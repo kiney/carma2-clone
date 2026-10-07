@@ -10,8 +10,12 @@ export interface ImpactScalingParameters {
   difficultyCarCar?: number;
   armorLevel?: number;
   offenseLevel?: number;
+  armorFactor?: number;
+  offenseFactor?: number;
   damageMultiplier?: number;
   protection?: number;
+  sinceLastAttributedImpactMs?: number;
+  /** Compatibility alias; +13e4 is crash attribution time, not repair time. */
   sinceLastRepairMs?: number;
 }
 
@@ -28,18 +32,19 @@ export function scaleImpactVectors(
   const p = parameters;
   let factor = p.difficultySoftness ?? 1;
   if (p.hitCar) {
-    if (p.human) factor *= Math.pow(0.91, p.armorLevel ?? 0) * 1.2;
+    if (p.human) factor *= (p.armorFactor ?? Math.pow(0.91, p.armorLevel ?? 0)) * 1.2;
     if (p.attackerHuman)
       factor *=
         (p.difficultyCarCar ?? 1) *
-        Math.pow(1.06, p.offenseLevel ?? 0) *
+        (p.offenseFactor ?? Math.pow(1.06, p.offenseLevel ?? 0)) *
         (p.damageMultiplier ?? 1) *
         0.9;
     if (!p.human && !p.attackerHuman) factor *= 0.2;
     factor /= (p.attackerSoftness + 0.7) / 0.7;
   } else if (!p.human) {
     factor *= p.receiverSoftness;
-    if ((p.sinceLastRepairMs ?? 0) > 5000) factor *= 0.2;
+    if ((p.sinceLastAttributedImpactMs ?? p.sinceLastRepairMs ?? 0) > 5000)
+      factor *= 0.2;
   }
   factor *= 0.2;
   const damage = rawVector.clone().multiplyScalar(factor);

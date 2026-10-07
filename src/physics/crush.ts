@@ -234,6 +234,90 @@ export interface CrushModelResult {
   movedVertices: number;
 }
 
+/** SwapShapesIfPossible434910 bit4 projects candidate coordinates sequentially
+ * inside the OLD accepted hull. A failed second test/packed limit restores the
+ * old accepted point. Plane convention here is outward dot(n,p)<=constant. */
+export function constrainCrushVertex(
+  point: CrushVector,
+  previous: CrushVector,
+  planes: readonly { normal: CrushVector; constant: number }[],
+  packed: number,
+  limits: CrushLimits,
+): [number, number, number] {
+  const result: [number, number, number] = [...point];
+  for (const plane of planes) {
+    const distance = dot(result, plane.normal) - plane.constant;
+    if (distance > 0)
+      for (let axis = 0; axis < 3; axis++)
+        result[axis] -= distance * plane.normal[axis];
+  }
+  if (planes.some((plane) => dot(result, plane.normal) - plane.constant > 1e-5))
+    return [...previous];
+  for (let axis = 0; axis < 3; axis++) {
+    const region = packed >>> (4 * axis);
+    if (
+      result[axis] < limits[axis].min[region & 3] ||
+      result[axis] > limits[axis].max[(region >>> 2) & 3]
+    )
+      return [...previous];
+  }
+  return result;
+}
+
+/** Already-bent actors use HW42c4a0 instead of packed-region CrushModel.
+ * The stop box is the bent collision bounds inset by 15%, saved by BendCar.
+ * Only vertices outside that box and moving toward it can move. */
+export function crushBentModel(input: {
+  positions: { length: number; [index: number]: number };
+  contacts: readonly CrushVector[];
+  movement: CrushVector;
+  stopBounds: { min: CrushVector; max: CrushVector };
+}): CrushModelResult {
+  const result = {
+    maxInfluence: 0,
+    strongestVertex: -1,
+    strongestDisplacement: 0,
+    movedVertices: 0,
+  };
+  if (!input.contacts.length) return result;
+  const magnitude = Math.hypot(...input.movement);
+  const unit: CrushVector =
+    magnitude > 2.384185791015625e-7
+      ? [
+          input.movement[0] / magnitude,
+          input.movement[1] / magnitude,
+          input.movement[2] / magnitude,
+        ]
+      : [1, 0, 0];
+  const axis = dominantCrushAxis(unit);
+  const amount = input.movement[axis];
+  if (!amount) return result;
+  for (let i = 0; i < input.positions.length; i += 3) {
+    const point: CrushVector = [
+      input.positions[i],
+      input.positions[i + 1],
+      input.positions[i + 2],
+    ];
+    const distance = crushContactDistanceSquared(point, input.contacts);
+    const influence = distance <= 0.01 ? 1 - Math.sqrt(distance * 100) : 0;
+    const stop = Math.min(
+      (input.stopBounds.min[axis] - point[axis]) / amount,
+      (input.stopBounds.max[axis] - point[axis]) / amount,
+    );
+    const fraction = stop > 0 ? Math.min(influence, stop) : 0;
+    if (influence > result.maxInfluence) {
+      result.maxInfluence = influence;
+      result.strongestVertex = i / 3;
+      result.strongestDisplacement = magnitude * fraction;
+    }
+    if (!fraction) continue;
+    for (let component = 0; component < 3; component++)
+      input.positions[i + component] += input.movement[component] * fraction;
+    result.movedVertices++;
+  }
+  return result;
+}
+
 /** CrushModel 0x432ad0: distances use CURRENT positions, but eligibility and
  * stop planes use the original packed regions. No global displacement cap,
  * squared falloff, per-coordinate clipping or hinge-index exclusion occurs.

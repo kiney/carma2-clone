@@ -14,6 +14,7 @@ export interface DatModel {
   uvs: Float32Array;
   faces: DatFace[];
   materials: string[];
+  warnings?: string[];
 }
 export interface ActNode {
   name: string;
@@ -80,11 +81,11 @@ class Reader {
     this.pos += 4;
     return v;
   }
-  f32() {
+  f32(allowNonFinite = false) {
     this.need(4);
     const v = this.view.getFloat32(this.pos);
     this.pos += 4;
-    if (!Number.isFinite(v))
+    if (!allowNonFinite && !Number.isFinite(v))
       throw new Error(`${this.label}: non-finite coordinate`);
     return v;
   }
@@ -189,9 +190,25 @@ export function parseDat(bytes: Uint8Array): DatModel[] {
       case 0x17:
         current().positions = c.floats(c.u32() * 3);
         break;
-      case 0x18:
-        current().uvs = c.floats(c.u32() * 2);
+      case 0x18: {
+        const m = current(),
+          count = c.u32() * 2;
+        c.need(count * 4);
+        m.uvs = new Float32Array(count);
+        let invalid = 0;
+        for (let i = 0; i < count; i++) {
+          const value = c.f32(true);
+          m.uvs[i] = Number.isFinite(value) ? value : 0;
+          if (!Number.isFinite(value)) invalid++;
+        }
+        // Retail forklift contains NaN U values in otherwise valid, referenced
+        // fork models. UV fallback is confined here; XYZ/transforms remain strict.
+        if (invalid)
+          (m.warnings ??= []).push(
+            `${m.name}: ${invalid} non-finite UV components replaced with zero`,
+          );
         break;
+      }
       case 0x35: {
         const m = current(),
           count = c.u32();

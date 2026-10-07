@@ -2,11 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createAttachmentState,
+  createDetachmentSchedulingContext,
+  detachmentQueueSize,
+  cancelScheduledDetachment,
+  accumulateSharedDetachmentForce,
   detachmentThreshold,
   accumulateDetachmentForce,
   beginPartDetachment,
   jointAllowsSeparation,
   shouldFullyDetachPart,
+  kevFlapTearThreshold,
   resetAttachmentState,
   detachedPartMass,
   detachedBoxInertia,
@@ -87,5 +92,82 @@ test("detached mass, inertia and inherited angular point velocity match physics 
   assert.deepEqual(
     inheritedDetachedVelocity([10, 0, 0], [0, 0, 2], [1, 0, 0], [1, 0, 0]),
     [10, 0, 0],
+  );
+});
+
+test("KEV flap tears only on the source angular limit direction above its mass-scaled impulse", () => {
+  const input = {
+    sourceType: 11,
+    impulse: 0.21,
+    childMass: 0.1,
+    angularConstraint: [-1, 0, 0],
+    hingeAxis: [1, 0, 0],
+    kevFlap: true,
+    driver: 8,
+    immune: false,
+  };
+  assert.equal(kevFlapTearThreshold(input), 0.2);
+  assert.equal(kevFlapTearThreshold({ ...input, impulse: 0.2 }), undefined);
+  assert.equal(
+    kevFlapTearThreshold({ ...input, angularConstraint: [1, 0, 0] }),
+    undefined,
+  );
+  assert.equal(
+    kevFlapTearThreshold({ ...input, angularConstraint: [0, 1, 0] }),
+    undefined,
+  );
+  for (const override of [
+    { sourceType: 10 },
+    { kevFlap: false },
+    { driver: 5 },
+    { immune: true },
+    { childObjectType: 2 },
+    { parentObjectType: 2 },
+  ])
+    assert.equal(kevFlapTearThreshold({ ...input, ...override }), undefined);
+});
+
+test("global queue caps sixteen cars' parts, retains full-queue accumulation and reuses released slots", () => {
+  const context = createDetachmentSchedulingContext();
+  const states = Array.from({ length: 17 }, () => createAttachmentState(0));
+  states
+    .slice(0, 16)
+    .forEach((state, index) =>
+      assert.equal(
+        accumulateSharedDetachmentForce(context, state, 0.2, 1, 0.1, 100),
+        1000 * (index + 1),
+      ),
+    );
+  assert.equal(detachmentQueueSize(context), 16);
+  assert.equal(
+    accumulateSharedDetachmentForce(context, states[16], 0.2, 1, 0.1, 100),
+    null,
+  );
+  assert.equal(
+    states[16].accumulatedForce,
+    0.2,
+    "capacity must not suppress crush-force history",
+  );
+  assert.equal(beginPartDetachment(states[0], 1000), true);
+  assert.equal(detachmentQueueSize(context), 15);
+  assert.equal(
+    accumulateSharedDetachmentForce(context, states[16], 0, 0, 0.1, 1000),
+    17000,
+  );
+  assert.equal(detachmentQueueSize(context), 16);
+  cancelScheduledDetachment(context, states[16]);
+  assert.equal(
+    context.lastScheduled,
+    17000,
+    "repair does not rewind the global schedule",
+  );
+  assert.equal(
+    accumulateSharedDetachmentForce(context, states[16], 0, 0, 0.1, 2000, true),
+    2000,
+  );
+  assert.equal(
+    context.lastScheduled,
+    17000,
+    "an immediate entry does not lower the last timestamp",
   );
 });

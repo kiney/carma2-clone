@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians, with an arcade driving and race simulation. It supports stock and Advanced content, but it does not reproduce every original game system or campaign behavior. Game assets are read from the installation and are not included here.
+This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians, with reconstructed ordinary-road vehicle dynamics, collision impulses, persistent crush, component damage and physical vehicle parts. It supports stock and Advanced content, but it does not reproduce every original game system or campaign behavior. Game assets are read from the installation and are not included here.
 
 ## Run it
 
@@ -33,13 +33,15 @@ Choose a race and car, then select **Load Race**. The browser menus and HUD are 
 | Shift               | Brake                                      |
 | Space               | Handbrake                                  |
 | R                   | Recover to the track for 250 credits       |
-| E                   | Repair using credits                       |
+| Hold E              | Incremental repair using credits           |
 | C                   | Cycle chase, cockpit, and overhead cameras |
 | M                   | Show or hide the minimap                   |
 | Escape              | Pause or return to the menu                |
 | Enter               | Restart after a race                       |
 
-The engine includes graph-following opponents, checkpoint/lap races, damage and repair, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, and engine pickups. Race objectives are approximations; unsupported smash missions are labelled free driving.
+Vehicle mechanics and WAM data drive suspension, tyres, steering, gears, mass/inertia, localized dents, structural bending and body splitting. Twelve component damage units affect handling; detached parts have their own rigid state and joints. Held repair restores eligible bodywork and charges repaired component levels; wasted or split cars require full repair/reload. The ordinary physics equations are independently reconstructed from the local C2 executable; see [the evidence notes](docs/c2-physics-re.md).
+
+The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, and engine pickups. Race objectives are approximations; unsupported smash missions are labelled free driving.
 
 ## Tests
 

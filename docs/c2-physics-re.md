@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The initial browser vehicle handler is not a C2 crash simulation. It is being replaced from evidence in the local original executables, authored car/WAM/GENERAL data, and independently interpreted reconstruction references. Completion is unproven until the integrated motion, crash, damage, detachment, repair, rendering and regression gates pass in Chromium. Original binaries, decompiler databases and disassembly stay outside Git.
+The baseline rigid arcade handler has been replaced by independently reconstructed C2 ordinary-road motion, feature collision detection, coupled contact impulses, persistent WAM crush, component damage, structural bending/splitting, and physical detachable parts. Equations are checked against the installed executable rather than inferred from C1. Integration and remaining articulated details are still being validated in Chromium. Original binaries, decompiler databases and disassembly stay outside Git.
 
 ## Evidence and binary revisions
 
@@ -27,7 +27,7 @@ Chromium DevTools confirmed original New City/Eagle loading and rendering. Contr
 - Dents use incoming velocity as a guessed normal and a guessed impact position. Arbitrary growing radius, squared radial attenuation, and maximum displacement replace C2's crush algorithm. Geometry changes have no effect on collision shape. No parts detach, including WAM-declared detach parts.
 - Suspension is static, grounded motion snaps vertical velocity to zero, and overall health arbitrarily reduces acceleration.
 - Existing tests validate the approximation, not C2 conformance; those assertions must be replaced as the solver changes.
-- Rendering defect remains under investigation. Baseline screenshots are local /tmp artifacts; gameplay/crash changes have priority.
+- Baseline rendering defects discarded DAT smoothing masks and replaced null face materials with gray. Both are corrected; screenshots remain local /tmp artifacts.
 
 ## Current function map
 
@@ -41,7 +41,7 @@ Chromium DevTools confirmed original New City/Eagle loading and rendering. Contr
 | Friction         | 0x4c0870    | —                                        | Pair cap 0.35*normalImpulse*(1+objectFrictionA)\*(1+objectFrictionB); world cap includes face friction and 1+worldFriction                    |
 | Impact callback  | 0x41c1d0    | SW 0x41c1f0; ProcessForcesCallback       | Crush/smash/damage callback before normal application; not the wheel-force integrator                                                         |
 | Car frame        | 0x4168e0    | not reconstructed in rec2                | Ordinary motion calls controls 0x415320 and wheel forces 0x418870                                                                             |
-| Wheel forces     | 0x418870    | rec2 unfinished                          | Spring/damper load; tyre limits proportional to sqrt(load), authored axle coefficients and road material; detailed interpretation in progress |
+| Wheel forces     | 0x418870    | rec2 unfinished                          | Verified ordinary road load/friction equations, metric/model conversions, drivetrain and fault episodes; implemented |
 | Crush queue      | 0x42d350    | QueueCarCrush                            | Impulse magnitude times car softness; reject <=0.06, queue cap10, max4 contact points/events                                                  |
 | Crush            | 0x436340    | CrushCar rec2 0x4363f0                   | rec2 stub; calls actor callback0x431d70 and vertex deformation0x432ad0                                                                        |
 | Vertex region    | 0x42b410    | CrushLimitNumber                         | Original packs MIN in low2/MAX in high2 bits per axis; rec2 has swapped bits and invalid initialization discrepancy                           |
@@ -58,4 +58,53 @@ GENERAL crush constants verified in original data/binary: radius squared0.01, mi
 
 ## Status and open evidence
 
-The full mechanics/damage parsers and independent crush/contact kernels are being implemented and tested. Runtime integration is still outstanding. Original damage scaling, detachment thresholds/joints, wheel-force/drivetrain branches and collision-hull deformation need to be tracked here as each is verified. No acceptance gate is considered met by standalone parser or math tests alone.
+The full mechanics/damage parsers and independent crush/contact kernels are implemented and tested. The reconstructed kernels now run through `src/physics/simulation.ts` at 40 ms, with source mechanics and full three-dimensional COM/angular state. Original damage scaling, detachment thresholds/joints, wheel-force/drivetrain branches and collision-hull deformation are integrated below. No acceptance gate is considered met by standalone parser or math tests alone.
+
+
+## Integrated evidence and remaining gates
+
+The runtime reads original four-wheel mechanics, six damage programs and WAM actor records. Mass, COM, source diagonal inertia, suspension give/damping, traction angles, rolling resistance, gears/redline/torque and per-material road coefficients feed the simulation. Separate rendering and collision-shape crush paths follow C2: WAM104 intentionally preserves shapes; ordinary root-shape crush suppresses X and positive Y, retains wheel envelope stops, and chooses nearest linked model softness. Mesh dents do not define the physical hull.
+
+Original callback `0x41ded0` receives grouped normal impulses directly in model units, with **no 6.9 multiplication**. Its base factor is .2; human visual crush receives an additional .5 and opponent visual crush1.5. Authored car softness, skill, armor/offense and protection have distinct roles. Easy stock initial armor/offense levels are1. Components use the lambda-weighted impact point, while crush uses the deduplicated contact primitive. Human engine/transmission/driver99 or all four wheels99 trigger wasting and the source ten-second race-end countdown.
+
+Original detachment accumulates capped force times maximum vertex influence before softness/region eligibility. Types distinguish jointed and free parts. Normal scheduling spaces entries by1000ms; full detachment limit24 percar, semi limit3 percar and32 joints globally. Child linear velocity inherits parent COM velocity plus omega cross center offset, with no launch kick. Ordinary joints select an authored part vertex using part/car-boundary geometry (`0x42baf0`), not a guessed dent center. Ball anchors and angular planes participate in the same contact inverse-mass matrix. Original quick-hinge optimization is represented by its equivalent permitted DOFs pending further comparison.
+
+Rotation `0x4c1990/0x4c1cc0` transports angular momentum through local diagonal inertia, rotates about COM, quantizes BRender angle units and uses original angle-dependent midpoint substeps. The renderer shows full body orientation and original suspension lengths, wheel RPM/spin and damage tilt; damage offsets feed the tyre solver. Steering/transmission fault episodes use original damage thresholds, probabilities and durations.
+
+Incremental repair `0x43abd0` restores each coordinate by at most `.00005*dtMilliseconds`. Component repair is proportional to repaired/remaining L1 deflection; stock Easy price10 credits per component level, rounded down in tens. Repair happens before billing; source spending clamps credits atzero. Wasted cars cannot hold-repair. Full powerup repair restores model/shape/component/attachment/material state.
+
+Chromium validation: Eagle settles at its original floor origin, four source wheel loads sum to mass*10, throttle uses reconstructed gears. Head-on wall crashes stop with localized persistent deformation and queued body parts; an oblique wall crash produces substantial yaw, retained tangential motion and region damage. Screenshots and proprietary analysis remain under `/tmp`/ignored artifacts. Browser execution alone does not establish completion.
+
+Integrated corrections include original float-stored pair contact ties, attached plastic flap motion, bending/splitting, world and pair recovery, safe hull swaps and complete body-level contact selection. Quick-hinge preprocessing and original convex-hull topology ordering remain under source audit. Special volumes and moving platforms are separate unsupported paths. Original car-pair candidate-only SAT was rejected by a deterministic Eagle test: it chose a top-face normal after overlap and let cars pass through. The replacement uses independently derived original moving-feature CCD with separate old-frame levers for both cars.
+
+A verified rendering error discarded DAT smoothing masks. `src/render-geometry.ts` now supports corner normals with mask-controlled adjacency and preserves authored vertex IDs for WAM/joint/crush mapping. `content.ts` consumes it; deformed normals follow the same masks. Additional unused DAT LOD models are loaded but are not rendered unless referenced by ACT actors.
+
+## Further verified local functions and integration
+
+All addresses here refer to the SHA-identified installed HW binary, not rec2's revision. `rec2` provides symbol/structure maps; decompilation supplies missing algorithms. No decompiled source text or proprietary fixtures are included.
+
+| Local HW VA | Subsystem / inputs and outputs | Evidence, implementation, confidence |
+| --- | --- | --- |
+| `0x415320`, `0x418870` | Controls, gear/RPM/torque, four source wheel positions, spring/damper loads, axle traction/slip and road coefficients → linear/angular force | Verified ordinary-road branches; `motion.ts`. Model coordinates×6.9 are force/metric positions; torque conversions preserve model inertia. No generic μN tyre solver. |
+| `0x4277c0`, `0x427f20` | Prior overlap flag, old convex edges/planes and point velocities → type6 pair recovery | Verified; `geometry.ts`. Geometric overlap alone sets recovery; impulses require positive closing and source center-facing normal gate. No SAT MTV substitute. |
+| `0x422800`, `0x4235f0` | Independent world recovery flag, old edges, finite track triangles → suppressed vertices and type1 contacts | Verified; ordinary cars initialize world flag false; split halves initialize true. Whole-body four-contact cap, `.95` prefix normal gate; COPLANAR flags and float fractions preserved. |
+| `0x41fe70`, `0x428fc0`, `0x428d10` | Pending hull, old COM, world/body obstruction → placement normal | Verified; COM-star world sweeps and expanded `.005` body clipping, with source summed-normal escape direction. |
+| `0x434910` | Pending shape flags/geometry and optional pending COM → accepted hull or previous active shape | Verified; ordinary crush contracts against current hull and WAM bounds; repair/bend probes ten placements with `.007246377` starting step and source doubling rule, rolls position back on failure and retains pending flags. |
+| `0x431d70`, `0x432ad0`, `0x436340` | Current vertices, authored stop planes, contact primitive, softness and queued force → permanent local bodywork | Verified; fixed radius squared `.01`, force range `.06`..`.5`, movement1.5, accumulated dents; distinct physical-root versus visual-model branches. |
+| `0x433bc0` | Impact vector/contact and WAM bendability/pivots → quantized two-ended bend | Verified; structural transforms bend body, collision shapes, COM and six wheel GROOVEs; front yaw feeds `.03` curvature per degree. No recomputed mass/inertia. |
+| `0x430d80`, `0x430730` | Solved world-edge impulses, first two nearby world triangles, WAM snap/driver/bounds → eligible XZ cut | Verified; source angle, proximity, quantization and driver-facing gates; no invented speed threshold. |
+| `0x42df20`, `0x4ba2f0`, `0x42e230` | All XZ attempts, then roof contact groups, source cut plane → two independently colliding halves | Verified; roof requires every qualifying point above authored cut and strict summed force threshold. Mass/COM/inertia partition, pre-impact point velocity inheritance, old solve invalidation and same-tick recollection (30-pass guard). Child joints transfer by parent-anchor plane sign. |
+| `0x42d730`, `0x433640`, `0x438850` | WAM part accumulated force/ease/type, global queue and joint state → queued/jointed/free object | Verified; global16 queue and1000ms spacing; per-car semi3/free24, global32 joints. Quarter-width child COM shift, density-volume mass, source box inertia, inherited linear/angular velocity. Ordinary timeout requires source geometric predicate; no particle-only detachment. |
+| `0x431260` | Solved type11 angular LIMIT, KEV hinge axis and child mass → torn joint/restart | Verified; strict lambda>mass×GENERAL2, negative child-local coefficient dot hinge axis. Splitting precedes tearing; bilateral hinge constraints cannot trigger it. |
+| `0x43f820`, `0x43f620` | Source normalized impact position/energy, all matching six-side damage clauses → twelve capped units and persistent wasting | Verified; human probability/NPC randomness, increment<5 ignore and crossing99 rule; driver protection, functional component fault episodes. Once-knackered survives a late repair; human acceleration/reverse disabled, suspension still runs; ten-second race countdown persists. |
+| `0x43abd0`, `0x43b400`, `0x43b630`, `0x439460`, `0x439910` | Held/full repair → repaired bodywork/shape, parts, levels and source bill | Verified; each visual coordinate `.00005*dtMs` toward compressed U16[-10,+10] target; collision shape snapshots are exact Float32. Proportional component repair and skill fee, rounded tens. Full repair restores halves/parts but not persistent knackered race state. |
+
+## Browser and numerical conformance evidence
+
+Chromium through Chrome DevTools MCP has driven original New City cars into broad walls head-on and obliquely, car-car head-on and side-on, and the original building wedge at x51.307678/z32.224792. The wedge splits Eagle into physical halves of masses `.749865703582701` and `.750134296417299` from original mass1.5, with their own velocities/hulls; pre-split rows are disabled before recollection. A wall bumper becomes a jointed object, repeated dents persist, and held repair restores bodywork and reattaches parts. Ordinary pair contacts exchange momentum and off-center impacts rotate cars.
+
+Original buggy mass1.150008, Eagle1.5 and dumper35.282787 drive separate inertia, spring, contact response and damage/crush behavior. Numerical tests verify source mass-ratio velocity exchange and momentum, off-center torque/inertia, force-scaled regional component damage, multiple speeds, repeated/localized crush, thresholds, XZ and authored roof cuts, zero-snappability rejection, repair and split teardown. All52 stock mechanics/shape pipelines parse (59 poly shapes; no stock sphere/wire root shapes).
+
+Production browser regression drives real track gates to completion, loads stock Quarry and Advanced Acid Reign, preserves controls/audio/opponents/pedestrians, checks geometry, and reports no fatal console errors or failed requests. MCP screenshots inspect actual original geometry, damage and materials, with WebGL `getError()==0`. The MCP GUI instance hung in this environment; an isolated headless Chromium instance uses the installed Chrome DevTools MCP server and software WebGL for these checks. This establishes software-rendered Chromium behavior, not physical GPU performance.
+
+Rendering fixes preserve original DAT smoothing/vertex IDs and correct null material slots to BRender's inherited/default opaque white; named face groups retain their materials. Camera framing follows each authored car's bounds to avoid clipping inside large vehicles. Remaining full-game limits include special-volume/water/oil and moving-platform motion, sphere/wire special dispatch, campaign/mission/AI fidelity and unsupported effects. These are separate from the reconstructed ordinary stock-car crash path.

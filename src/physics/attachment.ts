@@ -22,6 +22,60 @@ export function createAttachmentState(type: number): AttachmentState {
   };
 }
 
+/** Queue42d730 is global, including its last scheduled time67a724. Entries
+ * that failed sensible placement keep their reservation until retry/repair. */
+export interface DetachmentSchedulingContext {
+  readonly queued: Set<AttachmentState>;
+  lastScheduled: number;
+}
+export function createDetachmentSchedulingContext(): DetachmentSchedulingContext {
+  return { queued: new Set(), lastScheduled: 0 };
+}
+export function detachmentQueueSize(
+  context: DetachmentSchedulingContext,
+): number {
+  for (const state of context.queued)
+    if (state.phase !== 0 || state.queuedAt === null)
+      context.queued.delete(state);
+  return context.queued.size;
+}
+/** Removing a car's queued parts does not reset the shared global timestamp. */
+export function cancelScheduledDetachment(
+  context: DetachmentSchedulingContext,
+  state: AttachmentState,
+): void {
+  context.queued.delete(state);
+  state.queuedAt = null;
+}
+
+/** Accumulation happens before queue42d730's capacity/deduplication checks.
+ * Once another car frees a slot, a saturated part can retry on its next dent.
+ */
+export function accumulateSharedDetachmentForce(
+  context: DetachmentSchedulingContext,
+  state: AttachmentState,
+  cappedForce: number,
+  maxInfluence: number,
+  threshold: number,
+  now: number,
+  immediate = false,
+): number | null {
+  if (state.phase !== 0) return null;
+  state.accumulatedForce += cappedForce * maxInfluence;
+  if (
+    state.queuedAt !== null ||
+    !(state.accumulatedForce > threshold) ||
+    detachmentQueueSize(context) >= 16
+  )
+    return null;
+  state.queuedAt = immediate
+    ? now
+    : Math.max(now, context.lastScheduled + 1000);
+  context.lastScheduled = Math.max(context.lastScheduled, state.queuedAt);
+  context.queued.add(state);
+  return state.queuedAt;
+}
+
 const EASE_FACTORS: Readonly<Record<string, number>> = {
   very_easy: 0.25,
   easy: 0.5,
@@ -31,9 +85,10 @@ const EASE_FACTORS: Readonly<Record<string, number>> = {
 };
 export function detachmentThreshold(ease: string, normalForce = 0.1): number {
   const factor = EASE_FACTORS[ease.toLowerCase()];
-  if (factor === undefined)
-    throw new Error(`Unknown WAM detachment ease: ${ease}`);
-  return normalForce * factor;
+  // Original command parsing returns -1 for unknown names; the WAM loader's
+  // default branch treats them as normal. Eagle3's hood uses "hard", which
+  // is absent from the executable's difficult/very_difficult keyword table.
+  return normalForce * (factor ?? 1);
 }
 
 /** HW 0x43202a adds cappedForce*maximum pre-eligibility influence; WAM
@@ -105,6 +160,41 @@ export function shouldFullyDetachPart(
     (elapsed >= maxDetachTime ||
       damagePercentageChance((100 * elapsed) / maxDetachTime, random))
   );
+}
+
+/** Source431260 inspects solved angular joint rows BEFORE impulse application.
+ * A KEV flap tears only against its hinge direction; the opposite unilateral
+ * limit cannot tear it. Return the source lambda cap for collision restart.
+ * Both angularConstraint and hingeAxis are in the child object's local frame.
+ */
+export function kevFlapTearThreshold(input: {
+  sourceType: number;
+  impulse: number;
+  childMass: number;
+  angularConstraint: CrushVector;
+  hingeAxis: CrushVector;
+  kevFlap: boolean;
+  driver: number;
+  immune: boolean;
+  childObjectType?: number;
+  parentObjectType?: number;
+  torquePerTonne?: number;
+}): number | undefined {
+  if (
+    input.sourceType !== 11 ||
+    !input.kevFlap ||
+    input.driver <= 5 ||
+    input.immune ||
+    (input.childObjectType ?? 1) !== 1 ||
+    (input.parentObjectType ?? 1) !== 1
+  )
+    return;
+  const threshold = input.childMass * (input.torquePerTonne ?? 2);
+  const direction = input.angularConstraint.reduce(
+    (sum, component, axis) => sum + component * input.hingeAxis[axis],
+    0,
+  );
+  if (input.impulse > threshold && direction < 0) return threshold;
 }
 
 /** ReAttachBit restores the actor's original parent/hinge alignment and removes

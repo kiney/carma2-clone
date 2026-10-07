@@ -46,7 +46,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
   const definitions = [
     { message: "Credits", action: 0, ints: [100, 1000] },
     { message: "Instant repair", action: 7 },
-    { message: "Hot rod", action: 9, duration: 30, floats: [2, 1.5] },
+    { message: "Hot rod", action: 9, duration: 30, floats: [2, 1.5, 1, 1, 0, 0, 1] },
     { message: "Time bonus", action: 11, ints: [5, 30] },
   ];
   const assets = { text: async () => table(definitions) };
@@ -91,8 +91,9 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
   assert.equal(events[0].kind, "engine");
   assert.deepEqual(modifiers, {
     accelerationMultiplier: 2,
-    maxSpeedMultiplier: 2,
+    maxSpeedMultiplier: 1,
     lateralGripMultiplier: 1.5,
+    suspension: {frontGiveMultiplier:1,rearGiveMultiplier:1,frontExtraLength:0,rearExtraLength:0,dampingMultiplier:1},
   });
   system.dispose();
 
@@ -198,15 +199,15 @@ test(
     const system = await new PowerupSystem(source, world).init();
     assert.equal(
       system.pickups.length,
-      211,
-      "New City has 211 supported pickup instances",
+      212,
+      "New City has 212 supported pickups including tyre grip",
     );
     assert.equal(
       system.warnings.length,
-      48,
-      "New City warns once for each of its 48 unsupported definitions",
+      47,
+      "New City warns once for each of its 47 unsupported definitions",
     );
-    assert.equal(system.group.children.length, 211);
+    assert.equal(system.group.children.length, 212);
     system.dispose();
   },
 );

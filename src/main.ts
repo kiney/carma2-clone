@@ -12,21 +12,21 @@ import type {
   RaceCatalogEntry,
   OpponentConfig,
 } from "./config";
-import {
-  createVehicle,
-  updateVehicle,
-  createRace,
-  updateRace,
-  speedMph,
-  repairVehicle,
-  recoverVehicle,
-} from "./gameplay";
-import type { VehicleState, RaceState, VehicleConfig } from "./gameplay";
+import { createRace, updateRace, speedMph, recoverVehicle } from "./gameplay";
+import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
 import { DamageSystem } from "./damage";
 import { PowerupSystem } from "./powerups";
 import { CarAnimation, TextureAnimation } from "./animation";
 import { applyRaceObjectives, isSupportedRace, objectiveText } from "./rules";
+import {
+  createSimulatedCar,
+  VehicleSimulation,
+  type SimulatedCar,
+} from "./physics/simulation";
+import { parseSurfaceModifiers } from "./physics/surfaces";
+import {parseUpgradeSettings, createUpgradeState, upgradeFactors, payRepair, type UpgradeSettings} from "./physics/upgrades";
+import { setMotionSuspension } from "./physics/motion";
 import { physicsConfigFromCar } from "./handling";
 import { RoadNavigator } from "./ai";
 import { PedestrianSystem } from "./pedestrians";
@@ -57,7 +57,7 @@ let content: THREE.Group | undefined,
   car: THREE.Group | undefined,
   sky: THREE.Mesh | undefined,
   collision: WorldCollision | undefined,
-  vehicle: VehicleState | undefined,
+  vehicle: SimulatedCar["state"] | undefined,
   race: RaceState | undefined,
   track: TrackConfig | undefined;
 let carConfig: CarConfig | undefined,
@@ -68,6 +68,7 @@ let carConfig: CarConfig | undefined,
   loading = false,
   cameraMode = 0,
   mapVisible = true;
+let chaseDistance=1.55,chaseHeight=.8,carTargetHeight=.18;
 let lastTime = performance.now(),
   messageUntil = 0,
   seconds = 0,
@@ -81,6 +82,7 @@ let damage: DamageSystem | undefined,
   carTextures: TextureAnimation | undefined,
   worldAnimation: TextureAnimation | undefined,
   definition: RaceCatalogEntry | undefined;
+let simulation: VehicleSimulation | undefined, player: SimulatedCar | undefined;
 let rivalsReady = false,
   pedestriansReady = false;
 const keys = new Set<string>(),
@@ -100,6 +102,12 @@ const stats = {
 const debug = {
   stats,
   audio,
+  get simulation() {
+    return simulation;
+  },
+  get player() {
+    return player;
+  },
   get carAnimation() {
     return carAnimation;
   },
@@ -132,6 +140,9 @@ const debug = {
   },
   get carConfig() {
     return carConfig;
+  },
+  get camera() {
+    return camera;
   },
   get scene() {
     return scene;
@@ -288,7 +299,8 @@ function disposeGroup(group: THREE.Object3D) {
 }
 interface Rival {
   object: THREE.Group;
-  state: VehicleState;
+  state: SimulatedCar["state"];
+  body: SimulatedCar;
   node: number;
   previousNode: number;
   stuck: number;
@@ -312,6 +324,16 @@ function groupMaterials(group: THREE.Object3D) {
 let rivals: Rival[] = [];
 let pedestrians: PedestrianSystem | undefined;
 let powerups: PowerupSystem | undefined;
+let upgradeSettings: UpgradeSettings | undefined;
+function updateUpgradeFactors(body: SimulatedCar) {
+  if (!body.upgrades || !upgradeSettings) return;
+  const factors = upgradeFactors(body.upgrades,upgradeSettings);
+  body.armorLevel=body.upgrades.levels[0];
+  body.offenseLevel=body.upgrades.levels[2];
+  body.armorFactor=factors.armour;
+  body.offenseFactor=factors.offensive;
+  body.state.powerMultiplier=factors.power;
+}
 async function loadRace() {
   if (loading) return;
   loading = true;
@@ -332,15 +354,27 @@ async function loadRace() {
     const loadedPowerups = new PowerupSystem(assets, world.group);
     await loadedPowerups.init();
     status("Parsing original car…");
+    upgradeSettings ??= parseUpgradeSettings(await assets.text("data/GENERAL.TXT"));
     const carText = await assets.text(currentCar);
     const newCarConfig = parseCarConfig(carText);
     await audio.setCar(carText);
     const loadedCar = await assets.scene(dirOf(currentCar), stemOf(currentCar));
+    // Frame each original car from its authored bounds. A fixed Eagle-sized
+    // camera put the viewer inside larger vehicles such as the dumper.
+    const cameraBounds=new THREE.Box3().setFromObject(loadedCar.group);
+    const cameraSize=cameraBounds.getSize(new THREE.Vector3());
+    chaseDistance=Math.max(1.55,cameraSize.z*.5+.8,cameraSize.y*1.5,cameraSize.x*1.5);
+    chaseHeight=Math.max(.8,cameraBounds.max.y+.35);
+    carTargetHeight=Math.max(.18,cameraBounds.getCenter(new THREE.Vector3()).y);
     const loadedDamage = new DamageSystem(assets, loadedCar.group, carText);
     await loadedDamage.init();
     status("Building collision geometry…");
     world.group = batchStaticWorld(world.group);
-    const newCollision = new WorldCollision(world.group);
+    const newCollision = new WorldCollision(
+      world.group,
+      parseSurfaceModifiers(trackText),
+    );
+    simulation?.dispose();
     carAnimation?.dispose();
     carTextures?.dispose();
     worldAnimation?.dispose();
@@ -400,8 +434,38 @@ async function loadRace() {
     physicsConfig = physicsConfigFromCar(newCarConfig);
     const start = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
     const ground = collision.height(start.x, start.z, start.y + 1);
-    if (ground !== null) start.y = ground + 0.05;
-    vehicle = createVehicle(start, ((track.heading ?? 0) * Math.PI) / 180);
+    if (ground !== null) start.y = ground;
+    player = createSimulatedCar(
+      car,
+      carText,
+      loadedDamage,
+      start,
+      ((track.heading ?? 0) * Math.PI) / 180,
+      true,
+    );
+    vehicle = player.state;
+    player.upgrades=createUpgradeState(upgradeSettings,{skill:0});
+    updateUpgradeFactors(player);
+    simulation = new VehicleSimulation(newCollision, scene);
+    simulation.settings=upgradeSettings;
+    simulation.add(player);
+    simulation.onRepair = (body, cost) => {
+      if (body.human && race && body.upgrades && upgradeSettings) {
+        body.upgrades.credits=race.credits;
+        payRepair(body.upgrades,cost,upgradeSettings,{skill:0});
+        race.credits=body.upgrades.credits;
+        updateUpgradeFactors(body);
+      }
+    };
+    simulation.onImpact = (body, speed) => {
+      if (body.human && speed > 0.8) {
+        message("IMPACT · E TO REPAIR");
+        audio.impact(speed / 6);
+      }
+    };
+    simulation.onWasted = body => {
+      if (body.human) message("YOU ARE WASTED", 10);
+    };
     car.position.copy(start);
     car.rotation.y = vehicle.heading;
     definition = races.find(
@@ -419,7 +483,7 @@ async function loadRace() {
       {
         laps: definition?.laps ?? 4,
         timeLimit: definition?.initialTimer[0] ?? 180,
-        credits: 5000,
+        credits: player.upgrades.credits,
         checkpointBonusSeconds: track.checkpoints[0]?.timerIncrement?.[0] ?? 20,
         completionCredits: definition?.raceCompletedBonus[0]?.[0] ?? 20000,
       },
@@ -543,14 +607,25 @@ async function loadRivals(
     }
     const node = new THREE.Vector3(...nodes[closest]);
     const y = collision.height(spawn.x, spawn.z, spawn.y + 1);
-    if (y !== null) spawn.y = y + 0.05;
+    if (y !== null) spawn.y = y;
     const heading = vehicle.heading;
-    const state = createVehicle(spawn, heading);
+    const body = createSimulatedCar(
+      model.group,
+      text,
+      rivalDamage,
+      spawn,
+      heading,
+      false,
+    );
+    const state = body.state;
+    if (upgradeSettings) state.powerMultiplier=player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
+    simulation?.add(body);
     model.group.position.copy(spawn);
     scene.add(model.group);
     rivals.push({
       object: model.group,
       state,
+      body,
       node: closest,
       previousNode: -1,
       stuck: 0,
@@ -599,6 +674,22 @@ async function loadPedestrians(text: string, loadGeneration: number) {
   pedestrians = system;
   scene.add(system.group);
 }
+function motionAnimation(body: SimulatedCar) {
+  const p = body.motion,
+    s = body.state;
+  return {
+    wheelLengths: s.wheelLengths,
+    wheelRayHeights: p.wheelPositions.map((w) => w.y),
+    steeringAngle: Math.atan(
+      (p.wheelPositions[0].z - p.wheelPositions[2].z) * s.curvature,
+    ),
+    rpm: s.rpm,
+    gear: s.gear,
+    speedRevsRatio: p.speedRevsRatio,
+    handbrake: !!body.input.handbrake,
+    componentDamage: Array.from(body.damage.componentLevels),
+  };
+}
 function updateRivals(dt: number) {
   if (!track || !collision || !vehicle || !race) return;
   for (const r of rivals) {
@@ -616,31 +707,22 @@ function updateRivals(dt: number) {
       r.state.position.copy(p);
       r.state.velocity.set(0, 0, 0);
       r.state.heading = controls.recoverHeading ?? r.state.heading;
+      simulation?.reset(r.body);
     }
-    const incoming = r.state.velocity.clone();
-    const result = updateVehicle(r.state, controls, dt, collision, {
-      ...r.config,
-      maxSpeed: 4.5,
-      impactDamage: 1,
-    });
-    if (result.collisionSpeed > 0.8) {
-      const normal = incoming
-        .negate()
-        .setY(0)
-        .normalize()
-        .applyAxisAngle(new THREE.Vector3(0, 1, 0), -r.state.heading);
-      r.damage.impact(
-        normal.clone().multiplyScalar(-0.35).setY(0.12),
-        normal,
-        result.collisionSpeed,
-      );
-    }
+    r.body.input = {
+      throttle: controls.throttle,
+      steer: controls.steer,
+      brake: controls.brake,
+      handbrake: controls.handbrake,
+    };
     r.animation.update(dt, {
+      ...motionAnimation(r.body),
       speed: r.state.speed,
       steer: controls.steer,
       brake: !!controls.brake,
       throttle: controls.throttle,
     });
+    r.state.wheelDamageOffsets = r.animation.wheelDamageOffsets;
     r.textures.update(dt, {
       speed: r.state.speed,
       steer: controls.steer,
@@ -648,42 +730,10 @@ function updateRivals(dt: number) {
       throttle: controls.throttle,
     });
     r.object.position.copy(r.state.position);
-    r.object.rotation.y = r.state.heading;
-    const distance = r.state.position.distanceTo(vehicle.position);
-    if (distance < 0.48) {
-      const n = vehicle.position.clone().sub(r.state.position);
-      n.y = 0;
-      n.normalize();
-      const impact = vehicle.velocity.clone().sub(r.state.velocity).dot(n);
-      if (impact < 0) {
-        vehicle.velocity.addScaledVector(n, -impact * 0.8);
-        r.state.velocity.addScaledVector(n, impact * 0.8);
-        vehicle.health = Math.max(0, vehicle.health - Math.abs(impact) * 3);
-        const local = n
-          .clone()
-          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -vehicle.heading);
-        damage?.impact(
-          local.clone().multiplyScalar(-0.32).setY(0.12),
-          local,
-          Math.abs(impact),
-        );
-        const other = n
-          .clone()
-          .negate()
-          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -r.state.heading);
-        r.damage.impact(
-          other.clone().multiplyScalar(-0.32).setY(0.12),
-          other,
-          Math.abs(impact),
-        );
-        r.state.health = Math.max(0, r.state.health - Math.abs(impact) * 12);
-        message("CAR COLLISION");
-        audio.impact(Math.abs(impact) / 6);
-      }
-    }
-    if (r.state.health <= 0) {
+    r.object.quaternion.copy(r.state.orientation);
+    if (r.damage.wasted) {
       r.wasted = true;
-      r.state.velocity.set(0, 0, 0);
+      r.body.input = { throttle: 0, steer: 0, brake: 0, handbrake: false };
       race.credits += 2500;
       race.timeLeft += 15;
       message("OPPONENT WASTED · +2500 CR");
@@ -726,9 +776,10 @@ function recover() {
     }
   }
   const y = collision.height(p.x, p.z, p.y + 1);
-  if (y !== null) p.y = y + 0.05;
+  if (y !== null) p.y = y;
   const recovered = recoverVehicle(vehicle, race, p, vehicle.heading);
   if (recovered) {
+    if (player) simulation?.reset(player);
     pedestrians?.resetCar(vehicle.position);
     powerups?.resetPath(vehicle.position);
   }
@@ -763,11 +814,8 @@ addEventListener("keydown", (event) => {
   keys.add(event.code);
   if (event.repeat || paused) return;
   if (event.code === "KeyR") recover();
-  if (event.code === "KeyE" && vehicle && race) {
-    const repaired = repairVehicle(vehicle, race);
-    if (repaired) damage?.repair();
-    message(repaired ? "REPAIRED" : "NO REPAIR NEEDED / INSUFFICIENT CREDITS");
-  }
+  if (event.code === "KeyE" && damage?.wasted)
+    message("CAR WASTED · ENTER TO RESTART");
   if (event.code === "KeyC") cameraMode = (cameraMode + 1) % 3;
   if (event.code === "KeyM") {
     mapVisible = !mapVisible;
@@ -860,34 +908,31 @@ function animate(now: number) {
         );
         audio.checkpoint();
       });
-      const powered = {
-        ...physicsConfig,
-        acceleration:
-          (physicsConfig.acceleration ?? 1.8) *
-          (modifiers?.accelerationMultiplier ?? 1),
-        maxSpeed:
-          (physicsConfig.maxSpeed ?? 12.96) *
-          (modifiers?.maxSpeedMultiplier ?? 1),
-        lateralGrip: 9 * (modifiers?.lateralGripMultiplier ?? 1),
-      };
       previous.copy(vehicle.position);
-      const incoming = vehicle.velocity.clone();
-      const result = updateVehicle(
-        vehicle,
-        {
+      if (player && simulation) {
+        player.state.engineFactor=modifiers?.accelerationMultiplier ?? 1;
+        player.state.tyreGripFactor=modifiers?.lateralGripMultiplier ?? 1;
+        if (modifiers?.suspension) setMotionSuspension(player.motion,modifiers.suspension);
+        player.repairing = keys.has("KeyE");
+        player.input = {
           throttle:
             Number(keys.has("KeyW") || keys.has("ArrowUp")) -
             Number(keys.has("KeyS") || keys.has("ArrowDown")),
           steer:
             Number(keys.has("KeyA") || keys.has("ArrowLeft")) -
             Number(keys.has("KeyD") || keys.has("ArrowRight")),
-          brake: keys.has("ShiftLeft"),
+          brake: Number(keys.has("ShiftLeft")),
           handbrake: keys.has("Space"),
-        },
-        dt,
-        collision,
-        powered,
-      );
+        };
+        updateRivals(dt);
+        simulation.update(dt);
+        // Installed C2 RaceCompleted(reason6) lets the wasted body continue
+        // simulating during its ten-second end countdown.
+        if (player.wastedAt !== undefined && simulation.elapsed - player.wastedAt >= 10) {
+          race.status = "failed";
+          message("YOU ARE WASTED · ENTER TO RESTART", 10);
+        }
+      }
       for (const event of updateRace(
         race,
         previous,
@@ -905,22 +950,6 @@ function animate(now: number) {
                 : "CHECKPOINT!",
         );
       }
-      if (result.collisionSpeed > 0.8) {
-        message("IMPACT · E TO REPAIR");
-        audio.impact(result.collisionSpeed / 6);
-        const normal = incoming
-          .clone()
-          .negate()
-          .setY(0)
-          .normalize()
-          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -vehicle.heading);
-        damage?.impact(
-          normal.clone().multiplyScalar(-0.35).setY(0.12),
-          normal,
-          result.collisionSpeed,
-        );
-      }
-      updateRivals(dt);
       pedestrians?.update(dt, {
         position: vehicle.position,
         yaw: vehicle.heading,
@@ -942,6 +971,7 @@ function animate(now: number) {
       });
       if (victory.completed) message(victory.message ?? "RACE COMPLETED", 8);
       const animationInput = {
+        ...(player ? motionAnimation(player) : {}),
         speed: vehicle.speed,
         steer:
           Number(keys.has("KeyA") || keys.has("ArrowLeft")) -
@@ -952,6 +982,7 @@ function animate(now: number) {
           Number(keys.has("KeyS") || keys.has("ArrowDown")),
       };
       carAnimation?.update(dt, animationInput);
+      vehicle.wheelDamageOffsets = carAnimation?.wheelDamageOffsets;
       carTextures?.update(dt, animationInput);
       if (vehicle.position.y < -80) recover();
     }
@@ -962,21 +993,21 @@ function animate(now: number) {
       paused || race.status !== "racing",
     );
     car.position.copy(vehicle.position);
-    car.rotation.y = vehicle.heading;
+    car.quaternion.copy(vehicle.orientation);
     const forward = new THREE.Vector3(
       -Math.sin(vehicle.heading),
       0,
       -Math.cos(vehicle.heading),
     );
-    target.copy(vehicle.position).add(new THREE.Vector3(0, 0.18, 0));
+    target.copy(vehicle.position).add(new THREE.Vector3(0, carTargetHeight, 0));
     if (cameraMode === 0) {
       cameraGoal
         .copy(vehicle.position)
         .addScaledVector(
           forward,
-          -1.55 - Math.min(Math.abs(vehicle.speed) * 0.06, 0.8),
+          -chaseDistance - Math.min(Math.abs(vehicle.speed) * 0.06, 0.8),
         )
-        .add(new THREE.Vector3(0, 0.8, 0));
+        .add(new THREE.Vector3(0, chaseHeight, 0));
       const obstruction = collision.sweep(target, cameraGoal, 0.08);
       if (obstruction)
         cameraGoal.lerpVectors(

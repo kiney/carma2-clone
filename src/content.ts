@@ -1,3 +1,4 @@
+import { createModelGeometry } from "./render-geometry";
 import * as THREE from "three";
 import { parseDat, parseAct, parseMat, parsePix, decodeText } from "./formats";
 import { parseTiff } from "./tiff";
@@ -155,8 +156,10 @@ export class Assets {
     const dat = this.files(dir, /^[^/]+\.dat$/i);
     const mats = this.files(dir, /^[^/]+\.mat$/i);
     for (const p of dat) {
-      for (const model of parseDat(await this.bytes(p)))
+      for (const model of parseDat(await this.bytes(p))) {
         models.set(key(model.name), model);
+        this.warnings.push(...(model.warnings ?? []));
+      }
     }
     const parsedMaterials: MatMaterial[] = [];
     for (const p of mats) {
@@ -191,45 +194,30 @@ export class Assets {
         depthWrite: opacity >= 0.99,
       });
       material.name = mat.name;
+      material.userData.c2Flags = mat.flags;
       materials.set(key(mat.name), material);
     }
     const fallback = new THREE.MeshLambertMaterial({
       color: 0xaaaaaa,
       side: THREE.DoubleSide,
     });
+    // BRender SetupDefaultMaterial: white, opaque and lit. DAT index0 means
+    // actor/inherited material; it does not mean an unresolved named material.
+    const defaultMaterial = new THREE.MeshLambertMaterial({color:0xffffff});
+    defaultMaterial.name="C2 default material";
+    defaultMaterial.userData.c2Flags=1;
     const geometries = new Map<
       string,
-      { geometry: THREE.BufferGeometry; materials: THREE.Material[] }
+      { geometry: THREE.BufferGeometry; materials: THREE.Material[]; slots:number[] }
     >();
     for (const [name, model] of models) {
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        "position",
-        new THREE.BufferAttribute(model.positions, 3),
+      const geometry = createModelGeometry(model);
+      const slots=[...new Set(model.faces.map((f) => f.material))];
+      const used = slots.map(
+        (index) =>
+          index===0 ? defaultMaterial : materials.get(key(model.materials[index - 1] || "")) ?? fallback,
       );
-      geometry.setAttribute("uv", new THREE.BufferAttribute(model.uvs, 2));
-      const byMat = new Map<number, number[]>();
-      for (const face of model.faces) {
-        let indices = byMat.get(face.material);
-        if (!indices) {
-          indices = [];
-          byMat.set(face.material, indices);
-        }
-        indices.push(...face.indices);
-      }
-      const all: number[] = [];
-      const used: THREE.Material[] = [];
-      for (const [index, indices] of byMat) {
-        geometry.addGroup(all.length, indices.length, used.length);
-        all.push(...indices);
-        used.push(
-          materials.get(key(model.materials[index - 1] || "")) ?? fallback,
-        );
-      }
-      geometry.setIndex(all);
-      geometry.computeVertexNormals();
-      geometry.computeBoundingSphere();
-      geometries.set(name, { geometry, materials: used });
+      geometries.set(name, { geometry, materials: used, slots });
     }
     const act =
       this.resolve(`${dir}/${stem}.act`) ??
@@ -277,7 +265,7 @@ export class Assets {
           const override = mat ? materials.get(key(mat)) : undefined;
           const mesh = new THREE.Mesh(
             data.geometry,
-            override ?? data.materials,
+            data.materials.map((material,index)=>data.slots[index]===0 ? override ?? material : material),
           );
           mesh.name = node.model;
           object.add(mesh);

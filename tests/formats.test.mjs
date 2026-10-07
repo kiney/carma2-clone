@@ -47,6 +47,20 @@ function triangle(vertexIndex = 2) {
   );
 }
 
+function datWithNonFiniteFloat(tagToChange, componentIndex = 0) {
+  const fixture = Buffer.from(triangle());
+  for (let offset = 16; offset < fixture.length; ) {
+    const tag = fixture.readUInt32BE(offset);
+    const length = fixture.readUInt32BE(offset + 4);
+    if (tag === tagToChange) {
+      fixture.writeFloatBE(Number.NaN, offset + 12 + componentIndex * 4);
+      return fixture;
+    }
+    offset += 8 + length;
+  }
+  throw new Error(`DAT chunk ${tagToChange.toString(16)} was not found`);
+}
+
 test("DAT keeps vertex coordinates, UVs, smoothing and one-based material indices", () => {
   const [m] = parseDat(triangle());
   assert.equal(m.name, "triangle");
@@ -58,6 +72,23 @@ test("DAT keeps vertex coordinates, UVs, smoothing and one-based material indice
   assert.deepEqual(m.materials, ["road"]);
   assert.throws(() => parseDat(triangle(9)), /vertex index/);
   assert.throws(() => parseDat(triangle().subarray(0, 40)), /truncated/);
+});
+
+test("DAT replaces non-finite UV components with zero and reports the fallback", () => {
+  const [model] = parseDat(datWithNonFiniteFloat(0x18, 2));
+  assert.equal(model.uvs[2], 0);
+  assert.ok(model.uvs.every(Number.isFinite));
+  assert.deepEqual(model.warnings, [
+    "triangle: 1 non-finite UV components replaced with zero",
+  ]);
+  assert.ok(model.positions.every(Number.isFinite));
+});
+
+test("DAT still rejects non-finite XYZ coordinates", () => {
+  assert.throws(
+    () => parseDat(datWithNonFiniteFloat(0x17)),
+    /non-finite coordinate/,
+  );
 });
 
 test("ACT attaches nested children and preserves local transforms and inherited material references", () => {

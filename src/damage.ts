@@ -9,7 +9,69 @@ import {
   Object3D,
   Texture,
   Vector3,
+  DoubleSide,
 } from "three";
+import type { CarMechanics } from "./mechanics";
+import { parseDamagePrograms, type DamageProgramSet } from "./damage-program";
+import {
+  applyComponentImpact,
+  applyDamageUnit,
+  type ComponentDamageContext,
+} from "./physics/components";
+import {
+  crushModel,
+  crushBentModel,
+  constrainCrushVertex,
+  classifyCrushVertex,
+  prepareCrushLimits,
+  queuedCrushForce,
+  crushSmashMagnitude,
+  type CrushLimits,
+  type CrushVector,
+} from "./physics/crush";
+import {
+  createAttachmentState,
+  createDetachmentSchedulingContext,
+  accumulateSharedDetachmentForce,
+  cancelScheduledDetachment,
+  detachmentQueueSize,
+  detachmentThreshold,
+  resetAttachmentState,
+  detachedPartMass,
+  type AttachmentState,
+  type DetachmentSchedulingContext,
+} from "./physics/attachment";
+import { isWasted } from "./physics/impact";
+import { updateModelNormals } from "./render-geometry";
+import { selectOrdinaryDetachGeometry } from "./physics/joint";
+import {
+  applyPlasticFlap,
+  createFlapState,
+  flapBasis,
+  flapCheckVertices,
+  flapAngleRadians,
+  orderFlapHinges,
+  stepFlapAngle,
+  type FlapState,
+} from "./physics/flap";
+import { buildHull, type CollisionHull } from "./physics/geometry";
+import {
+  validateSplitPlane,
+  splitHull,
+  splitProperties,
+  splitModelGeometry,
+  type SplitPlane,
+  type SplitProperties,
+} from "./physics/split";
+import {
+  bendPoint,
+  bendHullVertices,
+  selectStructuralBend,
+  createBendTransform,
+  stepBendRepair,
+  bendSteeringCurvature,
+  type BendTransform,
+} from "./physics/structural";
 
 export interface WamSmashLevel {
   threshold: number;
@@ -31,7 +93,8 @@ export interface WamPart {
   shape?: string;
   ease?: string;
   detachmentType?: string;
-  kevOFlap?: boolean;
+  kevOFlap?: number;
+  jointIndex?: number;
   smashes: WamSmash[];
 }
 export interface WamData {
@@ -115,7 +178,9 @@ function skipConnotations(r: WamReader): void {
   r.skip(1); // Slick material.
   r.skip(r.count() * 11); // Non-car activation cuboids.
   r.skip(r.count() * 7); // Side-effect smash cuboids.
-  r.skip(2); // Extension flags and room code.
+  const extensionFlags = r.number();
+  if (extensionFlags & 1) r.skip(1);
+  r.skip(1); // Room code.
   if (r.read().toLowerCase() !== "none") r.skip(4);
   r.skip(r.count()); // Runtime variable changes.
 }
@@ -171,13 +236,19 @@ export function parseWam(text: string): WamData {
     };
     if (type === "flap") {
       part.hinges = [r.count(), r.count(), r.count()];
-      part.kevOFlap = r.number() !== 0;
+      part.kevOFlap = r.count();
       part.ease = r.read();
       part.shape = r.read().toLowerCase();
     } else if (type === "detach") {
       part.ease = r.read();
-      part.detachmentType = r.read();
-      if (part.detachmentType.toLowerCase() === "joint_index") r.skip(1);
+      part.detachmentType = r.read().toLowerCase();
+      if (
+        !["normal", "stubborn", "fully_detach", "joint_index"].includes(
+          part.detachmentType,
+        )
+      )
+        throw new Error("Unsupported WAM detach type");
+      if (part.detachmentType === "joint_index") part.jointIndex = r.count();
       part.shape = r.read().toLowerCase();
     }
     if (part.shape === "poly") part.shapePoints = r.list();
@@ -223,45 +294,446 @@ export interface DamageAssets {
   warnings?: string[];
   pixelmaps?(path: string, target: Map<string, Texture>): Promise<unknown>;
 }
+export interface DamageRuntimePart {
+  actor: Object3D;
+  originalParent: Object3D;
+  originalTransform: Matrix4;
+  bounds: Box3;
+  state: AttachmentState;
+  part: WamPart;
+  mass: number;
+  /** Authored principal model vertices in this actor's local frame. */
+  originalVertices: Vector3[];
+  /** Impact sample used by flap deformation; separate from the joint anchor. */
+  strongestVertex: number;
+  strongestDisplacement: number;
+  /** Original detach_data +30/+32/+33: anchor, corner mask, car side. */
+  detachmentVertex: number;
+  detachmentDirection: number;
+  detachmentSide: number;
+  flap?: FlapState;
+  flapHinges: number[];
+  flapCheckVertices: Uint8Array;
+  flapParentAnchor: Vector3;
+  flapParentReference: Vector3;
+}
 interface DamageMesh {
-  mesh: Mesh;
+  mesh: Mesh<BufferGeometry>;
   original: Float32Array;
-  originalCar: Vector3[];
-  lower: Vector3[];
-  upper: Vector3[];
-  part?: WamPart;
+  repairTarget: Float32Array;
+  originalToCar: Matrix4;
+  regions: Uint16Array;
+  runtime?: DamageRuntimePart;
   materials: {
     material: Material & { map?: Texture | null };
     map?: Texture | null;
+    centroid: Vector3;
+    level: number;
+    originalSide: Material["side"];
   }[];
-  materialEnergy: number;
 }
-const key = (name: string) =>
-  name.replace(/\.(act|dat|mat|pix)$/i, "").toLowerCase();
-const clamp = (v: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, v));
+interface ShapeDamage {
+  vertices: Vector3[];
+  original: Vector3[];
+  regions: Uint16Array;
+  softness: Float64Array;
+}
+export interface DamageSplitRuntime {
+  actor: Group;
+  plane: SplitPlane;
+  shapes: Vector3[][];
+  positive: SplitProperties;
+  negative: SplitProperties;
+  /** Wheels retained by the primary, driver-facing half. */
+  wheelMask: boolean[];
+  /** X/Z splits set source18c8=1; horizontal roof splits keep wheel forces. */
+  disableMotion: boolean;
+}
+const textureKey = (name: string) =>
+  name.replace(/\.(pix|p16)$/i, "").toLowerCase();
+const vectorTuple = (point: Vector3): CrushVector => [
+  point.x,
+  point.y,
+  point.z,
+];
+const ZERO_LIMITS = [0, 1, 2].map(() => ({ min: [], max: [] }));
+const WHEEL_PREFIXES = ["FL", "FR", "RL", "RR", "IRL", "IRR"];
 
-/** Bounded radial deformation using original WAM softness and vertex regions.
- * Flap hinge vertices remain fixed. Shape samples are parsed but poly hulls,
- * hinge articulation, detachment, bending and splitting are not simulated.
- * All coordinates supplied to impact are local to the top-level car group.
- * strength is collision speed in original world units/second; its conversion
- * to dents and smash energy is an arcade approximation, not original physics.
+/** Setup compression515e70 / repair expansion515f50 stores visual XYZ as
+ * rounded uint16 in [-10,10]. Decode uses the binary's Float32 reciprocal;
+ * collision-shape repair retains its separate exact saved float coordinates. */
+export function modelRepairCoordinate(value: number): number {
+  const code = Math.trunc(
+    ((Math.max(-10, Math.min(10, value)) + 10) * 65535) / 20 + 0.5,
+  );
+  return Math.fround(code * 20 * Math.fround(1 / 65535) - 10);
+}
+
+/** C2 damage consumers share the original collision impulse, but geometry,
+ * texture damage and component levels follow their own audited equations.
+ * Supplied contact/energy vectors use car-root model coordinates.
+ * Collision and joint bodies are owned by the simulation; runtimeParts retains
+ * the original scene parent and matrix so repair can restore actor ownership.
  */
 export class DamageSystem {
   wam?: WamData;
+  damagePrograms?: DamageProgramSet;
+  readonly componentLevels = new Uint8Array(12);
+  readonly runtimeParts: DamageRuntimePart[] = [];
+  damageContext: Partial<ComponentDamageContext> = {};
+  repairRevision = 0;
+  deformationRevision = 0;
+  /** Source1pending,2rebuild,4contraction,8pendingCOM. Root clears on success. */
+  pendingShapeSwapFlags = 0;
+  structuralRevision = 0;
+  splitRevision = 0;
+  splitRuntime?: DamageSplitRuntime;
+  private shellModelActive = false;
+  structuralBend?: BendTransform;
+  readonly currentCenterOfMass = new Vector3();
+  currentWheelPositions: Vector3[] = [];
   private meshes: DamageMesh[] = [];
   private textures = new Map<string, Texture>();
   private ready = false;
   private bounds = new Box3();
+  private modelLimits?: CrushLimits;
+  private physicsLimits?: CrushLimits;
+  private mechanics?: CarMechanics;
+  private shapeVertices: Vector3[][] = [];
+  private shapes: ShapeDamage[] = [];
+  private detachmentScheduling = createDetachmentSchedulingContext();
+  private wheelTransforms = new Map<Object3D, Matrix4>();
+  private bendVertexReferences = new Map<DamageMesh, Vector3[]>();
+  private bendShapeReferences: Vector3[][] = [];
+  private readonly bendCenterReference = new Vector3();
+  private bendWheelReferences: Vector3[] = [];
+  private originalWheelPositions: Vector3[] = [];
+  private bentStopBounds = new Box3();
+  private splitGeometryOriginals = new Map<DamageMesh, BufferGeometry>();
+  private splitActorOriginals = new Map<
+    Object3D,
+    { parent: Object3D; transform: Matrix4; visible: boolean }
+  >();
+  private wheelMotionIndices: number[] = [];
+  readonly wheelGrooveOffsets = new Map<Object3D, number>();
+  private wheelGrooveReferences = new Map<Object3D, Vector3>();
+  private wheelGrooveOwnedActors = new Set<Object3D>();
+
   constructor(
     private assets: DamageAssets,
     private group: Group,
     private configText: string,
   ) {}
 
+  get carSoftness(): number {
+    return this.damagePrograms?.softness ?? 1;
+  }
+  get snapped(): boolean {
+    return !!this.splitRuntime;
+  }
+  /** Source +e24: clean shell mode excludes held repair until visual damage. */
+  get useShellModel(): boolean {
+    return this.shellModelActive;
+  }
+  get steeringDamageCurvature(): number {
+    return bendSteeringCurvature(this.structuralBend);
+  }
+
+  constrainShapeSwap(activeHulls: readonly CollisionHull[]): void {
+    if (!(this.pendingShapeSwapFlags & 4) || !this.physicsLimits) return;
+    this.shapes.forEach((shape, index) => {
+      const hull = activeHulls[index];
+      if (!hull) return;
+      const planes = hull.faces.map((face) => ({
+        normal: vectorTuple(face.normal),
+        constant: face.constant,
+      }));
+      shape.vertices.forEach((point, vertex) => {
+        const previous = hull.vertices[vertex];
+        if (!previous) return;
+        point.fromArray(
+          constrainCrushVertex(
+            vectorTuple(point),
+            vectorTuple(previous),
+            planes,
+            shape.regions[vertex],
+            this.physicsLimits!,
+          ),
+        );
+      });
+    });
+  }
+
+  private principalModels(): DamageMesh[] {
+    const primary =
+      this.runtimeParts.find((part) => part.actor.parent === this.group) ??
+      this.runtimeParts[0];
+    return this.meshes.filter((data) => data.runtime === primary);
+  }
+  prepareSplitPlane(
+    normal: Vector3,
+    constant: number,
+    horizontalY?: number,
+  ): SplitPlane | undefined {
+    if (
+      !this.ready ||
+      !this.wam ||
+      this.snapped ||
+      this.structuralBend ||
+      this.damageContext.invulnerable
+    )
+      return;
+    const bounds = new Box3();
+    for (const shape of this.shapes)
+      for (const point of shape.vertices) bounds.expandByPoint(point);
+    if (bounds.isEmpty()) bounds.copy(this.bounds);
+    const modelBounds = new Box3();
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    const principal = this.principalModels()[0];
+    if (!principal) return;
+    const positions = principal.mesh.geometry.getAttribute("position");
+    const toCar = new Matrix4().multiplyMatrices(
+      inverse,
+      principal.mesh.matrixWorld,
+    );
+    for (let i = 0; i < positions.count; i++)
+      modelBounds.expandByPoint(
+        new Vector3().fromBufferAttribute(positions, i).applyMatrix4(toCar),
+      );
+    return validateSplitPlane({
+      normal,
+      constant,
+      bounds,
+      modelBounds,
+      driver: this.wam.driver,
+      horizontalY,
+    });
+  }
+
+  /** Plane must come from prepareSplitPlane, after the source world-edge gate.
+   * The positive half retains the car driver; secondary actor starts with the
+   * same world/model transform. Simulation owns its independent rigid body. */
+  splitAtPlane(
+    plane: SplitPlane,
+    human: boolean,
+  ): DamageSplitRuntime | undefined {
+    if (
+      !this.ready ||
+      !this.wam ||
+      !this.mechanics ||
+      this.snapped ||
+      this.structuralBend
+    )
+      return;
+    const principal = this.principalModels();
+    if (!principal.length) return;
+    const bounds = new Box3();
+    for (const shape of this.shapes)
+      for (const point of shape.vertices) bounds.expandByPoint(point);
+    if (bounds.isEmpty()) return;
+    const properties = splitProperties(
+      {
+        mass: this.mechanics.root.mass,
+        centerOfMass: this.currentCenterOfMass,
+        inertia: new Vector3(...this.mechanics.root.inertia),
+      },
+      bounds,
+      plane,
+    );
+    if (
+      ![properties.positive, properties.negative].every(
+        (part) =>
+          part.mass > 0 &&
+          part.inertia
+            .toArray()
+            .every((value) => value > 0 && Number.isFinite(value)),
+      )
+    )
+      return;
+    const splitShapes = this.shapes.map((shape) =>
+      splitHull(shape.vertices, buildHull(shape.vertices).edges, plane),
+    );
+    if (
+      !splitShapes.some((shape) => shape.positive.length) ||
+      !splitShapes.some((shape) => shape.negative.length)
+    )
+      return;
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    const actor = new Group();
+    actor.name = this.group.name + "_split";
+    actor.matrix.copy(this.group.matrixWorld);
+    actor.matrix.decompose(actor.position, actor.quaternion, actor.scale);
+    actor.updateMatrixWorld(true);
+    for (const data of principal) {
+      const toCar = new Matrix4().multiplyMatrices(
+        inverse,
+        data.mesh.matrixWorld,
+      );
+      const halves = splitModelGeometry(
+        data.mesh.geometry,
+        toCar,
+        plane,
+        this.damageContext.random,
+      );
+      this.splitGeometryOriginals.set(data, data.mesh.geometry);
+      data.mesh.geometry = halves.positive;
+      const child = new Mesh(halves.negative, data.mesh.material);
+      child.name = data.mesh.name;
+      child.matrix.copy(toCar);
+      toCar.decompose(child.position, child.quaternion, child.scale);
+      actor.add(child);
+    }
+    const saveActor = (part: Object3D) => {
+      if (!part.parent || this.splitActorOriginals.has(part)) return;
+      part.updateMatrix();
+      this.splitActorOriginals.set(part, {
+        parent: part.parent,
+        transform: part.matrix.clone(),
+        visible: part.visible,
+      });
+    };
+    let hidden = 0;
+    for (const runtime of this.runtimeParts) {
+      if (runtime === principal[0].runtime || runtime.state.phase !== 0)
+        continue;
+      // Ancestor migration moves owned subactors with their parent exactly once.
+      let ancestor = runtime.actor.parent;
+      let inCar = false;
+      while (ancestor) {
+        if (ancestor === this.group) {
+          inCar = true;
+          break;
+        }
+        ancestor = ancestor.parent;
+      }
+      if (!inCar) continue;
+      const toCar = new Matrix4().multiplyMatrices(
+        inverse,
+        runtime.actor.matrixWorld,
+      );
+      const min = runtime.bounds.min.clone().applyMatrix4(toCar),
+        max = runtime.bounds.max.clone().applyMatrix4(toCar);
+      const low = plane.normal.dot(min) - plane.constant > 0,
+        high = plane.normal.dot(max) - plane.constant > 0;
+      if (low === high) {
+        if (!low) {
+          saveActor(runtime.actor);
+          actor.attach(runtime.actor);
+        }
+      } else if (hidden < 8) {
+        saveActor(runtime.actor);
+        runtime.actor.visible = false;
+        hidden++;
+      }
+    }
+    const wheelMask = this.currentWheelPositions.map(
+      (point) => plane.normal.dot(point) - plane.constant > 0,
+    );
+    this.mechanics.wheels.forEach((wheel, index) => {
+      if (wheelMask[this.wheelMotionIndices[index] ?? index]) return;
+      const wheelActor = this.group.getObjectByName(wheel.actor);
+      if (wheelActor) {
+        saveActor(wheelActor);
+        actor.attach(wheelActor);
+      }
+    });
+    splitShapes.forEach((shape, index) =>
+      this.shapes[index].vertices.splice(
+        0,
+        this.shapes[index].vertices.length,
+        ...shape.positive,
+      ),
+    );
+    this.currentCenterOfMass.copy(properties.positive.centerOfMass);
+    const random = this.damageContext.random ?? Math.random;
+    for (let index = 0; index < 12; index++) {
+      let attempts = 0;
+      do {
+        this.componentLevels[index] = applyDamageUnit(
+          this.componentLevels[index],
+          index,
+          50 + Math.floor(random() * 51),
+          { ...this.damageContext, human },
+        );
+      } while (index === 0 && this.componentLevels[0] < 80 && ++attempts < 30);
+    }
+    this.splitRuntime = {
+      actor,
+      plane,
+      shapes: splitShapes.map((shape) => shape.negative),
+      ...properties,
+      wheelMask,
+      disableMotion: Math.abs(plane.normal.y) <= 0.707107,
+    };
+    this.shellModelActive = false;
+    this.pendingShapeSwapFlags = 0;
+    this.splitRevision++;
+    this.structuralRevision++;
+    this.deformationRevision++;
+    return this.splitRuntime;
+  }
+
+  private restoreSplit(): void {
+    if (!this.splitRuntime) return;
+    for (const [data, geometry] of this.splitGeometryOriginals) {
+      data.mesh.geometry.dispose();
+      data.mesh.geometry = geometry;
+    }
+    this.splitGeometryOriginals.clear();
+    for (const [actor, saved] of this.splitActorOriginals) {
+      saved.parent.add(actor);
+      actor.matrix.copy(saved.transform);
+      saved.transform.decompose(actor.position, actor.quaternion, actor.scale);
+      actor.visible = saved.visible;
+    }
+    this.splitActorOriginals.clear();
+    for (const child of this.splitRuntime.actor.children)
+      if (child instanceof Mesh) child.geometry.dispose();
+    this.splitRuntime.actor.removeFromParent();
+    this.splitRuntime = undefined;
+    this.currentCenterOfMass.fromArray(
+      this.mechanics?.root.centerOfMass ?? [0, 0, 0],
+    );
+    this.splitRevision++;
+    this.structuralRevision++;
+  }
+
+  get wasted(): boolean {
+    return isWasted(this.componentLevels);
+  }
+
+  get detachQueue(): DamageRuntimePart[] {
+    return this.runtimeParts.filter(
+      (runtime) => runtime.state.queuedAt !== null && runtime.state.phase === 0,
+    );
+  }
+
+  /** Give every simulated car the same context before its first impact.
+   * A standalone preview/test retains its own original-size queue by default.
+   * Existing reservations can transfer only when the shared queue has room. */
+  configureDetachmentScheduling(context: DetachmentSchedulingContext): void {
+    if (context === this.detachmentScheduling) return;
+    const states = this.detachQueue.map((runtime) => runtime.state);
+    const newStates = states.filter((state) => !context.queued.has(state));
+    if (detachmentQueueSize(context) + newStates.length > 16)
+      throw new Error("C2 global detachment queue is full");
+    for (const state of states) {
+      this.detachmentScheduling.queued.delete(state);
+      context.queued.add(state);
+      context.lastScheduled = Math.max(context.lastScheduled, state.queuedAt!);
+    }
+    this.detachmentScheduling = context;
+  }
+
   async init(): Promise<void> {
     if (this.ready) return;
+    try {
+      this.damagePrograms = parseDamagePrograms(this.configText);
+    } catch {
+      /* Geometry-only archive previews need not contain a complete car TXT. */
+    }
     const config = this.configText
       .split(/\r?\n/)
       .map((line) => line.split("//")[0])
@@ -284,26 +756,28 @@ export class DamageSystem {
           this.assets.warnings?.push(`Damage data ${path}: ${String(error)}`);
         }
         if (this.assets.pixelmaps) {
-          const dir = path.slice(0, path.lastIndexOf("/") + 1).toLowerCase();
+          const directory = path
+            .slice(0, path.lastIndexOf("/") + 1)
+            .toLowerCase();
           for (const entry of this.assets.manifest ?? []) {
             if (
-              entry.path.toLowerCase().startsWith(dir) &&
-              /\.(pix|p16)$/i.test(entry.path)
-            ) {
-              try {
-                await this.assets.pixelmaps(entry.path, this.textures);
-              } catch (error) {
-                this.assets.warnings?.push(
-                  `Damage texture ${entry.path}: ${String(error)}`,
-                );
-              }
+              !entry.path.toLowerCase().startsWith(directory) ||
+              !/\.(pix|p16)$/i.test(entry.path)
+            )
+              continue;
+            try {
+              await this.assets.pixelmaps(entry.path, this.textures);
+            } catch (error) {
+              this.assets.warnings?.push(
+                `Damage texture ${entry.path}: ${String(error)}`,
+              );
             }
           }
         }
       }
     }
     for (const [name, texture] of this.assets.textures ?? [])
-      if (!this.textures.has(key(name))) this.textures.set(key(name), texture);
+      this.textures.set(textureKey(name), texture);
     this.group.updateMatrixWorld(true);
     const inverse = this.group.matrixWorld.clone().invert();
     this.group.traverse((object) => {
@@ -313,171 +787,1268 @@ export class DamageSystem {
       )
         return;
       const mesh = object as Mesh<BufferGeometry>;
-      // Actors can reuse DAT geometry within a scene. Give every damaged mesh ownership.
       mesh.geometry = mesh.geometry.clone();
       const position = mesh.geometry.getAttribute("position");
       const original = Float32Array.from(position.array);
-      const transform = new Matrix4().multiplyMatrices(
+      const originalToCar = new Matrix4().multiplyMatrices(
         inverse,
         mesh.matrixWorld,
       );
-      const originalCar = Array.from({ length: position.count }, (_, i) =>
-        new Vector3().fromBufferAttribute(position, i).applyMatrix4(transform),
-      );
-      originalCar.forEach((point) => this.bounds.expandByPoint(point));
-      let part: WamPart | undefined;
-      for (
-        let actor: Object3D | null = mesh;
-        actor && actor !== this.group && !part;
-        actor = actor.parent
-      ) {
-        part = this.wam?.parts.find(
-          (entry) => key(entry.actor) === key(actor!.name),
+      for (let i = 0; i < position.count; i++)
+        this.bounds.expandByPoint(
+          new Vector3()
+            .fromBufferAttribute(position, i)
+            .applyMatrix4(originalToCar),
         );
-      }
-      const materialArray = (
+      const cloned = (
         Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       ).map((material) => material.clone());
-      mesh.material = Array.isArray(mesh.material)
-        ? materialArray
-        : materialArray[0];
-      const materials = materialArray.map((material) => {
+      mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0];
+      const materials = cloned.map((material, materialIndex) => {
         const mapped = material as Material & { map?: Texture | null };
-        if (mapped.map) this.textures.set(key(mapped.map.name), mapped.map);
-        return { material: mapped, map: mapped.map };
+        if (mapped.map)
+          this.textures.set(textureKey(mapped.map.name), mapped.map);
+        return {
+          material: mapped,
+          map: mapped.map,
+          centroid: this.materialCentroid(mesh.geometry, materialIndex),
+          level: 0,
+          originalSide: material.side,
+        };
       });
       this.meshes.push({
         mesh,
         original,
-        originalCar,
-        lower: [],
-        upper: [],
-        part,
+        repairTarget: Float32Array.from(original, modelRepairCoordinate),
+        originalToCar,
+        regions: new Uint16Array(position.count),
         materials,
-        materialEnergy: 0,
       });
     });
-    for (const data of this.meshes) {
-      for (const original of data.originalCar) {
-        const lower = this.bounds.min.clone().addScalar(-0.025);
-        const upper = this.bounds.max.clone().addScalar(0.025);
-        this.wam?.limits.forEach((limits, axis) => {
-          const value = original.getComponent(axis);
-          const mins = limits.min.filter((plane) => plane <= value);
-          const maxs = limits.max.filter((plane) => plane >= value);
-          if (mins.length) lower.setComponent(axis, Math.max(...mins));
-          if (maxs.length) upper.setComponent(axis, Math.min(...maxs));
-        });
-        data.lower.push(lower);
-        data.upper.push(upper);
-      }
-    }
+    // content.ts represents an ACT actor as a Group, with its own DAT models
+    // as direct Mesh children. Match that actor exactly; never inherit a WAM
+    // entry down through child ACT actors or remove identifier extensions.
+    this.group.traverse((actor) => {
+      const part = this.wam?.parts.find(
+        (entry) => entry.actor.toLowerCase() === actor.name.toLowerCase(),
+      );
+      if (!part || !actor.parent) return;
+      const models = this.meshes.filter(
+        (data) =>
+          !data.runtime && (data.mesh === actor || data.mesh.parent === actor),
+      );
+      if (!models.length) return;
+      const type =
+        part.type === "flap"
+          ? part.kevOFlap
+            ? 5
+            : 2
+          : ["normal", "stubborn", "fully_detach", "joint_index"].indexOf(
+              part.detachmentType ?? "normal",
+            );
+      actor.updateMatrix();
+      const sourcePositions =
+        (models[0].mesh.geometry.userData.sourcePositions as
+          | Float32Array
+          | undefined) ?? models[0].original;
+      const runtime: DamageRuntimePart = {
+        actor,
+        originalParent: actor.parent,
+        originalTransform: actor.matrix.clone(),
+        bounds: new Box3(),
+        state: createAttachmentState(type),
+        part,
+        mass: 0.01,
+        originalVertices: Array.from(
+          { length: sourcePositions.length / 3 },
+          (_, i) => {
+            const point = new Vector3().fromArray(sourcePositions, i * 3);
+            return models[0].mesh === actor
+              ? point
+              : point.applyMatrix4(models[0].mesh.matrix);
+          },
+        ),
+        strongestVertex: 0,
+        strongestDisplacement: 0,
+        detachmentVertex: part.jointIndex ?? 0,
+        detachmentDirection: 0,
+        detachmentSide: 0,
+        flapHinges: [],
+        flapCheckVertices: new Uint8Array(),
+        flapParentAnchor: new Vector3(),
+        flapParentReference: new Vector3(),
+      };
+      this.runtimeParts.push(runtime);
+      for (const model of models) model.runtime = runtime;
+      this.updatePartBounds(runtime);
+    });
     this.ready = true;
+    this.setupRegions();
   }
 
+  configurePhysics(
+    mechanics: CarMechanics,
+    mutableShapeVertices: Vector3[][],
+    resolvedWheelPositions?: readonly Vector3[],
+  ): void {
+    this.mechanics = mechanics;
+    this.currentCenterOfMass.fromArray(
+      mechanics.root.centerOfMass ?? [0, 0, 0],
+    );
+    this.originalWheelPositions = resolvedWheelPositions
+      ? resolvedWheelPositions.map((point) => point.clone())
+      : mechanics.wheels.map((wheel) => new Vector3(...wheel.position));
+    this.currentWheelPositions = this.originalWheelPositions.map((point) =>
+      point.clone(),
+    );
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    this.setupWheelGrooveReferences(inverse);
+    this.wheelMotionIndices = mechanics.wheels.map((wheel, index) => {
+      if (!resolvedWheelPositions || resolvedWheelPositions.length !== 4)
+        return index;
+      const actor = this.group.getObjectByName(wheel.actor);
+      const x =
+        wheel.position[0] ||
+        (actor
+          ? new Box3()
+              .setFromObject(actor)
+              .getCenter(new Vector3())
+              .applyMatrix4(inverse).x
+          : 0);
+      return (wheel.steerable ? 2 : 0) + (x > 0 ? 1 : 0);
+    });
+    for (const wheel of mechanics.wheels) {
+      const actor = this.group.getObjectByName(wheel.actor);
+      if (actor) {
+        actor.updateMatrix();
+        this.wheelTransforms.set(actor, actor.matrix.clone());
+      }
+    }
+    this.shapeVertices = mutableShapeVertices;
+    if (this.ready) this.setupRegions();
+  }
+
+  private setupWheelGrooveReferences(inverse: Matrix4): void {
+    this.wheelGrooveReferences.clear();
+    this.wheelGrooveOwnedActors.clear();
+    const lines = this.configText
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\/\/.*$/, "").trim())
+      .filter(Boolean);
+    const start = lines.indexOf("START OF GROOVE"),
+      end = lines.indexOf("END OF GROOVE", start + 1);
+    if (start < 0 || end < 0) return;
+    const centers = new Map<string, Vector3>();
+    for (const block of lines
+      .slice(start + 1, end)
+      .join("\n")
+      .split("NEXT GROOVE")) {
+      const fields = block.trim().split("\n");
+      if (fields[3]?.toLowerCase() !== "straight") continue;
+      const values = fields[5]?.split(/[\s,]+/).map(Number);
+      if (values?.length === 3 && values.every(Number.isFinite))
+        centers.set(fields[0].toLowerCase(), new Vector3(...values));
+    }
+    for (const prefix of WHEEL_PREFIXES) {
+      const wheel = this.group.getObjectByName(prefix + "WHEEL.ACT"),
+        pivot = this.group.getObjectByName(prefix + "PIVOT.ACT");
+      const selected = pivot ?? wheel;
+      if (!selected) continue;
+      const center = centers.get(selected.name.toLowerCase());
+      if (!center) continue;
+      let reference: Vector3;
+      if (center.lengthSq() === 0) {
+        const box = new Box3().setFromObject(selected);
+        reference = box.isEmpty()
+          ? new Vector3().setFromMatrixPosition(selected.matrixWorld)
+          : box.getCenter(new Vector3());
+        reference.applyMatrix4(inverse);
+      } else {
+        reference = center.clone();
+        if (selected.parent)
+          reference.applyMatrix4(selected.parent.matrixWorld);
+        reference.applyMatrix4(inverse);
+      }
+      this.wheelGrooveReferences.set(selected, reference);
+      this.wheelGrooveOffsets.set(selected, 0);
+      selected.userData.c2BendPathOffsetY = 0;
+      if (wheel) this.wheelGrooveOwnedActors.add(wheel);
+      if (pivot) this.wheelGrooveOwnedActors.add(pivot);
+    }
+  }
+
+  private updateWheelGrooveOffsets(bend: BendTransform | undefined): void {
+    for (const [actor, reference] of this.wheelGrooveReferences) {
+      const offset = bend ? bendPoint(reference, bend).y - reference.y : 0;
+      this.wheelGrooveOffsets.set(actor, offset);
+      actor.userData.c2BendPathOffsetY = offset;
+    }
+  }
+
+  private materialCentroid(
+    geometry: BufferGeometry,
+    materialIndex: number,
+  ): Vector3 {
+    const position = geometry.getAttribute("position");
+    const index = geometry.index;
+    const indices = new Set<number>();
+    const groups = geometry.groups.length
+      ? geometry.groups
+      : [{ start: 0, count: index?.count ?? position.count, materialIndex: 0 }];
+    for (const group of groups) {
+      if ((group.materialIndex ?? 0) !== materialIndex) continue;
+      for (let i = group.start; i < group.start + group.count; i++)
+        indices.add(index ? index.getX(i) : i);
+    }
+    const centroid = new Vector3();
+    const sourceIndices = geometry.userData.sourceVertexIndices as
+      | Uint32Array
+      | undefined;
+    const counted = new Set<number>();
+    for (const vertex of indices) {
+      const source = sourceIndices?.[vertex] ?? vertex;
+      if (counted.has(source)) continue;
+      counted.add(source);
+      centroid.add(new Vector3().fromBufferAttribute(position, vertex));
+    }
+    return counted.size ? centroid.divideScalar(counted.size) : centroid;
+  }
+
+  private setupRegions(): void {
+    if (this.shapeVertices.length) {
+      this.bounds.makeEmpty();
+      for (const shape of this.shapeVertices)
+        for (const point of shape) this.bounds.expandByPoint(point);
+    }
+    if (this.bounds.isEmpty())
+      this.bounds.set(
+        new Vector3(-0.1, -0.1, -0.1),
+        new Vector3(0.1, 0.1, 0.1),
+      );
+    const authored = this.wam?.limits ?? ZERO_LIMITS;
+    this.modelLimits = prepareCrushLimits(authored, {
+      min: vectorTuple(this.bounds.min),
+      max: vectorTuple(this.bounds.max),
+    });
+    for (const data of this.meshes) {
+      for (let i = 0; i < data.regions.length; i++)
+        data.regions[i] = classifyCrushVertex(
+          [
+            data.original[i * 3],
+            data.original[i * 3 + 1],
+            data.original[i * 3 + 2],
+          ],
+          this.modelLimits,
+        ).packed;
+    }
+    const wheelBounds = new Box3();
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    for (const wheel of this.mechanics?.wheels ?? []) {
+      const actor = this.group.getObjectByName(wheel.actor);
+      const translation = actor
+        ? new Vector3().setFromMatrixPosition(
+            new Matrix4().multiplyMatrices(inverse, actor.matrixWorld),
+          )
+        : new Vector3(...wheel.position);
+      wheelBounds.expandByPoint(
+        wheel.positionFromActor ? translation : new Vector3(...wheel.position),
+      );
+      if (actor)
+        for (const model of this.meshes.filter(
+          (data) => data.mesh === actor || data.mesh.parent === actor,
+        )) {
+          model.mesh.geometry.computeBoundingBox();
+          const box = model.mesh.geometry.boundingBox;
+          if (box) {
+            wheelBounds.expandByPoint(box.min.clone().add(translation));
+            wheelBounds.expandByPoint(box.max.clone().add(translation));
+          }
+        }
+    }
+    // The original envelope includes six wheel models (inner rear wheels too),
+    // regardless of whether mechanics exposes four suspension rays.
+    for (const prefix of WHEEL_PREFIXES) {
+      const actor = this.group.getObjectByName(prefix + "WHEEL.ACT");
+      if (!actor) continue;
+      const translation = new Vector3().setFromMatrixPosition(
+        new Matrix4().multiplyMatrices(inverse, actor.matrixWorld),
+      );
+      for (const model of this.meshes.filter(
+        (data) => data.mesh === actor || data.mesh.parent === actor,
+      )) {
+        model.mesh.geometry.computeBoundingBox();
+        const box = model.mesh.geometry.boundingBox;
+        if (box) {
+          wheelBounds.expandByPoint(box.min.clone().add(translation));
+          wheelBounds.expandByPoint(box.max.clone().add(translation));
+        }
+      }
+    }
+    this.physicsLimits = (
+      wheelBounds.isEmpty()
+        ? this.modelLimits
+        : this.modelLimits.map((axis, i) => ({
+            min: [...axis.min, wheelBounds.max.getComponent(i)].sort(
+              (a, b) => b - a,
+            ),
+            max: [...axis.max, wheelBounds.min.getComponent(i)].sort(
+              (a, b) => a - b,
+            ),
+          }))
+    ) as CrushLimits;
+    this.shapes = this.shapeVertices.map((vertices) => {
+      const original = vertices.map((point) => point.clone());
+      const regions = new Uint16Array(vertices.length);
+      const softness = new Float64Array(vertices.length);
+      for (let i = 0; i < vertices.length; i++) {
+        const classified = classifyCrushVertex(
+          vectorTuple(vertices[i]),
+          this.physicsLimits!,
+        );
+        regions[i] = classified.packed;
+        if (classified.invalid) continue;
+        let nearest = Infinity;
+        softness[i] = 1;
+        for (const data of this.meshes) {
+          if (!data.runtime) continue;
+          for (let v = 0; v < data.original.length; v += 3) {
+            const point = new Vector3(
+              data.original[v],
+              data.original[v + 1],
+              data.original[v + 2],
+            ).applyMatrix4(data.originalToCar);
+            const distance = point.distanceToSquared(vertices[i]);
+            if (distance < nearest) {
+              nearest = distance;
+              softness[i] = data.runtime.part.softnessFactor;
+            }
+          }
+        }
+      }
+      return { vertices, original, regions, softness };
+    });
+    const carVolume = this.bounds
+      .getSize(new Vector3())
+      .toArray()
+      .reduce((product, value) => product * value, 1);
+    for (const runtime of this.runtimeParts) {
+      if (runtime.part.type === "flap") {
+        runtime.flapHinges = orderFlapHinges(
+          runtime.originalVertices,
+          runtime.part.hinges,
+          new Vector3(...(this.mechanics?.root.centerOfMass ?? [0, 0, 0])),
+          runtime.part.kevOFlap,
+        );
+        runtime.flap = createFlapState(
+          runtime.originalVertices[runtime.flapHinges[1]],
+          runtime.originalVertices[runtime.flapHinges[2]],
+        );
+        runtime.flapCheckVertices = flapCheckVertices(
+          runtime.originalVertices,
+          runtime.flapHinges,
+        );
+        const parentModel = this.meshes.find(
+          (data) =>
+            data.mesh === runtime.originalParent ||
+            data.mesh.parent === runtime.originalParent,
+        );
+        const nearestParent = (point: Vector3) => {
+          const mapped = point.clone().applyMatrix4(runtime.originalTransform);
+          if (!parentModel) return mapped;
+          const positions =
+            (parentModel.mesh.geometry.userData.sourcePositions as
+              | Float32Array
+              | undefined) ?? parentModel.original;
+          const nearest = mapped.clone();
+          let best = Infinity;
+          for (let i = 0; i < positions.length; i += 3) {
+            const candidate = new Vector3().fromArray(positions, i);
+            if (parentModel.mesh !== runtime.originalParent)
+              candidate.applyMatrix4(parentModel.mesh.matrix);
+            const distance = mapped.distanceToSquared(candidate);
+            if (distance < best) {
+              best = distance;
+              nearest.copy(candidate);
+            }
+          }
+          return nearest;
+        };
+        runtime.flapParentAnchor.copy(
+          nearestParent(runtime.originalVertices[runtime.flapHinges[0]]),
+        );
+        runtime.flapParentReference.copy(
+          nearestParent(runtime.originalVertices[runtime.flapHinges[2]]),
+        );
+      }
+      if (runtime.originalVertices.length) {
+        const geometry = selectOrdinaryDetachGeometry(
+          runtime.originalVertices,
+          this.bounds.min,
+          this.bounds.max,
+          runtime.part.detachmentType === "joint_index"
+            ? runtime.part.jointIndex
+            : undefined,
+        );
+        runtime.detachmentVertex = geometry.vertexIndex;
+        runtime.detachmentDirection = geometry.cornerBits;
+        runtime.detachmentSide = geometry.side;
+      }
+      const volume = runtime.bounds
+        .getSize(new Vector3())
+        .toArray()
+        .reduce((product, value) => product * value, 1);
+      runtime.mass = detachedPartMass(
+        volume,
+        this.mechanics?.root.mass ?? 1,
+        carVolume,
+      );
+    }
+  }
+
+  private updatePartBounds(runtime: DamageRuntimePart): void {
+    runtime.bounds.makeEmpty();
+    for (const data of this.meshes.filter(
+      (model) => model.runtime === runtime,
+    )) {
+      const position = data.mesh.geometry.getAttribute("position");
+      const transform =
+        data.mesh === runtime.actor ? new Matrix4() : data.mesh.matrix;
+      for (let i = 0; i < position.count; i++)
+        runtime.bounds.expandByPoint(
+          new Vector3()
+            .fromBufferAttribute(position, i)
+            .applyMatrix4(transform),
+        );
+    }
+  }
+
+  private refreshGeometry(data: DamageMesh): void {
+    (
+      data.mesh.geometry.getAttribute("position") as BufferAttribute
+    ).needsUpdate = true;
+    if (data.mesh.geometry.userData.sourceVertexIndices)
+      updateModelNormals(data.mesh.geometry);
+    else data.mesh.geometry.computeVertexNormals();
+    data.mesh.geometry.computeBoundingBox();
+    data.mesh.geometry.computeBoundingSphere();
+  }
+
+  getPartVertices(runtime: DamageRuntimePart): Vector3[] {
+    const data = this.meshes.find((entry) => entry.runtime === runtime);
+    if (!data) return runtime.originalVertices.map((point) => point.clone());
+    const position = data.mesh.geometry.getAttribute("position");
+    const mapping = data.mesh.geometry.userData.sourceVertexIndices as
+      | Uint32Array
+      | undefined;
+    const points = runtime.originalVertices.map((point) => point.clone());
+    const seen = new Set<number>();
+    for (let i = 0; i < position.count; i++) {
+      const source = mapping?.[i] ?? i;
+      if (seen.has(source)) continue;
+      seen.add(source);
+      points[source].fromBufferAttribute(position, i);
+      if (data.mesh !== runtime.actor)
+        points[source].applyMatrix4(data.mesh.matrix);
+    }
+    return points;
+  }
+
+  private writePartVertices(
+    runtime: DamageRuntimePart,
+    points: Vector3[],
+  ): void {
+    const data = this.meshes.find((entry) => entry.runtime === runtime);
+    if (!data) return;
+    const position = data.mesh.geometry.getAttribute(
+      "position",
+    ) as BufferAttribute;
+    const mapping = data.mesh.geometry.userData.sourceVertexIndices as
+      | Uint32Array
+      | undefined;
+    const inverse =
+      data.mesh === runtime.actor ? null : data.mesh.matrix.clone().invert();
+    for (let i = 0; i < position.count; i++) {
+      const point = points[mapping?.[i] ?? i].clone();
+      if (inverse) point.applyMatrix4(inverse);
+      position.setXYZ(i, point.x, point.y, point.z);
+    }
+    this.refreshGeometry(data);
+  }
+
+  private updateFlapTransform(
+    runtime: DamageRuntimePart,
+    points: Vector3[],
+  ): void {
+    if (!runtime.flap) return;
+    const { origin, axis } = flapBasis(points, runtime.flapHinges);
+    runtime.actor.matrix
+      .makeTranslation(
+        runtime.flapParentAnchor.x,
+        runtime.flapParentAnchor.y,
+        runtime.flapParentAnchor.z,
+      )
+      .multiply(
+        new Matrix4().makeRotationAxis(axis, flapAngleRadians(runtime.flap)),
+      )
+      .multiply(new Matrix4().makeTranslation(-origin.x, -origin.y, -origin.z));
+    runtime.actor.matrix.decompose(
+      runtime.actor.position,
+      runtime.actor.quaternion,
+      runtime.actor.scale,
+    );
+    runtime.actor.updateMatrixWorld(true);
+  }
+
+  /** Source FlapBits passes (v-now - v-previous)/dt + Batty gravity, transformed
+   * into the car frame. Call once per original physics step, after impacts. */
+  stepFlaps(forceInCar: Vector3): number {
+    let changed = 0;
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    for (const runtime of this.runtimeParts) {
+      if (
+        !runtime.flap?.active ||
+        runtime.part.kevOFlap ||
+        runtime.state.phase !== 0
+      )
+        continue;
+      const points = this.getPartVertices(runtime);
+      const { axis, radial } = flapBasis(points, runtime.flapHinges);
+      const radialInCar = radial.transformDirection(
+        new Matrix4().multiplyMatrices(inverse, runtime.actor.matrixWorld),
+      );
+      if (
+        stepFlapAngle(runtime.flap, axis, radialInCar, forceInCar, runtime.mass)
+      ) {
+        this.shellModelActive = false;
+        this.updateFlapTransform(runtime, points);
+        changed++;
+      }
+    }
+    return changed;
+  }
+
+  private applyStructuralBend(bend: BendTransform, human: boolean): void {
+    this.shellModelActive = false;
+    this.bendVertexReferences.clear();
+    this.bendCenterReference.copy(this.currentCenterOfMass);
+    this.bendWheelReferences = this.currentWheelPositions.map((point) =>
+      point.clone(),
+    );
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    for (const data of this.meshes) {
+      if (!data.runtime || data.runtime.state.phase !== 0) continue;
+      const toCar = new Matrix4().multiplyMatrices(
+        inverse,
+        data.mesh.matrixWorld,
+      );
+      const toMesh = toCar.clone().invert();
+      const positions = data.mesh.geometry.getAttribute(
+        "position",
+      ) as BufferAttribute;
+      const references: Vector3[] = [];
+      for (let i = 0; i < positions.count; i++) {
+        const point = new Vector3()
+          .fromBufferAttribute(positions, i)
+          .applyMatrix4(toCar);
+        references.push(point.clone());
+        point.copy(bendPoint(point, bend)).applyMatrix4(toMesh);
+        positions.setXYZ(i, point.x, point.y, point.z);
+      }
+      this.bendVertexReferences.set(data, references);
+      this.refreshGeometry(data);
+    }
+    // Extra bend-plane vertices are source hull edge intersections, not an
+    // expanded render bounding box. Store their insertion in the same arrays.
+    if (this.wam?.version === 4) {
+      this.bendShapeReferences = [];
+      for (const shape of this.shapes) {
+        const edges =
+          shape.vertices.length >= 4 ? buildHull(shape.vertices).edges : [];
+        const reference = bendHullVertices(
+          shape.vertices,
+          edges,
+          createBendTransform(bend.bounds, bend.pivot, bend.farZ, 0, 0),
+        );
+        this.bendShapeReferences.push(reference);
+        const bent = bendHullVertices(shape.vertices, edges, bend);
+        shape.vertices.splice(0, shape.vertices.length, ...bent);
+      }
+      this.currentCenterOfMass.copy(bendPoint(this.currentCenterOfMass, bend));
+    }
+    this.currentWheelPositions = this.currentWheelPositions.map((point) =>
+      bendPoint(point, bend),
+    );
+    this.updateWheelGrooveOffsets(bend);
+    for (const wheel of this.mechanics?.wheels ?? []) {
+      const actor = this.group.getObjectByName(wheel.actor);
+      if (!actor || this.wheelGrooveOwnedActors.has(actor)) continue;
+      const toCar = new Matrix4().multiplyMatrices(inverse, actor.matrixWorld);
+      const original = new Vector3().setFromMatrixPosition(toCar);
+      const bent = bendPoint(original, bend);
+      const parentInverse = actor.parent
+        ? actor.parent.matrixWorld
+            .clone()
+            .invert()
+            .multiply(this.group.matrixWorld)
+        : new Matrix4();
+      actor.position.copy(bent.applyMatrix4(parentInverse));
+      actor.updateMatrix();
+    }
+    // DamageSystems43?→DoDamage increments10..40; repeat engine until80 or
+    //30 attempts, then visit the other units once. Human driver remains immune.
+    const random = this.damageContext.random ?? Math.random;
+    for (let index = 0; index < 12; index++) {
+      let attempts = 0;
+      do {
+        this.componentLevels[index] = applyDamageUnit(
+          this.componentLevels[index],
+          index,
+          10 + Math.floor(random() * 31),
+          { ...this.damageContext, human },
+        );
+      } while (index === 0 && this.componentLevels[0] < 80 && ++attempts < 30);
+    }
+    this.structuralBend = bend;
+    if (this.wam?.version === 4) this.pendingShapeSwapFlags |= 0xb;
+    this.bentStopBounds.makeEmpty();
+    for (const shape of this.shapes)
+      for (const point of shape.vertices)
+        this.bentStopBounds.expandByPoint(point);
+    if (this.bentStopBounds.isEmpty()) this.bentStopBounds.copy(bend.bounds);
+    const inset = this.bentStopBounds
+      .getSize(new Vector3())
+      .multiplyScalar(0.15);
+    this.bentStopBounds.min.add(inset);
+    this.bentStopBounds.max.sub(inset);
+    this.structuralRevision++;
+    this.deformationRevision++;
+    for (const runtime of this.runtimeParts) this.updatePartBounds(runtime);
+  }
+
+  private resetStructuralState(): void {
+    if (!this.structuralBend) return;
+    this.structuralBend = undefined;
+    this.bendVertexReferences.clear();
+    this.bendShapeReferences = [];
+    this.currentCenterOfMass.fromArray(
+      this.mechanics?.root.centerOfMass ?? [0, 0, 0],
+    );
+    this.currentWheelPositions = this.originalWheelPositions.map((point) =>
+      point.clone(),
+    );
+    this.updateWheelGrooveOffsets(undefined);
+    for (const [actor, transform] of this.wheelTransforms) {
+      actor.matrix.copy(transform);
+      transform.decompose(actor.position, actor.quaternion, actor.scale);
+    }
+    this.structuralRevision++;
+  }
+
+  private repairStructuralBend(dtMs: number, unitCost: number) {
+    const previous = this.structuralBend!;
+    const result = stepBendRepair(previous, dtMs);
+    const { next, bodyworkRepair, totalDeflection } = result;
+    if (bodyworkRepair > 0) {
+      this.group.updateMatrixWorld(true);
+      const inverse = this.group.matrixWorld.clone().invert();
+      const deltaRotation = next.rotation
+        .clone()
+        .multiply(previous.rotation.clone().invert());
+      for (const [data, references] of this.bendVertexReferences) {
+        if (data.runtime?.state.phase !== 0) continue;
+        const toCar = new Matrix4().multiplyMatrices(
+          inverse,
+          data.mesh.matrixWorld,
+        );
+        const toMesh = toCar.clone().invert();
+        const positions = data.mesh.geometry.getAttribute(
+          "position",
+        ) as BufferAttribute;
+        for (let i = 0; i < positions.count; i++) {
+          const reference = references[i];
+          const point = new Vector3()
+            .fromBufferAttribute(positions, i)
+            .applyMatrix4(toCar);
+          const outer = previous.front
+            ? reference.z <= previous.pivot.z
+            : reference.z >= previous.pivot.z;
+          if (outer) point.applyMatrix4(deltaRotation);
+          else
+            point.add(
+              bendPoint(reference, next).sub(bendPoint(reference, previous)),
+            );
+          point.applyMatrix4(toMesh);
+          positions.setXYZ(i, point.x, point.y, point.z);
+        }
+        this.refreshGeometry(data);
+      }
+      this.shapes.forEach((shape, index) => {
+        const references = this.bendShapeReferences[index];
+        if (!references) return;
+        const points = references.map((point) => bendPoint(point, next));
+        if (result.complete) points.length = shape.original.length;
+        shape.vertices.splice(0, shape.vertices.length, ...points);
+      });
+      this.currentCenterOfMass.copy(bendPoint(this.bendCenterReference, next));
+      this.currentWheelPositions = this.bendWheelReferences.map((point) =>
+        bendPoint(point, next),
+      );
+      this.updateWheelGrooveOffsets(next);
+      for (const [actor, original] of this.wheelTransforms) {
+        if (this.wheelGrooveOwnedActors.has(actor)) continue;
+        const parent = actor.parent
+          ? new Matrix4().multiplyMatrices(inverse, actor.parent.matrixWorld)
+          : new Matrix4();
+        const point = new Vector3()
+          .setFromMatrixPosition(original)
+          .applyMatrix4(parent);
+        actor.position.copy(
+          bendPoint(point, next).applyMatrix4(parent.invert()),
+        );
+        actor.updateMatrix();
+      }
+      this.structuralBend = next;
+      if (result.complete) this.resetStructuralState();
+      else this.structuralRevision++;
+      this.deformationRevision++;
+      if (this.wam?.version === 4) this.pendingShapeSwapFlags |= 3;
+      for (const runtime of this.runtimeParts) this.updatePartBounds(runtime);
+    }
+    let componentDifference = 0,
+      cost = 0;
+    if (dtMs > 0)
+      for (let i = 0; i < 12; i++) {
+        const old = this.componentLevels[i];
+        this.componentLevels[i] =
+          totalDeflection === 0
+            ? 0
+            : Math.max(
+                0,
+                old - Math.floor((old * bodyworkRepair) / totalDeflection),
+              );
+        componentDifference += old - this.componentLevels[i];
+        cost = Math.trunc(cost + (old - this.componentLevels[i]) * unitCost);
+      }
+    return {
+      bodyworkRepair,
+      totalDeflection,
+      componentDifference,
+      cost: 10 * Math.trunc(cost / 10),
+      active: bodyworkRepair > 0 || cost > 0,
+      repaired: bodyworkRepair > 0 || componentDifference > 0,
+      complete: result.complete,
+    };
+  }
+
+  /** Legacy API treats strength as an already scaled crush-vector magnitude.
+   * It has no speed-to-force conversion; simulation uses applyImpact directly. */
   impact(
     localImpactPoint: Vector3,
     direction: Vector3,
     strength: number,
   ): void {
+    const crushVector = direction.clone().normalize().multiplyScalar(strength);
+    this.applyImpact(
+      [localImpactPoint],
+      crushVector.clone().multiplyScalar(2),
+      false,
+      true,
+      0,
+      crushVector,
+    );
+  }
+
+  applyImpact(
+    localContacts: Vector3[],
+    localEnergyVector: Vector3,
+    hitAnotherCar: boolean,
+    human: boolean,
+    nowMs: number,
+    localCrushVector?: Vector3,
+    localDamagePoint?: Vector3,
+  ) {
+    const empty = { componentEvents: [], queuedForce: 0, maxInfluence: 0 };
     if (
       !this.ready ||
-      !Number.isFinite(strength) ||
-      strength <= 0.65 ||
-      direction.lengthSq() < 1e-10 ||
-      !localImpactPoint.toArray().every(Number.isFinite) ||
-      !direction.toArray().every(Number.isFinite)
+      !localContacts.length ||
+      !localEnergyVector.toArray().every(Number.isFinite) ||
+      !localContacts.every((point) => point.toArray().every(Number.isFinite))
     )
-      return;
-    const push = direction.clone().normalize();
-    const radius = clamp(0.25 + strength * 0.025, 0.25, 0.55);
-    const amount = Math.min(0.12, (strength - 0.65) * 0.025);
+      return empty;
+    const contacts: Vector3[] = [];
+    for (const point of localContacts.slice(0, 4)) {
+      if (
+        !contacts.some(
+          (saved) =>
+            Math.abs(saved.x - point.x) < 0.005 &&
+            Math.abs(saved.y - point.y) < 0.005 &&
+            Math.abs(saved.z - point.z) < 0.005,
+        )
+      )
+        contacts.push(point.clone());
+    }
+    const mean = contacts
+      .reduce((sum, point) => sum.add(point), new Vector3())
+      .divideScalar(contacts.length);
+    const currentBounds = new Box3();
+    for (const shape of this.shapes)
+      for (const vertex of shape.vertices) currentBounds.expandByPoint(vertex);
+    if (currentBounds.isEmpty()) currentBounds.copy(this.bounds);
+    const component = this.damagePrograms
+      ? applyComponentImpact(this.componentLevels, this.damagePrograms, {
+          point: vectorTuple(localDamagePoint ?? mean),
+          bounds: {
+            min: vectorTuple(currentBounds.min),
+            max: vectorTuple(currentBounds.max),
+          },
+          energyVector: vectorTuple(localEnergyVector),
+          hitAnotherCar,
+          context: { ...this.damageContext, human },
+        })
+      : undefined;
+    const vector =
+      localCrushVector?.clone() ??
+      localEnergyVector.clone().multiplyScalar(human ? 0.5 : 1.5);
+    if (!vector.toArray().every(Number.isFinite)) return empty;
+    const force = queuedCrushForce(
+      vectorTuple(vector),
+      this.damagePrograms?.softness ?? 1,
+    );
+    if (!this.wam || !force || !this.modelLimits || this.snapped)
+      return {
+        componentEvents: component?.events ?? [],
+        queuedForce: force,
+        maxInfluence: 0,
+      };
+    const direction = vector.normalize();
+    {
+      const structural = selectStructuralBend({
+        mean,
+        direction,
+        force,
+        bendability: this.wam.bendability,
+        bendZMin: this.wam.bendZMin,
+        bendZMax: this.wam.bendZMax,
+        bounds: currentBounds,
+        human,
+        raceIndex: this.damageContext.raceIndex,
+        raceCount: this.damageContext.raceCount,
+        random: this.damageContext.random,
+        alreadyBent: !!this.structuralBend,
+      });
+      if (structural.skipOrdinary) {
+        if (structural.bend) this.applyStructuralBend(structural.bend, human);
+        return {
+          componentEvents: component?.events ?? [],
+          queuedForce: force,
+          maxInfluence: 0,
+        };
+      }
+    }
+    this.shellModelActive = false;
+    let changed = this.crushShapes(contacts, direction, force);
+    let maxInfluence = 0;
     this.group.updateMatrixWorld(true);
-    const rootInverse = this.group.matrixWorld.clone().invert();
+    const inverse = this.group.matrixWorld.clone().invert();
+    for (const runtime of this.runtimeParts) {
+      if (runtime.state.phase !== 0) continue;
+      const models = this.meshes.filter((data) => data.runtime === runtime);
+      let influence = 0;
+      for (const [detail, data] of models.entries()) {
+        const toMesh = new Matrix4()
+          .multiplyMatrices(inverse, data.mesh.matrixWorld)
+          .invert();
+        const modelContacts = contacts.map((point) =>
+          vectorTuple(point.clone().applyMatrix4(toMesh)),
+        );
+        const modelMean = mean.clone().applyMatrix4(toMesh);
+        const modelDirection = direction.clone().transformDirection(toMesh);
+        const position = data.mesh.geometry.getAttribute(
+          "position",
+        ) as BufferAttribute;
+        if (this.structuralBend) {
+          const result = crushBentModel({
+            positions: position.array,
+            contacts: modelContacts,
+            movement: vectorTuple(
+              modelDirection.multiplyScalar(
+                (runtime.part.softnessFactor * Math.min(force, 0.5)) /
+                  contacts.length,
+              ),
+            ),
+            stopBounds: {
+              min: vectorTuple(this.bentStopBounds.min),
+              max: vectorTuple(this.bentStopBounds.max),
+            },
+          });
+          if (result.movedVertices) {
+            this.refreshGeometry(data);
+            changed = true;
+          }
+          continue;
+        }
+        const result = crushModel({
+          positions: position.array,
+          vertexRegions: data.regions,
+          limits: this.modelLimits,
+          contacts: modelContacts,
+          direction: vectorTuple(modelDirection),
+          meanImpact: vectorTuple(modelMean),
+          force,
+          softness: runtime.part.softnessFactor,
+        });
+        if (result.movedVertices) {
+          this.refreshGeometry(data);
+          changed = true;
+        }
+        if (detail === 0) {
+          influence = result.maxInfluence;
+          runtime.strongestVertex =
+            data.mesh.geometry.userData.sourceVertexIndices?.[
+              result.strongestVertex
+            ] ?? result.strongestVertex;
+          runtime.strongestDisplacement = result.strongestDisplacement;
+          if (runtime.flap && !runtime.part.kevOFlap) {
+            const points = this.getPartVertices(runtime);
+            const plastic = applyPlasticFlap(runtime.flap, {
+              points,
+              hinges: runtime.flapHinges,
+              checkVertices: runtime.flapCheckVertices,
+              direction:
+                data.mesh === runtime.actor
+                  ? modelDirection
+                  : modelDirection.clone().transformDirection(data.mesh.matrix),
+              strongestVertex: runtime.strongestVertex,
+              displacement: result.strongestDisplacement,
+              parentReference: runtime.flapParentReference
+                .clone()
+                .applyMatrix4(runtime.actor.matrix.clone().invert()),
+              random: this.damageContext.random,
+            });
+            if (plastic.movedVertices) {
+              this.writePartVertices(runtime, points);
+              changed = true;
+            }
+            if (plastic.activated) {
+              for (const model of models)
+                for (const saved of model.materials) {
+                  saved.material.side = DoubleSide;
+                  saved.material.needsUpdate = true;
+                }
+            }
+            if (plastic.angleChanged) this.updateFlapTransform(runtime, points);
+          }
+        }
+        for (const smash of runtime.part.smashes) {
+          for (const saved of data.materials) {
+            if (
+              saved.material.name.toLowerCase() !== smash.material.toLowerCase()
+            )
+              continue;
+            const magnitude = crushSmashMagnitude(
+              force,
+              runtime.part.softnessFactor,
+              contacts.length,
+              vectorTuple(saved.centroid),
+              vectorTuple(modelMean),
+            );
+            let level = saved.level;
+            smash.levels.forEach((candidate, index) => {
+              if (candidate.threshold <= magnitude && index + 1 > level)
+                level = index + 1;
+            });
+            if (level === saved.level) continue;
+            saved.level = level;
+            const replacement = smash.levels[level - 1]?.pixelmaps
+              .map((name) => this.textures.get(textureKey(name)))
+              .find(Boolean);
+            if (!replacement) continue;
+            const texture = replacement.clone();
+            if (saved.map) {
+              texture.matrixAutoUpdate = saved.map.matrixAutoUpdate;
+              texture.matrix.copy(saved.map.matrix);
+            }
+            if (saved.material.map && saved.material.map !== saved.map)
+              saved.material.map.dispose();
+            saved.material.map = texture;
+            saved.material.needsUpdate = true;
+          }
+        }
+      }
+      maxInfluence = Math.max(maxInfluence, influence);
+      this.updatePartBounds(runtime);
+      if (runtime.part.type !== "boring" && runtime.part.ease) {
+        accumulateSharedDetachmentForce(
+          this.detachmentScheduling,
+          runtime.state,
+          Math.min(force, 0.5) / contacts.length,
+          influence,
+          detachmentThreshold(runtime.part.ease),
+          nowMs,
+        );
+      }
+    }
+    if (changed) this.deformationRevision++;
+    return {
+      componentEvents: component?.events ?? [],
+      queuedForce: force,
+      maxInfluence,
+    };
+  }
+
+  private crushShapes(
+    contacts: Vector3[],
+    direction: Vector3,
+    force: number,
+  ): boolean {
+    if (this.wam?.version !== 4 || !this.physicsLimits || this.structuralBend)
+      return false;
+    const reduced = new Vector3(0, Math.min(direction.y, 0), direction.z);
+    const ratio = reduced.length();
+    if (ratio < 0.00001) return false;
+    reduced.divideScalar(ratio);
+    const tuples = contacts.map(vectorTuple);
+    let changed = false;
+    for (const shape of this.shapes)
+      for (let i = 0; i < shape.vertices.length; i++) {
+        const point = shape.vertices[i];
+        const values = new Float64Array(point.toArray());
+        const before = point.clone();
+        crushModel({
+          positions: values,
+          vertexRegions: Uint16Array.of(shape.regions[i]),
+          limits: this.physicsLimits,
+          contacts: tuples,
+          direction: vectorTuple(reduced),
+          force: Math.min(force, 0.5) * ratio,
+          softness: shape.softness[i],
+        });
+        point.fromArray(values);
+        for (let axis = 0; axis < 3; axis++) {
+          const bits = shape.regions[i] >>> (axis * 4);
+          const min = this.physicsLimits[axis].min[bits & 3];
+          const max = this.physicsLimits[axis].max[(bits >>> 2) & 3];
+          const value = point.getComponent(axis);
+          point.setComponent(
+            axis,
+            value < min ? min : value > max ? max : value,
+          );
+        }
+        if (!point.equals(before)) changed = true;
+      }
+    if (changed) this.pendingShapeSwapFlags |= 7;
+    return changed;
+  }
+
+  /** Held repair: HW RepairCar2 0x43abd0 / RepairModel 0x43b400 move each
+   * coordinate toward its saved original at .00005 model units/ms. Component
+   * recovery follows repaired L1 deflection / initial L1 deflection; controls
+   * bills recovered unit levels, with GENERAL Medium cost20 credits/unit.
+   * The simulation still owns safe hull swaps and destruction/credit gating.
+   */
+  repairStep(dtMs: number, unitCost = 20) {
+    // Source43abd0 rejects snapped cars; TotallyRepairCar43? can reunite them.
+    if (this.snapped || this.shellModelActive)
+      return {
+        bodyworkRepair: 0,
+        totalDeflection: 0,
+        componentDifference: 0,
+        cost: 0,
+        active: false,
+        repaired: false,
+        complete: false,
+      };
+    if (this.structuralBend) return this.repairStructuralBend(dtMs, unitCost);
+    const step = Math.max(0, dtMs) * 0.00005;
+    let totalDeflection = 0;
+    let bodyworkRepair = 0;
+    let changed = false;
     for (const data of this.meshes) {
-      const softness = data.part?.softnessFactor ?? 1;
+      if (!data.runtime) continue;
       const position = data.mesh.geometry.getAttribute(
         "position",
       ) as BufferAttribute;
-      const transform = new Matrix4().multiplyMatrices(
-        rootInverse,
-        data.mesh.matrixWorld,
-      );
-      const toMesh = transform.clone().invert();
-      let modified = false;
-      let influence = 0;
-      for (let i = 0; i < position.count; i++) {
-        const original = data.originalCar[i];
-        const weight = Math.max(
-          0,
-          1 - original.distanceTo(localImpactPoint) / radius,
-        );
-        influence = Math.max(influence, weight);
-        if (weight <= 0 || softness === 0 || data.part?.hinges.includes(i))
-          continue;
-        const point = new Vector3()
-          .fromBufferAttribute(position, i)
-          .applyMatrix4(transform);
-        point.addScaledVector(push, amount * softness * weight * weight);
-        // Keep each original vertex in its WAM region and bound repeated impacts.
-        point.clamp(data.lower[i], data.upper[i]);
-        const delta = point.clone().sub(original);
-        if (delta.length() > 0.24)
-          point.copy(original).add(delta.setLength(0.24));
-        point.applyMatrix4(toMesh);
-        position.setXYZ(i, point.x, point.y, point.z);
-        modified = true;
+      let modelDeflection = 0;
+      let modelRepair = 0;
+      const sourceIndices = data.mesh.geometry.userData.sourceVertexIndices as
+        | Uint32Array
+        | undefined;
+      const counted = new Set<number>();
+      for (let i = 0; i < position.array.length; i++) {
+        const difference = data.repairTarget[i] - position.array[i];
+        const coordinate =
+          (sourceIndices?.[Math.floor(i / 3)] ?? Math.floor(i / 3)) * 3 +
+          (i % 3);
+        const first = !counted.has(coordinate);
+        counted.add(coordinate);
+        if (first) modelDeflection += Math.abs(difference);
+        // Original enumerates the root physics tree (including semi bits).
+        // Fully free bits only contribute remaining deflection until reattached.
+        if (data.runtime.state.phase === 2) continue;
+        const previous = position.array[i];
+        const amount =
+          Math.sign(difference) * Math.min(Math.abs(difference), step);
+        position.array[i] += amount;
+        if (first) modelRepair += Math.abs(position.array[i] - previous);
       }
-      if (modified) {
-        position.needsUpdate = true;
-        data.mesh.geometry.computeVertexNormals();
-        data.mesh.geometry.computeBoundingBox();
-        data.mesh.geometry.computeBoundingSphere();
+      totalDeflection += modelDeflection;
+      bodyworkRepair += modelRepair;
+      if (modelRepair) {
+        this.refreshGeometry(data);
+        changed = true;
       }
-      data.materialEnergy += strength * strength * 0.00005 * influence;
-      for (const smash of data.part?.smashes ?? []) {
-        const level = smash.levels
-          .filter((level) => data.materialEnergy >= (level.threshold || 0.001))
-          .at(-1);
-        const replacement = level?.pixelmaps
-          .map((name) => this.textures.get(key(name)))
-          .find(Boolean);
-        if (!replacement) continue;
+      if (modelDeflection === 0) {
+        data.runtime.state.accumulatedForce = 0;
+        if (data.runtime.flap && data.runtime.flap.active) {
+          data.runtime.flap = createFlapState(
+            data.runtime.originalVertices[data.runtime.flapHinges[1]],
+            data.runtime.originalVertices[data.runtime.flapHinges[2]],
+          );
+          data.runtime.actor.matrix.copy(data.runtime.originalTransform);
+          data.runtime.originalTransform.decompose(
+            data.runtime.actor.position,
+            data.runtime.actor.quaternion,
+            data.runtime.actor.scale,
+          );
+          changed = true;
+        }
         for (const saved of data.materials) {
-          if (key(saved.material.name) !== key(smash.material)) continue;
-          const current = saved.material.map;
-          if (current?.userData.damageSource === replacement.uuid) continue;
-          const texture = replacement.clone();
-          if (saved.map) {
-            texture.matrixAutoUpdate = saved.map.matrixAutoUpdate;
-            texture.matrix.copy(saved.map.matrix);
-          }
-          texture.userData.damageSource = replacement.uuid;
-          if (current && current !== saved.map) current.dispose();
-          saved.material.map = texture;
+          if (saved.material.map && saved.material.map !== saved.map)
+            saved.material.map.dispose();
+          saved.material.map = saved.map;
+          saved.material.side = saved.originalSide;
           saved.material.needsUpdate = true;
+          saved.level = 0;
         }
       }
     }
+    for (const shape of this.shapes)
+      shape.vertices.forEach((point, index) => {
+        if (!shape.original[index]) return;
+        for (let axis = 0; axis < 3; axis++) {
+          const difference =
+            shape.original[index].getComponent(axis) - point.getComponent(axis);
+          const amount =
+            Math.sign(difference) * Math.min(Math.abs(difference), step);
+          if (amount) {
+            point.setComponent(axis, point.getComponent(axis) + amount);
+            changed = true;
+            this.pendingShapeSwapFlags |= 3;
+          }
+        }
+      });
+    if (totalDeflection === 0 && dtMs > 0 && this.structuralBend) {
+      for (const shape of this.shapes)
+        shape.vertices.splice(
+          0,
+          shape.vertices.length,
+          ...shape.original.map((point) => point.clone()),
+        );
+      this.resetStructuralState();
+      changed = true;
+    }
+    // When the current tree stops moving, original repair reattaches remaining
+    // bits. Their geometry enters next tick's tree rather than snapping now.
+    if (bodyworkRepair === 0 && dtMs > 0) {
+      for (const runtime of this.runtimeParts) {
+        if (runtime.state.phase === 0 && runtime.state.queuedAt === null)
+          continue;
+        runtime.originalParent.add(runtime.actor);
+        runtime.actor.matrix.copy(runtime.originalTransform);
+        runtime.originalTransform.decompose(
+          runtime.actor.position,
+          runtime.actor.quaternion,
+          runtime.actor.scale,
+        );
+        cancelScheduledDetachment(this.detachmentScheduling, runtime.state);
+        resetAttachmentState(runtime.state);
+        changed = true;
+      }
+      if (changed) this.repairRevision++;
+    }
+    let componentDifference = 0;
+    let cost = 0;
+    if (dtMs > 0) {
+      for (let i = 0; i < this.componentLevels.length; i++) {
+        const previous = this.componentLevels[i];
+        const next =
+          totalDeflection === 0
+            ? 0
+            : Math.max(
+                0,
+                previous -
+                  Math.floor((previous * bodyworkRepair) / totalDeflection),
+              );
+        this.componentLevels[i] = next;
+        componentDifference += previous - next;
+        cost = Math.trunc(cost + (previous - next) * unitCost);
+      }
+    }
+    if (changed) this.deformationRevision++;
+    for (const runtime of this.runtimeParts) this.updatePartBounds(runtime);
+    this.group.updateMatrixWorld(true);
+    const progress = bodyworkRepair || (totalDeflection > 0 ? 1.1920929e-7 : 0);
+    return {
+      bodyworkRepair: progress,
+      totalDeflection,
+      componentDifference,
+      cost: 10 * Math.trunc(cost / 10),
+      active: progress > 0 || cost > 0,
+      repaired: bodyworkRepair > 0 || componentDifference > 0 || changed,
+      complete: totalDeflection === 0 && this.detachQueue.length === 0,
+    };
   }
 
   repair(): void {
+    this.restoreSplit();
+    for (const runtime of this.runtimeParts) {
+      runtime.originalParent.add(runtime.actor);
+      runtime.actor.matrix.copy(runtime.originalTransform);
+      runtime.originalTransform.decompose(
+        runtime.actor.position,
+        runtime.actor.quaternion,
+        runtime.actor.scale,
+      );
+      cancelScheduledDetachment(this.detachmentScheduling, runtime.state);
+      resetAttachmentState(runtime.state);
+      if (runtime.flap)
+        runtime.flap = createFlapState(
+          runtime.originalVertices[runtime.flapHinges[1]],
+          runtime.originalVertices[runtime.flapHinges[2]],
+        );
+    }
     for (const data of this.meshes) {
       const position = data.mesh.geometry.getAttribute(
         "position",
       ) as BufferAttribute;
-      position.array.set(data.original);
-      position.needsUpdate = true;
-      data.mesh.geometry.computeVertexNormals();
-      data.mesh.geometry.computeBoundingBox();
-      data.mesh.geometry.computeBoundingSphere();
-      data.materialEnergy = 0;
+      position.array.set(data.runtime ? data.repairTarget : data.original);
+      this.refreshGeometry(data);
       for (const saved of data.materials) {
         if (saved.material.map && saved.material.map !== saved.map)
           saved.material.map.dispose();
         saved.material.map = saved.map;
+        saved.material.side = saved.originalSide;
         saved.material.needsUpdate = true;
+        saved.level = 0;
       }
     }
+    for (const shape of this.shapes)
+      shape.vertices.splice(
+        0,
+        shape.vertices.length,
+        ...shape.original.map((point) => point.clone()),
+      );
+    this.resetStructuralState();
+    for (const runtime of this.runtimeParts) this.updatePartBounds(runtime);
+    this.componentLevels.fill(0);
+    this.shellModelActive = true;
+    this.repairRevision++;
+    this.deformationRevision++;
+    if (this.wam?.version === 4) this.pendingShapeSwapFlags |= 3;
+    this.group.updateMatrixWorld(true);
   }
 }

@@ -1,4 +1,13 @@
 import { Quaternion, Vector3 } from "three";
+import {
+  buildJointConstraints,
+  applyJointConstraintImpulses,
+  jointConstraintImpacts,
+  projectQuickHingeVelocities,
+  selectQuickHinges,
+} from "./joint";
+import type { RigidJoint, JointConstraintImpact } from "./joint";
+export type { JointConstraintImpact } from "./joint";
 
 /** Actor origin and solver-frame orientation; velocities refer to the COM. */
 export interface RigidState {
@@ -29,9 +38,13 @@ export interface Contact {
   a: RigidBody;
   b?: RigidBody;
   point: Vector3;
+  /** Independent B solver-frame lever for candidate-frame car/car contacts. */
+  pointB?: Vector3;
   normal: Vector3; // Unit world normal pointing from B toward A.
   penetration?: number;
   faceFriction?: number;
+  /** Original world feature flags0=edge,1=body vertex,2=world vertex;5=pair. */
+  sourceType?: number;
 }
 
 export interface ContactImpact extends Contact {
@@ -39,6 +52,14 @@ export interface ContactImpact extends Contact {
   closingSpeed: number;
   tangentImpulse: Vector3; // World impulse applied to A.
 }
+
+/** Return false when the callback changed collision geometry and the caller
+ * must recollect/re-solve this group. No contact, joint or friction impulses
+ * from that solve are then applied. Individual type9 rows are also disabled. */
+export type BeforeContactApply = (
+  impacts: ContactImpact[],
+  jointImpacts: JointConstraintImpact[],
+) => void | boolean;
 
 // Independently expressed rigid-body equations. Original HW impact branch:
 // 0x4bac60; impulse update: 0x4b7700; friction: 0x4c0870.
@@ -185,7 +206,11 @@ function linearSolve(
 }
 
 /** Independent active-set solve: lambda >= 0, K lambda - b >= 0. */
-function solveNormals(matrix: number[][], rhs: number[]): number[] {
+function solveNormals(
+  matrix: number[][],
+  rhs: number[],
+  unilateral = rhs.map(() => true),
+): number[] {
   const count = rhs.length;
   const impulses = new Array<number>(count).fill(0);
   const active = Array.from({ length: count }, (_, i) => i);
@@ -198,6 +223,7 @@ function solveNormals(matrix: number[][], rhs: number[]): number[] {
       for (let i = 0; i < active.length; i++) {
         impulses[active[i]] = solution[i];
         if (
+          unilateral[active[i]] &&
           solution[i] < -tolerance &&
           (negative < 0 || solution[i] < solution[negative])
         ) {
@@ -220,7 +246,10 @@ function solveNormals(matrix: number[][], rhs: number[]): number[] {
         worst = i;
       }
     }
-    if (worst < 0) return impulses.map((value) => Math.max(0, value));
+    if (worst < 0)
+      return impulses.map((value, i) =>
+        unilateral[i] ? Math.max(0, value) : value,
+      );
     active.push(worst);
   }
   // Degenerate active sets can cycle. Projected coordinate descent solves the
@@ -231,7 +260,8 @@ function solveNormals(matrix: number[][], rhs: number[]): number[] {
     for (let i = 0; i < count; i++) {
       let residual = rhs[i];
       for (let j = 0; j < count; j++) residual -= matrix[i][j] * impulses[j];
-      const next = Math.max(0, impulses[i] + residual / matrix[i][i]);
+      const value = impulses[i] + residual / matrix[i][i];
+      const next = unilateral[i] ? Math.max(0, value) : value;
       change = Math.max(change, Math.abs(next - impulses[i]));
       impulses[i] = next;
     }
@@ -267,14 +297,25 @@ function restingRhs(contact: Contact): number {
     );
   }
   const b = contact.b.state;
+  const localB = rotate(
+    (contact.pointB ?? contact.point).clone().sub(b.position),
+    b.orientation,
+    new Vector3(),
+    true,
+  );
+  const predictedBPoint = rotate(
+    localB,
+    b.predictedOrientation ?? b.orientation,
+    new Vector3(),
+  ).add(b.predictedPosition ?? b.position);
   const oldRelative = rotate(
-    contact.point.clone().sub(b.position),
+    contact.point.clone().sub(contact.pointB ?? contact.point),
     b.orientation,
     new Vector3(),
     true,
   );
   const newRelative = rotate(
-    predictedPoint.sub(b.predictedPosition ?? b.position),
+    predictedPoint.sub(predictedBPoint),
     b.predictedOrientation ?? b.orientation,
     predictedPoint,
     true,
@@ -286,17 +327,188 @@ function restingRhs(contact: Contact): number {
   );
 }
 
+interface FrictionBody {
+  body: RigidBody;
+  localLever: Vector3;
+  localVelocity: Vector3;
+  localOmega: Vector3;
+  candidate: Quaternion;
+}
+function frictionBody(
+  body: RigidBody,
+  point: Vector3,
+  velocities: Map<RigidState, Vector3>,
+): FrictionBody {
+  let localVelocity = velocities.get(body.state);
+  if (!localVelocity) {
+    localVelocity = rotate(
+      body.state.velocity,
+      body.state.orientation,
+      new Vector3(),
+      true,
+    );
+    velocities.set(body.state, localVelocity);
+  }
+  return {
+    body,
+    localVelocity,
+    localLever: rotate(
+      point.clone().sub(body.state.position),
+      body.state.orientation,
+      new Vector3(),
+      true,
+    ).sub(body.properties.centerOfMass),
+    localOmega: rotate(
+      body.state.angularVelocity,
+      body.state.orientation,
+      new Vector3(),
+      true,
+    ),
+    candidate: body.state.predictedOrientation ?? body.state.orientation,
+  };
+}
+function frictionSlip(entry: FrictionBody, leverScale = 1): Vector3 {
+  return entry.localOmega
+    .clone()
+    .cross(entry.localLever)
+    .multiplyScalar(leverScale)
+    .add(entry.localVelocity)
+    .applyQuaternion(entry.candidate);
+}
+function frictionResponse(
+  entry: FrictionBody,
+  worldTangent: Vector3,
+): { tangent: Vector3; response: Vector3; inverseMass: number } {
+  const tangent = rotate(worldTangent, entry.candidate, new Vector3(), true);
+  const torque = entry.localLever.clone().cross(tangent);
+  const response = entry.body.properties.rotationLocked
+    ? new Vector3()
+    : torque.clone().divide(entry.body.properties.inertia);
+  return {
+    tangent,
+    response,
+    inverseMass: 1 / entry.body.properties.mass + torque.dot(response),
+  };
+}
+function frictionApply(
+  entry: FrictionBody,
+  worldTangent: Vector3,
+  tangent: Vector3,
+  response: Vector3,
+  magnitude: number,
+): void {
+  entry.body.state.velocity.addScaledVector(
+    worldTangent,
+    magnitude / entry.body.properties.mass,
+  );
+  entry.localVelocity.addScaledVector(
+    tangent,
+    magnitude / entry.body.properties.mass,
+  );
+  entry.body.state.angularVelocity.addScaledVector(
+    rotate(response, entry.body.state.orientation, new Vector3()),
+    magnitude,
+  );
+}
+function limitFrictionOmega(body: RigidBody): void {
+  const rotationSquared =
+    body.state.angularVelocity.lengthSq() * 0.0015999999595806003;
+  if (rotationSquared > 2.464900016784668) {
+    body.state.angularVelocity.divideScalar(
+      2 * Math.sqrt(rotationSquared) * 0.6369426250457764,
+    );
+  }
+}
+function resolveFriction(
+  contact: ContactImpact,
+  velocities: Map<RigidState, Vector3>,
+): boolean {
+  if (contact.normalImpulse <= 0) return false;
+  const a = frictionBody(contact.a, contact.point, velocities);
+  const b = contact.b
+    ? frictionBody(contact.b, contact.pointB ?? contact.point, velocities)
+    : undefined;
+  const slip = frictionSlip(
+    a,
+    !b && contact.sourceType === 1 ? 1 - 0.004999999888241291 : 1,
+  );
+  if (b) slip.sub(frictionSlip(b));
+  slip.addScaledVector(contact.normal, -slip.dot(contact.normal));
+  let speed = slip.length();
+  if (speed < 0.001) return false;
+  const tangent = slip.multiplyScalar(-1 / speed);
+  const responseA = frictionResponse(a, tangent);
+  const responseB = b ? frictionResponse(b, tangent) : undefined;
+  let inverseMass = responseA.inverseMass + (responseB?.inverseMass ?? 0);
+  if (!b) {
+    const normal = rotate(
+      contact.normal,
+      a.body.state.orientation,
+      new Vector3(),
+      true,
+    );
+    const normalSpin = a.localOmega.dot(normal);
+    if (
+      Math.abs(normalSpin) < 0.10000000149011612 &&
+      a.localOmega.dot(responseA.response) < 0 &&
+      a.body.state.velocity.lengthSq() < 0.001
+    ) {
+      a.localOmega.addScaledVector(normal, -normalSpin);
+      rotate(
+        a.localOmega,
+        a.body.state.orientation,
+        a.body.state.angularVelocity,
+      );
+      responseA.response.set(0, 0, 0);
+      speed = a.localVelocity.length();
+      if (speed < 0.001) return false;
+      responseA.tangent.copy(a.localVelocity).multiplyScalar(-1 / speed);
+      tangent.copy(responseA.tangent).applyQuaternion(a.candidate);
+      inverseMass = 1 / a.body.properties.mass;
+    }
+  }
+  if (Math.abs(inverseMass) <= 0.0001) return false;
+  const friction = b
+    ? (1 + (a.body.properties.objectFriction ?? 0.4)) *
+      (1 + (b.body.properties.objectFriction ?? 0.4))
+    : (1 + a.body.properties.worldFriction) * (contact.faceFriction ?? 1);
+  const magnitude = Math.min(
+    speed / inverseMass,
+    Math.max(0, FRICTION_SCALE * contact.normalImpulse * friction),
+  );
+  contact.tangentImpulse.copy(tangent).multiplyScalar(magnitude);
+  frictionApply(a, tangent, responseA.tangent, responseA.response, magnitude);
+  if (b && responseB)
+    frictionApply(
+      b,
+      tangent,
+      responseB.tangent,
+      responseB.response,
+      -magnitude,
+    );
+  return true;
+}
+
 /**
  * Resolve one connected contact group. Positions/orientations are not changed.
  * The original rest branch measures solver-to-candidate transform drift rather
  * than arbitrary penetration. Its fixed factor 25 is retained regardless of dt.
- * Joint limits and original special rolling/static-friction flags are excluded.
+ * Optional joints add signed anchor/hinge rows and angular limits to the same
+ * matrix. Friction retains candidate-frame transport and original world modes.
  */
 export function resolveContacts(
   contacts: Contact[],
   _dt = ORIGINAL_STEP,
+  joints: RigidJoint[] = [],
+  beforeApply?: BeforeContactApply,
 ): ContactImpact[] {
-  if (!contacts.length) return [];
+  if (!contacts.length && !joints.length) return [];
+  // C2's hidden quick-hinge rows are already satisfied before it measures
+  // closing speeds. Full bilateral rows below implement the same projected
+  // normal response by Schur equivalence, including impulses on the partner.
+  selectQuickHinges(joints);
+  for (const joint of joints)
+    if (joint.quickHinge) projectQuickHingeVelocities(joint);
   const relative = new Vector3();
   const otherVelocity = new Vector3();
   const impacts = contacts.map((contact) => {
@@ -311,98 +523,160 @@ export function resolveContacts(
         pointVelocity(
           contact.b.state,
           contact.b.properties,
-          contact.point,
+          contact.pointB ?? contact.point,
           otherVelocity,
         ),
       );
     return {
       ...contact,
       point: contact.point.clone(),
+      pointB: contact.pointB?.clone(),
       normal: contact.normal.clone(),
       normalImpulse: 0,
       closingSpeed: Math.max(0, -contact.normal.dot(relative)),
       tangentImpulse: new Vector3(),
     };
   });
-  const impactBranch = impacts.some(
-    (impact) => impact.closingSpeed > NORMAL_BIAS,
-  );
+  const jointConstraints = buildJointConstraints(joints);
+  const impactBranch =
+    jointConstraints.some(
+      (row) => row.unilateral && (row.closingSpeed ?? 0) >= 0.001,
+    ) || impacts.some((impact) => impact.closingSpeed > NORMAL_BIAS);
   const rhs = impacts.map((impact) =>
     impactBranch
       ? NORMAL_BIAS + IMPACT_MULTIPLIER * impact.closingSpeed
       : restingRhs(impact),
   );
+  for (const row of jointConstraints)
+    rhs.push(
+      row.unilateral
+        ? impactBranch
+          ? Math.max(0.001, row.closingSpeed ?? 0)
+          : (row.restRhs ?? row.rhs)
+        : row.rhs,
+    );
   const rows = contacts.map((contact) => {
     const values = [row(contact.a, contact.point, contact.normal)];
     if (contact.b)
       values.push(
-        row(contact.b, contact.point, contact.normal.clone().negate()),
+        row(
+          contact.b,
+          contact.pointB ?? contact.point,
+          contact.normal.clone().negate(),
+        ),
       );
     return values;
   });
+  for (const joint of jointConstraints)
+    rows.push(
+      joint.jacobians.map((entry) => ({
+        body: entry.body,
+        direction: entry.linear,
+        torque: entry.angular,
+        angularResponse: entry.response,
+      })),
+    );
   const matrix = rows.map((a) => rows.map((b) => coupling(a, b)));
-  const normalImpulses = solveNormals(matrix, rhs);
-  const impulse = new Vector3();
+  const normalImpulses = solveNormals(matrix, rhs, [
+    ...contacts.map(() => true),
+    ...jointConstraints.map((row) => row.unilateral),
+  ]);
+  for (let i = 0; i < impacts.length; i++)
+    impacts[i].normalImpulse = normalImpulses[i];
+  const jointImpacts = jointConstraintImpacts(
+    jointConstraints,
+    normalImpulses.slice(contacts.length),
+    contacts.length,
+  );
+  if (beforeApply?.(impacts, jointImpacts) === false) return impacts;
+  const angularDelta = new Vector3();
   for (let i = 0; i < impacts.length; i++) {
     const contact = impacts[i];
-    contact.normalImpulse = normalImpulses[i];
-    impulse.copy(contact.normal).multiplyScalar(contact.normalImpulse);
-    applyImpulse(contact.a.state, contact.a.properties, contact.point, impulse);
-    if (contact.b)
-      applyImpulse(
-        contact.b.state,
-        contact.b.properties,
-        contact.point,
-        impulse.negate(),
+    if (contact.sourceType === 9 || contact.normalImpulse === 0) continue;
+    // The original stores the lever in the contact record before its callback.
+    // A split can change COM/mass/inertia without changing that saved lever.
+    for (const entry of rows[i]) {
+      const body = entry.body;
+      body.state.velocity.addScaledVector(
+        entry.direction,
+        contact.normalImpulse / body.properties.mass,
       );
+      inverseInertia(body, entry.torque, angularDelta);
+      body.state.angularVelocity.addScaledVector(
+        angularDelta,
+        contact.normalImpulse,
+      );
+    }
   }
+  applyJointConstraintImpulses(
+    joints,
+    jointConstraints,
+    jointImpacts.map((impact) =>
+      impact.sourceType === 9 ? 0 : impact.normalImpulse,
+    ),
+  );
+  const frictionVelocities = new Map<RigidState, Vector3>();
   for (const contact of impacts) {
-    pointVelocity(
-      contact.a.state,
-      contact.a.properties,
-      contact.point,
-      relative,
-    );
-    if (contact.b)
-      relative.sub(
-        pointVelocity(
-          contact.b.state,
-          contact.b.properties,
-          contact.point,
-          otherVelocity,
-        ),
-      );
-    relative.addScaledVector(contact.normal, -relative.dot(contact.normal));
-    const speed = relative.length();
-    if (speed < 0.001 || contact.normalImpulse <= 0) continue;
-    const tangent = relative.multiplyScalar(-1 / speed);
-    const tangentRows = [row(contact.a, contact.point, tangent)];
-    if (contact.b)
-      tangentRows.push(row(contact.b, contact.point, tangent.clone().negate()));
-    const inverseMass = coupling(tangentRows, tangentRows);
-    if (Math.abs(inverseMass) <= 0.0001) continue;
-    const friction = contact.b
-      ? (1 + (contact.a.properties.objectFriction ?? 0.4)) *
-        (1 + (contact.b.properties.objectFriction ?? 0.4))
-      : (1 + contact.a.properties.worldFriction) * (contact.faceFriction ?? 1);
-    const magnitude = Math.min(
-      speed / inverseMass,
-      Math.max(0, FRICTION_SCALE * contact.normalImpulse * friction),
-    );
-    contact.tangentImpulse.copy(tangent).multiplyScalar(magnitude);
-    applyImpulse(
-      contact.a.state,
-      contact.a.properties,
-      contact.point,
-      contact.tangentImpulse,
-    );
-    if (contact.b)
-      applyImpulse(
-        contact.b.state,
-        contact.b.properties,
-        contact.point,
-        impulse.copy(contact.tangentImpulse).negate(),
-      );
+    if (contact.sourceType === 9 || contact.normalImpulse === 0) continue;
+    const applied = resolveFriction(contact, frictionVelocities);
+    if (contact.b || applied) limitFrictionOmega(contact.a);
+    if (contact.b) limitFrictionOmega(contact.b);
   }
   return impacts;
+}
+
+/** Partition the contact/joint graph by shared rigid state. The world does not
+ * connect separate bodies: C2 selects impact versus rest for each object group.
+ * Contacts and joints retain their supplied order within each group. */
+export function resolveContactGroups(
+  contacts: Contact[],
+  dt = ORIGINAL_STEP,
+  joints: RigidJoint[] = [],
+  beforeApply?: BeforeContactApply,
+): ContactImpact[] {
+  const parents = new Map<RigidState, RigidState>();
+  const find = (state: RigidState): RigidState => {
+    const parent = parents.get(state);
+    if (!parent) {
+      parents.set(state, state);
+      return state;
+    }
+    if (parent === state) return state;
+    const root = find(parent);
+    parents.set(state, root);
+    return root;
+  };
+  const join = (a: RigidBody, b?: RigidBody) => {
+    const root = find(a.state);
+    if (b) parents.set(find(b.state), root);
+  };
+  for (const contact of contacts) join(contact.a, contact.b);
+  for (const joint of joints) join(joint.parent, joint.child);
+  const groups = new Map<
+    RigidState,
+    { contacts: Contact[]; joints: RigidJoint[] }
+  >();
+  const group = (body: RigidBody) => {
+    const root = find(body.state);
+    let value = groups.get(root);
+    if (!value) {
+      value = { contacts: [], joints: [] };
+      groups.set(root, value);
+    }
+    return value;
+  };
+  for (const contact of contacts) group(contact.a).contacts.push(contact);
+  for (const joint of joints) group(joint.parent).joints.push(joint);
+  const results = new Map<Contact, ContactImpact>();
+  for (const value of groups.values()) {
+    const impacts = resolveContacts(
+      value.contacts,
+      dt,
+      value.joints,
+      beforeApply,
+    );
+    for (let i = 0; i < impacts.length; i++)
+      results.set(value.contacts[i], impacts[i]);
+  }
+  return contacts.map((contact) => results.get(contact)!);
 }

@@ -130,11 +130,12 @@ try {
         nz /= length;
         v.position.set(
           cx - nx * 0.12,
-          window.carma.collision.height(cx, cz, 5) + 0.05,
+          window.carma.collision.height(cx, cz, 5),
           cz - nz * 0.12,
         );
         v.velocity.set(nx * 2, 0, nz * 2);
         v.heading = Math.atan2(-nx, -nz);
+        window.carma.simulation.reset(window.carma.player);
         await new Promise((r) => setTimeout(r, 220));
       }
     return {

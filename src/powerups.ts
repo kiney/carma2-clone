@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { VehicleState, RaceState } from "./gameplay";
+import {setTemporaryMotionPowerup, resetTemporaryMotionPowerup, type SuspensionPowerupValues} from "./physics/upgrades";
 
 /** One sequential record from DATA/POWERUP.TXT. Durations are source seconds. */
 export interface PowerupDefinition {
@@ -21,6 +22,7 @@ export interface PowerupModifiers {
   accelerationMultiplier: number;
   maxSpeedMultiplier: number;
   lateralGripMultiplier: number;
+  suspension?: SuspensionPowerupValues;
 }
 
 export interface PowerupEvent {
@@ -119,8 +121,7 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  speed: number;
-  grip: number;
+  action: 9 | 21;
 }
 type AssetTextSource = { text(path: string): Promise<string> };
 
@@ -131,6 +132,8 @@ type AssetTextSource = { text(path: string): Promise<string> };
  * timed car engine/grip factors; other actions are reported as unsupported.
  */
 export class PowerupSystem {
+  private motionFactors = {engineFactor:1,tyreGripFactor:1};
+  private suspension?: SuspensionPowerupValues;
   readonly group = new THREE.Group();
   readonly definitions: PowerupDefinition[] = [];
   readonly warnings: string[] = [];
@@ -179,7 +182,7 @@ export class PowerupSystem {
         );
         continue;
       }
-      if (![0, 7, 9, 11].includes(definition.action)) {
+      if (![0, 7, 9, 11, 21].includes(definition.action)) {
         if (!this.unsupportedWarned.has(index)) {
           this.unsupportedWarned.add(index);
           this.warnings.push(
@@ -213,8 +216,15 @@ export class PowerupSystem {
     onEvent?: (event: PowerupEvent) => void,
   ): PowerupModifiers {
     if (Number.isFinite(dt) && dt > 0) {
-      for (const effect of this.active)
-        if (effect.duration > 0) effect.remaining -= Math.min(dt, 0.25);
+      for (const effect of this.active) {
+        if (effect.duration > 0) {
+          effect.remaining -= Math.min(dt, 0.25);
+          if (effect.remaining <= 0) {
+            const suspension = resetTemporaryMotionPowerup(this.motionFactors,effect.action);
+            if (suspension) this.suspension=suspension;
+          }
+        }
+      }
       this.active = this.active.filter(
         (effect) => effect.duration <= 0 || effect.remaining > 0,
       );
@@ -241,15 +251,11 @@ export class PowerupSystem {
     }
     this.previous = current;
     const modifiers: PowerupModifiers = {
-      accelerationMultiplier: 1,
+      accelerationMultiplier: this.motionFactors.engineFactor,
       maxSpeedMultiplier: 1,
-      lateralGripMultiplier: 1,
+      lateralGripMultiplier: this.motionFactors.tyreGripFactor,
     };
-    for (const effect of this.active) {
-      modifiers.accelerationMultiplier *= effect.speed;
-      modifiers.maxSpeedMultiplier *= effect.speed;
-      modifiers.lateralGripMultiplier *= effect.grip;
-    }
+    if (this.suspension) modifiers.suspension=this.suspension;
     return modifiers;
   }
 
@@ -303,16 +309,17 @@ export class PowerupSystem {
         });
         break;
       }
-      case 9: {
-        const speed = Math.max(0.1, Math.min(3, def.floatParams[0] ?? 1));
-        const grip = Math.max(0.1, Math.min(3, def.floatParams[1] ?? 1));
+      case 9:
+      case 21: {
+        const suspension = setTemporaryMotionPowerup(this.motionFactors,def.action,def.floatParams);
+        if (suspension) this.suspension=suspension;
         const duration = def.duration > 0 ? def.duration : 0;
-        this.active.push({ index, remaining: duration, duration, speed, grip });
+        this.active.push({ index, remaining: duration, duration, action:def.action });
         onEvent?.({
           kind: "engine",
           name: def.message,
           definition: def,
-          amount: speed,
+          amount: def.floatParams[0],
         });
         break;
       }

@@ -322,3 +322,44 @@ test(
     assert.equal(fan.map, originalFan);
   },
 );
+
+test("source suspension refs, engine wheel spin and damage projection drive geometry; detached actors are skipped", () => {
+  const group = new THREE.Group(),
+    wheel = new THREE.Group(),
+    pivot = new THREE.Group();
+  wheel.name = "wheel";
+  pivot.name = "pivot";
+  group.add(wheel, pivot);
+  const suspensionGroove = groove("pivot", "rock", 7, "y").replace(
+    "no path",
+    "straight\nabsolute\n0,0,0\n4\n0,1,0",
+  );
+  const animation = new CarAnimation(
+    group,
+    carConfig([groove("wheel", "spin", 1, "x"), suspensionGroove]),
+  );
+  const componentDamage = Array(12).fill(0);
+  componentDamage[11] = 40;
+  animation.update(0.1, {
+    ...input,
+    speed: 10,
+    rpm: 3000,
+    gear: 1,
+    speedRevsRatio: 0.001,
+    steeringAngle: 0.2,
+    wheelLengths: [0.2, 0.2, 0.3, 0.3],
+    wheelRayHeights: [0.4, 0.4, 0.5, 0.5],
+    componentDamage,
+  });
+  near(pivot.matrix.elements[13], 0.2 / 6.9);
+  assert.ok(animation.wheelDamageOffsets[3] > 0);
+  assert.ok(Math.abs(wheel.quaternion.x) > 0);
+  const detached = new THREE.Group();
+  detached.attach(wheel);
+  const saved = wheel.matrix.clone();
+  animation.update(0.1, { ...input, speed: 5 });
+  assert.deepEqual(wheel.matrix.elements, saved.elements);
+  animation.reset();
+  assert.deepEqual(wheel.matrix.elements, saved.elements);
+  animation.dispose();
+});

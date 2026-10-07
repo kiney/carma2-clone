@@ -1,18 +1,28 @@
 import * as THREE from "three";
-interface Surface {
+import { DEFAULT_SURFACE, surfaceIndex } from "./physics/surfaces";
+import type { SurfaceModifier } from "./physics/surfaces";
+export interface Surface {
   a: THREE.Vector3;
   b: THREE.Vector3;
   c: THREE.Vector3;
   normal: THREE.Vector3;
   minY: number;
   maxY: number;
+  material: string;
+  modifier: SurfaceModifier;
+  twoSided: boolean;
+  materialFlags: number;
+  faceFlags: number;
 }
 /** A fixed broad phase over transformed original triangles. Geometry stays in C2 world units. */
 export class WorldCollision {
   private cells = new Map<string, Surface[]>();
   private cellSize = 4;
   triangles = 0;
-  constructor(group: THREE.Object3D) {
+  constructor(
+    group: THREE.Object3D,
+    private modifiers: readonly SurfaceModifier[] = [DEFAULT_SURFACE],
+  ) {
     group.updateMatrixWorld(true);
     group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -33,6 +43,14 @@ export class WorldCollision {
           .cross(new THREE.Vector3().subVectors(c, a))
           .normalize();
         if (!normal.lengthSq()) continue;
+        const materialGroup = geo.groups.find(
+          (g) => i >= g.start && i < g.start + g.count,
+        );
+        const material = (
+          Array.isArray(object.material)
+            ? object.material[materialGroup?.materialIndex ?? 0]
+            : object.material
+        ) as THREE.Material | undefined;
         const s = {
           a,
           b,
@@ -40,6 +58,17 @@ export class WorldCollision {
           normal,
           minY: Math.min(a.y, b.y, c.y),
           maxY: Math.max(a.y, b.y, c.y),
+          material: material?.name ?? "",
+          faceFlags: geo.userData.sourceFaceFlags?.[i / 3] ?? geo.userData.sourceFaces?.[Math.floor((index ? index.getX(i) : i) / 3)]?.flags ?? 0,
+          modifier:
+            this.modifiers[surfaceIndex(material?.name ?? "")] ??
+            DEFAULT_SURFACE,
+          materialFlags:
+            material?.userData.c2Flags ??
+            (material?.side === THREE.DoubleSide ? 4096 : 0),
+          twoSided:
+            !!((material?.userData.c2Flags ?? 0) & 0x1800) ||
+            material?.side === THREE.DoubleSide,
         };
         const minX = Math.floor(Math.min(a.x, b.x, c.x) / 4),
           maxX = Math.floor(Math.max(a.x, b.x, c.x) / 4),
@@ -59,6 +88,79 @@ export class WorldCollision {
         this.triangles++;
       }
     });
+  }
+  /** Bounds-confined original triangle candidates, shared by body and wheel queries. */
+  querySurfaces(min: THREE.Vector3, max: THREE.Vector3): Surface[] {
+    const result = new Set<Surface>();
+    const x0 = Math.floor(min.x / this.cellSize),
+      x1 = Math.floor(max.x / this.cellSize);
+    const z0 = Math.floor(min.z / this.cellSize),
+      z1 = Math.floor(max.z / this.cellSize);
+    if (
+      ![x0, x1, z0, z1].every(Number.isFinite) ||
+      (x1 - x0 + 1) * (z1 - z0 + 1) > 25000
+    )
+      return [];
+    for (let x = x0; x <= x1; x++)
+      for (let z = z0; z <= z1; z++)
+        for (const s of this.cells.get(`${x},${z}`) ?? [])
+          if (s.maxY >= min.y && s.minY <= max.y && !/^[!>]/.test(s.material))
+            result.add(s);
+    return [...result];
+  }
+  raycast(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    maxDistance: number,
+  ) {
+    if (
+      !Number.isFinite(maxDistance) ||
+      maxDistance <= 0 ||
+      direction.lengthSq() < 1e-12
+    )
+      return null;
+    const ray = new THREE.Ray(origin, direction.clone().normalize()),
+      end = ray.at(maxDistance, new THREE.Vector3());
+    const bounds = new THREE.Box3()
+      .setFromPoints([origin, end])
+      .expandByScalar(0.005);
+    let best: {
+      distance: number;
+      normal: THREE.Vector3;
+      friction: number;
+      rollingResistance: number;
+      downforce: number;
+      bumpiness: number;
+      surface: Surface;
+    } | null = null;
+    const point = new THREE.Vector3();
+    for (const surface of this.querySurfaces(bounds.min, bounds.max)) {
+      if (
+        !ray.intersectTriangle(
+          surface.a,
+          surface.b,
+          surface.c,
+          !surface.twoSided,
+          point,
+        )
+      )
+        continue;
+      const distance = point.distanceTo(origin);
+      if (distance > maxDistance || (best && distance >= best.distance))
+        continue;
+      const normal = surface.normal.clone();
+      if (normal.dot(direction) > 0) normal.negate();
+      best = {
+        distance,
+        normal,
+        friction: surface.modifier.tyreFriction,
+        rollingResistance: 0,
+        downforce: surface.modifier.downforce,
+        bumpiness: surface.modifier.bumpiness,
+        surface,
+      };
+    }
+    return best;
   }
   height(x: number, z: number, nearY: number) {
     let best: number | null = null;
@@ -128,7 +230,7 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
   source.updateMatrixWorld(true);
   const batches = new Map<
     THREE.Material,
-    { positions: number[]; normals: number[]; uvs: number[] }
+    { positions: number[]; normals: number[]; uvs: number[]; faceFlags:number[] }
   >();
   const vertex = new THREE.Vector3(),
     normal = new THREE.Vector3(),
@@ -152,7 +254,7 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
       if (!mat) continue;
       let b = batches.get(mat);
       if (!b) {
-        b = { positions: [], normals: [], uvs: [] };
+        b = { positions: [], normals: [], uvs: [], faceFlags:[] };
         batches.set(mat, b);
       }
       for (let i = group.start; i < group.start + group.count; i++) {
@@ -161,6 +263,10 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
           ? group.start + Math.floor(relative / 3) * 3 + [0, 2, 1][relative % 3]
           : i;
         const j = index ? index.getX(sourceIndex) : sourceIndex;
+        if (relative % 3 === 0) {
+          const flags=geometry.userData.sourceFaceFlags?.[Math.floor(sourceIndex/3)] ?? geometry.userData.sourceFaces?.[Math.floor(j/3)]?.flags ?? 0;
+          b.faceFlags.push(mirrored ? (flags & ~5) | ((flags & 1) << 2) | ((flags & 4) >> 2) : flags);
+        }
         vertex.fromBufferAttribute(p, j).applyMatrix4(o.matrixWorld);
         b.positions.push(vertex.x, vertex.y, vertex.z);
         if (n)
@@ -187,6 +293,7 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
       new THREE.Float32BufferAttribute(batch.normals, 3),
     );
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute(batch.uvs, 2));
+    geometry.userData.sourceFaceFlags=Uint8Array.from(batch.faceFlags);
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = material.name;

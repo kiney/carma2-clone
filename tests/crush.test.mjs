@@ -8,6 +8,8 @@ import {
   crushContactDistanceSquared,
   dominantCrushAxis,
   crushModel,
+  crushBentModel,
+  constrainCrushVertex,
   crushSmashMagnitude,
 } from "../src/physics/crush.ts";
 
@@ -42,6 +44,50 @@ test("C2 GENERAL crush settings and queue thresholds preserve original units", (
   assert.equal(queuedCrushForce([0.06, 0, 0]), 0);
   close(queuedCrushForce([0.03, 0.04, 0], 2), 0.1);
   assert.equal(queuedCrushForce([0, 20, 0]), 10);
+});
+
+test("shape contraction projects inside old accepted hull and restores a point rejected by packed limits", () => {
+  const planes = [
+    { normal: [1, 0, 0], constant: 0.3 },
+    { normal: [-1, 0, 0], constant: 0.3 },
+    { normal: [0, 1, 0], constant: 0.3 },
+    { normal: [0, -1, 0], constant: 0.3 },
+    { normal: [0, 0, 1], constant: 0.3 },
+    { normal: [0, 0, -1], constant: 0.3 },
+  ];
+  const loose = [0, 1, 2].map(() => ({ min: [-0.4], max: [0.4] }));
+  constrainCrushVertex([0.8, 0.6, 0], [0.1, 0, 0], planes, 0, loose).forEach(
+    (value, index) => close(value, [0.3, 0.3, 0][index]),
+  );
+  const tight = [0, 1, 2].map(() => ({ min: [-0.2], max: [0.2] }));
+  assert.deepEqual(
+    constrainCrushVertex([0.8, 0.6, 0], [0.1, 0, 0], planes, 0, tight),
+    [0.1, 0, 0],
+  );
+});
+
+test("already-bent kernel stops at the nearest inner box plane without force-to-movement scaling", () => {
+  const positions = new Float64Array([0, 0, -0.2, 0, 0, 0]);
+  const result = crushBentModel({
+    positions,
+    contacts: [
+      [0, 0, -0.2],
+      [0, 0, 0],
+    ],
+    movement: [0, 0, 0.15],
+    stopBounds: { min: [-0.1, -0.1, -0.1], max: [0.1, 0.1, 0.1] },
+  });
+  close(positions[2], -0.1);
+  close(positions[5], 0);
+  assert.equal(result.movedVertices, 1);
+  const falloff = new Float64Array([0, 0, -0.2]);
+  crushBentModel({
+    positions: falloff,
+    contacts: [[0, 0, -0.25]],
+    movement: [0, 0, 0.1],
+    stopBounds: { min: [-0.1, -0.1, -0.1], max: [0.1, 0.1, 0.1] },
+  });
+  close(falloff[2], -0.15);
 });
 
 test("packed regions classify original vertices with strict plane tests and min low bits", () => {

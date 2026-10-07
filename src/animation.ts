@@ -5,6 +5,15 @@ export interface AnimationInput {
   steer: number;
   brake: boolean;
   throttle: number;
+  /** Source tyre solver lengths/ray heights in metric coordinates, rear axle first. */
+  wheelLengths?: readonly number[];
+  wheelRayHeights?: readonly number[];
+  steeringAngle?: number; // radians; source atan(wheelbase*curvature)
+  rpm?: number;
+  gear?: number;
+  speedRevsRatio?: number;
+  handbrake?: boolean;
+  componentDamage?: readonly number[];
 }
 type Axis = "x" | "y" | "z";
 type Mode =
@@ -23,6 +32,7 @@ interface Groove {
   pivot: THREE.Vector3;
   axis: Axis;
   amplitude: number;
+  path?: { reference: number; direction: THREE.Vector3 };
 }
 interface Frame {
   texture: string;
@@ -124,14 +134,15 @@ function parseGroove(lines: string[]): Groove {
   if (!["constant", "distance"].includes(nature))
     throw new Error(`Unsupported groove nature ${nature}`);
   const path = r.string().toLowerCase();
+  let straight: Groove["path"];
   if (path === "straight") {
     const mode = r.mode();
     r.vector(3);
-    r.number();
-    r.vector(3);
+    const reference = r.number();
+    const direction = new THREE.Vector3(...r.vector(3));
+    straight = { reference, direction };
     if (!["absolute", "controlled"].includes(mode))
       throw new Error("Only car-controlled straight paths are supported");
-    // Suspension bindings are parsed but remain at their original positions.
   } else if (!["no path", "none"].includes(path))
     throw new Error(`Unsupported groove path ${path}`);
   const animation = r.string().toLowerCase();
@@ -154,6 +165,7 @@ function parseGroove(lines: string[]): Groove {
     pivot,
     axis: axis as Axis,
     amplitude,
+    path: straight,
   };
 }
 function parseFunk(lines: string[]): Funk {
@@ -258,6 +270,8 @@ interface CarBindings {
   rolling: Set<number>;
   drivenDiameter: number;
   rollingDiameter: number;
+  wheelReferences: Map<number, { wheel: number; driven: boolean }>;
+  suspensionReferences: Map<number, { wheel: number; sign: number }>;
 }
 function carBindings(text: string): CarBindings {
   const lines = cleaned(text),
@@ -274,6 +288,8 @@ function carBindings(text: string): CarBindings {
     rolling: new Set(),
     drivenDiameter: 0.14,
     rollingDiameter: 0.14,
+    wheelReferences: new Map(),
+    suspensionReferences: new Map(),
   };
   // These eight trailing values precede FUNK in stock C2 car files.
   if (prefix.length >= 9) {
@@ -284,6 +300,29 @@ function carBindings(text: string): CarBindings {
       result.rollingDiameter = rolling;
       result.driven = new Set(numbers(prefix.at(-4)!));
       result.rolling = new Set(numbers(prefix.at(-3)!));
+      for (const [line, isDriven] of [
+        [prefix.at(-4)!, true],
+        [prefix.at(-3)!, false],
+      ] as const)
+        line
+          .split(",")
+          .map(Number)
+          .forEach((ref, wheel) => {
+            if (ref >= 0 && Number.isInteger(ref))
+              result.wheelReferences.set(ref, { wheel, driven: isDriven });
+          });
+      for (let wheel = 0; wheel < 4; wheel++)
+        prefix
+          .at(-8 + wheel)!
+          .split(",")
+          .map(Number)
+          .forEach((ref, at) => {
+            if (ref >= 0 && Number.isInteger(ref))
+              result.suspensionReferences.set(ref, {
+                wheel,
+                sign: wheel % 2 === 0 && at % 2 !== 0 ? -1 : 1,
+              });
+          });
       for (let count = 0; count <= 8; count++) {
         const at = prefix.length - 9 - count;
         if (at >= 0 && Number(prefix[at]) === count) {
@@ -298,6 +337,28 @@ function carBindings(text: string): CarBindings {
   }
   return result;
 }
+/** Local HW 0x440240 tables at0x58ef50/70, signed damage-dependent tilt. */
+export function wheelDamageTilt(damage: number): [number, number] {
+  const yaw = [
+    0, -0.15000000596046448, 0.4000000059604645, 0.15000000596046448,
+    -0.4000000059604645, 0.25, 0, -0.25,
+  ];
+  const roll = [
+    0.4000000059604645, -0.25, 0, 0.25, 0, 0.15000000596046448,
+    -0.4000000059604645, -0.15000000596046448,
+  ];
+  if (damage <= 30) return [0, 0];
+  const index = Math.trunc(damage) & 7;
+  const angle = (degrees: number) => {
+    // Binary wraps negative degrees before converting to BRender's ushort angle.
+    if (degrees < 0) degrees -= 360;
+    return ((Math.trunc(degrees * 182.04444444444445) & 0xffff) * TAU) / 65536;
+  };
+  return [
+    angle(yaw[index] * (damage - 30)),
+    angle(roll[index] * (damage - 30)),
+  ];
+}
 interface ActorBinding {
   groove: Groove;
   object: THREE.Object3D;
@@ -307,14 +368,23 @@ interface ActorBinding {
   kind: "wheel" | "steering" | "timed";
   diameter: number;
   autoUpdate: boolean;
+  wheelIndex?: number;
+  driven: boolean;
+  suspension?: { wheel: number; sign: number };
 }
 
-/** Original GROOVE axes and car binding references drive visual wheels. The
- * browser's bicycle steering and rolling speed supply approximate control values. */
+/** Source GROOVE controls receive actual suspension, steering and engine speeds. */
 export class CarAnimation {
   readonly warnings: string[] = [];
   private bindings: ActorBinding[] = [];
   private elapsed = 0;
+  private root: THREE.Group;
+  readonly wheelDamageOffsets = [0, 0, 0, 0];
+  private attached(object: THREE.Object3D) {
+    for (let p: THREE.Object3D | null = object; p; p = p.parent)
+      if (p === this.root) return true;
+    return false;
+  }
   get wheelCount() {
     return this.bindings.filter((b) => b.kind === "wheel").length;
   }
@@ -322,6 +392,7 @@ export class CarAnimation {
     return this.bindings.filter((b) => b.kind === "steering").length;
   }
   constructor(group: THREE.Group, configText: string) {
+    this.root = group;
     if (configText.length > 4_000_000) {
       this.warnings.push("Animation config exceeds size limit");
       return;
@@ -391,6 +462,15 @@ export class CarAnimation {
           kind,
           diameter,
           autoUpdate: object.matrixAutoUpdate,
+          wheelIndex:
+            controls.wheelReferences.get(groove.value)?.wheel ??
+            (groove.path
+              ? controls.suspensionReferences.get(groove.path.reference)?.wheel
+              : undefined),
+          driven: controls.wheelReferences.get(groove.value)?.driven ?? false,
+          suspension: groove.path
+            ? controls.suspensionReferences.get(groove.path.reference)
+            : undefined,
         });
       } catch (e) {
         this.warnings.push(`${block[0]}: ${e}`);
@@ -401,15 +481,29 @@ export class CarAnimation {
     if (!Number.isFinite(dt)) return;
     dt = THREE.MathUtils.clamp(dt, 0, 1);
     this.elapsed += dt;
+    this.wheelDamageOffsets.fill(0);
     for (const binding of this.bindings) {
       const { groove, object, pivot } = binding;
+      if (!this.attached(object)) continue;
       let angle: number;
       if (binding.kind === "wheel") {
-        binding.angle =
-          (binding.angle - (input.speed * dt * 2) / binding.diameter) % TAU;
+        const speed =
+          binding.driven &&
+          input.rpm !== undefined &&
+          input.gear !== undefined &&
+          input.speedRevsRatio !== undefined
+            ? input.gear !== 0
+              ? (input.rpm * input.speedRevsRatio * input.gear) / 6.9
+              : input.handbrake
+                ? 0
+                : input.speed
+            : input.speed;
+        binding.angle = (binding.angle - (speed * dt) / binding.diameter) % TAU;
         angle = binding.angle;
       } else if (binding.kind === "steering")
-        angle = THREE.MathUtils.clamp(input.steer, -1, 1) * 0.5;
+        angle =
+          input.steeringAngle ??
+          THREE.MathUtils.clamp(input.steer, -1, 1) * 0.5;
       else if (groove.animation === "spin")
         angle = this.elapsed * groove.value * TAU;
       else
@@ -433,6 +527,52 @@ export class CarAnimation {
         .multiply(
           new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z),
         );
+      if (
+        binding.suspension &&
+        groove.path &&
+        input.wheelLengths &&
+        input.wheelRayHeights
+      ) {
+        const forceWheel = binding.suspension.wheel ^ 2;
+        const displacement =
+          (((input.wheelRayHeights[forceWheel] ?? 0) -
+            (input.wheelLengths[forceWheel] ?? 0)) /
+            6.9) *
+          binding.suspension.sign;
+        const translation = groove.path.direction
+          .clone()
+          .multiplyScalar(displacement);
+        // GROOVE path is a parent-space translation, preserving the actor hub.
+        animated.elements[12] += translation.x;
+        animated.elements[13] += translation.y;
+        animated.elements[14] += translation.z;
+      }
+      if (
+        binding.wheelIndex !== undefined &&
+        (binding.kind === "wheel" || binding.wheelIndex < 2)
+      ) {
+        const damage = Math.trunc(
+          input.componentDamage?.[8 + binding.wheelIndex] ?? 0,
+        );
+        if (damage > 30) {
+          const [yaw, roll] = wheelDamageTilt(damage);
+          animated
+            .multiply(new THREE.Matrix4().makeRotationY(yaw))
+            .multiply(new THREE.Matrix4().makeRotationZ(roll));
+          if (binding.kind === "wheel") {
+            const spoke = new THREE.Vector3(
+              binding.diameter * TAU * 0.1599999964237213,
+              0,
+              0,
+            );
+            spoke.applyMatrix3(new THREE.Matrix3().setFromMatrix4(animated));
+            this.wheelDamageOffsets[binding.wheelIndex] = Math.abs(spoke.y);
+          }
+        }
+      }
+      // Source structural bend/repair changes only the straight GROOVE's Y
+      // center. Apply it after base/suspension, preserving wheel/pivot rotation.
+      animated.elements[13] += object.userData.c2BendPathOffsetY ?? 0;
       // Keep the complete local matrix, including any original affine transform.
       object.matrixAutoUpdate = false;
       object.matrix.copy(animated);
@@ -442,8 +582,10 @@ export class CarAnimation {
   }
   reset() {
     this.elapsed = 0;
+    this.wheelDamageOffsets.fill(0);
     for (const b of this.bindings) {
       b.angle = 0;
+      if (!this.attached(b.object)) continue;
       b.object.matrix.copy(b.base);
       b.base.decompose(b.object.position, b.object.quaternion, b.object.scale);
       b.object.matrixAutoUpdate = b.autoUpdate;
