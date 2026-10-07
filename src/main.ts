@@ -1,0 +1,1034 @@
+import * as THREE from "three";
+import { Assets } from "./content";
+import {
+  parseTrackConfig,
+  parseCarConfig,
+  parseRaceCatalog,
+  parseOpponents,
+} from "./config";
+import type {
+  TrackConfig,
+  CarConfig,
+  RaceCatalogEntry,
+  OpponentConfig,
+} from "./config";
+import {
+  createVehicle,
+  updateVehicle,
+  createRace,
+  updateRace,
+  speedMph,
+  repairVehicle,
+  recoverVehicle,
+} from "./gameplay";
+import type { VehicleState, RaceState, VehicleConfig } from "./gameplay";
+import { WorldCollision, batchStaticWorld } from "./world";
+import { DamageSystem } from "./damage";
+import { PowerupSystem } from "./powerups";
+import { CarAnimation, TextureAnimation } from "./animation";
+import { applyRaceObjectives, isSupportedRace, objectiveText } from "./rules";
+import { physicsConfigFromCar } from "./handling";
+import { RoadNavigator } from "./ai";
+import { PedestrianSystem } from "./pedestrians";
+import { AudioSystem } from "./audio";
+import "./style.css";
+const app = document.querySelector<HTMLDivElement>("#app")!;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Physics, AI and HUD are approximations.</small></div>`;
+const el = (id: string) => document.getElementById(id)!;
+const view = el("view") as HTMLCanvasElement;
+const renderer = new THREE.WebGLRenderer({ canvas: view, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setClearColor(0x816750);
+const scene = new THREE.Scene();
+scene.add(new THREE.AmbientLight(0xffffff, 1.25));
+const sun = new THREE.DirectionalLight(0xfff6df, 1.4);
+sun.position.set(-3, 10, 4);
+scene.add(sun);
+const camera = new THREE.PerspectiveCamera(
+  65,
+  innerWidth / innerHeight,
+  0.035,
+  1800,
+);
+const assets = new Assets();
+const audio = new AudioSystem(assets);
+let content: THREE.Group | undefined,
+  car: THREE.Group | undefined,
+  sky: THREE.Mesh | undefined,
+  collision: WorldCollision | undefined,
+  vehicle: VehicleState | undefined,
+  race: RaceState | undefined,
+  track: TrackConfig | undefined;
+let carConfig: CarConfig | undefined,
+  physicsConfig: Partial<VehicleConfig> = {},
+  races: RaceCatalogEntry[] = [],
+  opponents: OpponentConfig[] = [],
+  paused = true,
+  loading = false,
+  cameraMode = 0,
+  mapVisible = true;
+let lastTime = performance.now(),
+  messageUntil = 0,
+  seconds = 0,
+  frames = 0,
+  fps = 0,
+  currentTrack = "",
+  currentCar = "",
+  generation = 0;
+let damage: DamageSystem | undefined,
+  carAnimation: CarAnimation | undefined,
+  carTextures: TextureAnimation | undefined,
+  worldAnimation: TextureAnimation | undefined,
+  definition: RaceCatalogEntry | undefined;
+let rivalsReady = false,
+  pedestriansReady = false;
+const keys = new Set<string>(),
+  cameraGoal = new THREE.Vector3(),
+  target = new THREE.Vector3(),
+  previous = new THREE.Vector3();
+const trackSelect = el("track-select") as HTMLSelectElement,
+  carSelect = el("car-select") as HTMLSelectElement;
+const stats = {
+  ready: false,
+  frames: 0,
+  fps: 0,
+  drawCalls: 0,
+  triangles: 0,
+  assetWarnings: assets.warnings,
+};
+const debug = {
+  stats,
+  audio,
+  get carAnimation() {
+    return carAnimation;
+  },
+  get carTextures() {
+    return carTextures;
+  },
+  get worldAnimation() {
+    return worldAnimation;
+  },
+  get powerups() {
+    return powerups;
+  },
+  get damage() {
+    return damage;
+  },
+  get pedestrians() {
+    return pedestrians;
+  },
+  get rivals() {
+    return rivals;
+  },
+  get vehicle() {
+    return vehicle;
+  },
+  get race() {
+    return race;
+  },
+  get track() {
+    return track;
+  },
+  get carConfig() {
+    return carConfig;
+  },
+  get scene() {
+    return scene;
+  },
+  get collision() {
+    return collision;
+  },
+  get assets() {
+    return assets;
+  },
+  get paused() {
+    return paused;
+  },
+  set paused(v: boolean) {
+    setPaused(v);
+  },
+  loadRace,
+};
+(window as unknown as { carma: typeof debug }).carma = debug;
+function status(text: string) {
+  el("status").textContent = text;
+}
+function message(text: string, duration = 3) {
+  el("message").textContent = text;
+  messageUntil = performance.now() + duration * 1000;
+}
+function setPaused(value: boolean) {
+  paused = value;
+  keys.clear();
+  el("panel").hidden = !value;
+  el("menu-button").textContent = value ? "RESUME · ESC" : "MENU · ESC";
+  if (!value) view.focus();
+}
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+function findConfig(area: string, filename: string) {
+  const stem = filename.replace(/\.txt$/i, "");
+  return (
+    assets.resolve(`data/${area}/${stem}/${filename}`) ??
+    assets.manifest.find(
+      (e) =>
+        new RegExp(`^(data|adv_data)/${area}/`, "i").test(e.path) &&
+        e.path.split("/").pop()?.toLowerCase() === filename.toLowerCase(),
+    )?.path
+  );
+}
+function dirOf(path: string) {
+  return path.slice(0, path.lastIndexOf("/"));
+}
+function stemOf(path: string) {
+  return path
+    .split("/")
+    .pop()!
+    .replace(/\.txt$/i, "");
+}
+
+async function init() {
+  try {
+    await assets.init();
+    let catalogPath = assets.resolve("data/RACES.TXT");
+    if (catalogPath) {
+      const catalog = parseRaceCatalog(await assets.text(catalogPath));
+      races = catalog.races;
+    }
+    const opponentPath = assets.resolve("data/OPPONENT.TXT");
+    if (opponentPath)
+      opponents = parseOpponents(await assets.text(opponentPath));
+    const tracks = assets.manifest.filter(
+      (e) =>
+        /^(data|adv_data)\/races\/[^/]+\/[^/]+\.txt$/i.test(e.path) &&
+        stemOf(e.path).toLowerCase() ===
+          dirOf(e.path).split("/").pop()!.toLowerCase(),
+    );
+    for (const entry of tracks) {
+      if (!assets.resolve(`${dirOf(entry.path)}/${stemOf(entry.path)}.act`))
+        continue;
+      const raceEntry = races.find(
+        (r) =>
+          r.raceFilename.toLowerCase() ===
+          entry.path.split("/").pop()!.toLowerCase(),
+      );
+      const option = new Option(
+        `${entry.path.startsWith("adv_data/") ? "ADV · " : ""}${raceEntry?.name ?? stemOf(entry.path)}${isSupportedRace(raceEntry) ? "" : " · FREE DRIVE"}`,
+        entry.path,
+      );
+      trackSelect.add(option);
+    }
+    const cars = assets.manifest.filter(
+      (e) =>
+        /^(data|adv_data)\/cars\/[^/]+\/[^/]+\.txt$/i.test(e.path) &&
+        stemOf(e.path).toLowerCase() ===
+          dirOf(e.path).split("/").pop()!.toLowerCase(),
+    );
+    for (const entry of cars) {
+      const opponent = opponents.find(
+        (o) =>
+          o.carFilename.toLowerCase() ===
+          entry.path.split("/").pop()!.toLowerCase(),
+      );
+      carSelect.add(
+        new Option(
+          `${entry.path.startsWith("adv_data/") ? "ADV · " : ""}${opponent?.carName ?? stemOf(entry.path)}`,
+          entry.path,
+        ),
+      );
+    }
+    const initialRace = findConfig(
+      "RACES",
+      races[0]?.raceFilename ?? "newcity1.txt",
+    );
+    if (initialRace) trackSelect.value = initialRace;
+    const initialCar = findConfig("CARS", "EAGLE3.TXT");
+    if (initialCar) carSelect.value = initialCar;
+    const saved = localStorage.getItem("c2-selection");
+    if (saved) {
+      try {
+        const s = JSON.parse(saved);
+        if (assets.resolve(s.track)) trackSelect.value = s.track;
+        if (assets.resolve(s.car)) carSelect.value = s.car;
+      } catch {}
+    }
+    await audio.init();
+    await assets.common(status);
+    await loadRace();
+    setPaused(true);
+  } catch (error) {
+    status(`Cannot start: ${error instanceof Error ? error.message : error}`);
+    console.error(error);
+  }
+}
+function disposeGroup(group: THREE.Object3D) {
+  const geos = new Set<THREE.BufferGeometry>(),
+    mats = new Set<THREE.Material>(),
+    maps = new Set<THREE.Texture>();
+  group.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      geos.add(o.geometry);
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        mats.add(m);
+        const mapped = m as THREE.MeshLambertMaterial;
+        if (mapped.map) maps.add(mapped.map);
+      }
+    }
+  });
+  for (const g of geos) g.dispose();
+  for (const m of mats) m.dispose();
+  const shared = new Set<THREE.Texture>(assets.textures.values());
+  for (const map of maps) if (!shared.has(map)) map.dispose();
+}
+interface Rival {
+  object: THREE.Group;
+  state: VehicleState;
+  node: number;
+  previousNode: number;
+  stuck: number;
+  navigator: RoadNavigator;
+  wasted: boolean;
+  damage: DamageSystem;
+  animation: CarAnimation;
+  textures: TextureAnimation;
+  id: number;
+  config: Partial<VehicleConfig>;
+}
+function groupMaterials(group: THREE.Object3D) {
+  const map = new Map<string, THREE.Material>();
+  group.traverse((o) => {
+    if (o instanceof THREE.Mesh)
+      for (const m of Array.isArray(o.material) ? o.material : [o.material])
+        map.set(m.uuid, m);
+  });
+  return map;
+}
+let rivals: Rival[] = [];
+let pedestrians: PedestrianSystem | undefined;
+let powerups: PowerupSystem | undefined;
+async function loadRace() {
+  if (loading) return;
+  loading = true;
+  const loadGeneration = ++generation;
+  rivalsReady = pedestriansReady = false;
+  setPaused(true);
+  el("play").setAttribute("disabled", "");
+  stats.ready = false;
+  try {
+    currentTrack = trackSelect.value;
+    currentCar = carSelect.value;
+    if (!currentTrack || !currentCar)
+      throw new Error("No compatible tracks or cars found in the installation");
+    status("Parsing original track geometry…");
+    const trackText = await assets.text(currentTrack);
+    const newTrack = parseTrackConfig(trackText);
+    const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
+    const loadedPowerups = new PowerupSystem(assets, world.group);
+    await loadedPowerups.init();
+    status("Parsing original car…");
+    const carText = await assets.text(currentCar);
+    const newCarConfig = parseCarConfig(carText);
+    await audio.setCar(carText);
+    const loadedCar = await assets.scene(dirOf(currentCar), stemOf(currentCar));
+    const loadedDamage = new DamageSystem(assets, loadedCar.group, carText);
+    await loadedDamage.init();
+    status("Building collision geometry…");
+    world.group = batchStaticWorld(world.group);
+    const newCollision = new WorldCollision(world.group);
+    carAnimation?.dispose();
+    carTextures?.dispose();
+    worldAnimation?.dispose();
+    if (powerups) {
+      scene.remove(powerups.group);
+      disposeGroup(powerups.group);
+      powerups.dispose();
+    }
+    powerups = loadedPowerups;
+    scene.add(powerups.group);
+    if (content) {
+      scene.remove(content);
+      disposeGroup(content);
+    }
+    if (car) {
+      scene.remove(car);
+      disposeGroup(car);
+    }
+    for (const rival of rivals) {
+      rival.animation.dispose();
+      rival.textures.dispose();
+      scene.remove(rival.object);
+      disposeGroup(rival.object);
+    }
+    rivals = [];
+    if (pedestrians) {
+      scene.remove(pedestrians.group);
+      pedestrians.dispose();
+      pedestrians = undefined;
+    }
+    if (sky) {
+      scene.remove(sky);
+      sky.geometry.dispose();
+      const mat = sky.material as THREE.MeshBasicMaterial;
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    carAnimation = new CarAnimation(loadedCar.group, carText);
+    carTextures = new TextureAnimation(
+      groupMaterials(loadedCar.group),
+      loadedCar.textures,
+      carText,
+    );
+    worldAnimation = new TextureAnimation(
+      world.materials,
+      world.textures,
+      trackText,
+    );
+    damage = loadedDamage;
+    content = world.group;
+    scene.add(content);
+    car = loadedCar.group;
+    scene.add(car);
+    collision = newCollision;
+    track = newTrack;
+    carConfig = newCarConfig;
+    physicsConfig = physicsConfigFromCar(newCarConfig);
+    const start = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
+    const ground = collision.height(start.x, start.z, start.y + 1);
+    if (ground !== null) start.y = ground + 0.05;
+    vehicle = createVehicle(start, ((track.heading ?? 0) * Math.PI) / 180);
+    car.position.copy(start);
+    car.rotation.y = vehicle.heading;
+    definition = races.find(
+      (r) =>
+        r.raceFilename.toLowerCase() ===
+        currentTrack.split("/").pop()!.toLowerCase(),
+    );
+    const lapRace =
+      !definition ||
+      ["carma", "checkpoints"].includes(String(definition.raceType));
+    race = createRace(
+      (lapRace ? track.checkpoints : []).map((c) => ({
+        points: c.points.map((p) => new THREE.Vector3(...p)),
+      })),
+      {
+        laps: definition?.laps ?? 4,
+        timeLimit: definition?.initialTimer[0] ?? 180,
+        credits: 5000,
+        checkpointBonusSeconds: track.checkpoints[0]?.timerIncrement?.[0] ?? 20,
+        completionCredits: definition?.raceCompletedBonus[0]?.[0] ?? 20000,
+      },
+    );
+    el("race-name").textContent = definition?.name ?? stemOf(currentTrack);
+    const skyTexture = track.sky
+      ? world.textures.get(track.sky.replace(/\.pix$/i, "").toLowerCase())
+      : undefined;
+    if (skyTexture) {
+      const texture = skyTexture.clone();
+      texture.repeat.set(track.skySettings?.repeat ?? 7, 1);
+      texture.flipY = true;
+      texture.magFilter = THREE.LinearFilter;
+      texture.needsUpdate = true;
+      sky = new THREE.Mesh(
+        new THREE.CylinderGeometry(900, 900, 1200, 64, 1, true),
+        new THREE.MeshBasicMaterial({
+          map: texture,
+          side: THREE.BackSide,
+          depthWrite: false,
+          fog: false,
+        }),
+      );
+      const height =
+        2 *
+        900 *
+        Math.tan(((track.skySettings?.verticalDegrees ?? 60) * Math.PI) / 360);
+      sky.scale.y = height / 1200;
+      const horizon =
+        (track.skySettings?.horizonPixel ?? skyTexture.image.height / 2) /
+        skyTexture.image.height;
+      sky.position.y = (horizon - 0.5) * height;
+      sky.renderOrder = -10;
+      scene.add(sky);
+    }
+    camera.position.copy(start).add(new THREE.Vector3(0, 1, 2));
+    camera.lookAt(start);
+    stats.ready = true;
+    status(
+      `Loaded ${world.stats.models} track models, ${loadedCar.stats.models} car models; ${world.stats.missingTextures} unresolved world textures.`,
+    );
+    localStorage.setItem(
+      "c2-selection",
+      JSON.stringify({ track: currentTrack, car: currentCar }),
+    );
+    setPaused(false);
+    message("RACE START · W / ↑ TO DRIVE", 5);
+    loadPedestrians(trackText, loadGeneration)
+      .then(() => {
+        if (loadGeneration === generation) pedestriansReady = true;
+      })
+      .catch((error) => console.warn("Pedestrian content:", error));
+    loadRivals(definition, loadGeneration)
+      .then(() => {
+        if (loadGeneration === generation) rivalsReady = true;
+      })
+      .catch((error) => console.warn("Opponent content:", error));
+  } catch (error) {
+    status(`Load failed: ${error instanceof Error ? error.message : error}`);
+    console.error(error);
+  } finally {
+    loading = false;
+    el("play").removeAttribute("disabled");
+  }
+}
+async function loadRivals(
+  definition: RaceCatalogEntry | undefined,
+  loadGeneration: number,
+) {
+  if (!track || !vehicle || !collision) return;
+  const activeTrack = currentTrack;
+  const nodes = track.pathNodes;
+  if (!nodes.length) return;
+  const ids = definition?.explicitOpponents.length
+    ? definition.explicitOpponents
+    : opponents.map((_, id) => id);
+  const candidates = ids
+    .map((id) => ({
+      id,
+      path: opponents[id]
+        ? findConfig("CARS", opponents[id].carFilename)
+        : undefined,
+    }))
+    .filter(
+      (entry): entry is { id: number; path: string } =>
+        !!entry.path && entry.path.toLowerCase() !== currentCar.toLowerCase(),
+    );
+  const count = Math.min(
+    4,
+    Math.max(
+      0,
+      (definition?.numberOfOpponents ?? -1) < 0
+        ? 4
+        : (definition?.numberOfOpponents ?? 4),
+    ),
+  );
+  for (let i = 0; i < count && i < candidates.length; i++) {
+    const configPath = candidates[i].path;
+    const text = await assets.text(configPath);
+    const config = parseCarConfig(text);
+    const model = await assets.scene(dirOf(configPath), stemOf(configPath));
+    const rivalDamage = new DamageSystem(assets, model.group, text);
+    await rivalDamage.init();
+    if (activeTrack !== currentTrack || loadGeneration !== generation) {
+      disposeGroup(model.group);
+      return;
+    }
+    let closest = 0,
+      distance = Infinity;
+    const spawn = vehicle.position
+      .clone()
+      .add(
+        new THREE.Vector3((i % 2 ? 1 : -1) * 0.8, 0, 1 + Math.floor(i / 2) * 1),
+      );
+    for (let n = 0; n < nodes.length; n++) {
+      const d = new THREE.Vector3(...nodes[n]).distanceToSquared(spawn);
+      if (d < distance) {
+        distance = d;
+        closest = n;
+      }
+    }
+    const node = new THREE.Vector3(...nodes[closest]);
+    const y = collision.height(spawn.x, spawn.z, spawn.y + 1);
+    if (y !== null) spawn.y = y + 0.05;
+    const heading = vehicle.heading;
+    const state = createVehicle(spawn, heading);
+    model.group.position.copy(spawn);
+    scene.add(model.group);
+    rivals.push({
+      object: model.group,
+      state,
+      node: closest,
+      previousNode: -1,
+      stuck: 0,
+      navigator: new RoadNavigator(
+        nodes.map((p) => new THREE.Vector3(...p)),
+        track!.pathEdges,
+      ),
+      wasted: false,
+      damage: rivalDamage,
+      id: candidates[i].id,
+      animation: new CarAnimation(model.group, text),
+      textures: new TextureAnimation(
+        groupMaterials(model.group),
+        model.textures,
+        text,
+      ),
+      config: physicsConfigFromCar(config),
+    });
+  }
+}
+async function loadPedestrians(text: string, loadGeneration: number) {
+  if (!content || !collision || !vehicle) return;
+  const active = currentTrack;
+  const system = await PedestrianSystem.create(
+    assets,
+    content,
+    text,
+    collision.height.bind(collision),
+    {
+      maxCount: 80,
+      spawn: vehicle.position,
+      onHit: (event) => {
+        if (race?.status === "racing") {
+          race.credits += event.count * 200;
+          race.timeLeft += event.count * 8;
+          message(`PEDESTRIAN HIT · +${event.count * 200} CR`);
+          audio.impact(0.25);
+        }
+      },
+    },
+  );
+  if (active !== currentTrack || loadGeneration !== generation) {
+    system.dispose();
+    return;
+  }
+  pedestrians = system;
+  scene.add(system.group);
+}
+function updateRivals(dt: number) {
+  if (!track || !collision || !vehicle || !race) return;
+  for (const r of rivals) {
+    if (r.wasted) continue;
+    const controls = r.navigator.update(
+      r.state.position,
+      r.state.heading,
+      r.state.speed,
+      dt,
+    );
+    if (controls.recoverTo) {
+      const p = controls.recoverTo;
+      const h = collision.height(p.x, p.z, p.y + 1);
+      if (h !== null) p.y = h + 0.05;
+      r.state.position.copy(p);
+      r.state.velocity.set(0, 0, 0);
+      r.state.heading = controls.recoverHeading ?? r.state.heading;
+    }
+    const incoming = r.state.velocity.clone();
+    const result = updateVehicle(r.state, controls, dt, collision, {
+      ...r.config,
+      maxSpeed: 4.5,
+      impactDamage: 1,
+    });
+    if (result.collisionSpeed > 0.8) {
+      const normal = incoming
+        .negate()
+        .setY(0)
+        .normalize()
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), -r.state.heading);
+      r.damage.impact(
+        normal.clone().multiplyScalar(-0.35).setY(0.12),
+        normal,
+        result.collisionSpeed,
+      );
+    }
+    r.animation.update(dt, {
+      speed: r.state.speed,
+      steer: controls.steer,
+      brake: !!controls.brake,
+      throttle: controls.throttle,
+    });
+    r.textures.update(dt, {
+      speed: r.state.speed,
+      steer: controls.steer,
+      brake: !!controls.brake,
+      throttle: controls.throttle,
+    });
+    r.object.position.copy(r.state.position);
+    r.object.rotation.y = r.state.heading;
+    const distance = r.state.position.distanceTo(vehicle.position);
+    if (distance < 0.48) {
+      const n = vehicle.position.clone().sub(r.state.position);
+      n.y = 0;
+      n.normalize();
+      const impact = vehicle.velocity.clone().sub(r.state.velocity).dot(n);
+      if (impact < 0) {
+        vehicle.velocity.addScaledVector(n, -impact * 0.8);
+        r.state.velocity.addScaledVector(n, impact * 0.8);
+        vehicle.health = Math.max(0, vehicle.health - Math.abs(impact) * 3);
+        const local = n
+          .clone()
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -vehicle.heading);
+        damage?.impact(
+          local.clone().multiplyScalar(-0.32).setY(0.12),
+          local,
+          Math.abs(impact),
+        );
+        const other = n
+          .clone()
+          .negate()
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -r.state.heading);
+        r.damage.impact(
+          other.clone().multiplyScalar(-0.32).setY(0.12),
+          other,
+          Math.abs(impact),
+        );
+        r.state.health = Math.max(0, r.state.health - Math.abs(impact) * 12);
+        message("CAR COLLISION");
+        audio.impact(Math.abs(impact) / 6);
+      }
+    }
+    if (r.state.health <= 0) {
+      r.wasted = true;
+      r.state.velocity.set(0, 0, 0);
+      race.credits += 2500;
+      race.timeLeft += 15;
+      message("OPPONENT WASTED · +2500 CR");
+      r.object.traverse((o) => {
+        if (o instanceof THREE.Mesh)
+          for (const m of Array.isArray(o.material)
+            ? o.material
+            : [o.material]) {
+            if (m instanceof THREE.MeshLambertMaterial)
+              m.color.multiplyScalar(0.3);
+          }
+      });
+    }
+  }
+}
+
+function recover() {
+  if (!vehicle || !race || !track || !collision) return;
+  let p = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
+  let best = Infinity;
+  for (const [from, to] of track.pathEdges) {
+    const a = track.pathNodes[from],
+      b = track.pathNodes[to];
+    if (!a || !b) continue;
+    const segment = new THREE.Line3(
+      new THREE.Vector3(...a),
+      new THREE.Vector3(...b),
+    );
+    const projected = segment.closestPointToPoint(
+      vehicle.position,
+      true,
+      new THREE.Vector3(),
+    );
+    const d =
+      (projected.x - vehicle.position.x) ** 2 +
+      (projected.z - vehicle.position.z) ** 2;
+    if (d < best) {
+      best = d;
+      p = projected;
+    }
+  }
+  const y = collision.height(p.x, p.z, p.y + 1);
+  if (y !== null) p.y = y + 0.05;
+  const recovered = recoverVehicle(vehicle, race, p, vehicle.heading);
+  if (recovered) {
+    pedestrians?.resetCar(vehicle.position);
+    powerups?.resetPath(vehicle.position);
+  }
+  message(recovered ? "RECOVERED · CR -250" : "NOT ENOUGH CREDITS");
+}
+el("play").addEventListener("click", () => {
+  void audio.unlock();
+  void loadRace();
+});
+el("menu-button").addEventListener("click", () => {
+  if (vehicle && !loading) {
+    void audio.unlock();
+    setPaused(!paused);
+  }
+});
+addEventListener("keydown", (event) => {
+  if (event.code === "Escape") {
+    event.preventDefault();
+    if (vehicle && !loading) {
+      void audio.unlock();
+      setPaused(!paused);
+    }
+    return;
+  }
+  if ((event.target as HTMLElement)?.tagName === "SELECT") return;
+  if (
+    ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(
+      event.code,
+    )
+  )
+    event.preventDefault();
+  keys.add(event.code);
+  if (event.repeat || paused) return;
+  if (event.code === "KeyR") recover();
+  if (event.code === "KeyE" && vehicle && race) {
+    const repaired = repairVehicle(vehicle, race);
+    if (repaired) damage?.repair();
+    message(repaired ? "REPAIRED" : "NO REPAIR NEEDED / INSUFFICIENT CREDITS");
+  }
+  if (event.code === "KeyC") cameraMode = (cameraMode + 1) % 3;
+  if (event.code === "KeyM") {
+    mapVisible = !mapVisible;
+    el("map").hidden = !mapVisible;
+  }
+  if (event.code === "Enter" && race?.status !== "racing") void loadRace();
+});
+addEventListener("keyup", (event) => keys.delete(event.code));
+addEventListener("blur", () => {
+  keys.clear();
+  if (vehicle && !loading) setPaused(true);
+});
+function drawMap() {
+  if (!track || !vehicle || !race || !mapVisible) return;
+  const ctx = (el("map") as HTMLCanvasElement).getContext("2d")!;
+  ctx.clearRect(0, 0, 220, 220);
+  ctx.fillStyle = "rgba(15,12,9,.72)";
+  ctx.fillRect(0, 0, 220, 220);
+  const points = track.pathNodes.length
+    ? track.pathNodes
+    : track.checkpoints.flatMap((g) => g.points);
+  if (!points.length) return;
+  const xs = points.map((p) => p[0]),
+    zs = points.map((p) => p[2]);
+  const minX = Math.min(...xs),
+    maxX = Math.max(...xs),
+    minZ = Math.min(...zs),
+    maxZ = Math.max(...zs);
+  const scale = 190 / Math.max(maxX - minX, maxZ - minZ, 1);
+  const project = (x: number, z: number) => [
+    15 + (x - minX) * scale,
+    15 + (z - minZ) * scale,
+  ];
+  ctx.strokeStyle = "#706b5b";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (const [a, b] of track.pathEdges) {
+    if (!points[a] || !points[b]) continue;
+    ctx.moveTo(...(project(points[a][0], points[a][2]) as [number, number]));
+    ctx.lineTo(...(project(points[b][0], points[b][2]) as [number, number]));
+  }
+  ctx.stroke();
+  for (const [i, gate] of track.checkpoints.entries()) {
+    const p = gate.points
+      .reduce((v, p) => v.add(new THREE.Vector3(...p)), new THREE.Vector3())
+      .divideScalar(gate.points.length);
+    const [x, y] = project(p.x, p.z);
+    ctx.fillStyle = i === race.nextCheckpoint ? "#fff" : "#d98b20";
+    ctx.fillRect(x - 3, y - 3, 6, 6);
+    ctx.font = "bold 12px monospace";
+    ctx.fillText(String(i + 1), x + 5, y + 4);
+  }
+  for (const r of rivals) {
+    const [x, y] = project(r.state.position.x, r.state.position.z);
+    ctx.fillStyle = "#a22";
+    ctx.fillRect(x - 2, y - 2, 4, 4);
+  }
+  const [x, y] = project(vehicle.position.x, vehicle.position.z);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-vehicle.heading);
+  ctx.fillStyle = "#fe3";
+  ctx.beginPath();
+  ctx.moveTo(0, -6);
+  ctx.lineTo(-4, 4);
+  ctx.lineTo(4, 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+function animate(now: number) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  seconds += dt;
+  frames++;
+  if (seconds >= 1) {
+    fps = Math.round(frames / seconds);
+    seconds = frames = 0;
+  }
+  if (vehicle && car && race && collision) {
+    if (!paused && race.status === "racing") {
+      worldAnimation?.update(dt);
+      const modifiers = powerups?.update(dt, vehicle, race, (event) => {
+        if (event.kind === "repair") damage?.repair();
+        message(
+          event.name === "n/a"
+            ? `${event.kind.toUpperCase()} +${event.amount ?? 0}`
+            : event.name,
+        );
+        audio.checkpoint();
+      });
+      const powered = {
+        ...physicsConfig,
+        acceleration:
+          (physicsConfig.acceleration ?? 1.8) *
+          (modifiers?.accelerationMultiplier ?? 1),
+        maxSpeed:
+          (physicsConfig.maxSpeed ?? 12.96) *
+          (modifiers?.maxSpeedMultiplier ?? 1),
+        lateralGrip: 9 * (modifiers?.lateralGripMultiplier ?? 1),
+      };
+      previous.copy(vehicle.position);
+      const incoming = vehicle.velocity.clone();
+      const result = updateVehicle(
+        vehicle,
+        {
+          throttle:
+            Number(keys.has("KeyW") || keys.has("ArrowUp")) -
+            Number(keys.has("KeyS") || keys.has("ArrowDown")),
+          steer:
+            Number(keys.has("KeyA") || keys.has("ArrowLeft")) -
+            Number(keys.has("KeyD") || keys.has("ArrowRight")),
+          brake: keys.has("ShiftLeft"),
+          handbrake: keys.has("Space"),
+        },
+        dt,
+        collision,
+        powered,
+      );
+      for (const event of updateRace(
+        race,
+        previous,
+        vehicle.position,
+        isSupportedRace(definition) ? dt : 0,
+      )) {
+        audio.checkpoint();
+        message(
+          event.type === "completed"
+            ? "RACE COMPLETED · ENTER TO RESTART"
+            : event.type === "failed"
+              ? "OUT OF TIME · ENTER TO RESTART"
+              : event.type === "lap"
+                ? "LAP COMPLETE"
+                : "CHECKPOINT!",
+        );
+      }
+      if (result.collisionSpeed > 0.8) {
+        message("IMPACT · E TO REPAIR");
+        audio.impact(result.collisionSpeed / 6);
+        const normal = incoming
+          .clone()
+          .negate()
+          .setY(0)
+          .normalize()
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -vehicle.heading);
+        damage?.impact(
+          normal.clone().multiplyScalar(-0.35).setY(0.12),
+          normal,
+          result.collisionSpeed,
+        );
+      }
+      updateRivals(dt);
+      pedestrians?.update(dt, {
+        position: vehicle.position,
+        yaw: vehicle.heading,
+        speed: vehicle.speed,
+      });
+      const victory = applyRaceObjectives(race, definition, {
+        opponentsTotal: rivals.length,
+        opponentsWasted: rivals.filter((r) => r.wasted).length,
+        pedestriansTotal: pedestrians?.count ?? 0,
+        pedestriansKilled: pedestrians?.hits ?? 0,
+        groupCounts: pedestrians?.groupCounts,
+        opponentsReady: rivalsReady,
+        pedestriansReady,
+        opponentsWastedIds: definition?.opponentsToKill.every((id) =>
+          rivals.some((r) => r.id === id),
+        )
+          ? new Set(rivals.filter((r) => r.wasted).map((r) => r.id))
+          : undefined,
+      });
+      if (victory.completed) message(victory.message ?? "RACE COMPLETED", 8);
+      const animationInput = {
+        speed: vehicle.speed,
+        steer:
+          Number(keys.has("KeyA") || keys.has("ArrowLeft")) -
+          Number(keys.has("KeyD") || keys.has("ArrowRight")),
+        brake: keys.has("ShiftLeft") || keys.has("Space"),
+        throttle:
+          Number(keys.has("KeyW") || keys.has("ArrowUp")) -
+          Number(keys.has("KeyS") || keys.has("ArrowDown")),
+      };
+      carAnimation?.update(dt, animationInput);
+      carTextures?.update(dt, animationInput);
+      if (vehicle.position.y < -80) recover();
+    }
+    audio.update(
+      Math.abs(vehicle.speed) / Math.max(physicsConfig.maxSpeed ?? 12.96, 1),
+      Number(keys.has("KeyW") || keys.has("ArrowUp")),
+      vehicle.health / 100,
+      paused || race.status !== "racing",
+    );
+    car.position.copy(vehicle.position);
+    car.rotation.y = vehicle.heading;
+    const forward = new THREE.Vector3(
+      -Math.sin(vehicle.heading),
+      0,
+      -Math.cos(vehicle.heading),
+    );
+    target.copy(vehicle.position).add(new THREE.Vector3(0, 0.18, 0));
+    if (cameraMode === 0) {
+      cameraGoal
+        .copy(vehicle.position)
+        .addScaledVector(
+          forward,
+          -1.55 - Math.min(Math.abs(vehicle.speed) * 0.06, 0.8),
+        )
+        .add(new THREE.Vector3(0, 0.8, 0));
+      const obstruction = collision.sweep(target, cameraGoal, 0.08);
+      if (obstruction)
+        cameraGoal.lerpVectors(
+          target,
+          cameraGoal,
+          Math.max(0.18, obstruction.fraction),
+        );
+      camera.position.lerp(cameraGoal, 1 - Math.exp(-dt * 6));
+      target.addScaledVector(forward, 0.65);
+      car.visible = true;
+    } else if (cameraMode === 1) {
+      camera.position
+        .copy(vehicle.position)
+        .add(new THREE.Vector3(0, 0.18, 0))
+        .addScaledVector(forward, 0.17);
+      target.addScaledVector(forward, 3);
+      car.visible = false;
+    } else {
+      camera.position.copy(vehicle.position).add(new THREE.Vector3(0, 14, 0.1));
+      car.visible = true;
+    }
+    camera.lookAt(target);
+    if (sky) {
+      sky.position.x = camera.position.x;
+      sky.position.z = camera.position.z;
+    }
+    el("speed").textContent = String(Math.round(Math.abs(speedMph(vehicle))));
+    el("damage").textContent = `ARMOUR ${Math.round(vehicle.health)}%`;
+    const time = Math.max(0, Math.ceil(race.timeLeft));
+    el("timer").textContent = `${Math.floor(time / 60)
+      .toString()
+      .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`;
+    el("laps").textContent =
+      `LAP ${Math.min(race.lap, race.laps)}/${race.laps}`;
+    el("credits").textContent = `CR ${race.credits}`;
+    el("checkpoint").textContent = race.checkpoints.length
+      ? `CHECKPOINT ${race.nextCheckpoint + 1}/${race.checkpoints.length}`
+      : objectiveText(definition, {
+          opponentsTotal: rivals.length,
+          opponentsWasted: rivals.filter((r) => r.wasted).length,
+          pedestriansTotal: pedestrians?.count ?? 0,
+          pedestriansKilled: pedestrians?.hits ?? 0,
+        });
+    if (!isSupportedRace(definition)) el("timer").textContent = "FREE DRIVE";
+    drawMap();
+  }
+  if (now > messageUntil) el("message").textContent = paused ? "PAUSED" : "";
+  renderer.render(scene, camera);
+  stats.frames++;
+  stats.fps = fps;
+  stats.drawCalls = renderer.info.render.calls;
+  stats.triangles = renderer.info.render.triangles;
+}
+requestAnimationFrame(animate);
+void init();

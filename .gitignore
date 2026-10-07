@@ -1,1 +1,8 @@
-carma2_orig
+/carma2_orig/
+/node_modules/
+/dist/
+/.asset-cache/
+/generated-assets/
+/artifacts/
+*.tsbuildinfo
+.env

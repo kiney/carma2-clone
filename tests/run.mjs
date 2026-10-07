@@ -1,0 +1,13 @@
+import "./assets.test.mjs";
+import "./formats.test.mjs";
+import "./config.test.mjs";
+import "./gameplay.test.mjs";
+import "./world.test.mjs";
+import "./tiff.test.mjs";
+import "./ai.test.mjs";
+import "./pedestrians.test.mjs";
+import "./damage.test.mjs";
+import "./animation.test.mjs";
+import "./rules.test.mjs";
+import "./handling.test.mjs";
+import "./powerups.test.mjs";
