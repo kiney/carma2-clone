@@ -201,7 +201,7 @@ function pixMap(format, width, height, rowBytes, pixelSize, data) {
   );
 }
 
-test("PIX decodes big-endian RGB565 with padded rows and a transparent zero", () => {
+test("PIX decodes big-endian RGB565 with padded rows and opaque black", () => {
   const fixture = pixMap(
     5,
     2,
@@ -220,7 +220,7 @@ test("PIX decodes big-endian RGB565 with padded rows and a transparent zero", ()
   const [p] = parsePix(fixture);
   assert.deepEqual(
     Array.from(p.rgba),
-    [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 0, 0, 0],
+    [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 0, 0, 255],
   );
   const corrupt = Buffer.from(fixture);
   corrupt.writeUInt32BE(0xffffffff, 20);
@@ -234,6 +234,8 @@ test("PIX decodes ARGB4444 and indexed colors using an external RGBA palette", (
   palette.set([10, 20, 30, 255], 4);
   const [indexed] = parsePix(pixMap(3, 2, 1, 2, 1, bytes([1, 0])), palette);
   assert.deepEqual(Array.from(indexed.rgba), [10, 20, 30, 255, 0, 0, 0, 0]);
+  const [black] = parsePix(pixMap(18, 2, 1, 4, 2, bytes(u16(0xf000), u16(0))));
+  assert.deepEqual(Array.from(black.rgba), [0, 0, 0, 255, 0, 0, 0, 0]);
 });
 
 test("retail text decoder handles byte encoding, tabs, comment key changes and plain lines", () => {

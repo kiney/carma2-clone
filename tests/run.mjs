@@ -40,3 +40,4 @@ import "./simulation-masses.test.mjs";
 import "./split-lifecycle.test.mjs";
 
 import "./box-hull.test.mjs";
+import "./render-pose.test.mjs";

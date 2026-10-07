@@ -31,10 +31,18 @@ export interface PowerupModifiers {
   freeRepairs: boolean;
   damageMultiplier: number;
   protection: number;
+  timerFrozen: boolean;
 }
 
 export interface PowerupEvent {
-  kind: "credits" | "repair" | "time" | "engine" | "effect" | "upgrade";
+  kind:
+    | "credits"
+    | "repair"
+    | "time"
+    | "engine"
+    | "effect"
+    | "upgrade"
+    | "unsupported";
   name: string;
   definition: PowerupDefinition;
   amount?: number;
@@ -129,15 +137,16 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  action: 5 | 6 | 9 | 21 | 22 | 27;
+  action: 5 | 6 | 8 | 9 | 21 | 22 | 27;
 }
 type AssetTextSource = { text(path: string): Promise<string> };
 
 /**
  * Extracts original `&£NN...` pickup actors from an unbatched source scene.
- * The first two digits after the marker select the POWERUP.TXT record. This
- * Supports credits, repair, time, timed engine/grip and damage modifiers, and
- * cancellation. Other actions are reported as unsupported.
+ * The first two digits after the marker select the POWERUP.TXT record.
+ * Supports weighted random effects, credits, repair, time bonuses/freezing,
+ * timed engine/grip and damage modifiers, permanent upgrades and cancellation.
+ * Other actions collect with an explicit unsupported event.
  */
 export class PowerupSystem {
   private motionFactors = { engineFactor: 1, tyreGripFactor: 1 };
@@ -146,6 +155,7 @@ export class PowerupSystem {
   private freeRepairs = false;
   private damageMultiplier = 1;
   private protection = 1;
+  private timerFrozen = false;
   readonly group = new THREE.Group();
   readonly definitions: PowerupDefinition[] = [];
   readonly warnings: string[] = [];
@@ -157,6 +167,7 @@ export class PowerupSystem {
   constructor(
     private readonly assets: AssetTextSource,
     private readonly sourceWorldGroup: THREE.Group,
+    private readonly random: () => number = Math.random,
   ) {
     this.group.name = "Original powerups";
   }
@@ -195,7 +206,9 @@ export class PowerupSystem {
         continue;
       }
       if (
-        ![0, 5, 6, 7, 9, 11, 21, 22, 27, 46, 47, 51].includes(definition.action)
+        ![0, 4, 5, 6, 7, 8, 9, 11, 21, 22, 27, 46, 47, 51].includes(
+          definition.action,
+        )
       ) {
         if (!this.unsupportedWarned.has(index)) {
           this.unsupportedWarned.add(index);
@@ -203,7 +216,6 @@ export class PowerupSystem {
             `Power-up ${index} (${definition.message}) uses unsupported action ${definition.action}`,
           );
         }
-        continue;
       }
       const worldMatrix = node.matrixWorld.clone();
       node.parent?.remove(node);
@@ -246,6 +258,7 @@ export class PowerupSystem {
     const from = this.previous?.clone() ?? current.clone();
     const segment = current.clone().sub(from);
     const lengthSq = segment.lengthSq();
+    const hits: Array<{ pickup: Pickup; t: number }> = [];
     for (const pickup of this.pickups) {
       if (pickup.collected) continue;
       const t =
@@ -258,6 +271,11 @@ export class PowerupSystem {
           : 0;
       const closest = from.clone().addScaledVector(segment, t);
       if (closest.distanceToSquared(pickup.position) > 0.7 * 0.7) continue;
+      hits.push({ pickup, t });
+    }
+    // Actor traversal order is unrelated to the order encountered while driving.
+    hits.sort((a, b) => a.t - b.t);
+    for (const { pickup } of hits) {
       pickup.collected = true;
       pickup.object.visible = false;
       this.apply(pickup.index, vehicle, race, onEvent);
@@ -271,6 +289,7 @@ export class PowerupSystem {
       freeRepairs: this.freeRepairs,
       damageMultiplier: this.damageMultiplier,
       protection: this.protection,
+      timerFrozen: this.timerFrozen,
     };
     if (this.suspension) modifiers.suspension = this.suspension;
     return modifiers;
@@ -297,6 +316,9 @@ export class PowerupSystem {
       case 6:
         this.freeRepairs = false;
         break;
+      case 8:
+        this.timerFrozen = false;
+        break;
       case 22:
         this.damageMultiplier = 1;
         break;
@@ -320,21 +342,58 @@ export class PowerupSystem {
     this.active.length = 0;
   }
 
+  /** Installed IRandomBetween 0x512f00 scales an inclusive range using a
+   * 15-bit rand() sample; its signed integer division truncates toward zero. */
+  private randomBetween(low: number, high: number): number {
+    const sample = Math.floor(this.random() * 0x8000);
+    return low + Math.trunc(Math.imul(sample, high + 1 - low) / 0x8000);
+  }
+
   private apply(
     index: number,
     vehicle: VehicleState,
     race: RaceState,
     onEvent?: (event: PowerupEvent) => void,
+    randomPath: ReadonlySet<number> = new Set(),
   ): void {
     const def = this.definitions[index];
     if (!def) return;
     switch (def.action) {
+      case 4: {
+        // Repeated indices in the source table are intentional probability weights.
+        const choice =
+          def.integerParams[
+            this.randomBetween(0, def.integerParams.length - 1)
+          ];
+        if (
+          choice === undefined ||
+          !this.definitions[choice] ||
+          randomPath.has(index)
+        ) {
+          onEvent?.({
+            kind: "unsupported",
+            name: def.message,
+            definition: def,
+          });
+          break;
+        }
+        this.apply(
+          choice,
+          vehicle,
+          race,
+          onEvent,
+          new Set([...randomPath, index]),
+        );
+        break;
+      }
       case 5:
       case 6:
+      case 8:
       case 22:
       case 27: {
         if (def.action === 5) this.invulnerable = true;
         if (def.action === 6) this.freeRepairs = true;
+        if (def.action === 8) this.timerFrozen = true;
         if (def.action === 22) this.damageMultiplier = def.floatParams[0] ?? 1;
         if (def.action === 27) this.protection = def.floatParams[0] ?? 1;
         // A renewed effect owns its new timeout; an old timeout cannot undo it.
@@ -369,7 +428,8 @@ export class PowerupSystem {
       case 0: {
         const low = def.integerParams[0] ?? 0,
           high = def.integerParams[1] ?? low;
-        const award = Math.round((low + high) / 2);
+        // Installed GotCredits 0x4dbf60 truncates the sampled award to hundreds.
+        const award = Math.trunc(this.randomBetween(low, high) / 100) * 100;
         race.credits += award;
         onEvent?.({
           kind: "credits",
@@ -386,7 +446,7 @@ export class PowerupSystem {
       case 11: {
         const low = def.integerParams[0] ?? 0,
           high = def.integerParams[1] ?? low;
-        const seconds = Math.round((low + high) / 2);
+        const seconds = this.randomBetween(low, high);
         race.timeLeft += seconds;
         onEvent?.({
           kind: "time",
@@ -404,6 +464,10 @@ export class PowerupSystem {
           def.floatParams,
         );
         if (suspension) this.suspension = suspension;
+        // Renewal replaces the previous timer, as for the scalar effects above.
+        this.active = this.active.filter(
+          (effect) => effect.action !== def.action,
+        );
         const duration = def.duration > 0 ? def.duration : 0;
         this.active.push({
           index,
@@ -419,6 +483,9 @@ export class PowerupSystem {
         });
         break;
       }
+      default:
+        onEvent?.({ kind: "unsupported", name: def.message, definition: def });
+        break;
     }
   }
 }

@@ -84,6 +84,38 @@ try {
     before,
     { timeout: 20000 },
   );
+  const smoothing = await page.evaluate(async () => {
+    const c = window.carma;
+    const samples = [];
+    for (let i = 0; i < 60; i++) {
+      await new Promise(requestAnimationFrame);
+      samples.push({
+        tick: c.simulation.elapsed,
+        position: c.vehicle.position.toArray(),
+        rendered: c.renderPosition.toArray(),
+      });
+    }
+    let repeatedPhysics = 0,
+      interpolatedFrames = 0;
+    for (let i = 1; i < samples.length; i++) {
+      if (samples[i].tick !== samples[i - 1].tick) continue;
+      repeatedPhysics++;
+      if (
+        samples[i].rendered.some(
+          (v, j) => Math.abs(v - samples[i - 1].rendered[j]) > 1e-8,
+        )
+      )
+        interpolatedFrames++;
+    }
+    return { repeatedPhysics, interpolatedFrames };
+  });
+  // At <=25fps each frame may contain a physics tick. At higher rates the
+  // intervening frames must continue moving rather than display a frozen pose.
+  if (smoothing.repeatedPhysics >= 5)
+    assert.ok(
+      smoothing.interpolatedFrames > smoothing.repeatedPhysics * 0.8,
+      `smooth fixed-tick rendering: ${JSON.stringify(smoothing)}`,
+    );
   await page.keyboard.down("a");
   await page.waitForTimeout(750);
   await page.keyboard.up("a");
@@ -249,7 +281,14 @@ try {
   }
   assert.deepEqual(errors, [], "browser console has no fatal errors");
   assert.deepEqual(failedRequests, [], "all requested local assets load");
-  const report = { driving, progression, switches, errors, failedRequests };
+  const report = {
+    driving,
+    smoothing,
+    progression,
+    switches,
+    errors,
+    failedRequests,
+  };
   await writeFile(
     "artifacts/browser-report.json",
     JSON.stringify(report, null, 2),

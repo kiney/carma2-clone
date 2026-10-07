@@ -41,7 +41,7 @@ Choose a race and car, then select **Load Race**. The browser menus and HUD are 
 
 Vehicle mechanics and WAM data drive suspension, tyres, steering, gears, mass/inertia, localized dents, structural bending and body splitting. Twelve component damage units affect handling; detached parts have their own rigid state and joints. Held repair restores eligible bodywork and charges repaired component levels; split bodywork requires the full-repair pickup or reloading; wasting and its countdown persist until reloading. The ordinary physics equations are independently reconstructed from the local C2 executable; see [the evidence notes](docs/c2-physics-re.md).
 
-The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, engine and grip pickups, plus invulnerability, granite protection, damage magnification, free repairs and permanent armour/power/offense upgrades. Race objectives are approximations; unsupported smash missions are labelled free driving.
+The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, weighted random, engine and grip pickups, plus invulnerability, granite protection, damage magnification, free repairs and permanent armour/power/offense upgrades. Unsupported powerup effects show an explicit notification when collected. Race objectives are approximations; unsupported smash missions are labelled free driving.
 
 ## Tests
 

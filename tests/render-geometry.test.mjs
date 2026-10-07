@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { access } from "node:fs/promises";
+import { Mesh, DoubleSide, FrontSide } from "three";
+import { Assets } from "../src/content.ts";
+import { createAssetStore } from "../server/assets.mjs";
 import {
   createModelGeometry,
   updateModelNormals,
@@ -107,4 +111,108 @@ test("zero smoothing masks use the original all-smooth default and update from l
     Math.SQRT1_2,
     Math.SQRT1_2,
   ]);
+});
+
+test("scene materials render both always-visible and two-sided faces without culling", async () => {
+  const u32 = (value) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32BE(value);
+    return b;
+  };
+  const chunk = (tag, payload = Buffer.alloc(0)) =>
+    Buffer.concat([u32(tag), u32(payload.length), payload]);
+  const header = (type) => chunk(0x12, Buffer.concat([u32(type), u32(2)]));
+  const material = (name, flags) => {
+    const data = Buffer.alloc(65);
+    data.fill(255, 0, 4);
+    data.writeUInt32BE(flags, 20);
+    data.writeFloatBE(1, 24);
+    data.writeFloatBE(1, 36);
+    return Buffer.concat([
+      chunk(0x3c, Buffer.concat([data, Buffer.from(name + "\0")])),
+      chunk(0),
+    ]);
+  };
+  const files = new Map([
+    [
+      "scene/scene.mat",
+      Buffer.concat([
+        header(5),
+        material("one-sided", 1),
+        material("always-visible", 0x801),
+        material("two-sided", 0x1001),
+      ]),
+    ],
+    [
+      "scene/scene.act",
+      Buffer.concat([header(1), chunk(0x23, Buffer.from([0, 4, 0])), chunk(0)]),
+    ],
+  ]);
+  const assets = new Assets();
+  assets.manifest = [...files.keys()].map((path) => ({
+    path,
+    size: files.get(path).length,
+  }));
+  assets.lookup = new Map([...files.keys()].map((path) => [path, path]));
+  assets.bytes = async (path) => files.get(path);
+  const scene = await assets.scene("scene", "scene");
+  assert.equal(scene.materials.get("one-sided").side, FrontSide);
+  assert.equal(scene.materials.get("always-visible").side, DoubleSide);
+  assert.equal(scene.materials.get("two-sided").side, DoubleSide);
+});
+
+test("read-only original scenes preserve black tyres and windows, plus authored cutouts", async (t) => {
+  try {
+    await access("carma2_orig");
+  } catch {
+    t.skip("local original assets are absent");
+    return;
+  }
+  const store = await createAssetStore();
+  const assets = new Assets();
+  assets.manifest = store.manifest;
+  assets.lookup = new Map(
+    store.manifest.map(({ path }) => [path.toLowerCase(), path]),
+  );
+  assets.bytes = async (path) => store.read(path);
+  await assets.common(() => {});
+  const car = await assets.scene("data/CARS/EAGLE3", "EAGLE3");
+  const city = await assets.scene("data/RACES/newcity1", "newcity1");
+  const blackPixels = (material) => {
+    const data = material.map.image.data;
+    let black = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] || data[i + 1] || data[i + 2]) continue;
+      black++;
+      assert.equal(
+        data[i + 3],
+        255,
+        `${material.name}: black pixel ${i / 4} stays opaque`,
+      );
+    }
+    return black;
+  };
+  const tyre = car.materials.get("ewheel6");
+  assert.ok(blackPixels(tyre) > 600);
+  let wheels = 0;
+  car.group.traverse((object) => {
+    if (!(object instanceof Mesh) || !/^[RF][RL]WHEEL\.DAT$/i.test(object.name))
+      return;
+    wheels++;
+    assert.equal(
+      object.material[0],
+      tyre,
+      `${object.name}: inherited tyre material`,
+    );
+  });
+  assert.equal(wheels, 4);
+  assert.ok(blackPixels(city.materials.get("block5w2")) > 0);
+  assert.ok(blackPixels(city.materials.get("tower3w")) > 0);
+  const fence = city.materials.get("fencing").map.image.data;
+  assert.ok(
+    fence.some((value, i) => i % 4 === 3 && value === 0),
+    "RGBA fence cutouts stay transparent",
+  );
+  assert.equal(car.stats.missingTextures, 0);
+  assert.equal(city.stats.missingTextures, 0);
 });

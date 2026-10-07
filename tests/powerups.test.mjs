@@ -102,6 +102,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     freeRepairs: false,
     damageMultiplier: 1,
     protection: 1,
+    timerFrozen: false,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -116,18 +117,22 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
   const bonus = new THREE.Group();
   bonus.name = "&£001234";
   indexedRoot.add(bonus);
-  const indexedSystem = await new PowerupSystem(assets, indexedRoot).init();
+  const indexedSystem = await new PowerupSystem(
+    assets,
+    indexedRoot,
+    () => 0.5,
+  ).init();
   const car = createVehicle(new THREE.Vector3());
   const state = createRace([], { credits: 0, timeLimit: 60 });
   const got = [];
   indexedSystem.update(0, car, state, (event) => got.push(event));
-  assert.equal(state.credits, 550);
+  assert.equal(state.credits, 500);
   assert.equal(got[0].kind, "credits");
-  assert.equal(got[0].amount, 550);
+  assert.equal(got[0].amount, 500);
   indexedSystem.dispose();
 });
 
-test("unsupported action pickups remain visible and report one definition warning", async () => {
+test("unsupported pickups collect once with an explicit event and definition warning", async () => {
   const assets = {
     text: async () => table([{ message: "Unknown", action: 48 }]),
   };
@@ -136,15 +141,28 @@ test("unsupported action pickups remain visible and report one definition warnin
   pickup.name = "&£001234";
   root.add(pickup);
   const system = await new PowerupSystem(assets, root).init();
-  assert.equal(system.pickups.length, 0);
-  assert.equal(root.children.includes(pickup), true);
+  assert.equal(system.pickups.length, 1);
+  assert.equal(root.children.includes(pickup), false);
   assert.match(system.warnings[0], /unsupported action 48/);
   assert.equal(system.warnings.length, 1);
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  const events = [];
+  const modifiers = system.update(0, car, race, (event) => events.push(event));
+  assert.equal(pickup.visible, false);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "unsupported");
+  assert.equal(events[0].name, "Unknown");
+  assert.equal(modifiers.accelerationMultiplier, 1);
+  system.update(0, car, race, (event) => events.push(event));
+  assert.equal(events.length, 1);
+  system.dispose();
 });
 
 async function syntheticEffects(
   definitions,
   positions = definitions.map(() => 0),
+  random = Math.random,
 ) {
   const root = new THREE.Group();
   definitions.forEach((definition, index) => {
@@ -156,6 +174,7 @@ async function syntheticEffects(
   return new PowerupSystem(
     { text: async () => table(definitions) },
     root,
+    random,
   ).init();
 }
 
@@ -189,6 +208,135 @@ test("timed source damage and repair actions retain independent thirty/sixty sec
   modifiers = system.update(30, car, race);
   assert.equal(modifiers.freeRepairs, false);
   system.dispose();
+});
+
+test("source random tables retain duplicate weights and report the selected effect", async () => {
+  for (const [sample, expectedKind, expectedAmount] of [
+    [0, "credits", 100],
+    [0.65, "credits", 100],
+    [2 / 3, "credits", 100],
+    [0.99, "time", 5],
+  ]) {
+    const system = await syntheticEffects(
+      [
+        { action: 4, ints: [1, 1, 2] },
+        { action: 0, message: "Cash", ints: [100, 100] },
+        { action: 11, message: "Time", ints: [5, 5] },
+      ],
+      [0, 100, 200],
+      () => sample,
+    );
+    const car = createVehicle(new THREE.Vector3());
+    const race = createRace([], { credits: 0, timeLimit: 60 });
+    const events = [];
+    system.update(0, car, race, (event) => events.push(event));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].kind, expectedKind);
+    assert.equal(events[0].amount, expectedAmount);
+    assert.equal(
+      events[0].definition.index,
+      expectedKind === "credits" ? 1 : 2,
+    );
+    system.dispose();
+  }
+});
+
+test("credits sample the original inclusive range and truncate awards to hundreds", async () => {
+  for (const [sample, expected] of [
+    [0, 100],
+    [0.5, 500],
+    [0.99, 900],
+    [32767 / 32768, 1000],
+  ]) {
+    const system = await syntheticEffects(
+      [{ action: 0, ints: [100, 1000] }],
+      [0],
+      () => sample,
+    );
+    const car = createVehicle(new THREE.Vector3());
+    const race = createRace([], { credits: 25 });
+    const events = [];
+    system.update(0, car, race, (event) => events.push(event));
+    assert.equal(race.credits, 25 + expected);
+    assert.equal(events[0].amount, expected);
+    system.dispose();
+  }
+});
+
+test("time bonuses preserve source 15-bit sampling and both inclusive endpoints", async () => {
+  for (const [sample, expected] of [
+    [0, 5],
+    [1 / 26, 5],
+    [0.5, 18],
+    [32767 / 32768, 30],
+  ]) {
+    const system = await syntheticEffects(
+      [{ action: 11, ints: [5, 30] }],
+      [0],
+      () => sample,
+    );
+    const car = createVehicle(new THREE.Vector3());
+    const race = createRace([], { timeLimit: 60 });
+    const events = [];
+    system.update(0, car, race, (event) => events.push(event));
+    assert.equal(race.timeLeft, 60 + expected);
+    assert.equal(events[0].amount, expected);
+    system.dispose();
+  }
+});
+
+test("random pickup preserves an unsupported choice and guards cyclic tables", async () => {
+  const system = await syntheticEffects(
+    [
+      { action: 4, ints: [1] },
+      { action: 48, message: "Original ability" },
+    ],
+    [0, 100],
+    () => 0,
+  );
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  const events = [];
+  system.update(0, car, race, (event) => events.push(event));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "unsupported");
+  assert.equal(events[0].name, "Original ability");
+  system.dispose();
+  const cyclic = await syntheticEffects(
+    [{ action: 4, ints: [0] }],
+    [0],
+    () => 0,
+  );
+  cyclic.update(0, car, race, (event) => events.push(event));
+  assert.equal(events.length, 2);
+  assert.equal(events[1].kind, "unsupported");
+  cyclic.dispose();
+});
+
+test("freeze timer renews its duration and cancellation clears it", async () => {
+  const system = await syntheticEffects(
+    [{ action: 8, duration: 1 }, { action: 8, duration: 2 }, { action: 51 }],
+    [0, 4, 8],
+  );
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  assert.equal(system.update(0, car, race).timerFrozen, true);
+  system.update(0.75, car, race);
+  car.position.x = 4;
+  system.update(0, car, race);
+  assert.equal(system.update(0.25, car, race).timerFrozen, true);
+  assert.equal(system.update(1.75, car, race).timerFrozen, false);
+  system.dispose();
+
+  const cancelling = await syntheticEffects(
+    [{ action: 8, duration: 30 }, { action: 51 }],
+    [0, 4],
+  );
+  car.position.x = 0;
+  assert.equal(cancelling.update(0, car, race).timerFrozen, true);
+  car.position.x = 4;
+  assert.equal(cancelling.update(0, car, race).timerFrozen, false);
+  cancelling.dispose();
 });
 
 test("cancellation invokes scalar and motion resets without reverting credits or health", async () => {
@@ -242,6 +390,63 @@ test("renewing a damage factor replaces its timeout and disposal resets live eff
   assert.equal(modifiers.invulnerable, true);
   system.dispose();
   assert.equal(system.update(0, car, race).invulnerable, false);
+});
+
+test("renewed engine and tyre effects survive the previous pickup's expiry", async () => {
+  for (const action of [9, 21]) {
+    const floats = action === 9 ? [2, 1.5, 1, 1, 0, 0, 1] : [2];
+    const renewed = action === 9 ? [4, 3, 1, 1, 0, 0, 1] : [4];
+    const system = await syntheticEffects(
+      [
+        { action, duration: 1, floats },
+        { action, duration: 2, floats: renewed },
+      ],
+      [0, 4],
+    );
+    const car = createVehicle(new THREE.Vector3());
+    const race = createRace([]);
+    system.update(0, car, race);
+    system.update(0.75, car, race);
+    car.position.x = 4;
+    system.update(0, car, race);
+    const active = system.update(0.25, car, race);
+    assert.equal(active.lateralGripMultiplier, action === 9 ? 3 : 4);
+    assert.equal(active.accelerationMultiplier, action === 9 ? 4 : 1);
+    const expired = system.update(1.75, car, race);
+    assert.equal(expired.lateralGripMultiplier, 1);
+    assert.equal(expired.accelerationMultiplier, 1);
+    system.dispose();
+  }
+});
+
+test("a sweep applies pickups in driving order, independently of scene ordering", async () => {
+  const system = await syntheticEffects(
+    [
+      { action: 51, message: "Cancel" },
+      {
+        action: 9,
+        message: "Turbo",
+        duration: 30,
+        floats: [2, 1.5, 1, 1, 0, 0, 1],
+      },
+    ],
+    [4, 2],
+  );
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  system.update(0, car, race);
+  car.position.x = 6;
+  const events = [];
+  const modifiers = system.update(0, car, race, (event) => events.push(event));
+  assert.deepEqual(
+    events.map((event) => event.name),
+    ["Turbo", "Cancel"],
+  );
+  assert.equal(modifiers.accelerationMultiplier, 1);
+  assert.equal(modifiers.lateralGripMultiplier, 1);
+  system.update(0, car, race, (event) => events.push(event));
+  assert.equal(events.length, 2, "collected pickups do not retrigger");
+  system.dispose();
 });
 
 test("APO gains and slots emit original three-column parameters without inventing credit billing", async () => {
@@ -341,12 +546,12 @@ test(
     const system = await new PowerupSystem(source, world).init();
     assert.equal(
       system.pickups.length,
-      232,
-      "New City supported pickup count includes timed damage and permanent APO actions",
+      491,
+      "all New City pickups collect, including random tables and explicitly unsupported abilities",
     );
     assert.equal(
       system.warnings.length,
-      37,
+      32,
       "New City warns once for each unsupported definition",
     );
     assert.equal(system.group.children.length, system.pickups.length);

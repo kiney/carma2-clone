@@ -461,7 +461,8 @@ function pixels(raw: RawPix, palette?: Uint8Array): PixMap {
           r = expand5(value >> 11);
           g = expand6((value >> 5) & 63);
           b = expand5(value & 31);
-          if (value === 0) a = 0;
+          // RGB565 has no alpha. C2's hardware buffer marks it
+          // unblended; black tyre rubber and dark windows must stay opaque.
         } else {
           r = expand5((value >> 10) & 31);
           g = expand5((value >> 5) & 31);

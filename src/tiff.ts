@@ -64,8 +64,7 @@ export function parseTiff(bytes: Uint8Array) {
   const rgba = UTIF.toRGBA8(image);
   if (rgba.length !== width * height * 4)
     throw new Error("TIFF: decoded size mismatch");
-  for (let i = 0; i < rgba.length; i += 4)
-    if (rgba[i] === 0 && rgba[i + 1] === 0 && rgba[i + 2] === 0)
-      rgba[i + 3] = 0;
+  // TIFFRGB stores ordinary RGB black as opaque. Transparency comes from the
+  // file's alpha samples, as in C2's separate RGB565/RGBA4444 loading paths.
   return { width, height, rgba };
 }

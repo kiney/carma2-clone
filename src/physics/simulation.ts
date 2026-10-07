@@ -90,6 +90,8 @@ export interface SimulatedCar extends RigidBody {
   input: VehicleInput;
   revision: number;
   structuralRevision: number;
+  /** Discontinuous placement invalidates the renderer's previous pose. */
+  poseEpoch: number;
   suspensionBendActive: boolean;
   splitRevision: number;
   wastedAt?: number;
@@ -248,6 +250,7 @@ export function createSimulatedCar(
     input: { throttle: 0, steer: 0, brake: 0, handbrake: false },
     revision: 0,
     structuralRevision: 0,
+    poseEpoch: 0,
     suspensionBendActive: false,
     splitRevision: 0,
     repairing: false,
@@ -299,6 +302,7 @@ export class VehicleSimulation {
   accumulator = 0;
   elapsed = 0;
   lastImpacts: ContactImpact[] = [];
+  onBeforeStep?: () => void;
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
   onWasted?: (car: SimulatedCar) => void;
@@ -324,11 +328,14 @@ export class VehicleSimulation {
     car.group.updateMatrixWorld(true);
   }
   reset(car: SimulatedCar) {
+    car.poseEpoch++;
     car.overlapRecovery = true;
     car.worldRecovery = true;
     car.state.orientation.setFromAxisAngle(Y, car.state.heading);
     car.state.angularVelocity.set(0, 0, 0);
     car.state.curvature = car.state.turnSpeed = 0;
+    car.state.predictedPosition = undefined;
+    car.state.predictedOrientation = undefined;
     this.sync(car);
   }
   /** Full powerup repair439460 also resets suspension, including an unbent
@@ -417,6 +424,150 @@ export class VehicleSimulation {
       penetration: hit.penetration,
       faceFriction: hit.faceFriction ?? 1,
     }));
+  }
+  /** The impulse solve changes the trajectory which was used to collect its
+   * contacts. In particular a wall impulse can pitch a previously clear bumper
+   * through a road face. Check that new trajectory against the same finite
+   * source features before committing it. Angular samples also catch a vertex
+   * whose arc crosses a face although both full-tick endpoints are clear.
+   * This integration guard is separate from the original contact selection:
+   * its normal-prefix rule can deliberately discard a simultaneous road face.
+   */
+  private advanceWorldContacts(body: SimulatedCar | DetachedBody) {
+    const samples = Math.min(
+      128,
+      Math.max(
+        1,
+        Math.ceil((body.state.angularVelocity.length() * PHYSICS_STEP) / 0.05),
+      ),
+    );
+    return this.sweepWorldTrajectory(body, samples, (fraction) => {
+      candidate(body, PHYSICS_STEP * fraction);
+      return {
+        position: body.state.predictedPosition!,
+        orientation: body.state.predictedOrientation!,
+      };
+    });
+  }
+  private sweepWorldTrajectory(
+    body: SimulatedCar | DetachedBody,
+    samples: number,
+    pose: (fraction: number) => { position: Vector3; orientation: Quaternion },
+    basePosition = body.state.position,
+    baseOrientation = body.state.orientation,
+  ) {
+    let old = body.hulls.map((hull) =>
+      transformHull(hull, basePosition, baseOrientation),
+    );
+    let earliest = 1;
+    const hits: HullContact[] = [];
+    for (let sample = 1; sample <= samples; sample++) {
+      const { position, orientation } = pose(sample / samples);
+      const next = body.hulls.map((hull) =>
+        transformHull(hull, position, orientation),
+      );
+      for (let shape = 0; shape < old.length; shape++) {
+        const bounds = hullBounds(old[shape])
+          .union(hullBounds(next[shape]))
+          .expandByScalar(0.005);
+        const nearby = this.world.querySurfaces(bounds.min, bounds.max);
+        const recovery =
+          body.worldRecovery || body.worldOverlapDetected
+            ? recoverWorldContacts(
+                old[shape],
+                next[shape],
+                this.recoverySurfaces(nearby),
+                body.properties.centerOfMass
+                  .clone()
+                  .applyQuaternion(old[shape].orientation!)
+                  .add(old[shape].position!),
+              )
+            : undefined;
+        const shapeHits = [...(recovery?.contacts ?? [])];
+        for (const surface of nearby) {
+          const hit = sweepHullTriangle(
+            old[shape],
+            next[shape],
+            surface.a,
+            surface.b,
+            surface.c,
+            {
+              materialIdentifier: surface.material,
+              materialFlags: surface.materialFlags,
+              faceFlags: surface.faceFlags,
+              twoSided: surface.twoSided,
+              deferReduction: true,
+              suppressedVertices: recovery?.suppressedVertices,
+              skipWorldEdges: !!recovery?.overlapDetected,
+              skipWorldVertices: body.worldRecovery,
+            },
+          );
+          if (hit)
+            shapeHits.push({
+              ...hit,
+              faceFriction: surface.modifier.wallFriction,
+            });
+        }
+        for (const hit of shapeHits) {
+          for (let index = 0; index < hit.points.length; index++) {
+            const normal = hit.pointNormals?.[index] ?? hit.normal;
+            const local = hit.points[index]
+              .clone()
+              .sub(old[shape].position!)
+              .applyQuaternion(old[shape].orientation!.clone().conjugate());
+            const end = local
+              .clone()
+              .applyQuaternion(next[shape].orientation!)
+              .add(next[shape].position!);
+            if (end.sub(hit.points[index]).dot(normal) >= -1e-7) continue;
+            const fraction = hit.pointFractions?.[index] ?? hit.fraction ?? 0;
+            if (fraction < 0) continue;
+            const time = (sample - 1 + fraction) / samples;
+            earliest = Math.min(earliest, time);
+            hits.push({
+              normal,
+              points: [
+                local.applyQuaternion(baseOrientation).add(basePosition),
+              ],
+              penetration: 0,
+              fraction: time,
+              measures: [time],
+              contactTypes: [hit.contactTypes?.[index] ?? 1],
+              faceFriction: hit.faceFriction,
+            });
+          }
+        }
+      }
+      old = next;
+    }
+    // Preserve four source rows per direction while allowing both independent
+    // faces at a road/wall corner to constrain the newly solved movement.
+    const groups: HullContact[][] = [];
+    for (const hit of hits) {
+      let group = groups.find(
+        (group) => group[0].normal.dot(hit.normal) > 0.95,
+      );
+      if (!group) groups.push((group = []));
+      group.push(hit);
+    }
+    const contacts = groups
+      .flatMap((group) => reduceWorldContacts(group))
+      .map(
+        (hit): Contact => ({
+          a: body,
+          point: hit.points[0],
+          normal: hit.normal,
+          sourceType: hit.contactTypes?.[0],
+          faceFriction: hit.faceFriction,
+        }),
+      );
+    // A source feature sweep interpolates its endpoints linearly. Committing
+    // the interpolated crossing time through the nonlinear rigid integrator
+    // can land just beyond the face; retain the preceding tested pose instead.
+    return {
+      contacts,
+      fraction: hits.length ? Math.max(0, earliest - 1 / samples) : 1,
+    };
   }
   private placementDirection(
     car: SimulatedCar,
@@ -893,6 +1044,7 @@ export class VehicleSimulation {
     for (const car of this.cars) this.syncStructuralState(car);
   }
   step() {
+    this.onBeforeStep?.();
     this.elapsed += PHYSICS_STEP;
     const previousVelocities = new Map(
       this.cars.map((car) => [car, car.state.velocity.clone()]),
@@ -1007,31 +1159,104 @@ export class VehicleSimulation {
     );
     // Source split invalidates the old contact solve. Rebuild the changed group
     // immediately, with the original 30-pass guard, before advancing this tick.
-    for (let pass = 0; restartGroups.length && pass < 30; pass++) {
-      const members = restartGroups.shift()!;
-      const changed = [...members];
-      for (const body of changed) candidate(body, PHYSICS_STEP);
-      const changedJoints = this.debris.flatMap((b) =>
-        b.joint && members.has(b) ? [b.joint] : [],
+    let restarts = 0;
+    const resolveRestarts = () => {
+      while (restartGroups.length && restarts++ < 30) {
+        const members = restartGroups.shift()!;
+        const changed = [...members];
+        for (const body of changed) candidate(body, PHYSICS_STEP);
+        const changedJoints = this.debris.flatMap((b) =>
+          b.joint && members.has(b) ? [b.joint] : [],
+        );
+        this.lastImpacts.push(
+          ...resolveContactGroups(
+            this.collectContacts(changed),
+            PHYSICS_STEP,
+            changedJoints,
+            beforeApply,
+          ),
+        );
+      }
+    };
+    resolveRestarts();
+    for (const car of this.cars) this.syncStructuralState(car);
+    // Recollect after impulses, rather than advancing an unchecked trajectory.
+    // The bounded final sweep conservatively stops at the actual triangle;
+    // it neither assumes an infinite floor nor changes authored body shapes.
+    let guardResults = new Map<
+      SimulatedCar | DetachedBody,
+      ReturnType<VehicleSimulation["advanceWorldContacts"]>
+    >();
+    for (let pass = 0; pass < 8; pass++) {
+      guardResults = new Map(
+        [...this.cars, ...this.debris].map((body) => [
+          body,
+          this.advanceWorldContacts(body),
+        ]),
       );
+      const contacts = [...guardResults.values()].flatMap(
+        (guard) => guard.contacts,
+      );
+      if (!contacts.length) break;
       this.lastImpacts.push(
         ...resolveContactGroups(
-          this.collectContacts(changed),
+          contacts,
           PHYSICS_STEP,
-          changedJoints,
+          this.debris.flatMap((body) => (body.joint ? [body.joint] : [])),
           beforeApply,
         ),
       );
+      resolveRestarts();
+      guardResults.clear();
     }
-    for (const car of this.cars) this.syncStructuralState(car);
     for (const body of [...this.cars, ...this.debris]) {
-      advance(body, PHYSICS_STEP);
+      const guard = guardResults.get(body) ?? this.advanceWorldContacts(body);
+      advance(body, PHYSICS_STEP * guard.fraction);
       body.overlapRecovery = body.overlapDetected;
       body.worldRecovery = body.worldOverlapDetected;
     }
-    projectJointPositions(
-      this.debris.flatMap((b) => (b.joint ? [b.joint] : [])),
-    );
+    const joined = this.debris.filter((body) => body.joint);
+    const beforeProjection = joined.map((body) => ({
+      body,
+      position: body.state.position.clone(),
+      orientation: body.state.orientation.clone(),
+    }));
+    projectJointPositions(joined.map((body) => body.joint!));
+    // Anchor/hinge projection is a second transform mutation after integration.
+    // A constrained part must not teleport through a track face to satisfy it.
+    for (const { body, position, orientation } of beforeProjection) {
+      const projectedPosition = body.state.position.clone();
+      const projectedOrientation = body.state.orientation.clone();
+      if (
+        position.distanceToSquared(projectedPosition) < 1e-14 &&
+        orientation.angleTo(projectedOrientation) < 1e-7
+      )
+        continue;
+      const samples = Math.min(
+        128,
+        Math.max(
+          1,
+          Math.ceil(orientation.angleTo(projectedOrientation) / 0.05),
+        ),
+      );
+      const pose = (fraction: number) => ({
+        position: position.clone().lerp(projectedPosition, fraction),
+        orientation: orientation.clone().slerp(projectedOrientation, fraction),
+      });
+      const guard = this.sweepWorldTrajectory(
+        body,
+        samples,
+        pose,
+        position,
+        orientation,
+      );
+      if (guard.fraction < 1) {
+        const accepted = pose(guard.fraction);
+        body.state.position.copy(accepted.position);
+        body.state.orientation.copy(accepted.orientation);
+        body.worldRecovery = true;
+      }
+    }
     for (const car of this.cars) {
       const forward = new Vector3(0, 0, -1).applyQuaternion(
         car.state.orientation,

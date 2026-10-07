@@ -184,10 +184,11 @@ export class Assets {
             mat.rgba[2] / 255,
           );
       const opacity = mat.rgba[3] / 255;
+      // ALWAYS_VISIBLE disables BRender culling, as does TWO_SIDED.
       const material = new THREE.MeshLambertMaterial({
         color: colour,
         map: texture ?? null,
-        side: mat.flags & 4096 ? THREE.DoubleSide : THREE.FrontSide,
+        side: mat.flags & 0x1800 ? THREE.DoubleSide : THREE.FrontSide,
         transparent: opacity < 0.99,
         opacity,
         alphaTest: texture ? 0.15 : 0,

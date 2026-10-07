@@ -8,6 +8,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   DoubleSide,
+  Quaternion,
 } from "three";
 import { WorldCollision } from "../src/world.ts";
 import { DamageSystem } from "../src/damage.ts";
@@ -16,6 +17,9 @@ import {
   VehicleSimulation,
 } from "../src/physics/simulation.ts";
 import { originalCar } from "./support/original-car.mjs";
+import { transformHull } from "../src/physics/geometry.ts";
+import { buildBoxHull } from "../src/physics/box-hull.ts";
+import { createBallJoint } from "../src/physics/joint.ts";
 async function stock(t, name, position = new Vector3()) {
   let data;
   try {
@@ -47,6 +51,213 @@ const emptyWorld = {
     return [];
   },
 };
+function roadCorner(size = 20) {
+  const scene = new Group();
+  const material = new MeshBasicMaterial({ side: DoubleSide });
+  material.userData.c2Flags = 4096;
+  for (const vertices of [
+    [
+      -size,
+      0,
+      -size,
+      size,
+      0,
+      size,
+      size,
+      0,
+      -size,
+      -size,
+      0,
+      -size,
+      -size,
+      0,
+      size,
+      size,
+      0,
+      size,
+    ],
+    [
+      -size,
+      -size,
+      0,
+      size,
+      size,
+      0,
+      size,
+      -size,
+      0,
+      -size,
+      -size,
+      0,
+      -size,
+      size,
+      0,
+      size,
+      size,
+      0,
+    ],
+  ]) {
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3));
+    geometry.userData.sourceFaceFlags = Uint8Array.from([7, 7]);
+    scene.add(new Mesh(geometry, material));
+  }
+  return { scene, world: new WorldCollision(scene) };
+}
+
+test("post-impact pitch, fast falls and rotation stay above finite road triangles", async (t) => {
+  let hadJointedPart = false;
+  for (const [velocity, pitch] of [
+    [[3, -2, -4], 0], // Wall impulse pitches a clear bumper through the road.
+    [[0, -8, -8], 3], // The old top/bottom features alone missed this tumble.
+    [[0, -8, -32], 10],
+    [[0, 0, 0], 120], // A large arc cannot be checked by its endpoints alone.
+    [[0, -32, 0], 0],
+  ]) {
+    const car = await stock(t, "EAGLE3", new Vector3(0, 0.15, 0.6));
+    if (!car) return;
+    car.damage.damageContext.random = () => 0.5;
+    car.damage.wam.snappability = 0;
+    car.state.velocity.fromArray(velocity);
+    car.state.angularVelocity.x = pitch;
+    const { scene, world } = roadCorner();
+    scene.add(car.group);
+    const simulation = new VehicleSimulation(world, scene);
+    simulation.add(car);
+    let roadImpulse = false;
+    for (let tick = 0; tick < 150; tick++) {
+      simulation.step();
+      const vertices = car.hulls.flatMap(
+        (hull) =>
+          transformHull(hull, car.state.position, car.state.orientation)
+            .vertices,
+      );
+      assert.ok(
+        vertices.every((point) => point.y >= -0.003),
+        `Road penetration: v=${velocity}, pitch=${pitch}, tick=${tick}`,
+      );
+      assert.ok(car.state.orientation.toArray().every(Number.isFinite));
+      for (const piece of simulation.debris) {
+        hadJointedPart ||= !!piece.joint;
+        const points = piece.hulls.flatMap(
+          (hull) =>
+            transformHull(hull, piece.state.position, piece.state.orientation)
+              .vertices,
+        );
+        assert.ok(
+          !piece.joint || points.every((point) => point.y >= -0.003),
+          `Part ${piece.part} crossed the road at tick ${tick}: ${piece.state.position.toArray()}, min=${Math.min(...points.map((p) => p.y))}, v=${velocity}, pitch=${pitch}, joint=${!!piece.joint}`,
+        );
+      }
+      roadImpulse ||= simulation.lastImpacts.some(
+        (impact) => impact.normal.y > 0.95 && impact.normalImpulse > 0,
+      );
+    }
+    assert.ok(roadImpulse, "The authored road face exchanges momentum");
+    if (velocity[2] < 0)
+      assert.ok(
+        car.damage.deformationRevision > 0,
+        "Original crush still runs",
+      );
+    simulation.dispose();
+  }
+  assert.ok(
+    hadJointedPart,
+    "The sustained crash regression includes jointed source parts",
+  );
+});
+
+test("world integration guard permits falling outside the actual finite road", async (t) => {
+  const car = await stock(t, "EAGLE3", new Vector3(3, 0.15, 3));
+  if (!car) return;
+  const { scene, world } = roadCorner(1);
+  const simulation = new VehicleSimulation(world, scene);
+  scene.add(car.group);
+  simulation.add(car);
+  for (let tick = 0; tick < 100; tick++) simulation.step();
+  assert.ok(car.state.position.y < -5);
+  assert.equal(simulation.lastImpacts.length, 0);
+  simulation.dispose();
+});
+
+test("joint anchor projection cannot teleport an above-road part through a finite face", async (t) => {
+  const car = await stock(t, "EAGLE3", new Vector3(0, 0, 3));
+  if (!car) return;
+  const { scene, world } = roadCorner();
+  scene.add(car.group);
+  const simulation = new VehicleSimulation(world, scene);
+  simulation.add(car);
+  car.damage.damageContext.invulnerable = true;
+  car.damage.runtimeParts[0].state.phase = 1;
+  const piece = {
+    actor: new Group(),
+    owner: car,
+    part: 0,
+    overlapRecovery: true,
+    overlapDetected: false,
+    worldRecovery: true,
+    worldOverlapDetected: false,
+    state: {
+      position: new Vector3(0, 0.3, 3),
+      orientation: new Quaternion(),
+      velocity: new Vector3(),
+      angularVelocity: new Vector3(),
+    },
+    properties: {
+      mass: 0.05,
+      inertia: new Vector3(0.001, 0.001, 0.001),
+      centerOfMass: new Vector3(),
+      worldFriction: 0,
+      objectFriction: 0.4,
+    },
+    hulls: [
+      buildBoxHull(new Vector3(-0.1, -0.1, -0.1), new Vector3(0.1, 0.1, 0.1)),
+    ],
+  };
+  // Independent impossible anchor: projection alone targets the far side of
+  // the road, without an incoming velocity sweep which could detect it.
+  piece.joint = createBallJoint(
+    piece,
+    car,
+    new Vector3(),
+    new Vector3(0, -0.5, 0),
+  );
+  scene.add(piece.actor);
+  simulation.debris.push(piece);
+  for (let tick = 0; tick < 100; tick++) {
+    simulation.step();
+    assert.ok(
+      transformHull(
+        piece.hulls[0],
+        piece.state.position,
+        piece.state.orientation,
+      ).vertices.every((point) => point.y >= -0.003),
+    );
+    assert.ok(car.state.position.y > -0.5);
+  }
+  assert.ok(piece.joint, "Blocked projection does not invent a detachment");
+  simulation.dispose();
+});
+
+test("step snapshot hook precedes motion and recovery reset invalidates stale candidate poses", async (t) => {
+  const car = await stock(t, "EAGLE3");
+  if (!car) return;
+  const simulation = new VehicleSimulation(emptyWorld, new Group());
+  simulation.add(car);
+  const snapshots = [];
+  simulation.onBeforeStep = () => snapshots.push(car.state.position.clone());
+  simulation.update(0.08);
+  assert.equal(snapshots.length, 2);
+  assert.equal(snapshots[0].y, 0);
+  assert.ok(snapshots[1].y < snapshots[0].y);
+  const epoch = car.poseEpoch;
+  simulation.reset(car);
+  assert.equal(car.poseEpoch, epoch + 1);
+  assert.equal(car.state.predictedPosition, undefined);
+  assert.equal(car.state.predictedOrientation, undefined);
+  assert.equal(car.state.angularVelocity.length(), 0);
+  simulation.dispose();
+});
 test("original stock cars enter the fixed simulation using authored mass, inertia, wheelbase and hulls", async (t) => {
   const scene = new Group(),
     sim = new VehicleSimulation(emptyWorld, scene),

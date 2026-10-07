@@ -23,7 +23,9 @@ import {
   createSimulatedCar,
   VehicleSimulation,
   type SimulatedCar,
+  PHYSICS_STEP,
 } from "./physics/simulation";
+import { RenderPoses } from "./render-pose";
 import { parseSurfaceModifiers } from "./physics/surfaces";
 import {
   parseUpgradeSettings,
@@ -95,6 +97,9 @@ let damage: DamageSystem | undefined,
   worldAnimation: TextureAnimation | undefined,
   definition: RaceCatalogEntry | undefined;
 let simulation: VehicleSimulation | undefined, player: SimulatedCar | undefined;
+let renderPoses = new RenderPoses();
+const renderPosition = new THREE.Vector3(),
+  renderOrientation = new THREE.Quaternion();
 let rivalsReady = false,
   pedestriansReady = false;
 const keys = new Set<string>(),
@@ -155,6 +160,9 @@ const debug = {
   },
   get camera() {
     return camera;
+  },
+  get renderPosition() {
+    return renderPosition;
   },
   get scene() {
     return scene;
@@ -470,6 +478,13 @@ async function loadRace() {
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    renderPoses = new RenderPoses();
+    const activeSimulation = simulation;
+    simulation.onBeforeStep = () =>
+      renderPoses.capture([
+        ...activeSimulation.cars,
+        ...activeSimulation.debris,
+      ]);
     simulation.settings = upgradeSettings;
     simulation.add(player);
     simulation.onRepair = (body, cost, finished) => {
@@ -936,6 +951,10 @@ function animate(now: number) {
     if (!paused && race.status === "racing") {
       worldAnimation?.update(dt);
       const modifiers = powerups?.update(dt, vehicle, race, (event) => {
+        if (event.kind === "unsupported") {
+          message(`NOT IMPLEMENTED · ${event.name}`, 5);
+          return;
+        }
         if (event.kind === "repair") {
           if (player && simulation) simulation.repair(player);
           else damage?.repair();
@@ -1007,7 +1026,7 @@ function animate(now: number) {
         race,
         previous,
         vehicle.position,
-        isSupportedRace(definition) ? dt : 0,
+        isSupportedRace(definition) && !modifiers?.timerFrozen ? dt : 0,
       )) {
         audio.checkpoint();
         message(
@@ -1062,17 +1081,36 @@ function animate(now: number) {
       vehicle.health / 100,
       paused || race.status !== "racing",
     );
-    car.position.copy(vehicle.position);
-    car.quaternion.copy(vehicle.orientation);
-    const forward = new THREE.Vector3(
-      -Math.sin(vehicle.heading),
-      0,
-      -Math.cos(vehicle.heading),
+    const renderAlpha =
+      paused || race.status !== "racing"
+        ? 1
+        : (simulation?.accumulator ?? 0) / PHYSICS_STEP;
+    if (player)
+      renderPoses.sample(
+        player,
+        renderAlpha,
+        renderPosition,
+        renderOrientation,
+      );
+    else {
+      renderPosition.copy(vehicle.position);
+      renderOrientation.copy(vehicle.orientation);
+    }
+    if (simulation) {
+      for (const body of simulation.cars)
+        renderPoses.apply(body, body.group, renderAlpha);
+      for (const body of simulation.debris)
+        renderPoses.apply(body, body.actor, renderAlpha);
+    }
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+      renderOrientation,
     );
-    target.copy(vehicle.position).add(new THREE.Vector3(0, carTargetHeight, 0));
+    forward.y = 0;
+    if (forward.lengthSq() > 1e-8) forward.normalize();
+    target.copy(renderPosition).add(new THREE.Vector3(0, carTargetHeight, 0));
     if (cameraMode === 0) {
       cameraGoal
-        .copy(vehicle.position)
+        .copy(renderPosition)
         .addScaledVector(
           forward,
           -chaseDistance - Math.min(Math.abs(vehicle.speed) * 0.06, 0.8),
@@ -1090,13 +1128,13 @@ function animate(now: number) {
       car.visible = true;
     } else if (cameraMode === 1) {
       camera.position
-        .copy(vehicle.position)
+        .copy(renderPosition)
         .add(new THREE.Vector3(0, 0.18, 0))
         .addScaledVector(forward, 0.17);
       target.addScaledVector(forward, 3);
       car.visible = false;
     } else {
-      camera.position.copy(vehicle.position).add(new THREE.Vector3(0, 14, 0.1));
+      camera.position.copy(renderPosition).add(new THREE.Vector3(0, 14, 0.1));
       car.visible = true;
     }
     camera.lookAt(target);
@@ -1125,7 +1163,11 @@ function animate(now: number) {
     drawMap();
   }
   if (now > messageUntil) el("message").textContent = paused ? "PAUSED" : "";
-  renderer.render(scene, camera);
+  try {
+    renderer.render(scene, camera);
+  } finally {
+    renderPoses.restore();
+  }
   stats.frames++;
   stats.fps = fps;
   stats.drawCalls = renderer.info.render.calls;

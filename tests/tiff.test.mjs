@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import UTIF from "utif";
 import { parseTiff } from "../src/tiff.ts";
 function tiny() {
   const tags = [
@@ -40,6 +41,16 @@ test("baseline TIFF decodes original-style RGB strips without mutating source by
   assert.equal(image.height, 1);
   assert.deepEqual([...image.rgba], [255, 80, 20, 255]);
   assert.deepEqual(source, copy);
+});
+test("TIFFRGB keeps black building and tyre texels opaque", () => {
+  const source = tiny();
+  source.set([0, 0, 0], 140);
+  assert.deepEqual([...parseTiff(source).rgba], [0, 0, 0, 255]);
+});
+test("TIFF preserves authored alpha even when the RGB channels are black", () => {
+  const rgba = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 255]);
+  const source = new Uint8Array(UTIF.encodeImage(rgba, 3, 1));
+  assert.deepEqual(parseTiff(source).rgba, rgba);
 });
 test("TIFF rejects missing directory offsets, dimensions and excessive tag allocations", () => {
   assert.throws(() => parseTiff(new Uint8Array(7)), /size/);
