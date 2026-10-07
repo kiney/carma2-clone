@@ -10,6 +10,7 @@ import {
   applyDamagedControls,
   C2_WORLD_SCALE,
   setMotionSuspension,
+  resetMotionSuspension,
 } from "../src/physics/motion.ts";
 const S = C2_WORLD_SCALE;
 const near = (a, b, tolerance = 1e-8) =>
@@ -499,4 +500,43 @@ test("source temporary suspension assigns crossed give, spring, damper and metri
   near(p.spring[0], spring[0]);
   near(p.damper[1], damper[1]);
   near(p.suspensionLength[1], ride + 0.08 * S);
+});
+
+test("bend suspension reset recalculates axle load from current wheel geometry, COM and mass", () => {
+  const p = createMotionParameters(mechanics());
+  const originalSpring = [...p.spring];
+  setMotionSuspension(p, {
+    frontGiveMultiplier: 2,
+    rearGiveMultiplier: 4,
+    dampingMultiplier: 3,
+    frontExtraLength: 0.4,
+    rearExtraLength: 0.5,
+  });
+  // Changed geometry gives rear/front lever distances .4/.2 model units.
+  // A mass of three therefore assigns one to rear and two to front.
+  p.mass = 3;
+  p.centerOfMass.z = 0.05 * S;
+  p.wheelPositions[0].z = 0.45 * S;
+  p.wheelPositions[2].z = -0.15 * S;
+  resetMotionSuspension(p);
+  near(p.spring[0], 5 / (0.12 * S));
+  near(p.spring[1], 10 / (0.08 * S));
+  near(p.damper[0], Math.sqrt(5 / (0.12 * S)) * 0.7);
+  near(p.damper[1], 2 * Math.sqrt(5 / (0.08 * S)) * 0.7);
+  near(p.spring[0] * 0.12 * S + p.spring[1] * 0.08 * S, 15);
+  near(p.suspensionLength[0], (0.01 + 0.12) * S);
+  near(p.suspensionLength[1], (0.01 + 0.08) * S);
+  assert.ok(p.spring[1] > originalSpring[1]);
+
+  // A subsequent powerup derives from this geometry, not initial axle masses.
+  setMotionSuspension(p, {
+    frontGiveMultiplier: 2,
+    rearGiveMultiplier: 4,
+    dampingMultiplier: 3,
+    frontExtraLength: 0.4,
+    rearExtraLength: 0.5,
+  });
+  near(p.spring[0], 5 / (0.12 * S * 4));
+  near(p.spring[1], 10 / (0.08 * S * 2));
+  near(p.damper[1], 6 * Math.sqrt(5 / (0.08 * S * 2)) * 0.7);
 });

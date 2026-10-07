@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import type { VehicleState, RaceState } from "./gameplay";
-import {setTemporaryMotionPowerup, resetTemporaryMotionPowerup, type SuspensionPowerupValues} from "./physics/upgrades";
+import {
+  setTemporaryMotionPowerup,
+  resetTemporaryMotionPowerup,
+  type SuspensionPowerupValues,
+} from "./physics/upgrades";
 
 /** One sequential record from DATA/POWERUP.TXT. Durations are source seconds. */
 export interface PowerupDefinition {
@@ -23,10 +27,14 @@ export interface PowerupModifiers {
   maxSpeedMultiplier: number;
   lateralGripMultiplier: number;
   suspension?: SuspensionPowerupValues;
+  invulnerable: boolean;
+  freeRepairs: boolean;
+  damageMultiplier: number;
+  protection: number;
 }
 
 export interface PowerupEvent {
-  kind: "credits" | "repair" | "time" | "engine";
+  kind: "credits" | "repair" | "time" | "engine" | "effect" | "upgrade";
   name: string;
   definition: PowerupDefinition;
   amount?: number;
@@ -121,19 +129,23 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  action: 9 | 21;
+  action: 5 | 6 | 9 | 21 | 22 | 27;
 }
 type AssetTextSource = { text(path: string): Promise<string> };
 
 /**
  * Extracts original `&£NN...` pickup actors from an unbatched source scene.
  * The first two digits after the marker select the POWERUP.TXT record. This
- * browser implementation handles credits, instant repair, time bonus, and
- * timed car engine/grip factors; other actions are reported as unsupported.
+ * Supports credits, repair, time, timed engine/grip and damage modifiers, and
+ * cancellation. Other actions are reported as unsupported.
  */
 export class PowerupSystem {
-  private motionFactors = {engineFactor:1,tyreGripFactor:1};
+  private motionFactors = { engineFactor: 1, tyreGripFactor: 1 };
   private suspension?: SuspensionPowerupValues;
+  private invulnerable = false;
+  private freeRepairs = false;
+  private damageMultiplier = 1;
+  private protection = 1;
   readonly group = new THREE.Group();
   readonly definitions: PowerupDefinition[] = [];
   readonly warnings: string[] = [];
@@ -182,7 +194,9 @@ export class PowerupSystem {
         );
         continue;
       }
-      if (![0, 7, 9, 11, 21].includes(definition.action)) {
+      if (
+        ![0, 5, 6, 7, 9, 11, 21, 22, 27, 46, 47, 51].includes(definition.action)
+      ) {
         if (!this.unsupportedWarned.has(index)) {
           this.unsupportedWarned.add(index);
           this.warnings.push(
@@ -218,10 +232,9 @@ export class PowerupSystem {
     if (Number.isFinite(dt) && dt > 0) {
       for (const effect of this.active) {
         if (effect.duration > 0) {
-          effect.remaining -= Math.min(dt, 0.25);
+          effect.remaining -= dt;
           if (effect.remaining <= 0) {
-            const suspension = resetTemporaryMotionPowerup(this.motionFactors,effect.action);
-            if (suspension) this.suspension=suspension;
+            this.resetEffect(effect.action);
           }
         }
       }
@@ -254,8 +267,12 @@ export class PowerupSystem {
       accelerationMultiplier: this.motionFactors.engineFactor,
       maxSpeedMultiplier: 1,
       lateralGripMultiplier: this.motionFactors.tyreGripFactor,
+      invulnerable: this.invulnerable,
+      freeRepairs: this.freeRepairs,
+      damageMultiplier: this.damageMultiplier,
+      protection: this.protection,
     };
-    if (this.suspension) modifiers.suspension=this.suspension;
+    if (this.suspension) modifiers.suspension = this.suspension;
     return modifiers;
   }
 
@@ -267,6 +284,39 @@ export class PowerupSystem {
     for (const pickup of this.pickups)
       pickup.object.parent?.remove(pickup.object);
     this.pickups.length = 0;
+    this.cancelEffects();
+  }
+
+  /** Independent reset assignments verified in original handler table.
+   * Invulnerability represents both crush+1b4 and component+1b8 immunity. */
+  private resetEffect(action: ActiveEffect["action"]): void {
+    switch (action) {
+      case 5:
+        this.invulnerable = false;
+        break;
+      case 6:
+        this.freeRepairs = false;
+        break;
+      case 22:
+        this.damageMultiplier = 1;
+        break;
+      case 27:
+        this.protection = 1;
+        break;
+      case 9:
+      case 21: {
+        const suspension = resetTemporaryMotionPowerup(
+          this.motionFactors,
+          action,
+        );
+        if (suspension) this.suspension = suspension;
+        break;
+      }
+    }
+  }
+
+  private cancelEffects(): void {
+    for (const effect of this.active) this.resetEffect(effect.action);
     this.active.length = 0;
   }
 
@@ -279,6 +329,43 @@ export class PowerupSystem {
     const def = this.definitions[index];
     if (!def) return;
     switch (def.action) {
+      case 5:
+      case 6:
+      case 22:
+      case 27: {
+        if (def.action === 5) this.invulnerable = true;
+        if (def.action === 6) this.freeRepairs = true;
+        if (def.action === 22) this.damageMultiplier = def.floatParams[0] ?? 1;
+        if (def.action === 27) this.protection = def.floatParams[0] ?? 1;
+        // A renewed effect owns its new timeout; an old timeout cannot undo it.
+        this.active = this.active.filter(
+          (effect) => effect.action !== def.action,
+        );
+        const duration = def.duration > 0 ? def.duration : 0;
+        this.active.push({
+          index,
+          remaining: duration,
+          duration,
+          action: def.action,
+        });
+        onEvent?.({
+          kind: "effect",
+          name: def.message,
+          definition: def,
+          amount: def.floatParams[0],
+        });
+        break;
+      }
+      case 51:
+        this.cancelEffects();
+        onEvent?.({ kind: "effect", name: def.message, definition: def });
+        break;
+      case 46:
+      case 47:
+        // Permanent APO state, random fallback and source compensation belong
+        // to the simulation; preserve all three original integer parameters.
+        onEvent?.({ kind: "upgrade", name: def.message, definition: def });
+        break;
       case 0: {
         const low = def.integerParams[0] ?? 0,
           high = def.integerParams[1] ?? low;
@@ -311,10 +398,19 @@ export class PowerupSystem {
       }
       case 9:
       case 21: {
-        const suspension = setTemporaryMotionPowerup(this.motionFactors,def.action,def.floatParams);
-        if (suspension) this.suspension=suspension;
+        const suspension = setTemporaryMotionPowerup(
+          this.motionFactors,
+          def.action,
+          def.floatParams,
+        );
+        if (suspension) this.suspension = suspension;
         const duration = def.duration > 0 ? def.duration : 0;
-        this.active.push({ index, remaining: duration, duration, action:def.action });
+        this.active.push({
+          index,
+          remaining: duration,
+          duration,
+          action: def.action,
+        });
         onEvent?.({
           kind: "engine",
           name: def.message,

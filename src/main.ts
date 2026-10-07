@@ -25,15 +25,24 @@ import {
   type SimulatedCar,
 } from "./physics/simulation";
 import { parseSurfaceModifiers } from "./physics/surfaces";
-import {parseUpgradeSettings, createUpgradeState, upgradeFactors, payRepair, type UpgradeSettings} from "./physics/upgrades";
+import {
+  parseUpgradeSettings,
+  createUpgradeState,
+  upgradeFactors,
+  payRepair,
+  createRepairControl,
+  updateRepairControl,
+  type UpgradeSettings,
+} from "./physics/upgrades";
 import { setMotionSuspension } from "./physics/motion";
+import { applyUpgradePickup } from "./physics/upgrade-pickup";
 import { physicsConfigFromCar } from "./handling";
 import { RoadNavigator } from "./ai";
 import { PedestrianSystem } from "./pedestrians";
 import { AudioSystem } from "./audio";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Physics, AI and HUD are approximations.</small></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
 const view = el("view") as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas: view, antialias: true });
@@ -68,7 +77,10 @@ let carConfig: CarConfig | undefined,
   loading = false,
   cameraMode = 0,
   mapVisible = true;
-let chaseDistance=1.55,chaseHeight=.8,carTargetHeight=.18;
+let chaseDistance = 1.55,
+  chaseHeight = 0.8,
+  carTargetHeight = 0.18;
+let repairControl = createRepairControl();
 let lastTime = performance.now(),
   messageUntil = 0,
   seconds = 0,
@@ -327,12 +339,12 @@ let powerups: PowerupSystem | undefined;
 let upgradeSettings: UpgradeSettings | undefined;
 function updateUpgradeFactors(body: SimulatedCar) {
   if (!body.upgrades || !upgradeSettings) return;
-  const factors = upgradeFactors(body.upgrades,upgradeSettings);
-  body.armorLevel=body.upgrades.levels[0];
-  body.offenseLevel=body.upgrades.levels[2];
-  body.armorFactor=factors.armour;
-  body.offenseFactor=factors.offensive;
-  body.state.powerMultiplier=factors.power;
+  const factors = upgradeFactors(body.upgrades, upgradeSettings);
+  body.armorLevel = body.upgrades.levels[0];
+  body.offenseLevel = body.upgrades.levels[2];
+  body.armorFactor = factors.armour;
+  body.offenseFactor = factors.offensive;
+  body.state.powerMultiplier = factors.power;
 }
 async function loadRace() {
   if (loading) return;
@@ -354,18 +366,28 @@ async function loadRace() {
     const loadedPowerups = new PowerupSystem(assets, world.group);
     await loadedPowerups.init();
     status("Parsing original car…");
-    upgradeSettings ??= parseUpgradeSettings(await assets.text("data/GENERAL.TXT"));
+    upgradeSettings ??= parseUpgradeSettings(
+      await assets.text("data/GENERAL.TXT"),
+    );
     const carText = await assets.text(currentCar);
     const newCarConfig = parseCarConfig(carText);
     await audio.setCar(carText);
     const loadedCar = await assets.scene(dirOf(currentCar), stemOf(currentCar));
     // Frame each original car from its authored bounds. A fixed Eagle-sized
     // camera put the viewer inside larger vehicles such as the dumper.
-    const cameraBounds=new THREE.Box3().setFromObject(loadedCar.group);
-    const cameraSize=cameraBounds.getSize(new THREE.Vector3());
-    chaseDistance=Math.max(1.55,cameraSize.z*.5+.8,cameraSize.y*1.5,cameraSize.x*1.5);
-    chaseHeight=Math.max(.8,cameraBounds.max.y+.35);
-    carTargetHeight=Math.max(.18,cameraBounds.getCenter(new THREE.Vector3()).y);
+    const cameraBounds = new THREE.Box3().setFromObject(loadedCar.group);
+    const cameraSize = cameraBounds.getSize(new THREE.Vector3());
+    chaseDistance = Math.max(
+      1.55,
+      cameraSize.z * 0.5 + 0.8,
+      cameraSize.y * 1.5,
+      cameraSize.x * 1.5,
+    );
+    chaseHeight = Math.max(0.8, cameraBounds.max.y + 0.35);
+    carTargetHeight = Math.max(
+      0.18,
+      cameraBounds.getCenter(new THREE.Vector3()).y,
+    );
     const loadedDamage = new DamageSystem(assets, loadedCar.group, carText);
     await loadedDamage.init();
     status("Building collision geometry…");
@@ -444,16 +466,24 @@ async function loadRace() {
       true,
     );
     vehicle = player.state;
-    player.upgrades=createUpgradeState(upgradeSettings,{skill:0});
+    repairControl = createRepairControl();
+    player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
-    simulation.settings=upgradeSettings;
+    simulation.settings = upgradeSettings;
     simulation.add(player);
-    simulation.onRepair = (body, cost) => {
+    simulation.onRepair = (body, cost, finished) => {
+      if (body.human && finished) repairControl.autoRepair = false;
       if (body.human && race && body.upgrades && upgradeSettings) {
-        body.upgrades.credits=race.credits;
-        payRepair(body.upgrades,cost,upgradeSettings,{skill:0});
-        race.credits=body.upgrades.credits;
+        body.upgrades.credits = race.credits;
+        payRepair(
+          body.upgrades,
+          cost,
+          upgradeSettings,
+          { skill: 0 },
+          body.freeRepairs,
+        );
+        race.credits = body.upgrades.credits;
         updateUpgradeFactors(body);
       }
     };
@@ -463,7 +493,7 @@ async function loadRace() {
         audio.impact(speed / 6);
       }
     };
-    simulation.onWasted = body => {
+    simulation.onWasted = (body) => {
       if (body.human) message("YOU ARE WASTED", 10);
     };
     car.position.copy(start);
@@ -618,7 +648,9 @@ async function loadRivals(
       false,
     );
     const state = body.state;
-    if (upgradeSettings) state.powerMultiplier=player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
+    if (upgradeSettings)
+      state.powerMultiplier =
+        player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
     simulation?.add(body);
     model.group.position.copy(spawn);
     scene.add(model.group);
@@ -752,6 +784,10 @@ function updateRivals(dt: number) {
 
 function recover() {
   if (!vehicle || !race || !track || !collision) return;
+  if (player?.knackered) {
+    message("CAR WASTED · ENTER TO RESTART");
+    return;
+  }
   let p = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
   let best = Infinity;
   for (const [from, to] of track.pathEdges) {
@@ -814,7 +850,7 @@ addEventListener("keydown", (event) => {
   keys.add(event.code);
   if (event.repeat || paused) return;
   if (event.code === "KeyR") recover();
-  if (event.code === "KeyE" && damage?.wasted)
+  if (event.code === "KeyE" && player?.knackered)
     message("CAR WASTED · ENTER TO RESTART");
   if (event.code === "KeyC") cameraMode = (cameraMode + 1) % 3;
   if (event.code === "KeyM") {
@@ -900,7 +936,22 @@ function animate(now: number) {
     if (!paused && race.status === "racing") {
       worldAnimation?.update(dt);
       const modifiers = powerups?.update(dt, vehicle, race, (event) => {
-        if (event.kind === "repair") damage?.repair();
+        if (event.kind === "repair") {
+          if (player && simulation) simulation.repair(player);
+          else damage?.repair();
+        }
+        if (event.kind === "upgrade" && player?.upgrades && upgradeSettings) {
+          player.upgrades.credits = race!.credits;
+          applyUpgradePickup(
+            player.upgrades,
+            upgradeSettings,
+            { skill: 0 },
+            event.definition.action as 46 | 47,
+            event.definition.integerParams,
+          );
+          race!.credits = player.upgrades.credits;
+          updateUpgradeFactors(player);
+        }
         message(
           event.name === "n/a"
             ? `${event.kind.toUpperCase()} +${event.amount ?? 0}`
@@ -910,10 +961,26 @@ function animate(now: number) {
       });
       previous.copy(vehicle.position);
       if (player && simulation) {
-        player.state.engineFactor=modifiers?.accelerationMultiplier ?? 1;
-        player.state.tyreGripFactor=modifiers?.lateralGripMultiplier ?? 1;
-        if (modifiers?.suspension) setMotionSuspension(player.motion,modifiers.suspension);
-        player.repairing = keys.has("KeyE");
+        player.state.engineFactor = modifiers?.accelerationMultiplier ?? 1;
+        player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
+        player.damage.damageContext.invulnerable =
+          modifiers?.invulnerable ?? false;
+        player.damageMultiplier = modifiers?.damageMultiplier ?? 1;
+        player.protection = modifiers?.protection ?? 1;
+        player.freeRepairs = modifiers?.freeRepairs ?? false;
+        if (
+          modifiers?.suspension &&
+          modifiers.suspension !== player.suspensionPowerup
+        ) {
+          player.suspensionPowerup = modifiers.suspension;
+          setMotionSuspension(player.motion, modifiers.suspension);
+        }
+        player.repairing = updateRepairControl(
+          repairControl,
+          keys.has("KeyE"),
+          now,
+          player.knackered,
+        );
         player.input = {
           throttle:
             Number(keys.has("KeyW") || keys.has("ArrowUp")) -
@@ -928,7 +995,10 @@ function animate(now: number) {
         simulation.update(dt);
         // Installed C2 RaceCompleted(reason6) lets the wasted body continue
         // simulating during its ten-second end countdown.
-        if (player.wastedAt !== undefined && simulation.elapsed - player.wastedAt >= 10) {
+        if (
+          player.wastedAt !== undefined &&
+          simulation.elapsed - player.wastedAt >= 10
+        ) {
           race.status = "failed";
           message("YOU ARE WASTED · ENTER TO RESTART", 10);
         }

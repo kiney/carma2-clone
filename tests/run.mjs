@@ -32,6 +32,11 @@ import "./split-contact.test.mjs";
 import "./detached-com.test.mjs";
 import "./split.test.mjs";
 import "./upgrades.test.mjs";
+import "./upgrade-pickup.test.mjs";
 import "./shape-swap.test.mjs";
 
 import "./simulation-masses.test.mjs";
+
+import "./split-lifecycle.test.mjs";
+
+import "./box-hull.test.mjs";

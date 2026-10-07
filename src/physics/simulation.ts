@@ -11,6 +11,7 @@ import {
   applyVehicleForces,
   createMotionParameters,
   initializeMotion,
+  resetMotionSuspension,
   type MotionParameters,
   type MotionState,
   type MotionDebug,
@@ -26,6 +27,7 @@ import {
   buildHull,
   sweepHulls,
   hullBounds,
+  hullsBounds,
   reduceWorldContacts,
   finalizeWorldContacts,
   recoverWorldContacts,
@@ -47,16 +49,22 @@ import {
 import { advanceRigidBody } from "./integrate";
 import { scaleImpactVectors } from "./impact";
 import { detachedChildCenterOfMass } from "./detached-com";
-import { skillValue, type UpgradeSettings, type UpgradeState } from "./upgrades";
+import {
+  skillValue,
+  type UpgradeSettings,
+  type UpgradeState,
+  type SuspensionPowerupValues,
+} from "./upgrades";
 import { findSplitContactCandidate } from "./split-contact";
 import { moveShapeToSensiblePlace } from "./shape-swap";
 import { findRoofSplitContactCandidate } from "./split";
+import { buildBoxHull } from "./box-hull";
 import {
   beginPartDetachment,
+  cancelScheduledDetachment,
   createDetachmentSchedulingContext,
   kevFlapTearThreshold,
   detachedBoxInertia,
-  detachedPartMass,
   inheritedDetachedVelocity,
   shouldFullyDetachPart,
   jointAllowsSeparation,
@@ -81,16 +89,24 @@ export interface SimulatedCar extends RigidBody {
   input: VehicleInput;
   revision: number;
   structuralRevision: number;
+  suspensionBendActive: boolean;
   splitRevision: number;
   wastedAt?: number;
   /** Source car+1d4: wasting persists through model/component repair. */
   knackered: boolean;
   repairing: boolean;
+  repairAwaitingShapeSwap: boolean;
   lastAttributedImpactMs: number;
   armorLevel: number;
   offenseLevel: number;
   armorFactor?: number;
   offenseFactor?: number;
+  /** Temporary source powerup fields; these affect damage, never rigid mass. */
+  damageMultiplier: number;
+  protection: number;
+  freeRepairs: boolean;
+  /** Last setter event, rather than a per-frame suspension override. */
+  suspensionPowerup?: SuspensionPowerupValues;
   upgrades?: UpgradeState;
 }
 export interface DetachedBody extends RigidBody {
@@ -179,7 +195,35 @@ export function createSimulatedCar(
     motion,
   ) as SimulatedVehicleState;
   Object.assign(state, { heading, speed: 0, health: 100 });
-  const vertices = mechanics.shapes.map(shapeVertices);
+  const initialHulls = mechanics.shapes.map((shape) =>
+    shape.kind === "box"
+      ? buildBoxHull(
+          new Vector3(...shape.bounds.min),
+          new Vector3(...shape.bounds.max),
+        )
+      : buildHull(shapeVertices(shape)),
+  );
+  // Native FillInShape compacts physical polygon storage. These slots are
+  // independent of DAT/WAM model indices; discard unused input points before
+  // damage classification so a later dent cannot resurrect retired vertices.
+  const hulls = initialHulls.map((hull) => {
+    const order = hull.vertexOrder ?? hull.vertices.map((_, i) => i);
+    const remap = new Map(order.map((index, i) => [index, i]));
+    return {
+      vertices: order.map((index) => hull.vertices[index].clone()),
+      vertexOrder: order.map((_, i) => i),
+      faces: hull.faces.map((face) => ({
+        ...face,
+        indices: face.indices.map((index) => remap.get(index)!),
+      })),
+      edges: hull.edges.map(
+        ([a, b]) => [remap.get(a)!, remap.get(b)!] as [number, number],
+      ),
+    };
+  });
+  const vertices = hulls.map((hull) =>
+    hull.vertices.map((point) => point.clone()),
+  );
   const car: SimulatedCar = {
     state,
     group,
@@ -192,7 +236,7 @@ export function createSimulatedCar(
     worldRecovery: false,
     worldOverlapDetected: false,
     shapeVertices: vertices,
-    hulls: vertices.map(buildHull),
+    hulls,
     properties: {
       mass: mechanics.root.mass,
       inertia: new Vector3(...mechanics.root.inertia),
@@ -203,15 +247,24 @@ export function createSimulatedCar(
     input: { throttle: 0, steer: 0, brake: 0, handbrake: false },
     revision: 0,
     structuralRevision: 0,
+    suspensionBendActive: false,
     splitRevision: 0,
     repairing: false,
+    repairAwaitingShapeSwap: false,
     knackered: false,
     lastAttributedImpactMs: 0,
     armorLevel: human ? 1 : 0,
     offenseLevel: human ? 1 : 0,
+    damageMultiplier: 1,
+    protection: 1,
+    freeRepairs: false,
   };
   // DamageSystem owns the authored shape vertices, never the render bounds.
-  damage.configurePhysics(mechanics, vertices, motion.wheelPositions.map(p => p.clone().multiplyScalar(1 / 6.9)));
+  damage.configurePhysics(
+    mechanics,
+    vertices,
+    motion.wheelPositions.map((p) => p.clone().multiplyScalar(1 / 6.9)),
+  );
   return car;
 }
 function candidate(body: RigidBody, dt: number) {
@@ -245,13 +298,13 @@ export class VehicleSimulation {
   accumulator = 0;
   elapsed = 0;
   lastImpacts: ContactImpact[] = [];
-  onRepair?: (car: SimulatedCar, cost: number) => void;
+  onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
   onWasted?: (car: SimulatedCar) => void;
   settings?: UpgradeSettings;
   skill: 0 | 1 | 2 = 0;
   minSplitForcePerTonne = 2.5; // GENERAL gMin_force_to_split_XZ_per_tonne.
-  private detachmentScheduling=createDetachmentSchedulingContext();
+  private detachmentScheduling = createDetachmentSchedulingContext();
   private contactSurfaces = new Map<RigidBody, Surface[]>();
   constructor(
     public world: WorldCollision,
@@ -275,6 +328,13 @@ export class VehicleSimulation {
     car.state.curvature = car.state.turnSpeed = 0;
     this.sync(car);
   }
+  /** Full powerup repair439460 also resets suspension, including an unbent
+   * car. Restore partition properties before recalculating axle loads. */
+  repair(car: SimulatedCar) {
+    car.damage.repair();
+    this.syncStructuralState(car);
+    resetMotionSuspension(car.motion);
+  }
   update(dt: number) {
     this.accumulator = Math.min(
       this.accumulator + Math.max(0, dt),
@@ -286,86 +346,163 @@ export class VehicleSimulation {
     }
   }
   private recoverySurfaces(surfaces: readonly Surface[]) {
-    return surfaces.map(surface=>({...surface,materialIdentifier:surface.material,faceFriction:surface.modifier.wallFriction}));
+    return surfaces.map((surface) => ({
+      ...surface,
+      materialIdentifier: surface.material,
+      faceFriction: surface.modifier.wallFriction,
+    }));
   }
   private worldContacts(body: RigidBody, hulls: CollisionHull[]): Contact[] {
-    const carBody=body as SimulatedCar | DetachedBody;
-    const old=transformHulls(body,hulls),next=transformHulls(body,hulls,true);
-    const surfaces:Surface[]=[];
-    this.contactSurfaces.set(body,surfaces);
-    const allHits:HullContact[]=[];
-    const center=body.properties.centerOfMass.clone().applyQuaternion(body.state.orientation).add(body.state.position);
-    for(let i=0;i<old.length;i++) {
-      const bounds=hullBounds(old[i]).union(hullBounds(next[i])).expandByScalar(.005);
-      const nearby=this.world.querySurfaces(bounds.min,bounds.max);
-      for(const surface of nearby) if(!surfaces.includes(surface)) surfaces.push(surface);
-      const recovery=carBody.worldRecovery ? recoverWorldContacts(old[i],next[i],this.recoverySurfaces(nearby),center) : undefined;
+    const carBody = body as SimulatedCar | DetachedBody;
+    const old = transformHulls(body, hulls),
+      next = transformHulls(body, hulls, true);
+    const surfaces: Surface[] = [];
+    this.contactSurfaces.set(body, surfaces);
+    const allHits: HullContact[] = [];
+    const center = body.properties.centerOfMass
+      .clone()
+      .applyQuaternion(body.state.orientation)
+      .add(body.state.position);
+    for (let i = 0; i < old.length; i++) {
+      const bounds = hullBounds(old[i])
+        .union(hullBounds(next[i]))
+        .expandByScalar(0.005);
+      const nearby = this.world.querySurfaces(bounds.min, bounds.max);
+      for (const surface of nearby)
+        if (!surfaces.includes(surface)) surfaces.push(surface);
+      const recovery = carBody.worldRecovery
+        ? recoverWorldContacts(
+            old[i],
+            next[i],
+            this.recoverySurfaces(nearby),
+            center,
+          )
+        : undefined;
       carBody.worldOverlapDetected ||= !!recovery?.overlapDetected;
-      const candidates:HullContact[]=[...recovery?.contacts ?? []];
-      for(const surface of nearby) {
-        const hit=sweepHullTriangle(old[i],next[i],surface.a,surface.b,surface.c,{
-          materialIdentifier:surface.material,materialFlags:surface.materialFlags,faceFlags:surface.faceFlags,
-          twoSided:surface.twoSided,deferReduction:true,
-          suppressedVertices:recovery?.suppressedVertices,skipWorldEdges:!!recovery?.overlapDetected,
-          skipWorldVertices:carBody.worldRecovery,
-        });
-        if(hit) candidates.push(Object.assign(hit,{faceFriction:surface.modifier.wallFriction}));
+      const candidates: HullContact[] = [...(recovery?.contacts ?? [])];
+      for (const surface of nearby) {
+        const hit = sweepHullTriangle(
+          old[i],
+          next[i],
+          surface.a,
+          surface.b,
+          surface.c,
+          {
+            materialIdentifier: surface.material,
+            materialFlags: surface.materialFlags,
+            faceFlags: surface.faceFlags,
+            twoSided: surface.twoSided,
+            deferReduction: true,
+            suppressedVertices: recovery?.suppressedVertices,
+            skipWorldEdges: !!recovery?.overlapDetected,
+            skipWorldVertices: carBody.worldRecovery,
+          },
+        );
+        if (hit)
+          candidates.push(
+            Object.assign(hit, { faceFriction: surface.modifier.wallFriction }),
+          );
       }
       allHits.push(...reduceWorldContacts(candidates));
     }
-    return finalizeWorldContacts(allHits).map(hit=>({a:body,point:hit.points[0],pointB:hit.pointsB?.[0],normal:hit.normal,
-      sourceType:hit.contactTypes?.[0],penetration:hit.penetration,faceFriction:hit.faceFriction ?? 1}));
+    return finalizeWorldContacts(allHits).map((hit) => ({
+      a: body,
+      point: hit.points[0],
+      pointB: hit.pointsB?.[0],
+      normal: hit.normal,
+      sourceType: hit.contactTypes?.[0],
+      penetration: hit.penetration,
+      faceFriction: hit.faceFriction ?? 1,
+    }));
   }
-  private placementDirection(car: SimulatedCar, hulls: CollisionHull[]): Vector3 | undefined {
-    const transformed=transformHulls(car,hulls);
-    const bounds=new Box3().setFromPoints(transformed.flatMap(h=>h.vertices));
-    const center=car.properties.centerOfMass.clone().applyQuaternion(car.state.orientation).add(car.state.position);
-    bounds.expandByPoint(center).expandByScalar(.005);
-    const worldDirection=worldPlacementDirection(worldPlacementContacts(transformed,this.recoverySurfaces(this.world.querySurfaces(bounds.min,bounds.max)),center),car.state.orientation);
-    if(worldDirection) return worldDirection;
-    for(const other of [...this.cars,...this.debris]) {
-      if(other===car || ('joint' in other && other.joint?.parent===car)) continue;
-      const otherHulls=transformHulls(other,other.hulls);
-      if(!transformed.some(a=>otherHulls.some(b=>placementHullsOverlap(a,b)))) continue;
-      const difference=bounds.getCenter(new Vector3()).sub(new Box3().setFromPoints(otherHulls.flatMap(h=>h.vertices)).getCenter(new Vector3()));
-      return difference.length()>2.384185791015625e-7 ? difference.normalize() : new Vector3(1,0,0);
+  private placementDirection(
+    car: SimulatedCar,
+    hulls: CollisionHull[],
+  ): Vector3 | undefined {
+    const transformed = transformHulls(car, hulls);
+    const bounds = hullsBounds(transformed);
+    const center = car.properties.centerOfMass
+      .clone()
+      .applyQuaternion(car.state.orientation)
+      .add(car.state.position);
+    bounds.expandByPoint(center).expandByScalar(0.005);
+    const worldDirection = worldPlacementDirection(
+      worldPlacementContacts(
+        transformed,
+        this.recoverySurfaces(this.world.querySurfaces(bounds.min, bounds.max)),
+        center,
+      ),
+      car.state.orientation,
+    );
+    if (worldDirection) return worldDirection;
+    for (const other of [...this.cars, ...this.debris]) {
+      if (other === car || ("joint" in other && other.joint?.parent === car))
+        continue;
+      const otherHulls = transformHulls(other, other.hulls);
+      if (
+        !transformed.some((a) =>
+          otherHulls.some((b) => placementHullsOverlap(a, b)),
+        )
+      )
+        continue;
+      const difference = bounds
+        .getCenter(new Vector3())
+        .sub(hullsBounds(otherHulls).getCenter(new Vector3()));
+      return difference.length() > 2.384185791015625e-7
+        ? difference.normalize()
+        : new Vector3(1, 0, 0);
     }
     return undefined;
   }
   private syncStructuralState(car: SimulatedCar) {
-    if(car.splitRevision !== car.damage.splitRevision) {
-      if(!car.damage.snapped) {
-        car.properties.mass=car.motion.mass=car.mechanics.root.mass;
+    if (car.splitRevision !== car.damage.splitRevision) {
+      if (!car.damage.snapped) {
+        car.properties.mass = car.motion.mass = car.mechanics.root.mass;
         car.properties.inertia.fromArray(car.mechanics.root.inertia);
         car.motion.inertia.fromArray(car.mechanics.root.inertia);
       }
-      car.splitRevision=car.damage.splitRevision;
+      car.splitRevision = car.damage.splitRevision;
     }
-    const flags=car.damage.pendingShapeSwapFlags;
-    let accepted=true;
-    if(car.revision !== car.damage.deformationRevision) {
-      if(flags & 4) car.damage.constrainShapeSwap(car.hulls);
-      const pending=car.shapeVertices.filter(v=>v.length>=4).map(buildHull);
-      if(flags && !(flags & 4)) accepted=moveShapeToSensiblePlace(car.state.position,()=>this.placementDirection(car,pending)).accepted;
-      if(accepted) {
-        car.hulls=pending;
-        car.revision=car.damage.deformationRevision;
-        car.damage.pendingShapeSwapFlags=0;
+    const flags = car.damage.pendingShapeSwapFlags;
+    let accepted = true;
+    if (car.revision !== car.damage.deformationRevision) {
+      if (flags & 4) car.damage.constrainShapeSwap(car.hulls);
+      const pending = car.shapeVertices
+        .filter((v) => v.length >= 4)
+        .map(buildHull);
+      if (flags && !(flags & 4))
+        accepted = moveShapeToSensiblePlace(car.state.position, () =>
+          this.placementDirection(car, pending),
+        ).accepted;
+      if (accepted) {
+        car.hulls = pending;
+        car.revision = car.damage.deformationRevision;
+        car.damage.pendingShapeSwapFlags = 0;
       }
     }
-    if(car.structuralRevision !== car.damage.structuralRevision) {
-      car.damage.currentWheelPositions.forEach((point,i)=>car.motion.wheelPositions[i].copy(point).multiplyScalar(6.9));
-      if(accepted || !(flags & 8)) {
+    if (car.structuralRevision !== car.damage.structuralRevision) {
+      car.damage.currentWheelPositions.forEach((point, i) =>
+        car.motion.wheelPositions[i].copy(point).multiplyScalar(6.9),
+      );
+      if (accepted || !(flags & 8)) {
         car.properties.centerOfMass.copy(car.damage.currentCenterOfMass);
         car.motion.centerOfMassModel.copy(car.damage.currentCenterOfMass);
-        car.motion.centerOfMass.copy(car.damage.currentCenterOfMass).multiplyScalar(6.9);
-        car.structuralRevision=car.damage.structuralRevision;
+        car.motion.centerOfMass
+          .copy(car.damage.currentCenterOfMass)
+          .multiplyScalar(6.9);
+        if (car.damage.structuralBend || car.suspensionBendActive)
+          resetMotionSuspension(car.motion);
+        car.suspensionBendActive = !!car.damage.structuralBend;
+        car.structuralRevision = car.damage.structuralRevision;
       }
     }
   }
-  private trySplit(impacts: ContactImpact[], restarts: Set<SimulatedCar | DetachedBody>[]): {occurred:boolean; restart:boolean} {
+  private trySplit(
+    impacts: ContactImpact[],
+    restarts: Set<SimulatedCar | DetachedBody>[],
+  ): { occurred: boolean; restart: boolean } {
     let restarting = false;
-    let occurred=false;
+    let occurred = false;
     const members = new Set<SimulatedCar | DetachedBody>();
     for (const impact of impacts) {
       members.add(impact.a as SimulatedCar | DetachedBody);
@@ -373,65 +510,154 @@ export class VehicleSimulation {
     }
     // Source42df20 gives all XZ-edge candidates precedence over every roof
     // candidate. The qualifying roof contacts are capped as one summed group.
-    const cars=[...members].filter((body): body is SimulatedCar => "damage" in body && !!body.damage.wam);
-    for (const roof of [false,true]) {
+    const cars = [...members].filter(
+      (body): body is SimulatedCar => "damage" in body && !!body.damage.wam,
+    );
+    for (const roof of [false, true]) {
       for (const body of cars) {
-        const wam=body.damage.wam!;
-        const ownContacts=impacts.slice(0,40).filter(impact=>impact.a===body);
-        const eligibility={minForcePerTonne:this.minSplitForcePerTonne,
-          snappability:wam.snappability,softness:body.damage.carSoftness,
-          driver:body.human?8:6,objectType:1,immune:!!body.damage.damageContext.invulnerable,snapped:body.damage.snapped};
+        const wam = body.damage.wam!;
+        const ownContacts = impacts
+          .slice(0, 40)
+          .filter((impact) => impact.a === body);
+        const eligibility = {
+          minForcePerTonne: this.minSplitForcePerTonne,
+          snappability: wam.snappability,
+          softness: body.damage.carSoftness,
+          driver: body.human ? 8 : 6,
+          objectType: 1,
+          immune: !!body.damage.damageContext.invulnerable,
+          snapped: body.damage.snapped,
+        };
         let plane: ReturnType<DamageSystem["prepareSplitPlane"]>;
-        let capped:ContactImpact[],total:number,threshold:number;
+        let capped: ContactImpact[], total: number, threshold: number;
         if (roof) {
-          const candidate=findRoofSplitContactCandidate(ownContacts,{...eligibility,splitY:wam.splitY,minimumForcePerTonne:this.minSplitForcePerTonne});
-          if(!candidate || !(plane=body.damage.prepareSplitPlane(new Vector3(0,1,0),candidate.splitY,candidate.splitY))) continue;
-          capped=candidate.contacts;total=candidate.totalImpulse;threshold=candidate.threshold;
+          const candidate = findRoofSplitContactCandidate(ownContacts, {
+            ...eligibility,
+            splitY: wam.splitY,
+            minimumForcePerTonne: this.minSplitForcePerTonne,
+          });
+          if (
+            !candidate ||
+            !(plane = body.damage.prepareSplitPlane(
+              new Vector3(0, 1, 0),
+              candidate.splitY,
+              candidate.splitY,
+            ))
+          )
+            continue;
+          capped = candidate.contacts;
+          total = candidate.totalImpulse;
+          threshold = candidate.threshold;
         } else {
-          const candidate=findSplitContactCandidate(ownContacts,this.contactSurfaces.get(body) ?? [],eligibility,
-            c=>!!(plane=body.damage.prepareSplitPlane(c.horizontalNormalLocal,c.horizontalConstantLocal)));
-          if(!candidate || !plane) continue;
-          capped=[candidate.contact];total=candidate.contact.normalImpulse;threshold=candidate.threshold;
+          const candidate = findSplitContactCandidate(
+            ownContacts,
+            this.contactSurfaces.get(body) ?? [],
+            eligibility,
+            (c) =>
+              !!(plane = body.damage.prepareSplitPlane(
+                c.horizontalNormalLocal,
+                c.horizontalConstantLocal,
+              )),
+          );
+          if (!candidate || !plane) continue;
+          capped = [candidate.contact];
+          total = candidate.contact.normalImpulse;
+          threshold = candidate.threshold;
         }
-        const oldCenter=body.properties.centerOfMass.clone(),oldVelocity=body.state.velocity.clone();
-        const result=body.damage.splitAtPlane(plane,body.human);
-        if(!result) continue;
-        occurred=true;
-        const velocityFor=(center:Vector3)=>oldVelocity.clone().add(new Vector3().crossVectors(body.state.angularVelocity,center.clone().sub(oldCenter).applyQuaternion(body.state.orientation)));
-        const child:DetachedBody={actor:result.actor,owner:body,part:-1,splitRevision:body.damage.splitRevision,
-          hulls:result.shapes.filter(v=>v.length>=4).map(buildHull),overlapRecovery:true,overlapDetected:false,worldRecovery:true,worldOverlapDetected:false,
-          state:{position:body.state.position.clone(),orientation:body.state.orientation.clone(),velocity:velocityFor(result.negative.centerOfMass),angularVelocity:body.state.angularVelocity.clone()},
-          properties:{...result.negative,centerOfMass:result.negative.centerOfMass.clone(),inertia:result.negative.inertia.clone(),worldFriction:0,objectFriction:.4}};
+        const oldCenter = body.properties.centerOfMass.clone(),
+          oldVelocity = body.state.velocity.clone();
+        const result = body.damage.splitAtPlane(plane, body.human);
+        if (!result) continue;
+        occurred = true;
+        const velocityFor = (center: Vector3) =>
+          oldVelocity
+            .clone()
+            .add(
+              new Vector3().crossVectors(
+                body.state.angularVelocity,
+                center
+                  .clone()
+                  .sub(oldCenter)
+                  .applyQuaternion(body.state.orientation),
+              ),
+            );
+        const child: DetachedBody = {
+          actor: result.actor,
+          owner: body,
+          part: -1,
+          splitRevision: body.damage.splitRevision,
+          hulls: result.shapes.filter((v) => v.length >= 4).map(buildHull),
+          overlapRecovery: true,
+          overlapDetected: false,
+          worldRecovery: true,
+          worldOverlapDetected: false,
+          state: {
+            position: body.state.position.clone(),
+            orientation: body.state.orientation.clone(),
+            velocity: velocityFor(result.negative.centerOfMass),
+            angularVelocity: body.state.angularVelocity.clone(),
+          },
+          properties: {
+            ...result.negative,
+            centerOfMass: result.negative.centerOfMass.clone(),
+            inertia: result.negative.inertia.clone(),
+            worldFriction: 0,
+            objectFriction: 0.4,
+          },
+        };
         // Source42e230 assigns physics children by the original parent-local
         // joint anchor. Their world pose and joint geometry remain unchanged.
-        for(const piece of this.debris) if(piece.joint?.parent===body && result.plane.normal.dot(piece.joint.parentAnchor)-result.plane.constant<0) {
-          piece.joint.parent=child;piece.overlapRecovery=piece.worldRecovery=true;
-        }
+        for (const piece of this.debris)
+          if (
+            piece.joint?.parent === body &&
+            result.plane.normal.dot(piece.joint.parentAnchor) -
+              result.plane.constant <
+              0
+          ) {
+            piece.joint.parent = child;
+            piece.overlapRecovery = piece.worldRecovery = true;
+          }
         body.state.velocity.copy(velocityFor(result.positive.centerOfMass));
-        body.properties.mass=body.motion.mass=result.positive.mass;
-        body.properties.inertia.copy(result.positive.inertia);body.motion.inertia.copy(result.positive.inertia);
+        body.properties.mass = body.motion.mass = result.positive.mass;
+        body.properties.inertia.copy(result.positive.inertia);
+        body.motion.inertia.copy(result.positive.inertia);
         body.properties.centerOfMass.copy(result.positive.centerOfMass);
-        if(result.disableMotion) body.state.rpm=0;
-        this.scene.add(result.actor);this.debris.push(child);members.add(child);
+        // Source42e230 retains spring/damping after the partition but resets
+        // prior wheel lengths to ride height for the next suspension tick.
+        body.state.wheelLengths.fill(body.motion.suspensionBase.rideHeight);
+        if (result.disableMotion) body.state.rpm = 0;
+        this.scene.add(result.actor);
+        this.debris.push(child);
+        members.add(child);
         this.syncStructuralState(body);
-        if(total>threshold) {
-          restarting=true;
-          const factor=threshold/total;
-          for(const impact of impacts) impact.normalImpulse=capped.includes(impact)?impact.normalImpulse*factor:0;
+        if (total > threshold) {
+          restarting = true;
+          const factor = threshold / total;
+          for (const impact of impacts)
+            impact.normalImpulse = capped.includes(impact)
+              ? impact.normalImpulse * factor
+              : 0;
         }
         break;
       }
-      if(occurred) break;
+      if (occurred) break;
     }
     if (restarting) {
-      for (const impact of impacts) impact.sourceType=9;
+      for (const impact of impacts) impact.sourceType = 9;
       // Include jointed bodies even if their only graph edges were joint rows.
-      for (const child of this.debris) if (child.joint && members.has(child.joint.parent as SimulatedCar | DetachedBody)) members.add(child);
+      for (const child of this.debris)
+        if (
+          child.joint &&
+          members.has(child.joint.parent as SimulatedCar | DetachedBody)
+        )
+          members.add(child);
       restarts.push(members);
     }
-    return {occurred,restart:restarting};
+    return { occurred, restart: restarting };
   }
-  private collectContacts(bodies: Array<SimulatedCar | DetachedBody>): Contact[] {
+  private collectContacts(
+    bodies: Array<SimulatedCar | DetachedBody>,
+  ): Contact[] {
     const contacts: Contact[] = [];
     for (const body of bodies)
       contacts.push(...this.worldContacts(body, body.hulls));
@@ -460,7 +686,8 @@ export class VehicleSimulation {
               continue;
             const attachmentRoot = (
               body: SimulatedCar | DetachedBody,
-            ): RigidBody => ("owner" in body && body.joint ? body.joint.parent : body);
+            ): RigidBody =>
+              "owner" in body && body.joint ? body.joint.parent : body;
             const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
               ...(a.overlapRecovery || b.overlapRecovery
                 ? {
@@ -469,12 +696,8 @@ export class VehicleSimulation {
                       b,
                       sameAttachmentGroup:
                         attachmentRoot(a) === attachmentRoot(b),
-                      boundsCenterA: new Box3()
-                        .setFromPoints(oldA.flatMap((h) => h.vertices))
-                        .getCenter(new Vector3()),
-                      boundsCenterB: new Box3()
-                        .setFromPoints(oldB.flatMap((h) => h.vertices))
-                        .getCenter(new Vector3()),
+                      boundsCenterA: hullsBounds(oldA).getCenter(new Vector3()),
+                      boundsCenterB: hullsBounds(oldB).getCenter(new Vector3()),
                     },
                   }
                 : {}),
@@ -499,26 +722,49 @@ export class VehicleSimulation {
       }
     return contacts;
   }
-  private processImpactDamage(impacts: ContactImpact[], jointImpacts: JointConstraintImpact[], restarts: Set<SimulatedCar | DetachedBody>[]): boolean | void {
-    const split=this.trySplit(impacts,restarts);
+  private processImpactDamage(
+    impacts: ContactImpact[],
+    jointImpacts: JointConstraintImpact[],
+    restarts: Set<SimulatedCar | DetachedBody>[],
+  ): boolean | void {
+    const split = this.trySplit(impacts, restarts);
     if (split.restart) return false;
     if (split.occurred) return;
     // Source431260: tear the first over-torque KEV flap angular LIMIT only,
     // after splitting but before ordinary crush and impulse application.
-    for(const row of jointImpacts) {
-      const child=this.debris.find(b=>b===row.a && b.joint===row.joint);
-      if(!child || child.part<0 || !row.joint.childAxis) continue;
-      const part=child.owner.damage.runtimeParts[child.part];
-      const threshold=kevFlapTearThreshold({sourceType:row.sourceType,impulse:row.normalImpulse,
-        childMass:child.properties.mass,angularConstraint:row.angularConstraintLocal.toArray(),
-        hingeAxis:row.joint.childAxis.toArray(),kevFlap:!!part.part.kevOFlap,
-        driver:child.owner.human?8:6,immune:!!child.owner.damage.damageContext.invulnerable});
-      if(threshold===undefined) continue;
-      const members=new Set<SimulatedCar|DetachedBody>();
-      for(const impact of impacts){members.add(impact.a as SimulatedCar|DetachedBody);if(impact.b)members.add(impact.b as SimulatedCar|DetachedBody);impact.sourceType=9;impact.normalImpulse=0;}
-      for(const impact of jointImpacts){members.add(impact.a as SimulatedCar|DetachedBody);members.add(impact.b as SimulatedCar|DetachedBody);impact.sourceType=9;impact.normalImpulse=impact===row?threshold:0;}
-      part.state.phase=2;child.joint=undefined;
-      child.overlapRecovery=child.worldRecovery=true;
+    for (const row of jointImpacts) {
+      const child = this.debris.find(
+        (b) => b === row.a && b.joint === row.joint,
+      );
+      if (!child || child.part < 0 || !row.joint.childAxis) continue;
+      const part = child.owner.damage.runtimeParts[child.part];
+      const threshold = kevFlapTearThreshold({
+        sourceType: row.sourceType,
+        impulse: row.normalImpulse,
+        childMass: child.properties.mass,
+        angularConstraint: row.angularConstraintLocal.toArray(),
+        hingeAxis: row.joint.childAxis.toArray(),
+        kevFlap: !!part.part.kevOFlap,
+        driver: child.owner.human ? 8 : 6,
+        immune: !!child.owner.damage.damageContext.invulnerable,
+      });
+      if (threshold === undefined) continue;
+      const members = new Set<SimulatedCar | DetachedBody>();
+      for (const impact of impacts) {
+        members.add(impact.a as SimulatedCar | DetachedBody);
+        if (impact.b) members.add(impact.b as SimulatedCar | DetachedBody);
+        impact.sourceType = 9;
+        impact.normalImpulse = 0;
+      }
+      for (const impact of jointImpacts) {
+        members.add(impact.a as SimulatedCar | DetachedBody);
+        members.add(impact.b as SimulatedCar | DetachedBody);
+        impact.sourceType = 9;
+        impact.normalImpulse = impact === row ? threshold : 0;
+      }
+      part.state.phase = 2;
+      child.joint = undefined;
+      child.overlapRecovery = child.worldRecovery = true;
       restarts.push(members);
       return false;
     }
@@ -536,7 +782,12 @@ export class VehicleSimulation {
       >
     >();
     for (const impact of impacts) {
-      if (impact.sourceType === 9 || impact.closingSpeed <= 0.01 || impact.normalImpulse <= 0) continue;
+      if (
+        impact.sourceType === 9 ||
+        impact.closingSpeed <= 0.01 ||
+        impact.normalImpulse <= 0
+      )
+        continue;
       for (const [body, other, sign] of [
         [impact.a, impact.b, 1],
         [impact.b, impact.a, -1],
@@ -586,9 +837,13 @@ export class VehicleSimulation {
       for (const [other, impact] of byOther) {
         const otherCar =
           other && "damage" in other ? (other as SimulatedCar) : undefined;
+        const piece =
+          other && "owner" in other ? (other as DetachedBody) : undefined;
+        // Source440550 follows saved ownership for free drivers2/3/4 only;
+        // semi-detached driver1 and self-owned pieces do not attribute hits.
         const humanSource =
           otherCar?.human ||
-          (other && "owner" in other && (other as DetachedBody).owner.human);
+          (piece && !piece.joint && piece.owner !== car && piece.owner.human);
         if (humanSource && !car.human)
           car.lastAttributedImpactMs = this.elapsed * 1000;
         const vectors = scaleImpactVectors(
@@ -598,6 +853,7 @@ export class VehicleSimulation {
           {
             human: car.human,
             hitCar: !!otherCar,
+            hitDetachedPart: !!other && "owner" in other,
             attackerHuman: otherCar?.human ?? false,
             receiverSoftness: car.damage.carSoftness,
             attackerSoftness: otherCar?.damage.carSoftness ?? 0.7,
@@ -607,8 +863,16 @@ export class VehicleSimulation {
             offenseLevel: otherCar?.offenseLevel ?? 0,
             armorFactor: car.armorFactor,
             offenseFactor: otherCar?.offenseFactor,
-            difficultySoftness: this.settings ? skillValue(this.settings.softness,{skill:this.skill}) : 1,
-            difficultyCarCar: this.settings ? skillValue(this.settings.carDamageMultiplier,{skill:this.skill}) : 1,
+            damageMultiplier: otherCar?.damageMultiplier ?? 1,
+            protection: car.protection,
+            difficultySoftness: this.settings
+              ? skillValue(this.settings.softness, { skill: this.skill })
+              : 1,
+            difficultyCarCar: this.settings
+              ? skillValue(this.settings.carDamageMultiplier, {
+                  skill: this.skill,
+                })
+              : 1,
           },
         );
         car.damage.applyImpact(
@@ -630,32 +894,57 @@ export class VehicleSimulation {
       this.cars.map((car) => [car, car.state.velocity.clone()]),
     );
     for (const car of this.cars) {
-      if (car.repairing && !car.knackered && !car.damage.wasted) {
-        const repair = car.damage.repairStep(PHYSICS_STEP * 1000, this.settings ? skillValue(this.settings.repairCost, {skill:this.skill}) : 10);
-        this.onRepair?.(car, repair.cost);
+      if (!(car.damage.pendingShapeSwapFlags & 1))
+        car.repairAwaitingShapeSwap = false;
+      if (
+        car.repairing &&
+        !car.repairAwaitingShapeSwap &&
+        !car.knackered &&
+        !car.damage.wasted
+      ) {
+        const repair = car.damage.repairStep(
+          PHYSICS_STEP * 1000,
+          this.settings
+            ? skillValue(this.settings.repairCost, { skill: this.skill })
+            : 10,
+        );
+        car.repairAwaitingShapeSwap =
+          repair.bodyworkRepair > 0 && !!(car.damage.pendingShapeSwapFlags & 1);
+        this.onRepair?.(
+          car,
+          repair.cost,
+          repair.cost === 0 && repair.bodyworkRepair === 0,
+        );
       }
       this.syncStructuralState(car);
-      car.state.steeringDamageCurvature=car.damage.steeringDamageCurvature;
-      car.state.wheelEnabled=car.damage.splitRuntime?.wheelMask;
+      car.state.steeringDamageCurvature = car.damage.steeringDamageCurvature;
+      car.state.wheelEnabled = car.damage.splitRuntime?.wheelMask;
       car.state.componentDamage = Array.from(car.damage.componentLevels);
       if (car.damage.splitRuntime?.disableMotion) {
         // Source car+18c8: XZ-snapped primary skips control and WheelForces;
         // both halves are free bodies. Gravity remains active.
         car.state.velocity.y -= (10 / 6.9) * PHYSICS_STEP;
-        car.state.rpm=0;
-        car.debug=undefined;
-      } else car.debug = applyVehicleForces(
-        car.state,
-        {
-          throttle: car.knackered ? 0 : Math.max(0, car.input.throttle),
-          steer: car.knackered && !car.human ? 0 : car.input.steer,
-          brake: car.knackered && !car.human ? 0 : Math.max(Number(car.input.brake), car.knackered ? 0 : -car.input.throttle),
-          handbrake: !!car.input.handbrake,
-        },
-        PHYSICS_STEP,
-        car.motion,
-        this.world,
-      );
+        car.state.rpm = 0;
+        car.debug = undefined;
+      } else
+        car.debug = applyVehicleForces(
+          car.state,
+          {
+            throttle: car.knackered ? 0 : Math.max(0, car.input.throttle),
+            steer: car.knackered && !car.human ? 0 : car.input.steer,
+            brake:
+              car.knackered && !car.human
+                ? 0
+                : Math.max(
+                    Number(car.input.brake),
+                    car.knackered ? 0 : -car.input.throttle,
+                  ),
+            handbrake: !!car.input.handbrake,
+          },
+          PHYSICS_STEP,
+          car.motion,
+          this.world,
+        );
     }
     this.debris = this.debris.filter((body) => {
       if (body.splitRevision !== undefined) {
@@ -691,32 +980,53 @@ export class VehicleSimulation {
       ...this.cars,
       ...this.debris,
     ];
-    prepareJointVelocities(this.debris.flatMap(b=>b.joint?[b.joint]:[]));
+    prepareJointVelocities(
+      this.debris.flatMap((b) => (b.joint ? [b.joint] : [])),
+    );
     for (const body of bodies) {
       body.overlapDetected = false;
-      body.worldOverlapDetected=false;
+      body.worldOverlapDetected = false;
       candidate(body, PHYSICS_STEP);
     }
     const restartGroups: Set<SimulatedCar | DetachedBody>[] = [];
-    const beforeApply = (impacts: ContactImpact[],jointImpacts:JointConstraintImpact[]) => this.processImpactDamage(impacts,jointImpacts, restartGroups);
+    const beforeApply = (
+      impacts: ContactImpact[],
+      jointImpacts: JointConstraintImpact[],
+    ) => this.processImpactDamage(impacts, jointImpacts, restartGroups);
     const joints = this.debris.flatMap((b) => (b.joint ? [b.joint] : []));
-    this.lastImpacts = resolveContactGroups(this.collectContacts(bodies), PHYSICS_STEP, joints, beforeApply);
+    this.lastImpacts = resolveContactGroups(
+      this.collectContacts(bodies),
+      PHYSICS_STEP,
+      joints,
+      beforeApply,
+    );
     // Source split invalidates the old contact solve. Rebuild the changed group
     // immediately, with the original 30-pass guard, before advancing this tick.
     for (let pass = 0; restartGroups.length && pass < 30; pass++) {
       const members = restartGroups.shift()!;
       const changed = [...members];
       for (const body of changed) candidate(body, PHYSICS_STEP);
-      const changedJoints = this.debris.flatMap(b => b.joint && members.has(b) ? [b.joint] : []);
-      this.lastImpacts.push(...resolveContactGroups(this.collectContacts(changed),PHYSICS_STEP,changedJoints,beforeApply));
+      const changedJoints = this.debris.flatMap((b) =>
+        b.joint && members.has(b) ? [b.joint] : [],
+      );
+      this.lastImpacts.push(
+        ...resolveContactGroups(
+          this.collectContacts(changed),
+          PHYSICS_STEP,
+          changedJoints,
+          beforeApply,
+        ),
+      );
     }
     for (const car of this.cars) this.syncStructuralState(car);
     for (const body of [...this.cars, ...this.debris]) {
       advance(body, PHYSICS_STEP);
       body.overlapRecovery = body.overlapDetected;
-      body.worldRecovery=body.worldOverlapDetected;
+      body.worldRecovery = body.worldOverlapDetected;
     }
-    projectJointPositions(this.debris.flatMap(b=>b.joint?[b.joint]:[]));
+    projectJointPositions(
+      this.debris.flatMap((b) => (b.joint ? [b.joint] : [])),
+    );
     for (const car of this.cars) {
       const forward = new Vector3(0, 0, -1).applyQuaternion(
         car.state.orientation,
@@ -727,7 +1037,7 @@ export class VehicleSimulation {
       if (car.damage.wasted && car.wastedAt === undefined) {
         car.wastedAt = this.elapsed;
         this.onWasted?.(car);
-        car.knackered=true;
+        car.knackered = true;
       }
       this.sync(car);
       car.damage.stepFlaps(
@@ -754,6 +1064,12 @@ export class VehicleSimulation {
         part.state.phase !== 0
       )
         continue;
+      // Source436a20 consumes due entries even when436cb0/4332a0 refuses
+      // invulnerable owners. Existing jointed bits still simulate/release.
+      if (car.damage.damageContext.invulnerable) {
+        cancelScheduledDetachment(this.detachmentScheduling, part.state);
+        continue;
+      }
       if (this.debris.filter((b) => b.owner === car).length >= 24) continue;
       if (
         part.state.type !== 2 &&
@@ -762,6 +1078,23 @@ export class VehicleSimulation {
       )
         continue;
       const actor = part.actor;
+      // Parts queued before a split may still be attached to the secondary
+      // actor when their queue slot becomes due. Use that physical parent for
+      // velocity, COM and joint inheritance; owner remains repair history.
+      const parent =
+        this.debris.find(
+          (body) =>
+            body.part < 0 &&
+            body.owner === car &&
+            (() => {
+              let node: Object3D | null = actor;
+              while (node) {
+                if (node === body.actor) return true;
+                node = node.parent;
+              }
+              return false;
+            })(),
+        ) ?? car;
       actor.updateWorldMatrix(true, true);
       const position = new Vector3(),
         orientation = new Quaternion(),
@@ -769,22 +1102,28 @@ export class VehicleSimulation {
       actor.matrixWorld.decompose(position, orientation, scale);
       const bounds = part.bounds.clone();
       const size = bounds.getSize(new Vector3()).multiply(scale);
-      const carBounds = new Box3().setFromPoints(car.shapeVertices.flat());
-      const csize = carBounds.getSize(new Vector3());
+      const carBounds = hullsBounds(parent.hulls);
       const mass = part.mass;
-      const com = detachedChildCenterOfMass(bounds.min, bounds.max, {position, orientation}, carBounds.min, carBounds.max, car.state).centerOfMass;
+      const com = detachedChildCenterOfMass(
+        bounds.min,
+        bounds.max,
+        { position, orientation },
+        carBounds.min,
+        carBounds.max,
+        parent.state,
+      ).centerOfMass;
       const worldCenter = com
         .clone()
         .applyQuaternion(orientation)
         .add(position);
-      const parentCenter = car.properties.centerOfMass
+      const parentCenter = parent.properties.centerOfMass
         .clone()
-        .applyQuaternion(car.state.orientation)
-        .add(car.state.position);
+        .applyQuaternion(parent.state.orientation)
+        .add(parent.state.position);
       const velocity = new Vector3(
         ...inheritedDetachedVelocity(
-          car.state.velocity.toArray(),
-          car.state.angularVelocity.toArray(),
+          parent.state.velocity.toArray(),
+          parent.state.angularVelocity.toArray(),
           parentCenter.toArray(),
           worldCenter.toArray(),
         ),
@@ -797,13 +1136,13 @@ export class VehicleSimulation {
         part: index,
         overlapRecovery: true,
         overlapDetected: false,
-        worldRecovery:true,
-        worldOverlapDetected:false,
+        worldRecovery: true,
+        worldOverlapDetected: false,
         state: {
           position,
           orientation,
           velocity,
-          angularVelocity: car.state.angularVelocity.clone(),
+          angularVelocity: parent.state.angularVelocity.clone(),
         },
         properties: {
           mass,
@@ -812,7 +1151,7 @@ export class VehicleSimulation {
           worldFriction: 0,
           objectFriction: 0.4,
         },
-        hulls: [buildHull(boxVertices(bounds))],
+        hulls: [buildBoxHull(bounds.min, bounds.max)],
       };
       if (part.part.shape === "poly" && part.part.shapePoints.length >= 4) {
         const points = part.part.shapePoints.map((i) =>
@@ -826,11 +1165,11 @@ export class VehicleSimulation {
           part.part.type === "flap"
             ? createSdbHingeJoint(
                 body,
-                car,
+                parent,
                 part.flapHinges.map((i) => car.damage.getPartVertices(part)[i]),
                 ((part.flap?.maxAngleUnits ?? 0x3ffc) * Math.PI * 2) / 65536,
               )
-            : createOrdinaryDetachJoint(body, car, part.originalVertices, {
+            : createOrdinaryDetachJoint(body, parent, part.originalVertices, {
                 vertexIndex: part.detachmentVertex,
                 cornerBits: part.detachmentDirection,
                 side: part.detachmentSide,
@@ -840,8 +1179,14 @@ export class VehicleSimulation {
     }
   }
   dispose() {
+    // Reunite private split geometries before the content loader disposes the
+    // scene. Otherwise pristine and secondary meshes become unreachable.
+    for (const car of this.cars) car.damage.repair();
     for (const body of this.debris) {
-      if(body.part<0) { body.actor.removeFromParent(); continue; }
+      if (body.part < 0) {
+        body.actor.removeFromParent();
+        continue;
+      }
       const part = body.owner.damage.runtimeParts[body.part];
       part.originalParent.add(body.actor);
       body.actor.matrix.copy(part.originalTransform);

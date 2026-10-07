@@ -7,6 +7,7 @@ import {
   selectStructuralBend,
   stepBendRepair,
   bendSteeringCurvature,
+  compressedBendReference,
 } from "../src/physics/structural.ts";
 
 const bounds = new Box3(new Vector3(-0.2, 0, -0.6), new Vector3(0.2, 0.3, 0.6));
@@ -20,6 +21,19 @@ const input = () => ({
   bounds,
   human: true,
   random: () => 0,
+});
+
+test("transition repair references use source bounded compressed CAR coordinates", () => {
+  const original = new Vector3(0, 0.1, -0.4);
+  assert.deepEqual(
+    compressedBendReference(original).toArray(),
+    [0.000152587890625, 0.09994658827781677, -0.3999389708042145],
+  );
+  assert.deepEqual(original.toArray(), [0, 0.1, -0.4]);
+  assert.deepEqual(
+    compressedBendReference(new Vector3(-11, 10, 11)).toArray(),
+    [-10, 10, 10],
+  );
 });
 
 test("only the front bend adds source signed-yaw-degree steering curvature", () => {

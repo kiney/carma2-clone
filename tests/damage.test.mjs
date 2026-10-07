@@ -19,6 +19,10 @@ import { parseTwt } from "../server/assets.mjs";
 import { parseAct, parseDat } from "../src/formats.ts";
 import { createModelGeometry } from "../src/render-geometry.ts";
 import {
+  bendPoint,
+  compressedBendReference,
+} from "../src/physics/structural.ts";
+import {
   createDetachmentSchedulingContext,
   detachmentQueueSize,
 } from "../src/physics/attachment.ts";
@@ -227,6 +231,39 @@ function apply(
     vector,
   );
 }
+
+test("source invulnerability rejects ordinary crush admission and preserves model, hull and attachments", async () => {
+  const object = mesh();
+  const system = new DamageSystem(
+    fakeAssets(wam()),
+    systemGroup(object),
+    "TEST.TXT\nTEST.WAM",
+  );
+  await system.init();
+  const shapes = physics(system);
+  const positions = Array.from(object.geometry.attributes.position.array);
+  const points = shapes.map((shape) => shape.map((point) => point.toArray()));
+  system.damageContext.invulnerable = true;
+  const result = apply(system, new Vector3(-0.2, 0.1, -0.4), 10);
+  assert.equal(result.queuedForce, 0);
+  assert.deepEqual(result.componentEvents, []);
+  assert.deepEqual(
+    Array.from(object.geometry.attributes.position.array),
+    positions,
+  );
+  assert.deepEqual(
+    shapes.map((shape) => shape.map((point) => point.toArray())),
+    points,
+  );
+  assert.ok(system.runtimeParts.every((part) => part.state.phase === 0));
+  assert.equal(system.structuralBend, undefined);
+  system.damageContext.invulnerable = false;
+  apply(system, new Vector3(-0.2, 0.1, -0.4), 0.08);
+  assert.notDeepEqual(
+    Array.from(object.geometry.attributes.position.array),
+    positions,
+  );
+});
 
 test("original queued-force threshold, fixed radius and region plane govern dents and repair", async () => {
   const object = mesh();
@@ -502,6 +539,18 @@ test("two damage systems share source detach spacing and repair releases only it
   assert.equal(second.detachQueue[0].state.queuedAt, 11000);
   apply(first, point, 0.5);
   assert.equal(first.detachQueue[0].state.queuedAt, 12000);
+  const remainingForce = second.runtimeParts[0].state.accumulatedForce;
+  first.repairStep(40, 20);
+  assert.equal(
+    detachmentQueueSize(context),
+    0,
+    "source clean held repair clears the global queue",
+  );
+  assert.equal(second.detachQueue.length, 0);
+  assert.equal(second.runtimeParts[0].state.accumulatedForce, remainingForce);
+  assert.equal(context.lastScheduled, 12000);
+  apply(second, point, 0.07);
+  assert.equal(second.detachQueue[0].state.queuedAt, 13000);
 });
 
 test("WAM104 leaves collision shape samples intact while WAM4 uses source Y/Z root deformation", async () => {
@@ -641,6 +690,64 @@ test("source structural branch bends hull, COM and wheels, applies component dam
   );
 });
 
+test("structural transition repair uses compressed pre-bend coordinates and preserves later dents", async () => {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new BufferAttribute(
+      Float32Array.of(-0.1, 0.1, -0.4, 0.123456, 0.1, 0, -0.1, 0.1, 0.6),
+      3,
+    ),
+  );
+  geometry.setIndex([0, 1, 2]);
+  const object = mesh("BODY.DAT", geometry);
+  const system = new DamageSystem(
+    fakeAssets(wam()),
+    systemGroup(object),
+    "TEST.TXT\nTEST.WAM",
+  );
+  system.damageContext.random = () => 0;
+  await system.init();
+  const original = new Vector3().fromBufferAttribute(
+    object.geometry.attributes.position,
+    1,
+  );
+  const shape = [];
+  for (const x of [-0.4, 0.4])
+    for (const y of [-0.4, 0.4])
+      for (const z of [-0.6, 0.6]) shape.push(new Vector3(x, y, z));
+  system.configurePhysics(
+    { root: { mass: 1, centerOfMass: [0, 0.1, -0.1] }, wheels: [], shapes: [] },
+    [shape],
+  );
+  apply(system, new Vector3(0, 0.1, -0.6), 3);
+  const previous = system.structuralBend;
+  assert.ok(previous);
+  const positions = object.geometry.attributes.position;
+  positions.setX(1, positions.getX(1) + 0.007);
+  const dented = new Vector3().fromBufferAttribute(positions, 1);
+  const fixed = new Vector3().fromBufferAttribute(positions, 2);
+  system.repairStep(40, 10);
+  const next = system.structuralBend;
+  assert.ok(next);
+  const packed = compressedBendReference(original);
+  const expected = dented
+    .clone()
+    .add(bendPoint(packed, next).sub(bendPoint(packed, previous)));
+  expected.fromArray(expected.toArray().map(Math.fround));
+  assert.ok(
+    new Vector3().fromBufferAttribute(positions, 1).distanceTo(expected) < 1e-8,
+  );
+  const uncompressed = dented
+    .clone()
+    .add(bendPoint(original, next).sub(bendPoint(original, previous)));
+  assert.ok(
+    expected.distanceTo(uncompressed) > 1e-8,
+    "binary compressed reference affects the repaired field",
+  );
+  assert.deepEqual(new Vector3().fromBufferAttribute(positions, 2), fixed);
+});
+
 test("high-force failed bending chance follows source and does not fall back to ordinary dent", async () => {
   const object = mesh();
   const pristine = Array.from(object.geometry.attributes.position.array);
@@ -747,6 +854,7 @@ test("corner-split rendering preserves authored part indices and counts repair o
   assert.equal(object.geometry.attributes.position.count, 6);
   assert.equal(system.runtimeParts[0].originalVertices.length, 4);
   system.repair();
+  apply(system, new Vector3(9, 9, 9), 0.08);
   const position = object.geometry.attributes.position;
   position.setZ(0, position.getZ(0) + 0.01);
   position.setZ(3, position.getZ(3) + 0.01);
@@ -759,6 +867,115 @@ test("corner-split rendering preserves authored part indices and counts repair o
   assert.equal(system.componentLevels[3], 52);
   assert.ok(
     Array.from(object.geometry.attributes.normal.array).every(Number.isFinite),
+  );
+});
+
+test("source shell mode rejects component-only repair until an ordinary crush clears it", async () => {
+  const object = mesh();
+  const system = new DamageSystem(
+    fakeAssets(wam()),
+    systemGroup(object),
+    "TEST.TXT\nTEST.WAM",
+  );
+  await system.init();
+  physics(system);
+  system.damagePrograms = {
+    softness: 1,
+    programs: Object.fromEntries(
+      ["top", "bottom", "left", "right", "front", "rear"].map((location) => [
+        location,
+        {
+          location,
+          clauses: [
+            {
+              conditions: [],
+              effects: [
+                { system: "steering", systemIndex: 3, weaknessFactor: 1 },
+              ],
+            },
+          ],
+        },
+      ]),
+    ),
+  };
+  system.damageContext.random = () => 0;
+  assert.equal(system.useShellModel, false, "fresh initial source state is0");
+  system.repair();
+  assert.equal(system.useShellModel, true);
+  const point = new Vector3(-0.2, 0.1, -0.4);
+  system.applyImpact(
+    [point],
+    new Vector3(0, 0, 0.4),
+    false,
+    true,
+    10000,
+    new Vector3(0, 0, 0.05),
+  );
+  assert.ok(system.componentLevels[3] > 0);
+  const before = system.componentLevels[3];
+  assert.equal(
+    system.useShellModel,
+    true,
+    "below-threshold component impact does not clear shell mode",
+  );
+  assert.equal(system.repairStep(40, 20).active, false);
+  assert.equal(system.componentLevels[3], before);
+  apply(system, point, 0.08);
+  assert.equal(system.useShellModel, false);
+  assert.equal(system.repairStep(40, 20).active, true);
+  system.repairStep(10000, 20);
+  system.repairStep(40, 20);
+  assert.equal(
+    system.useShellModel,
+    true,
+    "successful clean held repair switches back to shell mode",
+  );
+});
+
+test("principal LOD no-movement cleanup skips lower LODs; a moving principal repairs every LOD", async () => {
+  const actor = new Group();
+  actor.name = "BODY.ACT";
+  const principal = mesh("HIGH.DAT"),
+    lower = mesh("LOW.DAT");
+  actor.add(principal, lower);
+  const system = new DamageSystem(
+    fakeAssets(wam(["BODY.ACT", "normal", "boring", "0"])),
+    systemGroup(actor),
+    "TEST.TXT\nTEST.WAM",
+  );
+  await system.init();
+  physics(system);
+  system.repair();
+  apply(system, new Vector3(9, 9, 9), 0.08);
+  const p = principal.geometry.attributes.position,
+    l = lower.geometry.attributes.position;
+  l.setZ(0, l.getZ(0) + 0.01);
+  const lowerDamaged = l.getZ(0);
+  lower.material.map = new DataTexture();
+  const runtime = system.runtimeParts[0];
+  runtime.state.accumulatedForce = 0.05;
+  const clean = system.repairStep(40, 20);
+  assert.equal(clean.bodyworkRepair, 0);
+  assert.equal(
+    clean.totalDeflection,
+    0,
+    "lower LOD is excluded by source early return",
+  );
+  assert.equal(l.getZ(0), lowerDamaged);
+  assert.equal(lower.material.map, null);
+  assert.equal(runtime.state.accumulatedForce, 0);
+  assert.equal(system.useShellModel, true);
+  apply(system, new Vector3(9, 9, 9), 0.08);
+  p.setZ(0, p.getZ(0) + 0.01);
+  runtime.state.accumulatedForce = 0.05;
+  const moved = system.repairStep(40, 20);
+  assert.ok(Math.abs(moved.bodyworkRepair - 0.004) < 1e-7);
+  assert.ok(Math.abs(moved.totalDeflection - 0.02) < 1e-7);
+  assert.ok(l.getZ(0) < lowerDamaged);
+  assert.equal(
+    runtime.state.accumulatedForce,
+    0.05,
+    "history cleanup waits for the principal no-movement pass",
   );
 });
 

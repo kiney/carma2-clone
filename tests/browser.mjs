@@ -116,8 +116,12 @@ try {
       g.points.map((p) => ({ x: p.x, y: p.y, z: p.z })),
     );
     race.timeLeft = 500;
-    for (let lap = 0; lap < race.laps; lap++)
-      for (const points of checkpoints) {
+    const crossings = [];
+    const failures = [];
+    for (let lap = 0; lap < race.laps; lap++) {
+      for (let gate = 0; gate < checkpoints.length; gate++) {
+        const points = checkpoints[gate];
+        const before = { lap: race.lap, nextCheckpoint: race.nextCheckpoint };
         const cx = points.reduce((n, p) => n + p.x, 0) / points.length,
           cz = points.reduce((n, p) => n + p.z, 0) / points.length;
         const a = points[0],
@@ -136,19 +140,67 @@ try {
         v.velocity.set(nx * 2, 0, nz * 2);
         v.heading = Math.atan2(-nx, -nz);
         window.carma.simulation.reset(window.carma.player);
-        await new Promise((r) => setTimeout(r, 220));
+        const expectedLap =
+          gate === checkpoints.length - 1
+            ? lap === race.laps - 1
+              ? lap + 1
+              : lap + 2
+            : lap + 1;
+        const expectedCheckpoint = gate === checkpoints.length - 1 ? 0 : gate + 1;
+        const started = performance.now();
+        while (
+          race.status === "racing" &&
+          (race.lap !== expectedLap || race.nextCheckpoint !== expectedCheckpoint) &&
+          performance.now() - started < 3000
+        ) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        const result = {
+          lap: lap + 1,
+          gate: gate + 1,
+          before,
+          expected: { lap: expectedLap, nextCheckpoint: expectedCheckpoint },
+          after: { lap: race.lap, nextCheckpoint: race.nextCheckpoint },
+          status: race.status,
+          elapsedMs: Math.round(performance.now() - started),
+          start: { x: cx - nx * 0.12, z: cz - nz * 0.12 },
+          normal: { x: nx, z: nz },
+          velocity: { x: v.velocity.x, y: v.velocity.y, z: v.velocity.z },
+          gatePoints: points,
+        };
+        crossings.push(result);
+        if (
+          race.lap !== expectedLap ||
+          race.nextCheckpoint !== expectedCheckpoint ||
+          race.status !== "racing" && !(lap === race.laps - 1 && gate === checkpoints.length - 1)
+        ) {
+          failures.push(result);
+          return {
+            status: race.status,
+            lap: race.lap,
+            credits: race.credits,
+            next: race.nextCheckpoint,
+            crossings,
+            failures,
+            failedGate: result,
+          };
+        }
       }
+    }
     return {
       status: race.status,
       lap: race.lap,
       credits: race.credits,
       next: race.nextCheckpoint,
+      crossings,
+      failures,
+      failedGate: null,
     };
   });
   assert.equal(
     progression.status,
     "completed",
-    "actual original gates allow race completion",
+    `actual original gates allow race completion: ${JSON.stringify(progression)}`,
   );
   const switches = [];
   for (const [track, car, label] of [

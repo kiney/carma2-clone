@@ -79,6 +79,7 @@ export interface MotionParameters {
   /** Immutable source base values used when temporary suspension is assigned/reset. */
   suspensionBase: {
     give: [number, number];
+    damping: number;
     spring: [number, number];
     damper: [number, number];
     rideHeight: number;
@@ -200,6 +201,7 @@ export function createMotionParameters(
     suspensionLength: [rideHeight + rearGive, rideHeight + frontGive],
     suspensionBase: {
       give: [rearGive, frontGive],
+      damping,
       spring: [(rearMass * 5) / rearGive, (frontMass * 5) / frontGive],
       damper: [
         rearMass * Math.sqrt(5 / rearGive) * damping,
@@ -232,9 +234,9 @@ export function createMotionParameters(
   };
 }
 
-/** Original 0x41fc80: temporary suspension assignments always derive from file
- * values. Extra lengths are already metric force units, unlike file give.
- * Root collision min-Y must separately track the lowered suspension bounds.
+/** Original 0x41fc80 derives give/damping from file values and axle mass from
+ * the current wheel/COM geometry. Extra lengths are already metric force units.
+ * Its bb2.minY write changes auxiliary overall bounds, not collision vertices.
  */
 export function setMotionSuspension(
   p: MotionParameters,
@@ -248,14 +250,34 @@ export function setMotionSuspension(
   )
     throw new Error("Invalid source suspension powerup");
   const extra = [values.rearExtraLength, values.frontExtraLength];
+  const ratio = Math.abs(
+    (p.wheelPositions[0].z - p.centerOfMass.z) /
+      (p.wheelPositions[2].z - p.centerOfMass.z),
+  );
+  const axleMass = [p.mass / (ratio + 1), p.mass / (1 / ratio + 1)];
   for (let axle = 0; axle < 2; axle++) {
-    p.spring[axle] = base.spring[axle] / multipliers[axle];
+    const give = base.give[axle] * multipliers[axle];
+    p.spring[axle] = (axleMass[axle] * 5) / give;
     p.damper[axle] =
-      (base.damper[axle] * values.dampingMultiplier) /
-      Math.sqrt(multipliers[axle]);
+      axleMass[axle] *
+      Math.sqrt(5 / give) *
+      base.damping *
+      values.dampingMultiplier;
     p.suspensionLength[axle] =
       base.rideHeight + base.give[axle] * multipliers[axle] + extra[axle];
   }
+}
+
+/** BendWheels and structural repair invoke 0x41fc80 with default modifiers
+ * after changing wheel positions, resetting temporary suspension settings. */
+export function resetMotionSuspension(p: MotionParameters): void {
+  setMotionSuspension(p, {
+    frontGiveMultiplier: 1,
+    rearGiveMultiplier: 1,
+    dampingMultiplier: 1,
+    frontExtraLength: 0,
+    rearExtraLength: 0,
+  });
 }
 
 export function initializeMotion(
@@ -464,8 +486,8 @@ export function applyVehicleForces(
     const w = p.wheelPositions[i],
       axle = i >> 1;
     if (s.wheelEnabled?.[i] === false) {
-      hits[i]=null;
-      s.wheelLengths[i]=p.suspensionLength[axle];
+      hits[i] = null;
+      s.wheelLengths[i] = p.suspensionLength[axle];
       continue;
     }
     const start = w

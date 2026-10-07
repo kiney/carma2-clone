@@ -1,5 +1,4 @@
 import { Box3, Quaternion, Triangle, Vector3 } from "three";
-import { ConvexHull } from "three/addons/math/ConvexHull.js";
 import type { RigidBody } from "./contact";
 
 export interface HullFace {
@@ -9,6 +8,8 @@ export interface HullFace {
 }
 export interface CollisionHull {
   vertices: Vector3[];
+  /** Compact source feature order, expressed as authored vertex indices. */
+  vertexOrder?: number[];
   faces: HullFace[];
   edges: [number, number][];
   /** Solver/candidate transforms retain authored local planes for point CCD. */
@@ -484,67 +485,234 @@ export function sweepMovingEdges(
   return null;
 }
 
-/** Geometry helper only. Authored C2 collision vertices remain independently
- * crushable; the contact solver supplies the reconstructed C2 response. */
+interface IncrementalPlane {
+  inward: Vector3;
+  offset: number;
+}
+interface IncrementalEdge {
+  a: number;
+  b: number;
+  planes: IncrementalPlane[];
+}
+const HULL_PLANE_TOLERANCE = 9.999999974752427e-7;
+function storedVector(value: Vector3): Vector3 {
+  return value.set(
+    Math.fround(value.x),
+    Math.fround(value.y),
+    Math.fround(value.z),
+  );
+}
+function hullPlane(a: Vector3, b: Vector3, c: Vector3): IncrementalPlane {
+  const inward = storedVector(b.clone().sub(a).cross(c.clone().sub(a)));
+  if (inward.length() <= 2.384185791015625e-7) inward.set(1, 0, 0);
+  else storedVector(inward.normalize());
+  return { inward, offset: Math.fround(-inward.dot(a)) };
+}
+function growthHullPlane(
+  a: Vector3,
+  point: Vector3,
+  b: Vector3,
+): IncrementalPlane {
+  // Local0x421940..0x421a30 stores the point differences and selected edge
+  // differences as float32. Its final cross component remains in x87 while
+  // normalization multiplies it by the stored component. Those observable
+  // spill points decide nearly-coplanar horizon topology on stock dondump.
+  const u = storedVector(point.clone().sub(a));
+  const vx = b.x - a.x,
+    vy = b.y - a.y,
+    vz = b.z - a.z;
+  const z = u.x * vy - u.y * vx;
+  const inward = storedVector(
+    new Vector3(
+      u.y * vz - u.z * vy,
+      u.z * Math.fround(vx) - u.x * Math.fround(vz),
+      z,
+    ),
+  );
+  const length = Math.sqrt(inward.x ** 2 + inward.y ** 2 + z * inward.z);
+  if (length <= 2.384185791015625e-7) inward.set(1, 0, 0);
+  else storedVector(inward.multiplyScalar(1 / length));
+  return { inward, offset: Math.fround(-inward.dot(point)) };
+}
+function planeValue(plane: IncrementalPlane, point: Vector3): number {
+  return plane.inward.dot(point) + plane.offset;
+}
+function reversePlane(plane: IncrementalPlane): void {
+  plane.inward.negate();
+  plane.offset = -plane.offset;
+}
+function planeSide(plane: IncrementalPlane, point: Vector3): number {
+  const value = planeValue(plane, point);
+  return value < -HULL_PLANE_TOLERANCE
+    ? -1
+    : value >= HULL_PLANE_TOLERANCE
+      ? 1
+      : 0;
+}
+
+/** Independent incremental convex hull with C2's observable feature order:
+ * first consecutive noncollinear triple, first off-plane point, authored-order
+ * insertions, stable horizon edges and stable removal of unused vertices.
+ * Authored storage remains unchanged; feature indices exclude interior points.
+ * Local HW0x420fd0/0x421210/0x4217b0, with stored float32 plane coefficients. */
 export function buildHull(points: readonly Vector3[]): CollisionHull {
   if (
     points.length < 4 ||
     points.length > 1024 ||
-    points.some((p) => !p.toArray().every(Number.isFinite))
+    points.some((point) => !point.toArray().every(Number.isFinite))
   )
     throw new Error("Invalid collision hull vertices");
-  const vertices = points.map((p) => p.clone()),
-    quick = new ConvexHull().setFromPoints(vertices);
-  const faces: HullFace[] = [];
-  for (const f of quick.faces) {
-    let merged = faces.find(
-      (a) =>
-        a.normal.dot(f.normal) > 1 - EPS &&
-        Math.abs(a.constant - f.constant) < EPS,
-    );
-    if (!merged) {
-      merged = { normal: f.normal.clone(), constant: f.constant, indices: [] };
-      faces.push(merged);
-    }
-    let e = f.edge;
-    do {
-      const index = vertices.indexOf(e.head().point);
-      if (index >= 0 && !merged.indices.includes(index))
-        merged.indices.push(index);
-      e = e.next;
-    } while (e !== f.edge);
+  const vertices = points.map((point) => point.clone());
+  const geometry = vertices.map((point) => storedVector(point.clone()));
+  let seed = 0;
+  while (seed <= geometry.length - 3) {
+    const cross = geometry[seed + 1]
+      .clone()
+      .sub(geometry[seed])
+      .cross(geometry[seed + 2].clone().sub(geometry[seed]));
+    if (
+      cross.toArray().some((value) => Math.abs(value) >= HULL_PLANE_TOLERANCE)
+    )
+      break;
+    seed++;
   }
-  if (faces.length < 4) throw new Error("Degenerate collision hull");
-  const edges: [number, number][] = [];
-  for (const f of faces) {
-    const center = f.indices
-      .reduce((p, i) => p.add(vertices[i]), new Vector3())
-      .divideScalar(f.indices.length);
-    const u = vertices[f.indices[0]].clone().sub(center).normalize(),
-      v = f.normal.clone().cross(u);
-    f.indices.sort(
-      (a, b) =>
-        Math.atan2(
-          vertices[a].clone().sub(center).dot(v),
-          vertices[a].clone().sub(center).dot(u),
-        ) -
-        Math.atan2(
-          vertices[b].clone().sub(center).dot(v),
-          vertices[b].clone().sub(center).dot(u),
-        ),
+  if (seed > geometry.length - 3) throw new Error("Degenerate collision hull");
+  const order = [seed, seed + 1, seed + 2];
+  const base = hullPlane(
+    ...(order.map((index) => geometry[index]) as [Vector3, Vector3, Vector3]),
+  );
+  const fourth = geometry.findIndex(
+    (point) => Math.abs(planeValue(base, point)) > HULL_PLANE_TOLERANCE,
+  );
+  if (fourth < 0) throw new Error("Degenerate collision hull");
+  order.push(fourth);
+  if (planeValue(base, geometry[fourth]) < HULL_PLANE_TOLERANCE)
+    reversePlane(base);
+  let planes = [base];
+  for (let i = 0; i < 3; i++) {
+    const next = (i + 1) % 3;
+    const plane = hullPlane(
+      geometry[order[i]],
+      geometry[fourth],
+      geometry[order[next]],
     );
-    for (let i = 0; i < f.indices.length; i++) {
-      const a = f.indices[i],
-        b = f.indices[(i + 1) % f.indices.length];
-      if (
-        !edges.some(
-          (e) => (e[0] === b && e[1] === a) || (e[0] === a && e[1] === b),
-        )
-      )
-        edges.push([a, b]);
-    }
+    plane.offset = Math.fround(-plane.inward.dot(geometry[fourth]));
+    if (planeValue(plane, geometry[order[(i + 2) % 3]]) < HULL_PLANE_TOLERANCE)
+      reversePlane(plane);
+    planes.push(plane);
   }
-  return { vertices, faces, edges };
+  let edges: IncrementalEdge[] = [
+    { a: order[0], b: order[1], planes: [planes[0], planes[1]] },
+    { a: order[1], b: order[2], planes: [planes[0], planes[2]] },
+    { a: order[0], b: order[2], planes: [planes[0], planes[3]] },
+    ...[0, 1, 2].map((i) => ({
+      a: order[i],
+      b: fourth,
+      planes: [planes[i + 1], planes[1 + ((i + 2) % 3)]],
+    })),
+  ];
+  for (let vertex = 0; vertex < geometry.length; vertex++) {
+    const point = geometry[vertex];
+    if (edges.some((edge) => edge.planes.length < 2))
+      throw new Error("Degenerate collision hull horizon");
+    const sides = new Map(
+      planes.map((plane) => [plane, planeSide(plane, point)]),
+    );
+    if (![...sides.values()].includes(-1)) continue;
+    const additions: IncrementalPlane[] = [];
+    const radial = new Map<number, IncrementalEdge>();
+    const survivors: IncrementalEdge[] = [];
+    const radialEdge = (endpoint: number, plane: IncrementalPlane) => {
+      const existing = radial.get(endpoint);
+      if (existing) existing.planes[1] = plane;
+      else radial.set(endpoint, { a: endpoint, b: vertex, planes: [plane] });
+    };
+    for (const edge of edges) {
+      const [left, right] = edge.planes;
+      const sideLeft = sides.get(left)!,
+        sideRight = sides.get(right)!;
+      if (sideLeft < 0 !== sideRight < 0) {
+        let boundary: IncrementalPlane;
+        if (sideLeft === 0 || sideRight === 0) {
+          boundary = sideLeft === 0 ? left : right;
+        } else {
+          boundary = growthHullPlane(geometry[edge.a], point, geometry[edge.b]);
+          // Choose the inward new-plane orientation from the two old planes.
+          // This is the projection of the other plane normal into the first
+          // plane's tangent space; it gives the same interior half-space.
+          const orientation =
+            left.inward.lengthSq() * boundary.inward.dot(right.inward) -
+            left.inward.dot(right.inward) * boundary.inward.dot(left.inward);
+          if (orientation < 0) reversePlane(boundary);
+          boundary.offset = Math.fround(-boundary.inward.dot(point));
+          additions.push(boundary);
+          edge.planes = sideLeft > 0 ? [left, boundary] : [boundary, right];
+        }
+        radialEdge(edge.a, boundary);
+        radialEdge(edge.b, boundary);
+      }
+      if (sideLeft > 0 || sideRight > 0) survivors.push(edge);
+    }
+    edges = [...survivors, ...radial.values()];
+    planes = [
+      ...planes.filter((plane) => sides.get(plane)! >= 0),
+      ...additions,
+    ];
+    order.push(vertex);
+  }
+  const used = new Set(edges.flatMap((edge) => [edge.a, edge.b]));
+  const vertexOrder = order.filter((index) => used.has(index));
+  const faces = planes.map((plane) => {
+    let boundary = edges.filter((edge) => edge.planes.includes(plane));
+    // Original hulls can retain coplanar edges branching off a face boundary
+    // (native0x420fd0 does so after bending). Keep those CCD features globally;
+    // only the auxiliary clipping polygon needs the closed boundary cycle.
+    for (;;) {
+      const degree = new Map<number, number>();
+      for (const edge of boundary)
+        for (const vertex of [edge.a, edge.b])
+          degree.set(vertex, (degree.get(vertex) ?? 0) + 1);
+      const cycle = boundary.filter(
+        (edge) => degree.get(edge.a)! > 1 && degree.get(edge.b)! > 1,
+      );
+      if (cycle.length === boundary.length) break;
+      boundary = cycle;
+    }
+    const indices: number[] = [];
+    if (boundary.length) {
+      indices.push(boundary[0].a, boundary[0].b);
+      const remaining = boundary.slice(1);
+      while (remaining.length) {
+        const end = indices[indices.length - 1];
+        const index = remaining.findIndex(
+          (edge) => edge.a === end || edge.b === end,
+        );
+        if (index < 0) throw new Error("Invalid collision hull boundary");
+        const edge = remaining.splice(index, 1)[0];
+        const next = edge.a === end ? edge.b : edge.a;
+        if (next !== indices[0]) indices.push(next);
+      }
+    }
+    const normal = plane.inward.clone().negate();
+    // Render-independent face clipping expects winding with the outward normal.
+    // A retained source plane can have no closed feature cycle, notably a
+    // near-duplicate plane after bending. Its half-space still participates
+    // in original vertex/plane CCD; an auxiliary polygon is optional.
+    if (indices.length >= 3) {
+      const winding = vertices[indices[1]]
+        .clone()
+        .sub(vertices[indices[0]])
+        .cross(vertices[indices[2]].clone().sub(vertices[indices[1]]));
+      if (winding.dot(normal) < 0) indices.reverse();
+    }
+    return { normal, constant: plane.offset, indices };
+  });
+  return {
+    vertices,
+    vertexOrder,
+    faces,
+    edges: edges.map((edge) => [edge.a, edge.b]),
+  };
 }
 export function transformHull(
   hull: CollisionHull,
@@ -556,6 +724,7 @@ export function transformHull(
   );
   return {
     vertices,
+    vertexOrder: hull.vertexOrder,
     edges: hull.edges,
     localHull: hull,
     position: position.clone(),
@@ -564,22 +733,38 @@ export function transformHull(
       const normal = f.normal.clone().applyQuaternion(orientation);
       return {
         normal,
-        constant: normal.dot(vertices[f.indices[0]]),
+        constant: f.constant + normal.dot(position),
         indices: f.indices,
       };
     }),
   };
 }
 export function hullBounds(hull: CollisionHull): Box3 {
-  return new Box3().setFromPoints(hull.vertices);
+  return hullsBounds([hull]);
+}
+/** Source shape/cache bounds use compact collision points, not preserved
+ * authored storage. Useful for aggregate body bounds and recovery centers. */
+export function hullsBounds(hulls: readonly CollisionHull[]): Box3 {
+  const bounds = new Box3();
+  for (const hull of hulls) {
+    if (hull.vertexOrder) {
+      for (const index of hull.vertexOrder)
+        bounds.expandByPoint(hull.vertices[index]);
+    } else {
+      for (const point of hull.vertices) bounds.expandByPoint(point);
+    }
+  }
+  return bounds;
 }
 function projection(
   points: readonly Vector3[],
   axis: Vector3,
+  vertexOrder?: readonly number[],
 ): [number, number] {
   let lo = Infinity,
     hi = -Infinity;
-  for (const p of points) {
+  for (const index of vertexOrder ?? points.map((_, index) => index)) {
+    const p = points[index];
     const d = p.dot(axis);
     lo = Math.min(lo, d);
     hi = Math.max(hi, d);
@@ -640,7 +825,8 @@ function manifold(
   const pa = facePolygon(a, normal.clone().negate()),
     pb = facePolygon(b, normal);
   const constant =
-    (projection(a.vertices, normal)[0] + projection(b.vertices, normal)[1]) *
+    (projection(a.vertices, normal, a.vertexOrder)[0] +
+      projection(b.vertices, normal, b.vertexOrder)[1]) *
     0.5;
   const project = (p: Vector3) =>
     p.addScaledVector(normal, constant - p.dot(normal));
@@ -656,10 +842,16 @@ function manifold(
   if (result.length) return unique(result);
   // Edge-edge SAT contacts have no reference-face overlap. The midpoint of the
   // nearest support features supplies the torque arm, never the actor origin.
-  const av = a.vertices.reduce((p, q) =>
-      q.dot(normal) < p.dot(normal) ? q : p,
-    ),
-    bv = b.vertices.reduce((p, q) => (q.dot(normal) > p.dot(normal) ? q : p));
+  const av = (
+      a.vertexOrder
+        ? a.vertexOrder.map((index) => a.vertices[index])
+        : a.vertices
+    ).reduce((p, q) => (q.dot(normal) < p.dot(normal) ? q : p)),
+    bv = (
+      b.vertexOrder
+        ? b.vertexOrder.map((index) => b.vertices[index])
+        : b.vertices
+    ).reduce((p, q) => (q.dot(normal) > p.dot(normal) ? q : p));
   return [project(av.clone().add(bv).multiplyScalar(0.5))];
 }
 function axes(a: CollisionHull, b: CollisionHull): Vector3[] {
@@ -690,8 +882,8 @@ export function collideHulls(
   let penetration = Infinity,
     normal: Vector3 | undefined;
   for (const axis of axes(a, b)) {
-    const [al, ah] = projection(a.vertices, axis),
-      [bl, bh] = projection(b.vertices, axis);
+    const [al, ah] = projection(a.vertices, axis, a.vertexOrder),
+      [bl, bh] = projection(b.vertices, axis, b.vertexOrder);
     if (ah < bl - tolerance || bh < al - tolerance) return null;
     const left = ah - bl,
       right = bh - al;
@@ -958,8 +1150,10 @@ export function sweepHulls(
     const inside = relativeOld.map((point) =>
       localPointInside(target.localHull!, point),
     );
-    if (inside.some(Boolean)) options.onOverlap?.();
-    for (let i = 0; i < relativeOld.length; i++) {
+    const featureOrder =
+      moving.vertexOrder ?? moving.vertices.map((_, index) => index);
+    if (featureOrder.some((index) => inside[index])) options.onOverlap?.();
+    for (const i of featureOrder) {
       const entry = clipPointHull(
         relativeOld[i],
         relativeNew[i],
@@ -1142,8 +1336,12 @@ export function sweepHullTriangle(
   const planeNormal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
   if (!planeNormal.lengthSq()) return null;
   const planeConstant = planeNormal.dot(a);
-  const startInterval = projection(old.vertices, planeNormal);
-  const endInterval = projection(predicted.vertices, planeNormal);
+  const startInterval = projection(old.vertices, planeNormal, old.vertexOrder);
+  const endInterval = projection(
+    predicted.vertices,
+    planeNormal,
+    predicted.vertexOrder,
+  );
   if (
     Math.min(startInterval[0], endInterval[0]) > planeConstant + 0.005 ||
     Math.max(startInterval[1], endInterval[1]) < planeConstant - 0.005
@@ -1155,7 +1353,7 @@ export function sweepHullTriangle(
       (options.materialFlags & 0x1800) !== 0);
   const finiteTriangle = new Triangle(a, b, c);
   const vertexContacts: HullContact[] = [];
-  for (let i = 0; i < old.vertices.length; i++) {
+  for (const i of old.vertexOrder ?? old.vertices.map((_, index) => index)) {
     if (options.suppressedVertices?.has(i)) continue;
     const start = old.vertices[i];
     const direction = predicted.vertices[i].clone().sub(start);

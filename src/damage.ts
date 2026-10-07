@@ -65,6 +65,8 @@ import {
 } from "./physics/split";
 import {
   bendPoint,
+  compressedModelCoordinate,
+  compressedBendReference,
   bendHullVertices,
   selectStructuralBend,
   createBendTransform,
@@ -363,10 +365,7 @@ const WHEEL_PREFIXES = ["FL", "FR", "RL", "RR", "IRL", "IRR"];
  * rounded uint16 in [-10,10]. Decode uses the binary's Float32 reciprocal;
  * collision-shape repair retains its separate exact saved float coordinates. */
 export function modelRepairCoordinate(value: number): number {
-  const code = Math.trunc(
-    ((Math.max(-10, Math.min(10, value)) + 10) * 65535) / 20 + 0.5,
-  );
-  return Math.fround(code * 20 * Math.fround(1 / 65535) - 10);
+  return compressedModelCoordinate(value);
 }
 
 /** C2 damage consumers share the original collision impulse, but geometry,
@@ -404,6 +403,7 @@ export class DamageSystem {
   private detachmentScheduling = createDetachmentSchedulingContext();
   private wheelTransforms = new Map<Object3D, Matrix4>();
   private bendVertexReferences = new Map<DamageMesh, Vector3[]>();
+  private bendVertexClasses = new Map<DamageMesh, Uint8Array>();
   private bendShapeReferences: Vector3[][] = [];
   private readonly bendCenterReference = new Vector3();
   private bendWheelReferences: Vector3[] = [];
@@ -1333,6 +1333,7 @@ export class DamageSystem {
   private applyStructuralBend(bend: BendTransform, human: boolean): void {
     this.shellModelActive = false;
     this.bendVertexReferences.clear();
+    this.bendVertexClasses.clear();
     this.bendCenterReference.copy(this.currentCenterOfMass);
     this.bendWheelReferences = this.currentWheelPositions.map((point) =>
       point.clone(),
@@ -1350,15 +1351,24 @@ export class DamageSystem {
         "position",
       ) as BufferAttribute;
       const references: Vector3[] = [];
+      const classes = new Uint8Array(positions.count);
       for (let i = 0; i < positions.count; i++) {
         const point = new Vector3()
           .fromBufferAttribute(positions, i)
           .applyMatrix4(toCar);
-        references.push(point.clone());
+        const outer = bend.front
+          ? point.z <= bend.pivot.z
+          : point.z >= bend.pivot.z;
+        const fixed = bend.front ? point.z >= bend.farZ : point.z <= bend.farZ;
+        classes[i] = outer ? 2 : fixed ? 0 : 1;
+        references.push(
+          classes[i] === 1 ? compressedBendReference(point) : point.clone(),
+        );
         point.copy(bendPoint(point, bend)).applyMatrix4(toMesh);
         positions.setXYZ(i, point.x, point.y, point.z);
       }
       this.bendVertexReferences.set(data, references);
+      this.bendVertexClasses.set(data, classes);
       this.refreshGeometry(data);
     }
     // Extra bend-plane vertices are source hull edge intersections, not an
@@ -1433,6 +1443,7 @@ export class DamageSystem {
     if (!this.structuralBend) return;
     this.structuralBend = undefined;
     this.bendVertexReferences.clear();
+    this.bendVertexClasses.clear();
     this.bendShapeReferences = [];
     this.currentCenterOfMass.fromArray(
       this.mechanics?.root.centerOfMass ?? [0, 0, 0],
@@ -1468,15 +1479,14 @@ export class DamageSystem {
         const positions = data.mesh.geometry.getAttribute(
           "position",
         ) as BufferAttribute;
+        const classes = this.bendVertexClasses.get(data)!;
         for (let i = 0; i < positions.count; i++) {
+          if (classes[i] === 0) continue;
           const reference = references[i];
           const point = new Vector3()
             .fromBufferAttribute(positions, i)
             .applyMatrix4(toCar);
-          const outer = previous.front
-            ? reference.z <= previous.pivot.z
-            : reference.z >= previous.pivot.z;
-          if (outer) point.applyMatrix4(deltaRotation);
+          if (classes[i] === 2) point.applyMatrix4(deltaRotation);
           else
             point.add(
               bendPoint(reference, next).sub(bendPoint(reference, previous)),
@@ -1574,6 +1584,7 @@ export class DamageSystem {
     const empty = { componentEvents: [], queuedForce: 0, maxInfluence: 0 };
     if (
       !this.ready ||
+      this.damageContext.invulnerable ||
       !localContacts.length ||
       !localEnergyVector.toArray().every(Number.isFinite) ||
       !localContacts.every((point) => point.toArray().every(Number.isFinite))
@@ -1844,6 +1855,65 @@ export class DamageSystem {
     return changed;
   }
 
+  private repairModelCoordinates(
+    data: DamageMesh,
+    step: number,
+    move: boolean,
+  ) {
+    const position = data.mesh.geometry.getAttribute(
+      "position",
+    ) as BufferAttribute;
+    const sourceIndices = data.mesh.geometry.userData.sourceVertexIndices as
+      | Uint32Array
+      | undefined;
+    const counted = new Set<number>();
+    let deflection = 0,
+      repaired = 0;
+    for (let i = 0; i < position.array.length; i++) {
+      const difference = data.repairTarget[i] - position.array[i];
+      const coordinate =
+        (sourceIndices?.[Math.floor(i / 3)] ?? Math.floor(i / 3)) * 3 + (i % 3);
+      const first = !counted.has(coordinate);
+      counted.add(coordinate);
+      if (first) deflection += Math.abs(difference);
+      if (!move) continue;
+      const previous = position.array[i];
+      position.array[i] +=
+        Math.sign(difference) * Math.min(Math.abs(difference), step);
+      if (first) repaired += Math.abs(position.array[i] - previous);
+    }
+    if (repaired > 0) this.refreshGeometry(data);
+    return { deflection, repaired };
+  }
+
+  /** Source43b360 principal-model no-movement branch resets smash history,
+   * accumulated detach force and plastic buckling, then skips the other LODs.
+   * It leaves the active hinge angle alone until the whole car stops repairing. */
+  private finishPrincipalModelRepair(
+    runtime: DamageRuntimePart,
+    models: DamageMesh[],
+  ): boolean {
+    runtime.state.accumulatedForce = 0;
+    runtime.strongestVertex = -1;
+    runtime.strongestDisplacement = 0;
+    if (runtime.flap && !runtime.part.kevOFlap) {
+      runtime.flap.buckled = false;
+      runtime.flap.plastic = true;
+      runtime.flap.plasticOffset = 0;
+    }
+    let changed = false;
+    for (const data of models)
+      for (const saved of data.materials) {
+        changed ||= saved.level !== 0 || saved.material.map !== saved.map;
+        if (saved.material.map && saved.material.map !== saved.map)
+          saved.material.map.dispose();
+        saved.material.map = saved.map;
+        saved.material.needsUpdate = true;
+        saved.level = 0;
+      }
+    return changed;
+  }
+
   /** Held repair: HW RepairCar2 0x43abd0 / RepairModel 0x43b400 move each
    * coordinate toward its saved original at .00005 model units/ms. Component
    * recovery follows repaired L1 deflection / initial L1 deflection; controls
@@ -1867,63 +1937,32 @@ export class DamageSystem {
     let totalDeflection = 0;
     let bodyworkRepair = 0;
     let changed = false;
-    for (const data of this.meshes) {
-      if (!data.runtime) continue;
-      const position = data.mesh.geometry.getAttribute(
-        "position",
-      ) as BufferAttribute;
-      let modelDeflection = 0;
-      let modelRepair = 0;
-      const sourceIndices = data.mesh.geometry.userData.sourceVertexIndices as
-        | Uint32Array
-        | undefined;
-      const counted = new Set<number>();
-      for (let i = 0; i < position.array.length; i++) {
-        const difference = data.repairTarget[i] - position.array[i];
-        const coordinate =
-          (sourceIndices?.[Math.floor(i / 3)] ?? Math.floor(i / 3)) * 3 +
-          (i % 3);
-        const first = !counted.has(coordinate);
-        counted.add(coordinate);
-        if (first) modelDeflection += Math.abs(difference);
-        // Original enumerates the root physics tree (including semi bits).
-        // Fully free bits only contribute remaining deflection until reattached.
-        if (data.runtime.state.phase === 2) continue;
-        const previous = position.array[i];
-        const amount =
-          Math.sign(difference) * Math.min(Math.abs(difference), step);
-        position.array[i] += amount;
-        if (first) modelRepair += Math.abs(position.array[i] - previous);
+    for (const runtime of this.runtimeParts) {
+      const models = this.meshes.filter((data) => data.runtime === runtime);
+      if (!models.length) continue;
+      if (runtime.state.phase === 2) {
+        // Free bits contribute all remaining LOD deflection, but do not move.
+        for (const model of models)
+          totalDeflection += this.repairModelCoordinates(
+            model,
+            step,
+            false,
+          ).deflection;
+        continue;
       }
-      totalDeflection += modelDeflection;
-      bodyworkRepair += modelRepair;
-      if (modelRepair) {
-        this.refreshGeometry(data);
-        changed = true;
+      const principal = this.repairModelCoordinates(models[0], step, true);
+      totalDeflection += principal.deflection;
+      bodyworkRepair += principal.repaired;
+      changed ||= principal.repaired > 0;
+      if (principal.repaired === 0) {
+        changed = this.finishPrincipalModelRepair(runtime, models) || changed;
+        continue;
       }
-      if (modelDeflection === 0) {
-        data.runtime.state.accumulatedForce = 0;
-        if (data.runtime.flap && data.runtime.flap.active) {
-          data.runtime.flap = createFlapState(
-            data.runtime.originalVertices[data.runtime.flapHinges[1]],
-            data.runtime.originalVertices[data.runtime.flapHinges[2]],
-          );
-          data.runtime.actor.matrix.copy(data.runtime.originalTransform);
-          data.runtime.originalTransform.decompose(
-            data.runtime.actor.position,
-            data.runtime.actor.quaternion,
-            data.runtime.actor.scale,
-          );
-          changed = true;
-        }
-        for (const saved of data.materials) {
-          if (saved.material.map && saved.material.map !== saved.map)
-            saved.material.map.dispose();
-          saved.material.map = saved.map;
-          saved.material.side = saved.originalSide;
-          saved.material.needsUpdate = true;
-          saved.level = 0;
-        }
+      for (const model of models.slice(1)) {
+        const result = this.repairModelCoordinates(model, step, true);
+        totalDeflection += result.deflection;
+        bodyworkRepair += result.repaired;
+        changed ||= result.repaired > 0;
       }
     }
     for (const shape of this.shapes)
@@ -1954,20 +1993,40 @@ export class DamageSystem {
     // When the current tree stops moving, original repair reattaches remaining
     // bits. Their geometry enters next tick's tree rather than snapping now.
     if (bodyworkRepair === 0 && dtMs > 0) {
+      // Source43abd0 clears the whole global detach queue here, unlike full
+      // repair's car-specific removal. Other cars retain force/timestamp history.
+      for (const state of this.detachmentScheduling.queued)
+        cancelScheduledDetachment(this.detachmentScheduling, state);
       for (const runtime of this.runtimeParts) {
-        if (runtime.state.phase === 0 && runtime.state.queuedAt === null)
-          continue;
-        runtime.originalParent.add(runtime.actor);
-        runtime.actor.matrix.copy(runtime.originalTransform);
-        runtime.originalTransform.decompose(
-          runtime.actor.position,
-          runtime.actor.quaternion,
-          runtime.actor.scale,
-        );
-        cancelScheduledDetachment(this.detachmentScheduling, runtime.state);
-        resetAttachmentState(runtime.state);
-        changed = true;
+        if (runtime.state.phase !== 0) {
+          runtime.originalParent.add(runtime.actor);
+          runtime.actor.matrix.copy(runtime.originalTransform);
+          runtime.originalTransform.decompose(
+            runtime.actor.position,
+            runtime.actor.quaternion,
+            runtime.actor.scale,
+          );
+          resetAttachmentState(runtime.state);
+          changed = true;
+        }
+        if (runtime.flap && !runtime.part.kevOFlap && runtime.flap.active) {
+          runtime.flap.active = false;
+          runtime.flap.angleUnits = runtime.flap.minAngleUnits = 0;
+          runtime.flap.maxAngleUnits = runtime.flap.spanUnits = 0x3ffc;
+          runtime.actor.matrix.copy(runtime.originalTransform);
+          runtime.originalTransform.decompose(
+            runtime.actor.position,
+            runtime.actor.quaternion,
+            runtime.actor.scale,
+          );
+          changed = true;
+        }
       }
+      for (const data of this.meshes)
+        if (data.runtime)
+          for (const saved of data.materials)
+            saved.material.side = saved.originalSide;
+      if (totalDeflection === 0) this.shellModelActive = true;
       if (changed) this.repairRevision++;
     }
     let componentDifference = 0;

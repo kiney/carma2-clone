@@ -25,27 +25,27 @@ For a production build, run `npm run build` and then `npm start`. The production
 
 Choose a race and car, then select **Load Race**. The browser menus and HUD are independent implementations; the rendered game world uses original game assets.
 
-| Key                 | Action                                     |
-| ------------------- | ------------------------------------------ |
-| W / Up              | Accelerate                                 |
-| S / Down            | Reverse                                    |
-| A / Left, D / Right | Steer                                      |
-| Shift               | Brake                                      |
-| Space               | Handbrake                                  |
-| R                   | Recover to the track for 250 credits       |
-| Hold E              | Incremental repair using credits           |
-| C                   | Cycle chase, cockpit, and overhead cameras |
-| M                   | Show or hide the minimap                   |
-| Escape              | Pause or return to the menu                |
-| Enter               | Restart after a race                       |
+| Key                   | Action                                     |
+| --------------------- | ------------------------------------------ |
+| W / Up                | Accelerate                                 |
+| S / Down              | Reverse                                    |
+| A / Left, D / Right   | Steer                                      |
+| Shift                 | Brake                                      |
+| Space                 | Handbrake                                  |
+| R                     | Recover to the track for 250 credits       |
+| Hold E / double tap E | Repair / automatic repair using credits    |
+| C                     | Cycle chase, cockpit, and overhead cameras |
+| M                     | Show or hide the minimap                   |
+| Escape                | Pause or return to the menu                |
+| Enter                 | Restart after a race                       |
 
-Vehicle mechanics and WAM data drive suspension, tyres, steering, gears, mass/inertia, localized dents, structural bending and body splitting. Twelve component damage units affect handling; detached parts have their own rigid state and joints. Held repair restores eligible bodywork and charges repaired component levels; wasted or split cars require full repair/reload. The ordinary physics equations are independently reconstructed from the local C2 executable; see [the evidence notes](docs/c2-physics-re.md).
+Vehicle mechanics and WAM data drive suspension, tyres, steering, gears, mass/inertia, localized dents, structural bending and body splitting. Twelve component damage units affect handling; detached parts have their own rigid state and joints. Held repair restores eligible bodywork and charges repaired component levels; split bodywork requires the full-repair pickup or reloading; wasting and its countdown persist until reloading. The ordinary physics equations are independently reconstructed from the local C2 executable; see [the evidence notes](docs/c2-physics-re.md).
 
-The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, and engine pickups. Race objectives are approximations; unsupported smash missions are labelled free driving.
+The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, engine and grip pickups, plus invulnerability, granite protection, damage magnification, free repairs and permanent armour/power/offense upgrades. Race objectives are approximations; unsupported smash missions are labelled free driving.
 
 ## Tests
 
-Run `npm test` for parser, archive, asset-index, and gameplay tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; it exercises driving and checkpoints on stock and Advanced content and saves screenshots under ignored test artifacts. Small generated fixtures do not require game assets.
+Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; it exercises driving and checkpoints on stock and Advanced content and saves screenshots under ignored test artifacts. `npm run test:crashes` records 15 deterministic original-car plane/pair scenarios, including transforms, mass/COM/inertia, impulses, velocities, damage, deformation and part states in ignored `artifacts/crash-conformance.json`. Small generated fixtures do not require game assets.
 
 ## Asset and license notes
 

@@ -3,6 +3,22 @@ import { Box3, Matrix4, Vector3 } from "three";
 const ANGLE_SCALE = 65536 / (2 * Math.PI);
 const unsigned = (angle: number) => angle & 0xffff;
 const bendQuant = 0xe38;
+/** Common original515e70/515f50 packing used by repair and transition-bend
+ * references. The expand reciprocal is stored as a Float32 in the binary. */
+export function compressedModelCoordinate(value: number): number {
+  const code = Math.trunc(
+    ((Math.max(-10, Math.min(10, value)) + 10) * 65535) / 20 + 0.5,
+  );
+  return Math.fround(code * 20 * Math.fround(1 / 65535) - 10);
+}
+/** Source4358b0 saves CAR-local transition points before adding bend offsets. */
+export function compressedBendReference(point: Vector3): Vector3 {
+  return new Vector3(
+    ...point
+      .toArray()
+      .map((value) => compressedModelCoordinate(Math.fround(value))),
+  );
+}
 const quantize = (angle: number, minimum: number, maximum: number) => {
   angle = unsigned(angle);
   if (angle < 0x7ff8 && angle > maximum) return maximum;

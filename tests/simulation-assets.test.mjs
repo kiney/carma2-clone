@@ -96,7 +96,16 @@ test("stock car archives create finite mechanics, hulls and four distinct wheel 
       );
       assert.ok(car.properties.inertia.toArray().every(Number.isFinite));
       assert.ok(car.hulls.length > 0);
-      for (const hull of car.hulls) {
+      for (const [shapeIndex, hull] of car.hulls.entries()) {
+        assert.equal(
+          car.shapeVertices[shapeIndex].length,
+          hull.vertices.length,
+        );
+        assert.deepEqual(
+          hull.vertexOrder,
+          hull.vertices.map((_, i) => i),
+          "Physical storage follows native compact feature order before crush metadata is classified",
+        );
         assert.ok(hull.vertices.length >= 4);
         assert.ok(
           hull.vertices.every((point) =>

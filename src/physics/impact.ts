@@ -3,6 +3,10 @@ import { Vector3 } from "three";
 export interface ImpactScalingParameters {
   human: boolean;
   hitCar: boolean;
+  /** Counterpart object type1 with crush-info driver1/2 (or split driver3).
+   * Receiver armour applies before41e067 clears the effective other-car pointer.
+   * Detached receivers themselves fail41df29 and are intentionally rigid. */
+  hitDetachedPart?: boolean;
   attackerHuman: boolean;
   receiverSoftness: number;
   attackerSoftness: number;
@@ -31,16 +35,19 @@ export function scaleImpactVectors(
 ) {
   const p = parameters;
   let factor = p.difficultySoftness ?? 1;
-  if (p.hitCar) {
-    if (p.human) factor *= (p.armorFactor ?? Math.pow(0.91, p.armorLevel ?? 0)) * 1.2;
-    if (p.attackerHuman)
+  if (p.hitCar || p.hitDetachedPart) {
+    if (p.human)
+      factor *= (p.armorFactor ?? Math.pow(0.91, p.armorLevel ?? 0)) * 1.2;
+    if (!p.hitDetachedPart && p.attackerHuman)
       factor *=
         (p.difficultyCarCar ?? 1) *
         (p.offenseFactor ?? Math.pow(1.06, p.offenseLevel ?? 0)) *
         (p.damageMultiplier ?? 1) *
         0.9;
-    if (!p.human && !p.attackerHuman) factor *= 0.2;
-    factor /= (p.attackerSoftness + 0.7) / 0.7;
+    if (!p.hitDetachedPart) {
+      if (!p.human && !p.attackerHuman) factor *= 0.2;
+      factor /= (p.attackerSoftness + 0.7) / 0.7;
+    }
   } else if (!p.human) {
     factor *= p.receiverSoftness;
     if ((p.sinceLastAttributedImpactMs ?? p.sinceLastRepairMs ?? 0) > 5000)

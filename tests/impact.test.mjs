@@ -70,3 +70,34 @@ test("wasted requires engine, transmission, driver or all four wheels at99", () 
   levels[2] = 99;
   assert.equal(isWasted(levels), true);
 });
+
+test("detached counterparts apply receiver armour before discarding car damage multipliers", () => {
+  const result = scaleImpactVectors(new Vector3(1, 2, 3), {
+    ...base,
+    hitDetachedPart: true,
+    armorFactor: 0.8,
+    protection: 2,
+    attackerHuman: true,
+    offenseFactor: 10,
+    difficultyCarCar: 5,
+    damageMultiplier: 4,
+    attackerSoftness: 20,
+  });
+  close(result.damage.x, (0.2 * 1.2 * 0.8) / 2);
+  close(result.crush.x, result.damage.x * 0.5);
+  close(result.damage.z, result.damage.x * 3);
+});
+
+test("opponents hit by detached pieces skip world softness and inactivity reductions", () => {
+  const result = scaleImpactVectors(new Vector3(1, 0, 0), {
+    ...base,
+    human: false,
+    hitDetachedPart: true,
+    receiverSoftness: 3,
+    attackerSoftness: 10,
+    sinceLastAttributedImpactMs: 6000,
+    difficultySoftness: 2,
+  });
+  close(result.damage.x, 0.4);
+  close(result.crush.x, 0.6);
+});

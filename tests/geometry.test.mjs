@@ -1,8 +1,14 @@
 import test from "node:test";
+import { existsSync, readdirSync } from "node:fs";
+import { createAssetStore } from "../server/assets.mjs";
+import { decodeText } from "../src/formats.ts";
+import { parseCarMechanics } from "../src/mechanics.ts";
 import assert from "node:assert/strict";
 import { Quaternion, Vector3 } from "three";
 import {
   buildHull,
+  hullBounds,
+  hullsBounds,
   transformHull,
   collideHulls,
   sweepHullTriangle,
@@ -612,4 +618,306 @@ test("each swept vertex chooses its earliest world face before reduction", () =>
   assert.equal(result.length, 1);
   near(result[0].fraction, 0.3);
   near(result[0].normal.x, 1);
+});
+
+test("source tetrahedron seeding preserves compact feature and stable edge order", () => {
+  // First three authored cube points are coplanar at minX; authored point4
+  // seeds the tetrahedron before coplanar point3 expands that first face.
+  assert.deepEqual(cube.vertexOrder, [0, 1, 2, 4, 3, 5, 6, 7]);
+  assert.deepEqual(cube.edges, [
+    [0, 1],
+    [0, 2],
+    [0, 4],
+    [1, 3],
+    [2, 3],
+    [1, 5],
+    [4, 5],
+    [2, 6],
+    [4, 6],
+    [3, 7],
+    [5, 7],
+    [6, 7],
+  ]);
+  assert.deepEqual(
+    cube.faces.map((face) => face.normal.toArray().map((value) => value || 0)),
+    [
+      [-1, 0, 0],
+      [0, -1, 0],
+      [0, 0, -1],
+      [0, 0, 1],
+      [0, 1, 0],
+      [1, 0, 0],
+    ],
+  );
+});
+
+test("interior authored vertices keep damage indices but are omitted from collision features", () => {
+  const authored = [...cube.vertices.map((point) => point.clone()), v()];
+  const hull = buildHull(authored);
+  assert.equal(hull.vertices.length, 9);
+  assert.equal(hull.vertexOrder.length, 8);
+  assert.ok(!hull.vertexOrder.includes(8));
+  assert.ok(hull.edges.every((edge) => edge.every((index) => index < 8)));
+  authored.forEach((point, index) =>
+    near(hull.vertices[index].distanceTo(point), 0),
+  );
+  const old = transformHull(hull, v(0, 1), new Quaternion());
+  const predicted = transformHull(hull, v(0, -1), new Quaternion());
+  assert.deepEqual(old.vertexOrder, hull.vertexOrder);
+  const hit = sweepHullTriangle(old, predicted, ...floor, {
+    deferReduction: true,
+  });
+  assert.ok(hit);
+  hit.contactTypes.forEach((type, index) => {
+    if (type === 1) assert.notEqual(hit.vertexIndices[index], 8);
+  });
+});
+
+test("stock polyhedra retain authored indexing and finite closed source topology", async (t) => {
+  const directory = new URL("../carma2_orig/data/CARS/", import.meta.url);
+  if (!existsSync(directory)) {
+    t.skip("Local original car archives absent");
+    return;
+  }
+  const assets = await createAssetStore(
+    new URL("../carma2_orig", import.meta.url).pathname,
+  );
+  const names = readdirSync(directory)
+    .filter((name) => /\.twt$/i.test(name))
+    .map((name) => name.slice(0, -4));
+  let count = 0;
+  for (const name of names) {
+    const bytes = await assets.read(`data/CARS/${name}/${name}.txt`);
+    assert.ok(bytes, name);
+    const mechanics = parseCarMechanics(decodeText(bytes));
+    for (const shape of mechanics.shapes) {
+      if (shape.kind !== "polyhedron") continue;
+      const authored = shape.vertices.map((point) => v(...point));
+      const hull = buildHull(authored);
+      if (name.toLowerCase() === "dondump") {
+        // Direct original-HW0x420fd0 measurements: the near-coplanar end
+        // retains edge2->7, whose presence depends on x87 spill precision.
+        assert.deepEqual(hull.edges, [
+          [0, 1],
+          [1, 2],
+          [0, 2],
+          [1, 3],
+          [2, 3],
+          [0, 4],
+          [1, 5],
+          [4, 5],
+          [2, 6],
+          [4, 6],
+          [5, 6],
+          [2, 7],
+          [3, 7],
+          [5, 7],
+          [6, 7],
+          [0, 8],
+          [2, 8],
+          [4, 9],
+          [6, 9],
+          [8, 9],
+        ]);
+        assert.equal(hull.faces.length, 12);
+      }
+      if (
+        name.toLowerCase() === "logmachine" &&
+        shape === mechanics.shapes[2]
+      ) {
+        // The original also compacts this near-flat seed to these six points.
+        assert.deepEqual(hull.vertexOrder, [0, 1, 2, 3, 4, 5]);
+        assert.equal(hull.edges.length, 10);
+      }
+      assert.equal(hull.vertices.length, authored.length, name);
+      assert.equal(
+        new Set(hull.vertexOrder).size,
+        hull.vertexOrder.length,
+        name,
+      );
+      assert.equal(
+        hull.edges.length,
+        hull.vertexOrder.length + hull.faces.length - 2,
+        name,
+      );
+      const used = new Set(hull.edges.flat());
+      assert.ok(
+        hull.vertexOrder.every((index) => used.has(index)),
+        name,
+      );
+      for (const face of hull.faces) {
+        assert.ok(face.indices.length >= 3, name);
+        assert.ok(face.normal.toArray().every(Number.isFinite), name);
+        assert.ok(
+          face.indices.every((index) => hull.vertexOrder.includes(index)),
+          name,
+        );
+      }
+      count++;
+    }
+  }
+  assert.equal(names.length, 52);
+  assert.equal(count, 59);
+});
+
+test("source collision bounds exclude retired authored storage and aggregate active shapes", () => {
+  const hull = buildHull([...cube.vertices, v()]);
+  hull.vertices[8].set(100, -100, 200); // A retired slot remains available to damage storage.
+  const bounds = hullBounds(hull);
+  near(bounds.min.distanceTo(v(-0.5, -0.5, -0.5)), 0);
+  near(bounds.max.distanceTo(v(0.5, 0.5, 0.5)), 0);
+  const moved = transformHull(hull, v(2), new Quaternion());
+  const aggregate = hullsBounds([hull, moved]);
+  near(aggregate.max.x, 2.5);
+  near(aggregate.min.y, -0.5);
+  near(aggregate.max.z, 0.5);
+});
+
+test("native bent hull retains coplanar CCD branches while face polygons remain closed", async (t) => {
+  const { originalCar } = await import("./support/original-car.mjs");
+  let data;
+  try {
+    data = await originalCar("EAGLE3");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      t.skip("Local original Eagle archive absent");
+      return;
+    }
+    throw error;
+  }
+  const { DamageSystem } = await import("../src/damage.ts");
+  const { createSimulatedCar } = await import("../src/physics/simulation.ts");
+  const damage = new DamageSystem(data.assets, data.group, data.text);
+  await damage.init();
+  damage.damageContext.random = () => 0;
+  const car = createSimulatedCar(data.group, data.text, damage, v(), 0, true);
+  damage.applyImpact(
+    [v(0, 0.1, -0.3)],
+    v(0, 0, 5),
+    false,
+    true,
+    10000,
+    v(0, 0, 5),
+  );
+  assert.ok(damage.structuralBend);
+  const hull = buildHull(car.shapeVertices[0]);
+  // Measured directly from original HW0x420fd0 on this resulting point array.
+  assert.deepEqual(
+    hull.vertexOrder,
+    Array.from({ length: 12 }, (_, i) => i),
+  );
+  assert.deepEqual(hull.edges, [
+    [0, 1],
+    [1, 2],
+    [0, 3],
+    [0, 4],
+    [2, 4],
+    [1, 5],
+    [3, 5],
+    [5, 6],
+    [3, 7],
+    [6, 7],
+    [2, 10],
+    [6, 10],
+    [9, 10],
+    [4, 11],
+    [8, 11],
+    [7, 11],
+    [10, 11],
+  ]);
+  assert.equal(hull.faces.length, 7);
+  near(hull.faces[6].normal.y, 0.9983391761779785);
+  near(hull.faces[6].normal.z, -0.057609423995018005);
+  near(hull.faces[6].constant, 0.2195526510477066);
+  // These are still original vertex/edge CCD features, although they branch
+  // into the interiors of the two side faces instead of their boundary loops.
+  assert.ok(hull.vertexOrder.includes(8) && hull.vertexOrder.includes(9));
+  const left = hull.faces.find((face) => face.normal.x === -1);
+  const right = hull.faces.find((face) => face.normal.x === 1);
+  assert.ok(left && right);
+  assert.ok(!left.indices.includes(8) && !right.indices.includes(9));
+  for (const face of hull.faces) {
+    assert.ok(face.indices.length >= 3);
+    assert.equal(new Set(face.indices).size, face.indices.length);
+    for (const index of face.indices)
+      near(face.normal.dot(hull.vertices[index]), face.constant);
+  }
+});
+
+test("native buggy bend preserves source planes without auxiliary cycles through transforms", async (t) => {
+  const { originalCar } = await import("./support/original-car.mjs");
+  let data;
+  try {
+    data = await originalCar("buggy");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      t.skip("Local original buggy archive absent");
+      return;
+    }
+    throw error;
+  }
+  const { DamageSystem } = await import("../src/damage.ts");
+  const { createSimulatedCar } = await import("../src/physics/simulation.ts");
+  const damage = new DamageSystem(data.assets, data.group, data.text);
+  await damage.init();
+  damage.damageContext.random = () => 0;
+  const car = createSimulatedCar(
+    data.group,
+    data.text,
+    damage,
+    v(0, 3),
+    0,
+    true,
+  );
+  const points = car.shapeVertices.flat();
+  const point = v(
+    Math.min(...points.map((p) => p.x)) * 0.4,
+    0.1,
+    Math.max(...points.map((p) => p.z)) * 0.8,
+  );
+  damage.applyImpact([point], v(0, 0, -5), false, true, 10000, v(0, 0, -5));
+  assert.ok(damage.structuralBend);
+  const hull = buildHull(car.shapeVertices[0]);
+  // Native original420fd0 accepts both retained near-duplicate half-spaces.
+  assert.deepEqual(
+    hull.vertexOrder,
+    Array.from({ length: 18 }, (_, i) => i),
+  );
+  assert.equal(hull.edges.length, 33);
+  assert.equal(hull.faces.length, 18);
+  assert.deepEqual(
+    hull.faces
+      .map((face, index) => (face.indices.length < 3 ? index : -1))
+      .filter((index) => index >= 0),
+    [13, 14],
+  );
+  const measured = [
+    [0, 0.939590573310852, -0.3423004448413849, 0.24789783358573914],
+    [
+      1.5525394303494977e-8, 0.939590573310852, -0.3423003852367401,
+      0.24789781868457794,
+    ],
+  ];
+  for (const [index, expected] of measured.entries()) {
+    const face = hull.faces[index + 13];
+    [...face.normal.toArray(), face.constant].forEach((value, i) =>
+      assert.equal(value || 0, expected[i]),
+    );
+  }
+  const position = v(2, -1, 3),
+    rotation = new Quaternion().setFromAxisAngle(v(1, 2, 3).normalize(), 0.7);
+  const transformed = transformHull(hull, position, rotation);
+  for (let i = 0; i < hull.faces.length; i++) {
+    const local = hull.faces[i],
+      world = transformed.faces[i];
+    near(world.constant, local.constant + world.normal.dot(position));
+    assert.ok(Number.isFinite(world.constant));
+    const localPoint = local.normal
+      .clone()
+      .multiplyScalar(local.constant / local.normal.lengthSq());
+    near(
+      world.normal.dot(localPoint.applyQuaternion(rotation).add(position)),
+      world.constant,
+    );
+  }
 });
