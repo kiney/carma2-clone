@@ -11,6 +11,8 @@ import {
   C2_WORLD_SCALE,
   setMotionSuspension,
   resetMotionSuspension,
+  createMotionContext,
+  wheelBumpinessOffset,
 } from "../src/physics/motion.ts";
 const S = C2_WORLD_SCALE;
 const near = (a, b, tolerance = 1e-8) =>
@@ -326,7 +328,8 @@ test("wheel geometry offsets use front/rear damage-order conversion and steering
 test("source-origin plane spawn remains supported through repeated original 40 ms steps", () => {
   for (const height of [0, 0.005]) {
     const p = createMotionParameters(mechanics(2, 0.06)),
-      s = state(p);
+      s = state(p),
+      context = createMotionContext();
     s.position.y = height;
     const floor = {
       raycast(origin, direction, maxDistance) {
@@ -353,14 +356,18 @@ test("source-origin plane spawn remains supported through repeated original 40 m
     };
     let maxHeight = s.position.y;
     for (let i = 0; i < 250; i++) {
-      applyVehicleForces(s, neutral, 0.04, p, floor);
+      applyVehicleForces(s, neutral, 0.04, p, floor, context);
       advanceRigidBody(b, 0.04);
       maxHeight = Math.max(maxHeight, s.position.y);
       assert.ok(Number.isFinite(s.position.y));
     }
     assert.ok(maxHeight < 0.02, `unexpected suspension launch ${maxHeight}`);
     // Original sleep clamp can park within its residual-force threshold.
-    near(s.position.y, 0, height === 0 ? 1e-8 : 0.003);
+    near(
+      s.position.y,
+      0,
+      height === 0 ? 1e-8 : p.mass / (S * 2 * (p.spring[0] + p.spring[1])),
+    );
     near(s.velocity.length(), 0, 1e-4);
   }
 });
@@ -539,4 +546,291 @@ test("bend suspension reset recalculates axle load from current wheel geometry, 
   near(p.spring[0], 5 / (0.12 * S * 4));
   near(p.spring[1], 10 / (0.08 * S * 2));
   near(p.damper[1], 6 * Math.sqrt(5 / (0.08 * S * 2)) * 0.7);
+});
+
+test("shared source stop timer starts at zero and makes sleep depend on car iteration order", () => {
+  const p = createMotionParameters(mechanics());
+  const parked = () => preload(state(p, vector(0, 0.02, 0)), p);
+  const first = parked(),
+    second = parked(),
+    context = createMotionContext();
+  assert.equal(context.stopTimer, 0);
+  context.stopTimer = 0.5;
+  applyVehicleForces(first, neutral, 0.04, p, staticRoad(p), context);
+  assert.ok(first.velocity.y > 0); // Strict >.5 gate, not >=.
+  assert.equal(context.stopTimer, Math.fround(0.5 + Math.fround(0.04)));
+  applyVehicleForces(second, neutral, 0.04, p, staticRoad(p), context);
+  near(second.velocity.length(), 0);
+  assert.equal(context.stopTimer, Math.fround(0.5 + Math.fround(0.04)));
+  // A third car observes the same global value, not its own fresh timer.
+  const third = parked();
+  applyVehicleForces(third, neutral, 0.04, p, staticRoad(p), context);
+  near(third.velocity.length(), 0);
+  assert.equal(first.groundedWheelCount, 4);
+});
+
+test("shared timer advances through failed sleep gates and preserves Float32 sentinel boundary", () => {
+  const p = createMotionParameters(mechanics()),
+    context = createMotionContext();
+  const air = {
+    raycast() {
+      return null;
+    },
+  };
+  let expected = 0;
+  for (let i = 0; i < 24; i++) {
+    applyVehicleForces(state(p), neutral, 0.04, p, air, context);
+    expected = Math.fround(expected + Math.fround(0.04));
+    assert.equal(context.stopTimer, expected);
+  }
+  assert.ok(context.stopTimer < 1);
+  applyVehicleForces(state(p), neutral, 0.04, p, air, context);
+  assert.equal(context.stopTimer, 100);
+  const bouncing = preload(state(p, vector(0, 0.02, 0)), p);
+  bouncing.bounceRate = 1;
+  context.stopTimer = 0.6;
+  applyVehicleForces(bouncing, neutral, 0.04, p, staticRoad(p), context);
+  assert.ok(bouncing.velocity.y > 0);
+  assert.equal(context.stopTimer, Math.fround(0.6 + Math.fround(0.04)));
+  const eligible = preload(state(p, vector(0, 0.02, 0)), p);
+  context.stopTimer = 100;
+  applyVehicleForces(eligible, neutral, 0.04, p, staticRoad(p), context);
+  assert.ok(eligible.velocity.y > 0);
+  assert.equal(context.stopTimer, Math.fround(0.04));
+});
+
+test("crest downforce uses previous grounding, wheelbase probe, COM fraction and pitch lever", () => {
+  const p = createMotionParameters(mechanics(2, 0.06));
+  const ready = () => {
+    const s = preload(state(p, vector(0, 0, -15 / S)), p);
+    s.groundedWheelCount = 4;
+    return s;
+  };
+  const road = (probeSupported) => {
+    let call = 0;
+    const probes = [];
+    return {
+      probes,
+      raycast(origin, direction, maxDistance) {
+        if (++call % 5 === 0) {
+          probes.push({
+            origin: origin.clone(),
+            direction: direction.clone(),
+            maxDistance,
+          });
+          return probeSupported
+            ? {
+                distance: maxDistance,
+                normal: vector(0, 1),
+                friction: 1,
+                rollingResistance: 0,
+                downforce: 1,
+              }
+            : null;
+        }
+        return origin.z > 0
+          ? {
+              distance: p.wheelPositions[0].y / S,
+              normal: vector(0, 1),
+              friction: 1,
+              rollingResistance: 0,
+              downforce: 1,
+            }
+          : null;
+      },
+    };
+  };
+  const crest = ready(),
+    supported = ready();
+  const dropRoad = road(false),
+    supportRoad = road(true);
+  const a = applyVehicleForces(
+    crest,
+    neutral,
+    0.04,
+    p,
+    dropRoad,
+    createMotionContext(),
+  );
+  const b = applyVehicleForces(
+    supported,
+    neutral,
+    0.04,
+    p,
+    supportRoad,
+    createMotionContext(),
+  );
+  near(b.downforce, 10);
+  near(a.downforce, 6); // Front-COM distance .36 / wheelbase .6.
+  near(a.force.y - b.force.y, 4);
+  near(a.torque.x - b.torque.x, (0.3 - 0.06) * S * 6);
+  assert.equal(crest.crestDownforce, true);
+  assert.equal(supported.crestDownforce, false);
+  assert.equal(crest.groundedWheelCount, 2);
+  assert.deepEqual(dropRoad.probes[0].origin.toArray(), [0, 0, -0.3]);
+  assert.deepEqual(dropRoad.probes[0].direction.toArray(), [0, -1, 0]);
+  near(dropRoad.probes[0].maxDistance, 0.6);
+
+  // Once latched, rear-only contact retains the branch without another probe.
+  const rearOnly = {
+    raycast(origin) {
+      return origin.z > 0
+        ? {
+            distance: p.wheelPositions[0].y / S,
+            normal: vector(0, 1),
+            friction: 1,
+            rollingResistance: 0,
+            downforce: 1,
+          }
+        : null;
+    },
+  };
+  applyVehicleForces(crest, neutral, 0.04, p, rearOnly, createMotionContext());
+  assert.equal(crest.crestDownforce, true);
+  applyVehicleForces(
+    crest,
+    neutral,
+    0.04,
+    p,
+    staticRoad(p, 1, 1),
+    createMotionContext(),
+  );
+  assert.equal(crest.crestDownforce, false);
+  assert.equal(crest.groundedWheelCount, 4);
+});
+
+test("crest probe requires four previous contacts and follows full actor orientation", () => {
+  const p = createMotionParameters(mechanics()),
+    s = preload(state(p, vector(0, 0, -1)), p);
+  s.groundedWheelCount = 3;
+  let calls = 0;
+  const noFront = {
+    raycast(origin) {
+      calls++;
+      return origin.z > 0
+        ? {
+            distance: 0.01,
+            normal: vector(0, 1),
+            friction: 1,
+            rollingResistance: 0,
+            downforce: 1,
+          }
+        : null;
+    },
+  };
+  applyVehicleForces(s, neutral, 0.04, p, noFront, createMotionContext());
+  assert.equal(calls, 4);
+  assert.equal(s.crestDownforce, false);
+  s.groundedWheelCount = 4;
+  s.orientation.setFromAxisAngle(vector(0, 0, 1), Math.PI / 3);
+  s.position.set(3, 2, 4);
+  s.velocity.set(0, 0, -1);
+  calls = 0;
+  let probe;
+  const road = {
+    raycast(origin, direction, maxDistance) {
+      if (++calls === 5) {
+        probe = {
+          origin: origin.clone(),
+          direction: direction.clone(),
+          maxDistance,
+        };
+        return null;
+      }
+      return calls <= 2
+        ? {
+            distance: 0.01,
+            normal: vector(0, 1).applyQuaternion(s.orientation),
+            friction: 1,
+            rollingResistance: 0,
+            downforce: 1,
+          }
+        : null;
+    },
+  };
+  applyVehicleForces(s, neutral, 0.04, p, road, createMotionContext());
+  assert.equal(s.crestDownforce, true);
+  near(
+    probe.origin.distanceTo(
+      vector(0, 0, -0.3).applyQuaternion(s.orientation).add(s.position),
+    ),
+    0,
+  );
+  near(
+    probe.direction.distanceTo(vector(0, -1).applyQuaternion(s.orientation)),
+    0,
+  );
+  near(probe.maxDistance, 0.6);
+});
+
+test("source bumpiness folds signed metric phases, combined wave and normal projection", () => {
+  const coefficient = 2.358490564802196e-5;
+  const offset = (x, z) =>
+    wheelBumpinessOffset(vector(x, 0, z), vector(0, 1), 0, 1, 1);
+  near(offset(0, 0), 0);
+  near(offset(1, 0), 112 * coefficient);
+  near(offset(2, 0), 624 * coefficient);
+  near(offset(3, 0), 112 * coefficient);
+  near(offset(4, 0), 0);
+  near(offset(-2, -4), 624 * coefficient);
+  near(offset(1, 1), 624 * coefficient);
+  near(offset(2, 2), 0); // Combined phase folds again.
+  near(offset(400 / 512, 0), 0);
+  near(offset(401 / 512, 0), coefficient);
+  near(offset(401.9 / 512, 0), coefficient); // Truncation toward zero.
+  const slope = vector(0.5, Math.sqrt(0.75), 0);
+  near(
+    wheelBumpinessOffset(vector(1, 0, 0), slope, 2, 0.5, 3),
+    624 * coefficient * 0.5 * 3,
+  );
+});
+
+test("road bumpiness changes wheel travel before damping and can exceed the suspension envelope", () => {
+  const p = createMotionParameters(mechanics()),
+    s = preload(state(p), p);
+  // Place rear-left metric position at spatial-wave peak(x=2,z=0).
+  s.position.set(
+    (2 - p.wheelPositions[0].x) / S,
+    0,
+    -p.wheelPositions[0].z / S,
+  );
+  const bumpRoad = (bumpiness) => ({
+    raycast() {
+      return {
+        distance: p.wheelPositions[0].y / S,
+        normal: vector(0, 1),
+        friction: 0,
+        rollingResistance: 0,
+        downforce: 0,
+        bumpiness,
+      };
+    },
+  });
+  const dt = 0.04,
+    offset = 624 * 2.358490564802196e-5;
+  const d = applyVehicleForces(
+    s,
+    neutral,
+    dt,
+    p,
+    bumpRoad(1),
+    createMotionContext(),
+  );
+  near(s.wheelLengths[0], p.wheelPositions[0].y + offset);
+  near(
+    d.wheelSpringLoads[0],
+    p.mass * 2.5 - offset * (p.spring[0] + p.damper[0] / dt),
+  );
+  const airborne = preload(state(p), p);
+  airborne.position.copy(s.position);
+  const lost = applyVehicleForces(
+    airborne,
+    neutral,
+    dt,
+    p,
+    bumpRoad(100),
+    createMotionContext(),
+  );
+  near(lost.wheelSpringLoads[0], 0);
+  near(airborne.wheelLengths[0], p.suspensionLength[0]);
 });

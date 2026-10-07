@@ -45,7 +45,7 @@ The engine also includes graph-following opponents, checkpoint/lap races, textur
 
 ## Tests
 
-Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; it exercises driving and checkpoints on stock and Advanced content and saves screenshots under ignored test artifacts. `npm run test:crashes` records 15 deterministic original-car plane/pair scenarios, including transforms, mass/COM/inertia, impulses, velocities, damage, deformation and part states in ignored `artifacts/crash-conformance.json`. Small generated fixtures do not require game assets.
+Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; it exercises driving and checkpoints on stock and Advanced content and saves screenshots under ignored test artifacts. `npm run test:crashes` records 15 deterministic original-car plane/pair scenarios, including transforms, mass/COM/inertia, impulses, velocities, damage, deformation and part states in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps312 original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
 
 ## Asset and license notes
 

@@ -16,7 +16,7 @@ Power-up support covers original placed credit, repair, time, engine/grip, invul
 
 ## Known limits
 
-Special-volume/water and oil physics, moving-platform reactions, some articulated special cases, FLIC playback, replays, campaign progression/unlocks, remaining power-up effects and full mission logic remain incomplete. Physics acceptance is still under validation; see `c2-physics-re.md` for current gaps. BON/SKL playback is also not implemented. Funk/groove support is selective and does not reproduce every original directive.
+Special-volume/water and oil physics, moving-platform reactions, custom sphere/wire collision shapes, FLIC playback, replays, campaign progression/unlocks, remaining power-up effects and full mission logic remain incomplete. The ordinary stock-car motion/crash path has source, numerical and Chromium validation; see `c2-physics-re.md` for its evidence and scope. BON/SKL playback is also not implemented. Funk/groove support is selective and does not reproduce every original directive.
 
 Some source content has concrete data issues. Legacy ACT string references with stale chunk lengths, including `CPOINT.ACT`, are supported. `PROG.ACT` lacks a BRender header. The ADV Digga ACT is truncated; two Forklift DATs contain non-finite UV values, normalized with diagnostics while preserving strict finite geometry parsing. All 52 stock car mechanics/shape pipelines now load, including Forklift. The Nuke race config has no player start and its expected ACT is absent. These entries may fail to load or cannot be driven as configured. Some mission/arena configs contain no usable checkpoint gates and therefore cannot complete a checkpoint race.
 

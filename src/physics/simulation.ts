@@ -12,6 +12,7 @@ import {
   createMotionParameters,
   initializeMotion,
   resetMotionSuspension,
+  sharedMotionContext,
   type MotionParameters,
   type MotionState,
   type MotionDebug,
@@ -289,7 +290,7 @@ function transformHulls(
 }
 /** Fixed-tick orchestration. Low-level collision equations live in contact.ts;
  * authored mechanics, source tyre forces and permanent shape crush stay distinct.
- * Remaining special-volume, analytic sphere and articulated-joint paths are
+ * Remaining special-volume and custom sphere/wire paths are
  * explicitly tracked in docs/c2-physics-re.md rather than hidden as tuning.
  */
 export class VehicleSimulation {
@@ -304,6 +305,8 @@ export class VehicleSimulation {
   settings?: UpgradeSettings;
   skill: 0 | 1 | 2 = 0;
   minSplitForcePerTonne = 2.5; // GENERAL gMin_force_to_split_XZ_per_tonne.
+  /** Native BSS state survives car/race loads and advances once per force call. */
+  readonly motionContext = sharedMotionContext;
   private detachmentScheduling = createDetachmentSchedulingContext();
   private contactSurfaces = new Map<RigidBody, Surface[]>();
   constructor(
@@ -625,6 +628,7 @@ export class VehicleSimulation {
         // Source42e230 retains spring/damping after the partition but resets
         // prior wheel lengths to ride height for the next suspension tick.
         body.state.wheelLengths.fill(body.motion.suspensionBase.rideHeight);
+        body.state.groundedWheelCount = 0;
         if (result.disableMotion) body.state.rpm = 0;
         this.scene.add(result.actor);
         this.debris.push(child);
@@ -944,6 +948,7 @@ export class VehicleSimulation {
           PHYSICS_STEP,
           car.motion,
           this.world,
+          this.motionContext,
         );
     }
     this.debris = this.debris.filter((body) => {

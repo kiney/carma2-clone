@@ -42,8 +42,22 @@ export interface MotionState extends RigidState {
   justChangedGear?: boolean;
   tractionControl?: boolean;
   accForce?: number;
-  stopTimer?: number;
+  /** Source car+0x12a8: latched crest redistribution of aerodynamic force. */
+  crestDownforce?: boolean;
+  /** Source car+0x12e8, retained until the next WheelForces tail. */
+  groundedWheelCount?: number;
+  /** Source car+0x4c0; bouncing cars cannot enter the stationary clamp. */
+  bounceRate?: number;
 }
+/** Source static Float32 at 0x677c98. Advance once per WheelForces call, in
+ * active-car order; cars whose WheelForces is skipped do not advance it. */
+export interface MotionContext {
+  stopTimer: number;
+}
+export function createMotionContext(): MotionContext {
+  return { stopTimer: 0 };
+}
+export const sharedMotionContext = createMotionContext();
 export interface MotionInput {
   throttle: number;
   /** Positive steers left, negative right. Magnitudes below one use analog input. */
@@ -57,6 +71,7 @@ export interface MotionGroundHit {
   friction: number;
   rollingResistance: number;
   downforce: number;
+  bumpiness?: number;
 }
 export interface MotionGround {
   raycast(
@@ -224,13 +239,7 @@ export function createMotionParameters(
     speedRevsRatio: (source.speedAtRedline * 4) / 9 / source.gearCount / 6000,
     forceTorqueRatio: mass * source.highestGearAcceleration * source.gearCount,
     downforceBalanceSpeed: source.root.downforceBalanceSpeed,
-    unsupported: [
-      "special volumes/water",
-      "oil",
-      "dynamic platform reactions",
-      "crest downforce flag",
-      "original shared stop timer",
-    ],
+    unsupported: ["special volumes/water", "oil", "dynamic platform reactions"],
   };
 }
 
@@ -294,7 +303,9 @@ export function initializeMotion(
     slipping: 0,
     tractionControl: true,
     accForce: 0,
-    stopTimer: 100,
+    crestDownforce: false,
+    groundedWheelCount: 0,
+    bounceRate: 0,
     wheelLengths: p.wheelPositions.map(
       (w) => w.y,
     ) as MotionState["wheelLengths"],
@@ -415,6 +426,34 @@ export function allocateTyrePair(
   return [reduction * leftCap, reduction * rightCap, true];
 }
 
+/** Installed 0x418f8e..0x419068 samples metric wheel position PLUS the world
+ * normal times the raw ray distance, then projects the bump along local Y. */
+export function wheelBumpinessOffset(
+  wheelWorldMetric: Vector3,
+  worldNormal: Vector3,
+  distanceMetric: number,
+  localNormalY: number,
+  bumpiness: number,
+): number {
+  const fold = (value: number) => {
+    const phase = Math.abs(Math.trunc(value * 512)) % 2048;
+    return phase > 1024 ? 2048 - phase : phase;
+  };
+  // World wheel/normal/distance inputs have source Float32 stores. The Z
+  // normal-distance product additionally spills at418f9f before the phase sum.
+  const distance = Math.fround(distanceMetric);
+  const x = fold(
+    Math.fround(wheelWorldMetric.x) + Math.fround(worldNormal.x) * distance,
+  );
+  const z = fold(
+    Math.fround(wheelWorldMetric.z) +
+      Math.fround(Math.fround(worldNormal.z) * distance),
+  );
+  const sum = x + z;
+  const delta = Math.max(0, (sum > 1024 ? 2048 - sum : sum) - 400);
+  return delta * bumpiness * 2.358490564802196e-5 * localNormalY;
+}
+
 /** Adds COM/world velocity and world omega changes; the caller owns transform integration. */
 export function applyVehicleForces(
   s: MotionState,
@@ -422,6 +461,7 @@ export function applyVehicleForces(
   dt: number,
   p: MotionParameters,
   ground: MotionGround,
+  context: MotionContext = sharedMotionContext,
 ): MotionDebug {
   const inv = s.orientation.clone().invert();
   const v = s.velocity.clone().applyQuaternion(inv).multiplyScalar(S);
@@ -498,6 +538,14 @@ export function applyVehicleForces(
     const hit = ground.raycast(start, rayDirection, rayLength / S);
     hits[i] = hit;
     let length = hit ? hit.distance * S : 2 * rayLength;
+    if (hit?.bumpiness)
+      length += wheelBumpinessOffset(
+        start.clone().multiplyScalar(S),
+        hit.normal,
+        length,
+        hit.normal.clone().applyQuaternion(inv).y,
+        hit.bumpiness,
+      );
     const damageOffset = (s.wheelDamageOffsets?.[i ^ 2] ?? 0) * S;
     if (
       length < -0.5 ||
@@ -559,6 +607,35 @@ export function applyVehicleForces(
         (Math.abs(v.z) * p.mass * 10 * incline * downFactor) /
           p.downforceBalanceSpeed,
       );
+      // Source419c6a: previous grounded count, but this call's updated front
+      // distances. The probe starts at local(0,0,frontZ), spans one wheelbase
+      // along negative actor Y, and does not start at the wheel's ride height.
+      if (
+        s.groundedWheelCount === 4 &&
+        s.wheelLengths[2] === p.suspensionLength[1] &&
+        s.wheelLengths[3] === p.suspensionLength[1]
+      ) {
+        const span = zr - zf;
+        const origin = new Vector3(0, 0, zf / S)
+          .applyQuaternion(s.orientation)
+          .add(s.position);
+        const support = ground.raycast(
+          origin,
+          rayDirection.clone().multiplyScalar(Math.sign(span)),
+          Math.abs(span) / S,
+        );
+        if (!support || support.distance > Math.abs(span) / S)
+          s.crestDownforce = true;
+      } else if (
+        s.crestDownforce &&
+        (s.wheelLengths[2] < p.suspensionLength[1] ||
+          s.wheelLengths[3] < p.suspensionLength[1])
+      )
+        s.crestDownforce = false;
+      if (s.crestDownforce) {
+        downforce *= (zf - p.centerOfMass.z) / (zf - zr);
+        T.x += rearLever * downforce;
+      }
       F.y -= downforce;
     }
     const vp = v.clone().addScaledVector(n, -v.dot(n));
@@ -741,6 +818,7 @@ export function applyVehicleForces(
       T.add(new Vector3().crossVectors(r, f));
     }
   }
+  s.groundedWheelCount = grounded;
   s.velocity.addScaledVector(
     F.clone().applyQuaternion(s.orientation),
     dt / (p.mass * S),
@@ -754,11 +832,12 @@ export function applyVehicleForces(
     .applyQuaternion(s.orientation);
   s.angularVelocity.add(deltaOmega);
   s.accForce = -rearDirection.z * (actual[0] + actual[1]);
-  let timer = s.stopTimer ?? 100;
+  let timer = context.stopTimer;
   if (
-    s.velocity.lengthSq() < 0.1 &&
+    s.velocity.lengthSq() < 0.10000000149011612 &&
     (throttle === 0 || s.gear === 0) &&
     brake === 0 &&
+    (s.bounceRate ?? 0) === 0 &&
     s.angularVelocity.length() < 0.05 &&
     (F.length() < p.mass || (input.handbrake && grounded > 2))
   ) {
@@ -769,8 +848,10 @@ export function applyVehicleForces(
       timer = 0.5;
     }
   }
-  timer += dt;
-  s.stopTimer = timer > 1 ? 100 : timer;
+  //41bc1f stores Float32 before comparing the threshold, retaining the
+  // original strict boundaries and per-car accumulation order.
+  timer = Math.fround(timer + Math.fround(dt));
+  context.stopTimer = timer > 1 ? 100 : timer;
   const drag = dt * 0.0005000000237487257;
   s.velocity.multiplyScalar(
     Math.max(0, 1 - (s.velocity.length() * drag * S) / p.mass),

@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The baseline rigid arcade handler has been replaced by independently reconstructed C2 ordinary-road motion, feature collision detection, coupled contact impulses, persistent WAM crush, component damage, structural bending/splitting, and physical detachable parts. Equations are checked against the installed executable rather than inferred from C1. Integration and remaining articulated details are still being validated in Chromium. Original binaries, decompiler databases and disassembly stay outside Git.
+The baseline rigid arcade handler has been replaced by independently reconstructed C2 ordinary-road motion, feature collision detection, coupled contact impulses, persistent WAM crush, component damage, structural bending/splitting, and physical detachable parts. Equations are checked against the installed executable rather than inferred from C1. The ordinary stock-car crash path is integrated and validated numerically and in Chromium. Original binaries, decompiler databases and disassembly stay outside Git.
 
 ## Evidence and binary revisions
 
@@ -60,7 +60,7 @@ GENERAL crush constants verified in original data/binary: radius squared0.01, mi
 
 The full mechanics/damage parsers and independent crush/contact kernels are implemented and tested. The reconstructed kernels now run through `src/physics/simulation.ts` at 40 ms, with source mechanics and full three-dimensional COM/angular state. Original damage scaling, detachment thresholds/joints, wheel-force/drivetrain branches and collision-hull deformation are integrated below. No acceptance gate is considered met by standalone parser or math tests alone.
 
-## Integrated evidence and remaining gates
+## Integrated evidence
 
 The runtime reads original four-wheel mechanics, six damage programs and WAM actor records. Mass, COM, source diagonal inertia, suspension give/damping, traction angles, rolling resistance, gears/redline/torque and per-material road coefficients feed the simulation. Separate rendering and collision-shape crush paths follow C2: WAM104 intentionally preserves shapes; ordinary root-shape crush suppresses X and positive Y, retains wheel envelope stops, and chooses nearest linked model softness. Mesh dents do not define the physical hull.
 
@@ -121,3 +121,15 @@ Verified timed handlers: invulnerability `0x4dc630/0x4dc660` sets both crush and
 APO handlers `0x4dc030`, `0x4dc1e0`, `0x4dc2d0` use three original integer parameters. A single full type tries both neighboring types in one randomly selected direction; all-type requests never redirect. Negative level gains fill available slots. Slot gains clamp to GENERAL maxima. Entirely unchanged requests receive the distinct GENERAL level/slot substitution award. These pickups feed the existing armour, engine power and offense factors.
 
 BendWheels `0x435260`, UnBendWheels `0x43a970` and full repair `0x439460` reset suspension via `0x41fc80`. Axle stiffness/damping derive from current mass and wheel-Z/COM-Z ratio and authored give/damping. Temporary modifiers are setter events; reapplying them every frame would incorrectly undo a bend/repair reset. Splitting `0x42e230` preserves stiffness/damping/height and resets old wheel lengths to ride height. Friction-angle normalization remains unchanged. Auxiliary `bb2.minY` includes wheel ray length but is not physical chassis geometry; the browser's independent wheel queries cover it. Analytical and integrated original-car regressions cover these state changes.
+
+## Final ordinary-motion branches and validation
+
+Crest downforce (`0x419c6a`..`0x419e5d`) preserves the previous grounded count and a latch: four prior contacts plus two currently extended front wheels trigger a front-center, actor-Y wheelbase support probe. Missing support latches the COM-dependent downforce reduction and pitch moment; front recontact clears it. Split clears the prior grounded count.
+
+The stop timer at `0x677c98` is BSS-initialized to zero and shared process-wide, surviving car/race loads. `0x41bbae`..`0x41bc32` advances it once per actual WheelForces invocation, including failed stationary gates; skipped XZ-split motion does not advance it. Strict thresholds, the100 sentinel, bounce rejection and float32 accumulation are preserved.
+
+Material bumpiness (`0x418f8e`..`0x419068`) changes wheel travel before suspension/damage tests. It samples metric wheel position **plus** normal×raw ray distance, folds signed/truncated512 phases at2048/1024, folds the sum again, subtracts400 and clips atzero. Distance offset is delta×authored bumpiness×2.358490564802196e-5×localNormalY. Source float spills are retained. Dedicated numerical tests cover crest force/torque/latching, the shared timer and spatial bump/suspension effects.
+
+Final checks:375 tests pass, production build and Chromium stock/Advanced driving/race regression pass, and the read-only stock robustness sweep completes312 impact/repair cases across52 cars (120 bends) without failure. Native hull comparisons cover59 stock shapes plus bent Eagle/Buggy hulls. Coplanar dangling edges and planes without auxiliary polygons remain collision features, matching the executable rather than imposing an additional manifold-mesh requirement. The separate15-scenario report records physical/damage/deformation/part state. Original executable hashes are unchanged, and no original bytes are tracked in Git.
+
+MCP validates keyboard driving, head-on/oblique walls, head-on/side car contacts, physical body splitting and thrown/jointed pieces, held/automatic/full repair, multiple stock masses, and original damage-powerup collection. Invulnerability blocks crush/components; granite protection50 leaves mass unchanged; magnifier5 feeds attacker scaling; free repair restores engine damage30→0 without spending; APO collection updates original factors. No fatal console messages or WebGL errors were observed. Rendering smoothing, inherited/default materials and large-car camera framing are corrected. Remaining special-volume/oil/platform and custom sphere/wire dispatch are unsupported paths; campaign, AI, animation and remaining effects retain the full-game limits documented separately.

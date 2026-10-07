@@ -146,11 +146,13 @@ try {
               ? lap + 1
               : lap + 2
             : lap + 1;
-        const expectedCheckpoint = gate === checkpoints.length - 1 ? 0 : gate + 1;
+        const expectedCheckpoint =
+          gate === checkpoints.length - 1 ? 0 : gate + 1;
         const started = performance.now();
         while (
           race.status === "racing" &&
-          (race.lap !== expectedLap || race.nextCheckpoint !== expectedCheckpoint) &&
+          (race.lap !== expectedLap ||
+            race.nextCheckpoint !== expectedCheckpoint) &&
           performance.now() - started < 3000
         ) {
           await new Promise((r) => setTimeout(r, 25));
@@ -172,7 +174,8 @@ try {
         if (
           race.lap !== expectedLap ||
           race.nextCheckpoint !== expectedCheckpoint ||
-          race.status !== "racing" && !(lap === race.laps - 1 && gate === checkpoints.length - 1)
+          (race.status !== "racing" &&
+            !(lap === race.laps - 1 && gate === checkpoints.length - 1))
         ) {
           failures.push(result);
           return {
