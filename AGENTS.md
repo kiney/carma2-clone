@@ -4,7 +4,7 @@
 
 - All authored application UI must be English, regardless of the language of the user's prompt. This includes menus, HUD text, debug tools, tooltips, accessibility labels, loading/status messages and errors. Keep `index.html` marked `lang="en"`. Preserve original proper names and asset identifiers.
 - Conversation with the user may remain German. Do not infer a UI localization request from a German conversation.
-- Use English for new code comments and technical documentation unless the user requests another language. Preserve user-maintained TODO entries and priorities.
+- Keep all project documentation in English, including README, TODO entries, workflow policies and reverse-engineering notes. Translate newly reported German issues into English when documenting them. Use English for new code comments. Preserve user-maintained TODO identifiers, priorities, status meanings and technical evidence; do not retain German prose solely because an entry was authored by the user. A later explicit localization request may override this policy.
 - For longer responses, start with an Executive Summary stating the outcome, decisions and important limitations. Omit it for short responses. Give concise progress updates during extended work; report actual results and validation.
 
 ## Scope and autonomy
