@@ -2,6 +2,8 @@ import { Vector3 } from "three";
 import type { CarMechanics, MechanicsWheel } from "../mechanics";
 import type { RigidState } from "./contact";
 import type { SuspensionPowerupValues } from "./upgrades";
+import type { SurfaceModifier } from "./surfaces";
+import type { RigidBody } from "./contact";
 
 /** Local HW binary 0x418870, 0x415320, 0x417600 and 0x41fc80.
  * Independently expressed equations; positions are model units, forces use S=6.9.
@@ -48,6 +50,11 @@ export interface MotionState extends RigidState {
   groundedWheelCount?: number;
   /** Source car+0x4c0; bouncing cars cannot enter the stationary clamp. */
   bounceRate?: number;
+  /** Original special-volume gravity/viscosity, evaluated before WheelForces. */
+  volumeGravityFactor?: number;
+  volumeDragFactor?: number;
+  volumeSurface?: SurfaceModifier;
+  underwaterAbility?: boolean;
 }
 /** Source static Float32 at 0x677c98. Advance once per WheelForces call, in
  * active-car order; cars whose WheelForces is skipped do not advance it. */
@@ -72,6 +79,10 @@ export interface MotionGroundHit {
   rollingResistance: number;
   downforce: number;
   bumpiness?: number;
+  body?: RigidBody;
+  point?: Vector3;
+  velocity?: Vector3;
+  surface?: import("../world").Surface;
 }
 export interface MotionGround {
   raycast(
@@ -79,6 +90,14 @@ export interface MotionGround {
     direction: Vector3,
     maxDistance: number,
   ): MotionGroundHit | null;
+  /** Native wheel spring reaction into a drivable physics object418870. */
+  springReaction?(hit: MotionGroundHit, impulse: Vector3): void;
+  supports?(owners: readonly (RigidBody | undefined)[]): void;
+  worldWheelContact?(wheels: readonly { hit: MotionGroundHit | null | undefined; load:number; point?:Vector3 }[]):void;
+  sampleOil?(
+    wheelPointsMetric: readonly (Vector3 | null)[],
+    grounded: readonly boolean[],
+  ): readonly number[];
 }
 export interface MotionParameters {
   mass: number;
@@ -123,6 +142,7 @@ export interface MotionDebug {
   force: Vector3;
   torque: Vector3;
   downforce: number;
+  oilWheelFactors?: readonly number[];
 }
 const clamp = (v: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, v));
@@ -239,7 +259,7 @@ export function createMotionParameters(
     speedRevsRatio: (source.speedAtRedline * 4) / 9 / source.gearCount / 6000,
     forceTorqueRatio: mass * source.highestGearAcceleration * source.gearCount,
     downforceBalanceSpeed: source.root.downforceBalanceSpeed,
-    unsupported: ["special volumes/water", "oil", "dynamic platform reactions"],
+    unsupported: ["native groove interruption"],
   };
 }
 
@@ -473,6 +493,9 @@ export function applyVehicleForces(
   const caps: MotionDebug["wheelCapacities"] = [0, 0, 0, 0];
   const actual: MotionDebug["wheelTyreForces"] = [0, 0, 0, 0];
   const hits: Array<MotionGroundHit | null> = [];
+  const wheelPoints: Array<Vector3 | null> = [];
+  const wheelSmashPoints: Array<Vector3|undefined> = [];
+  const wheelGrounded: boolean[] = [];
   const rearDirection = new Vector3(),
     frontDirection = new Vector3();
   let grounded = 0,
@@ -527,6 +550,8 @@ export function applyVehicleForces(
       axle = i >> 1;
     if (s.wheelEnabled?.[i] === false) {
       hits[i] = null;
+      wheelPoints[i] = null;
+      wheelGrounded[i] = false;
       s.wheelLengths[i] = p.suspensionLength[axle];
       continue;
     }
@@ -535,7 +560,18 @@ export function applyVehicleForces(
       .multiplyScalar(1 / S)
       .applyQuaternion(s.orientation)
       .add(s.position);
-    const hit = ground.raycast(start, rayDirection, rayLength / S);
+    const rawHit = ground.raycast(start, rayDirection, rayLength / S);
+    wheelPoints[i] = start.clone().multiplyScalar(S);
+    wheelGrounded[i] = false;
+    const hit =
+      rawHit && s.volumeSurface
+        ? {
+            ...rawHit,
+            friction: s.volumeSurface.tyreFriction,
+            downforce: s.volumeSurface.downforce,
+            bumpiness: s.volumeSurface.bumpiness,
+          }
+        : rawHit;
     hits[i] = hit;
     let length = hit ? hit.distance * S : 2 * rayLength;
     if (hit?.bumpiness)
@@ -555,6 +591,7 @@ export function applyVehicleForces(
       length = p.suspensionLength[axle];
     else {
       normalSum.add(hit.normal.clone().applyQuaternion(inv));
+      wheelGrounded[i] = true;
       grounded++;
       length -= damageOffset;
       let load =
@@ -572,10 +609,31 @@ export function applyVehicleForces(
       F.y += loads[i];
       T.x -= loads[i] * (w.z - p.centerOfMass.z);
       T.z += loads[i] * (w.x - p.centerOfMass.x);
+      if (loads[i] > 0)
+        ground.springReaction?.(
+          hit,
+          new Vector3(0, (-loads[i] * dt) / S, 0).applyQuaternion(
+            s.orientation,
+          ),
+        );
     }
     s.wheelLengths[i] = length;
+    if(wheelGrounded[i])wheelSmashPoints[i]=start.clone().multiplyScalar(S).addScaledVector(rayDirection,length).multiplyScalar(Math.fround(1/S));
   }
-  F.add(new Vector3(0, -p.mass * 10, 0).applyQuaternion(inv));
+  ground.supports?.(
+    hits.map((hit, i) => (wheelGrounded[i] ? hit?.body : undefined)),
+  );
+  ground.worldWheelContact?.(hits.map((hit,i)=>({hit:wheelGrounded[i]?hit:null,load:loads[i],point:wheelSmashPoints[i]})));
+  F.add(
+    new Vector3(
+      0,
+      -p.mass * 10 * (s.volumeGravityFactor ?? 1),
+      0,
+    ).applyQuaternion(inv),
+  );
+  // GetWheelOil0x4a72d0 tests authored wheel positions in metric coordinates;
+  // per-wheel oil values multiply native capacities before tyre allocation.
+  const oil = ground.sampleOil?.(wheelPoints, wheelGrounded) ?? [1, 1, 1, 1];
   if (
     input.steer === 0 &&
     (s.wheelLengths[2] < p.suspensionLength[1] ||
@@ -695,15 +753,19 @@ export function applyVehicleForces(
       Math.sqrt(loads[0]) *
       muRear *
       (s.tyreGripFactor ?? 1) *
-      (hits[0]?.friction ?? 1);
+      (hits[0]?.friction ?? 1) *
+      (oil[0] ?? 1);
     caps[1] =
       Math.sqrt(loads[1]) *
       muRear *
       (s.tyreGripFactor ?? 1) *
-      (hits[1]?.friction ?? 1);
+      (hits[1]?.friction ?? 1) *
+      (oil[1] ?? 1);
     const rearCapacity = caps[0] + caps[1];
     if (
       s.tractionControl !== false &&
+      oil[0] === 1 &&
+      oil[1] === 1 &&
       2 * rearDemand > rearCapacity &&
       accelerationForce > 0 &&
       s.tractionRpm > 1000 &&
@@ -793,12 +855,14 @@ export function applyVehicleForces(
       Math.sqrt(loads[2]) *
       p.mu[1] *
       (s.tyreGripFactor ?? 1) *
-      (hits[2]?.friction ?? 1);
+      (hits[2]?.friction ?? 1) *
+      (oil[2] ?? 1);
     caps[3] =
       Math.sqrt(loads[3]) *
       p.mu[1] *
       (s.tyreGripFactor ?? 1) *
-      (hits[3]?.friction ?? 1);
+      (hits[3]?.friction ?? 1) *
+      (oil[3] ?? 1);
     const frontAllocation = allocateTyrePair(
       frontDemand,
       caps[2],
@@ -852,7 +916,7 @@ export function applyVehicleForces(
   // original strict boundaries and per-car accumulation order.
   timer = Math.fround(timer + Math.fround(dt));
   context.stopTimer = timer > 1 ? 100 : timer;
-  const drag = dt * 0.0005000000237487257;
+  const drag = dt * 0.0005000000237487257 * (s.volumeDragFactor ?? 1);
   s.velocity.multiplyScalar(
     Math.max(0, 1 - (s.velocity.length() * drag * S) / p.mass),
   );
@@ -928,5 +992,6 @@ export function applyVehicleForces(
     force: F,
     torque: T,
     downforce,
+    oilWheelFactors: oil,
   };
 }

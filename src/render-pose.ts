@@ -60,6 +60,12 @@ export class RenderPoses {
       },
     });
     this.sample(body, alpha, actor.position, actor.quaternion);
+    if (actor.parent) {
+      actor.parent.updateWorldMatrix(true,false);
+      actor.position.applyMatrix4(actor.parent.matrixWorld.clone().invert());
+      const parentRotation = actor.parent.getWorldQuaternion(new Quaternion());
+      actor.quaternion.premultiply(parentRotation.invert());
+    }
     actor.updateMatrixWorld(true);
   }
 

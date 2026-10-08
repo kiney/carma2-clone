@@ -27,6 +27,8 @@ export interface RigidProperties {
   objectFriction?: number; // Original default is 0.4.
   worldFriction: number;
   rotationLocked?: boolean;
+  /** Native dormant object/world anchor: no velocity response until activated. */
+  immovable?: boolean;
 }
 
 export interface RigidBody {
@@ -45,6 +47,7 @@ export interface Contact {
   faceFriction?: number;
   /** Original world feature flags0=edge,1=body vertex,2=world vertex;5=pair. */
   sourceType?: number;
+  sourceSurface?: import("../world").Surface;
 }
 
 export interface ContactImpact extends Contact {
@@ -106,7 +109,8 @@ function lever(
 }
 
 function inverseInertia(body: RigidBody, torque: Vector3, target: Vector3) {
-  if (body.properties.rotationLocked) return target.set(0, 0, 0);
+  if (body.properties.rotationLocked || body.properties.immovable)
+    return target.set(0, 0, 0);
   rotate(torque, body.state.orientation, target, true);
   const inertia = body.properties.inertia;
   target.set(target.x / inertia.x, target.y / inertia.y, target.z / inertia.z);
@@ -131,11 +135,16 @@ export function applyImpulse(
   point: Vector3,
   impulse: Vector3,
 ): void {
+  if (properties.immovable) return;
   lever(state, properties, point, scratchLever);
   scratchTorque.crossVectors(scratchLever, impulse);
   inverseInertia({ state, properties }, scratchTorque, scratchDelta);
   state.velocity.addScaledVector(impulse, 1 / properties.mass);
   state.angularVelocity.add(scratchDelta);
+}
+
+export function inverseMass(body: RigidBody): number {
+  return body.properties.immovable ? 0 : 1 / body.properties.mass;
 }
 
 interface ContactRow {
@@ -162,7 +171,7 @@ function coupling(a: ContactRow[], b: ContactRow[]): number {
   for (const x of a) {
     for (const y of b) {
       if (x.body.state === y.body.state) {
-        value += x.direction.dot(y.direction) / x.body.properties.mass;
+        value += x.direction.dot(y.direction) * inverseMass(x.body);
         value += x.torque.dot(y.angularResponse);
       }
     }
@@ -381,13 +390,14 @@ function frictionResponse(
 ): { tangent: Vector3; response: Vector3; inverseMass: number } {
   const tangent = rotate(worldTangent, entry.candidate, new Vector3(), true);
   const torque = entry.localLever.clone().cross(tangent);
-  const response = entry.body.properties.rotationLocked
-    ? new Vector3()
-    : torque.clone().divide(entry.body.properties.inertia);
+  const response =
+    entry.body.properties.rotationLocked || entry.body.properties.immovable
+      ? new Vector3()
+      : torque.clone().divide(entry.body.properties.inertia);
   return {
     tangent,
     response,
-    inverseMass: 1 / entry.body.properties.mass + torque.dot(response),
+    inverseMass: inverseMass(entry.body) + torque.dot(response),
   };
 }
 function frictionApply(
@@ -399,11 +409,11 @@ function frictionApply(
 ): void {
   entry.body.state.velocity.addScaledVector(
     worldTangent,
-    magnitude / entry.body.properties.mass,
+    magnitude * inverseMass(entry.body),
   );
   entry.localVelocity.addScaledVector(
     tangent,
-    magnitude / entry.body.properties.mass,
+    magnitude * inverseMass(entry.body),
   );
   entry.body.state.angularVelocity.addScaledVector(
     rotate(response, entry.body.state.orientation, new Vector3()),
@@ -439,7 +449,8 @@ function resolveFriction(
   const tangent = slip.multiplyScalar(-1 / speed);
   const responseA = frictionResponse(a, tangent);
   const responseB = b ? frictionResponse(b, tangent) : undefined;
-  let inverseMass = responseA.inverseMass + (responseB?.inverseMass ?? 0);
+  let effectiveInverseMass =
+    responseA.inverseMass + (responseB?.inverseMass ?? 0);
   if (!b) {
     const normal = rotate(
       contact.normal,
@@ -464,16 +475,16 @@ function resolveFriction(
       if (speed < 0.001) return false;
       responseA.tangent.copy(a.localVelocity).multiplyScalar(-1 / speed);
       tangent.copy(responseA.tangent).applyQuaternion(a.candidate);
-      inverseMass = 1 / a.body.properties.mass;
+      effectiveInverseMass = inverseMass(a.body);
     }
   }
-  if (Math.abs(inverseMass) <= 0.0001) return false;
+  if (Math.abs(effectiveInverseMass) <= 0.0001) return false;
   const friction = b
     ? (1 + (a.body.properties.objectFriction ?? 0.4)) *
       (1 + (b.body.properties.objectFriction ?? 0.4))
     : (1 + a.body.properties.worldFriction) * (contact.faceFriction ?? 1);
   const magnitude = Math.min(
-    speed / inverseMass,
+    speed / effectiveInverseMass,
     Math.max(0, FRICTION_SCALE * contact.normalImpulse * friction),
   );
   contact.tangentImpulse.copy(tangent).multiplyScalar(magnitude);
@@ -599,7 +610,7 @@ export function resolveContacts(
       const body = entry.body;
       body.state.velocity.addScaledVector(
         entry.direction,
-        contact.normalImpulse / body.properties.mass,
+        contact.normalImpulse * inverseMass(body),
       );
       inverseInertia(body, entry.torque, angularDelta);
       body.state.angularVelocity.addScaledVector(

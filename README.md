@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians, with reconstructed ordinary-road vehicle dynamics, collision impulses, persistent crush, component damage and physical vehicle parts. It supports stock and Advanced content, but it does not reproduce every original game system or campaign behavior. Game assets are read from the installation and are not included here.
+This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians. Ordinary-road vehicle dynamics, collision impulses, persistent crush, component damage and physical vehicle parts have numerical, headless, and prior browser checks. Water, oil, moving platforms, world destruction, noncars and mines now have source-based runtime paths and headless coverage; browser regression for this newer integration remains pending. Game assets are read from the installation and are not included here.
 
 ## Run it
 
@@ -34,6 +34,8 @@ Choose a race and car, then select **Load Race**. The browser menus and HUD are 
 | Space                 | Handbrake                                  |
 | R                     | Recover to the track for 250 credits       |
 | Hold E / double tap E | Repair / automatic repair using credits    |
+| Tab                   | Select a charged ability                   |
+| F                     | Use the selected ability                   |
 | C                     | Cycle chase, cockpit, and overhead cameras |
 | M                     | Show or hide the minimap                   |
 | Escape                | Pause or return to the menu                |
@@ -41,11 +43,11 @@ Choose a race and car, then select **Load Race**. The browser menus and HUD are 
 
 Vehicle mechanics and WAM data drive suspension, tyres, steering, gears, mass/inertia, localized dents, structural bending and body splitting. Twelve component damage units affect handling; detached parts have their own rigid state and joints. Held repair restores eligible bodywork and charges repaired component levels; split bodywork requires the full-repair pickup or reloading; wasting and its countdown persist until reloading. The ordinary physics equations are independently reconstructed from the local C2 executable; see [the evidence notes](docs/c2-physics-re.md).
 
-The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, weighted random, engine and grip pickups, plus invulnerability, granite protection, damage magnification, free repairs and permanent armour/power/offense upgrades. Unsupported powerup effects show an explicit notification when collected. Race objectives are approximations; unsupported smash missions are labelled free driving.
+The engine also includes graph-following opponents, checkpoint/lap races, textured pedestrians with simple behavior, engine, impact, and checkpoint sounds, and original credit, repair, time, weighted random, engine and grip pickups, plus invulnerability, granite protection, damage magnification, free repairs and permanent armour/power/offense upgrades. Actions 34/35 provide charged mine/mortar and oil abilities. Mines use the GENERAL mass and timed source lifecycle; mine sphere contacts are still approximated with a sampled hull, and explosions have no radial damage. Water and oil use reconstructed source formulas. Unsupported powerup effects show an explicit notification when collected. Race objectives are approximations; unsupported smash missions are labelled free driving.
 
 ## Tests
 
-Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; it exercises driving and checkpoints on stock and Advanced content and saves screenshots under ignored test artifacts. `npm run test:crashes` records 15 deterministic original-car plane/pair scenarios, including transforms, mass/COM/inertia, impulses, velocities, damage, deformation and part states in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps312 original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
+Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; existing checks exercise driving and checkpoints on stock and Advanced content. Browser regression for the newer water/oil, world destruction, noncar, platform, and mine paths remains pending. Screenshots are saved under ignored test artifacts. `npm run test:crashes` records original-car plane/pair scenarios in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
 
 ## Asset and license notes
 

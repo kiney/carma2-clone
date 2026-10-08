@@ -32,6 +32,7 @@ export interface HullContact {
   /** Original emitter flags: world edge0, body vertex1, world vertex2, pair5. */
   contactTypes?: number[];
   faceFriction?: number;
+  sourceSurface?: import("../world").Surface;
 }
 export interface WorldSurfaceOptions {
   materialIdentifier?: string;
@@ -47,6 +48,8 @@ export interface WorldSurfaceOptions {
   skipWorldEdges?: boolean;
   /** Prior object+ed disables world-vertex tests even without current recovery. */
   skipWorldVertices?: boolean;
+  sourceSurface?: import("../world").Surface;
+  edgeOnly?: boolean;
 }
 
 export interface WorldRecoverySurface extends WorldSurfaceOptions {
@@ -92,7 +95,7 @@ function recoveryRay(
     surface: WorldRecoverySurface;
   } | null = null;
   for (const surface of surfaces) {
-    if (/^[!>]/.test(surface.materialIdentifier ?? "")) continue;
+    if (surface.edgeOnly || /^[!>?]/.test(surface.materialIdentifier ?? "")) continue;
     const { a, b, c } = surface;
     const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
     if (!normal.lengthSq()) continue;
@@ -203,6 +206,7 @@ export function recoverWorldContacts(
       measures: [0],
       contactTypes: [1],
       faceFriction: selected.surface.faceFriction,
+      sourceSurface: selected.surface.sourceSurface,
     });
   }
   return result;
@@ -1354,6 +1358,7 @@ export function sweepHullTriangle(
   const finiteTriangle = new Triangle(a, b, c);
   const vertexContacts: HullContact[] = [];
   for (const i of old.vertexOrder ?? old.vertices.map((_, index) => index)) {
+    if(options.edgeOnly) break;
     if (options.suppressedVertices?.has(i)) continue;
     const start = old.vertices[i];
     const direction = predicted.vertices[i].clone().sub(start);
@@ -1397,6 +1402,7 @@ export function sweepHullTriangle(
   const triangleVertices = [a, b, c];
   const faceContacts: HullContact[] = [];
   for (let i = 0; i < triangleVertices.length; i++) {
+    if(options.edgeOnly) break;
     if (options.skipWorldEdges || options.skipWorldVertices) break;
     // World vertices are emitted as endpoints of an enabled triangle edge.
     if (
@@ -1440,6 +1446,7 @@ export function sweepHullTriangle(
       ]);
   if (retained.length)
     return {
+      sourceSurface:options.sourceSurface,
       normal: retained[0].normal,
       points: retained.flatMap((contact) => contact.points),
       pointsB: retained.map(

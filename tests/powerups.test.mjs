@@ -15,7 +15,7 @@ function table(definitions) {
       d.icon ?? "none",
       "-1",
       String(d.duration ?? -1),
-      "0",
+      String(d.initialValue ?? 0),
       String(d.action),
       String(d.floats?.length ?? 0),
       ...(d.floats ?? []).map(String),
@@ -28,6 +28,94 @@ function table(definitions) {
   }
   return lines.join("\r\n");
 }
+
+test("original negative charge count becomes edge-operated oil inventory and expires on its fifth use", async () => {
+  const root = new THREE.Group();
+  const actor = new THREE.Group();
+  actor.name = "&£000001";
+  root.add(actor);
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([{ action: 35, initialValue: -5, message: "Oil ability" }]),
+    },
+    root,
+  ).init();
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([], { timeLimit: 60 });
+  const events = [];
+  system.update(0, car, race, (event) => events.push(event));
+  assert.equal(events[0].kind, "ability");
+  assert.equal(system.abilities.get(0).charges, 5);
+  assert.equal(
+    system.activateAbility(race, () => {}, true),
+    false,
+    "Wasted cars cannot activate",
+  );
+  race.status = "completed";
+  assert.equal(
+    system.activateAbility(race),
+    false,
+    "Finished races cannot activate",
+  );
+  race.status = "racing";
+  let uses = 0;
+  for (let i = 0; i < 5; i++)
+    assert.equal(
+      system.activateAbility(race, (event) => {
+        assert.equal(event.kind, "ability-use");
+        uses++;
+      }),
+      true,
+    );
+  assert.equal(uses, 5);
+  assert.equal(system.activateAbility(race), false);
+  assert.equal(system.abilities.size, 0);
+  assert.equal(system.selectedAbility, null);
+});
+
+test("action 34 shares charged inventory and actions 12/30 dispatch crash events", async () => {
+  const system = await syntheticEffects(
+    [
+      { action: 34, initialValue: -3, message: "Charged ability" },
+      { action: 12, message: "Native crush" },
+      { action: 30, message: "Mine ability" },
+    ],
+    [0, 4, 8],
+  );
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  const events = [];
+  system.update(0, car, race, (event) => events.push(event));
+  car.position.x = 4;
+  system.update(0, car, race, (event) => events.push(event));
+  car.position.x = 8;
+  system.update(0, car, race, (event) => events.push(event));
+  assert.equal(system.abilities.get(0).charges, 3);
+  assert.deepEqual(
+    events.map(({ kind, definition }) => [kind, definition.action]),
+    [["ability", 34], ["crash", 12], ["crash", 30]],
+  );
+  assert.equal(system.activateAbility(race), true);
+  assert.equal(system.abilities.get(0).charges, 2);
+  system.dispose();
+});
+
+test("underwater ability renewal and cancellation own their native timed modifier", async () => {
+  const root = new THREE.Group();
+  const actor = new THREE.Group();
+  actor.name = "&£000001";
+  root.add(actor);
+  const system = await new PowerupSystem(
+    { text: async () => table([{ action: 10, duration: 5 }]) },
+    root,
+  ).init();
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([], { timeLimit: 60 });
+  assert.equal(system.update(0, car, race).underwaterAbility, true);
+  assert.equal(system.update(4.99, car, race).underwaterAbility, true);
+  assert.equal(system.update(0.02, car, race).underwaterAbility, false);
+});
 
 test("parses sequential definitions and variable float/integer parameters", () => {
   const parsed = parsePowerups(
@@ -103,6 +191,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     damageMultiplier: 1,
     protection: 1,
     timerFrozen: false,
+    underwaterAbility: false,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -497,6 +586,10 @@ test(
     assert.equal(definitions[9].action, 7);
     assert.equal(definitions[12].action, 11);
     assert.equal(definitions[5].action, 9);
+    assert.equal(definitions[52].action, 34);
+    assert.equal(definitions[52].initialValue, -10);
+    assert.equal(definitions[96].action, 34);
+    assert.equal(definitions[96].initialValue, -3);
   },
 );
 
@@ -551,7 +644,7 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      32,
+      27,
       "New City warns once for each unsupported definition",
     );
     assert.equal(system.group.children.length, system.pickups.length);

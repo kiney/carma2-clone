@@ -74,8 +74,11 @@ export class Assets {
       texture.generateMipmaps = true;
       texture.flipY = false;
       texture.needsUpdate = true;
-      texture.name = map.name;
-      target.set(key(map.name), texture);
+      // Standalone original PIX files (including OIL.PIX) may omit an
+      // internal identifier; native lookup then uses the filename.
+      const identifier = map.name || path.split("/").pop()!;
+      texture.name = identifier;
+      target.set(key(identifier), texture);
     }
     return maps;
   }
@@ -204,19 +207,24 @@ export class Assets {
     });
     // BRender SetupDefaultMaterial: white, opaque and lit. DAT index0 means
     // actor/inherited material; it does not mean an unresolved named material.
-    const defaultMaterial = new THREE.MeshLambertMaterial({color:0xffffff});
-    defaultMaterial.name="C2 default material";
-    defaultMaterial.userData.c2Flags=1;
+    const defaultMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    defaultMaterial.name = "C2 default material";
+    defaultMaterial.userData.c2Flags = 1;
     const geometries = new Map<
       string,
-      { geometry: THREE.BufferGeometry; materials: THREE.Material[]; slots:number[] }
+      {
+        geometry: THREE.BufferGeometry;
+        materials: THREE.Material[];
+        slots: number[];
+      }
     >();
     for (const [name, model] of models) {
       const geometry = createModelGeometry(model);
-      const slots=[...new Set(model.faces.map((f) => f.material))];
-      const used = slots.map(
-        (index) =>
-          index===0 ? defaultMaterial : materials.get(key(model.materials[index - 1] || "")) ?? fallback,
+      const slots = [...new Set(model.faces.map((f) => f.material))];
+      const used = slots.map((index) =>
+        index === 0
+          ? defaultMaterial
+          : (materials.get(key(model.materials[index - 1] || "")) ?? fallback),
       );
       geometries.set(name, { geometry, materials: used, slots });
     }
@@ -266,7 +274,9 @@ export class Assets {
           const override = mat ? materials.get(key(mat)) : undefined;
           const mesh = new THREE.Mesh(
             data.geometry,
-            data.materials.map((material,index)=>data.slots[index]===0 ? override ?? material : material),
+            data.materials.map((material, index) =>
+              data.slots[index] === 0 ? (override ?? material) : material,
+            ),
           );
           mesh.name = node.model;
           object.add(mesh);

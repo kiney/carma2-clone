@@ -32,6 +32,7 @@ export interface PowerupModifiers {
   damageMultiplier: number;
   protection: number;
   timerFrozen: boolean;
+  underwaterAbility: boolean;
 }
 
 export interface PowerupEvent {
@@ -42,6 +43,9 @@ export interface PowerupEvent {
     | "engine"
     | "effect"
     | "upgrade"
+    | "ability"
+    | "ability-use"
+    | "crash"
     | "unsupported";
   name: string;
   definition: PowerupDefinition;
@@ -137,7 +141,11 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  action: 5 | 6 | 8 | 9 | 21 | 22 | 27;
+  action: 5 | 6 | 8 | 9 | 10 | 21 | 22 | 27;
+}
+export interface PowerupAbility {
+  definition: PowerupDefinition;
+  charges: number;
 }
 type AssetTextSource = { text(path: string): Promise<string> };
 
@@ -146,6 +154,7 @@ type AssetTextSource = { text(path: string): Promise<string> };
  * The first two digits after the marker select the POWERUP.TXT record.
  * Supports weighted random effects, credits, repair, time bonuses/freezing,
  * timed engine/grip and damage modifiers, permanent upgrades and cancellation.
+ * Mine and crush actions are dispatched to the simulation as crash events.
  * Other actions collect with an explicit unsupported event.
  */
 export class PowerupSystem {
@@ -156,10 +165,13 @@ export class PowerupSystem {
   private damageMultiplier = 1;
   private protection = 1;
   private timerFrozen = false;
+  private underwaterAbility = false;
   readonly group = new THREE.Group();
   readonly definitions: PowerupDefinition[] = [];
   readonly warnings: string[] = [];
   readonly pickups: Pickup[] = [];
+  readonly abilities = new Map<number, PowerupAbility>();
+  selectedAbility: number | null = null;
   private active: ActiveEffect[] = [];
   private previous?: THREE.Vector3;
   private unsupportedWarned = new Set<number>();
@@ -206,7 +218,7 @@ export class PowerupSystem {
         continue;
       }
       if (
-        ![0, 4, 5, 6, 7, 8, 9, 11, 21, 22, 27, 46, 47, 51].includes(
+        ![0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 27, 30, 34, 35, 46, 47, 51].includes(
           definition.action,
         )
       ) {
@@ -290,6 +302,7 @@ export class PowerupSystem {
       damageMultiplier: this.damageMultiplier,
       protection: this.protection,
       timerFrozen: this.timerFrozen,
+      underwaterAbility: this.underwaterAbility,
     };
     if (this.suspension) modifiers.suspension = this.suspension;
     return modifiers;
@@ -298,11 +311,46 @@ export class PowerupSystem {
   resetPath(position: THREE.Vector3): void {
     this.previous = position.clone();
   }
+  /** Keyboard powerups use an input edge, not an every-frame cooldown.
+   * Negative initialValue is the native charge count; successful calls consume
+   * one even when an oil allocator refuses unsuitable placement. */
+  activateAbility(
+    race: RaceState,
+    onEvent?: (event: PowerupEvent) => void,
+    knackered = false,
+  ): boolean {
+    if (race.status !== "racing" || knackered || this.selectedAbility === null)
+      return false;
+    const ability = this.abilities.get(this.selectedAbility);
+    if (!ability || ability.charges <= 0) return false;
+    onEvent?.({
+      kind: "ability-use",
+      name: ability.definition.message,
+      definition: ability.definition,
+    });
+    ability.charges--;
+    if (!ability.charges) {
+      this.abilities.delete(ability.definition.index);
+      this.selectedAbility = this.abilities.keys().next().value ?? null;
+    }
+    return true;
+  }
+
+  cycleAbility(): PowerupAbility | undefined {
+    const available = [...this.abilities.keys()];
+    if (!available.length) return undefined;
+    const next =
+      (available.indexOf(this.selectedAbility ?? -1) + 1) % available.length;
+    this.selectedAbility = available[next];
+    return this.abilities.get(this.selectedAbility);
+  }
 
   dispose(): void {
     for (const pickup of this.pickups)
       pickup.object.parent?.remove(pickup.object);
     this.pickups.length = 0;
+    this.abilities.clear();
+    this.selectedAbility = null;
     this.cancelEffects();
   }
 
@@ -318,6 +366,9 @@ export class PowerupSystem {
         break;
       case 8:
         this.timerFrozen = false;
+        break;
+      case 10:
+        this.underwaterAbility = false;
         break;
       case 22:
         this.damageMultiplier = 1;
@@ -359,6 +410,23 @@ export class PowerupSystem {
     const def = this.definitions[index];
     if (!def) return;
     switch (def.action) {
+      case 34:
+      case 35: {
+        const charges = Math.max(0, -def.initialValue);
+        this.abilities.set(index, { definition: def, charges });
+        this.selectedAbility = index;
+        onEvent?.({
+          kind: "ability",
+          name: def.message,
+          definition: def,
+          amount: charges,
+        });
+        break;
+      }
+      case 12:
+      case 30:
+        onEvent?.({ kind: "crash", name: def.message, definition: def });
+        break;
       case 4: {
         // Repeated indices in the source table are intentional probability weights.
         const choice =
@@ -389,11 +457,13 @@ export class PowerupSystem {
       case 5:
       case 6:
       case 8:
+      case 10:
       case 22:
       case 27: {
         if (def.action === 5) this.invulnerable = true;
         if (def.action === 6) this.freeRepairs = true;
         if (def.action === 8) this.timerFrozen = true;
+        if (def.action === 10) this.underwaterAbility = true;
         if (def.action === 22) this.damageMultiplier = def.floatParams[0] ?? 1;
         if (def.action === 27) this.protection = def.floatParams[0] ?? 1;
         // A renewed effect owns its new timeout; an old timeout cannot undo it.

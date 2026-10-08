@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { DEFAULT_SURFACE, surfaceIndex } from "./physics/surfaces";
 import type { SurfaceModifier } from "./physics/surfaces";
+import { pointVelocity, type RigidBody } from "./physics/contact";
 export interface Surface {
   a: THREE.Vector3;
   b: THREE.Vector3;
@@ -13,6 +14,11 @@ export interface Surface {
   twoSided: boolean;
   materialFlags: number;
   faceFlags: number;
+  owner?: RigidBody;
+  actor?: THREE.Mesh;
+  faceIndex?: number;
+  enabled?: boolean;
+  collisionMode?: "solid" | "passthrough" | "edges";
 }
 /** A fixed broad phase over transformed original triangles. Geometry stays in C2 world units. */
 export class WorldCollision {
@@ -20,18 +26,63 @@ export class WorldCollision {
   private cellSize = 4;
   triangles = 0;
   constructor(
-    group: THREE.Object3D,
+    private sourceRoot: THREE.Object3D,
     private modifiers: readonly SurfaceModifier[] = [DEFAULT_SURFACE],
   ) {
+    this.rebuildStatic();
+  }
+  rebuildStatic() {
+    this.cells.clear();this.triangles=0;
+    for(const surface of this.makeSurfaces(this.sourceRoot)) this.indexSurface(surface);
+  }
+  private dynamic = new Map<
+    RigidBody,
+    {
+      actor: THREE.Object3D;
+      drivable: boolean;
+      surfaces: Surface[];
+      bounds: THREE.Box3;
+      pose: string;
+      worldCollider: boolean;
+    }
+  >();
+  private indexSurface(s: Surface) {
+    const { a, b, c } = s;
+    const minX = Math.floor(Math.min(a.x, b.x, c.x) / this.cellSize),
+      maxX = Math.floor(Math.max(a.x, b.x, c.x) / this.cellSize);
+    const minZ = Math.floor(Math.min(a.z, b.z, c.z) / this.cellSize),
+      maxZ = Math.floor(Math.max(a.z, b.z, c.z) / this.cellSize);
+    if ((maxX - minX + 1) * (maxZ - minZ + 1) > 25000) return;
+    for (let x = minX; x <= maxX; x++)
+      for (let z = minZ; z <= maxZ; z++) {
+        const key = `${x},${z}`;
+        let cell = this.cells.get(key);
+        if (!cell) this.cells.set(key, (cell = []));
+        cell.push(s);
+      }
+    this.triangles++;
+  }
+  private makeSurfaces(group: THREE.Object3D, owner?: RigidBody): Surface[] {
+    const surfaces: Surface[] = [];
     group.updateMatrixWorld(true);
     group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
+      if(object.userData.skipWorldCollision) return;
+      for(let node:THREE.Object3D|null=object;node;node=node.parent) if(node.userData.worldSmashDisabled) return;
+      if (!owner) {
+        let node: THREE.Object3D | null = object;
+        while (node) {
+          if (node.userData.dynamicBody) return;
+          node = node.parent;
+        }
+      }
       const geo = object.geometry as THREE.BufferGeometry;
       const pos = geo.getAttribute("position"),
         index = geo.index;
       if (!pos) return;
       const count = index ? index.count : pos.count;
       for (let i = 0; i < count; i += 3) {
+        if(geo.userData.worldSmashFaceModes?.[i/3] === "passthrough") continue;
         const vertices = [0, 1, 2].map((j) =>
           new THREE.Vector3()
             .fromBufferAttribute(pos, index ? index.getX(i + j) : i + j)
@@ -51,7 +102,11 @@ export class WorldCollision {
             ? object.material[materialGroup?.materialIndex ?? 0]
             : object.material
         ) as THREE.Material | undefined;
-        const s = {
+        const s: Surface = {
+          actor: object,
+          faceIndex: i / 3,
+          owner,
+          collisionMode: geo.userData.worldSmashFaceModes?.[i/3] ?? (material?.name.startsWith("?")?"edges":"solid"),
           a,
           b,
           c,
@@ -59,7 +114,12 @@ export class WorldCollision {
           minY: Math.min(a.y, b.y, c.y),
           maxY: Math.max(a.y, b.y, c.y),
           material: material?.name ?? "",
-          faceFlags: geo.userData.sourceFaceFlags?.[i / 3] ?? geo.userData.sourceFaces?.[Math.floor((index ? index.getX(i) : i) / 3)]?.flags ?? 0,
+          faceFlags:
+            geo.userData.sourceFaceFlags?.[i / 3] ??
+            geo.userData.sourceFaces?.[
+              Math.floor((index ? index.getX(i) : i) / 3)
+            ]?.flags ??
+            0,
           modifier:
             this.modifiers[surfaceIndex(material?.name ?? "")] ??
             DEFAULT_SURFACE,
@@ -70,27 +130,60 @@ export class WorldCollision {
             !!((material?.userData.c2Flags ?? 0) & 0x1800) ||
             material?.side === THREE.DoubleSide,
         };
-        const minX = Math.floor(Math.min(a.x, b.x, c.x) / 4),
-          maxX = Math.floor(Math.max(a.x, b.x, c.x) / 4),
-          minZ = Math.floor(Math.min(a.z, b.z, c.z) / 4),
-          maxZ = Math.floor(Math.max(a.z, b.z, c.z) / 4);
-        if ((maxX - minX + 1) * (maxZ - minZ + 1) > 25000) continue;
-        for (let x = minX; x <= maxX; x++)
-          for (let z = minZ; z <= maxZ; z++) {
-            const k = `${x},${z}`;
-            let cell = this.cells.get(k);
-            if (!cell) {
-              cell = [];
-              this.cells.set(k, cell);
-            }
-            cell.push(s);
-          }
-        this.triangles++;
+        surfaces.push(s);
       }
     });
+    return surfaces;
+  }
+  addDynamic(owner: RigidBody, actor: THREE.Object3D, drivable = true, worldCollider = false) {
+    this.dynamic.set(owner, {
+      actor,
+      drivable,
+      surfaces: [],
+      bounds: new THREE.Box3(),
+      pose: "",
+      worldCollider,
+    });
+    this.refreshDynamic(owner);
+  }
+  removeDynamic(owner: RigidBody) {
+    this.dynamic.delete(owner);
+  }
+  invalidateDynamic(owner?: RigidBody) {
+    for (const [body, entry] of this.dynamic) if (!owner || body === owner) entry.pose = "";
+    this.refreshDynamic(owner);
+  }
+  refreshDynamic(owner?: RigidBody) {
+    for (const [body, entry] of this.dynamic) {
+      if (owner && body !== owner) continue;
+      entry.actor.updateWorldMatrix(true,true);
+      const pose = [
+        ...entry.actor.matrixWorld.elements,
+      ].join(",");
+      if (entry.pose === pose) continue;
+      entry.pose = pose;
+      entry.surfaces = this.makeSurfaces(entry.actor, body);
+      entry.bounds.setFromPoints(
+        entry.surfaces.flatMap((s) => [s.a, s.b, s.c]),
+      );
+    }
+  }
+  private dynamicSurfaces(bounds: THREE.Box3): Surface[] {
+    return [...this.dynamic.values()]
+      .filter(
+        (entry) =>
+          entry.drivable &&
+          entry.actor.visible &&
+          entry.bounds.intersectsBox(bounds),
+      )
+      .flatMap((entry) => entry.surfaces);
   }
   /** Bounds-confined original triangle candidates, shared by body and wheel queries. */
-  querySurfaces(min: THREE.Vector3, max: THREE.Vector3): Surface[] {
+  querySurfaces(
+    min: THREE.Vector3,
+    max: THREE.Vector3,
+    includeNonSolid = false,
+  ): Surface[] {
     const result = new Set<Surface>();
     const x0 = Math.floor(min.x / this.cellSize),
       x1 = Math.floor(max.x / this.cellSize);
@@ -104,14 +197,37 @@ export class WorldCollision {
     for (let x = x0; x <= x1; x++)
       for (let z = z0; z <= z1; z++)
         for (const s of this.cells.get(`${x},${z}`) ?? [])
-          if (s.maxY >= min.y && s.minY <= max.y && !/^[!>]/.test(s.material))
+          if (
+            s.enabled !== false &&
+            s.maxY >= min.y &&
+            s.minY <= max.y &&
+            (includeNonSolid || !/^[!>]/.test(s.material))
+          )
             result.add(s);
+    const bounds = new THREE.Box3(min, max);
+    for (const [body, entry] of this.dynamic) {
+      if (!entry.worldCollider || !entry.actor.visible) continue;
+      const oldBounds = entry.bounds.clone().translate(body.state.position.clone().sub(body.state.predictedPosition ?? body.state.position));
+      // Rotation can sweep farther than the endpoint boxes. Bound by the
+      // authored triangle radius about the actor origin rather than filling
+      // the concave actor with a convex collision shape.
+      const radius = entry.bounds.getSize(new THREE.Vector3()).length() + entry.bounds.getCenter(new THREE.Vector3()).distanceTo(body.state.predictedPosition ?? body.state.position);
+      oldBounds.union(entry.bounds).union(new THREE.Box3().setFromCenterAndSize(body.state.position, new THREE.Vector3(2*radius,2*radius,2*radius)));
+      if (!oldBounds.intersectsBox(bounds)) continue;
+      for (const surface of entry.surfaces) if (includeNonSolid || !/^[!>]/.test(surface.material)) result.add(surface);
+    }
     return [...result];
+  }
+  /** Material modifier indices are authored by the selected track. Volume
+   * overrides are per body, never a mutation of shared triangle state. */
+  modifier(index: number): SurfaceModifier {
+    return this.modifiers[index] ?? DEFAULT_SURFACE;
   }
   raycast(
     origin: THREE.Vector3,
     direction: THREE.Vector3,
     maxDistance: number,
+    includeNonSolid = false,
   ) {
     if (
       !Number.isFinite(maxDistance) ||
@@ -132,9 +248,21 @@ export class WorldCollision {
       downforce: number;
       bumpiness: number;
       surface: Surface;
+      point: THREE.Vector3;
+      body?: RigidBody;
+      velocity?: THREE.Vector3;
     } | null = null;
     const point = new THREE.Vector3();
-    for (const surface of this.querySurfaces(bounds.min, bounds.max)) {
+    for (const surface of [
+      ...this.querySurfaces(bounds.min, bounds.max, includeNonSolid),
+      ...this.dynamicSurfaces(bounds),
+    ]) {
+      if(!includeNonSolid && (surface.collisionMode === "edges" || surface.material.startsWith("?")))continue;
+      if (
+        surface.enabled === false ||
+        (!includeNonSolid && /^[!>]/.test(surface.material))
+      )
+        continue;
       if (
         !ray.intersectTriangle(
           surface.a,
@@ -153,6 +281,11 @@ export class WorldCollision {
       best = {
         distance,
         normal,
+        point: point.clone(),
+        body: surface.owner,
+        velocity: surface.owner
+          ? pointVelocity(surface.owner.state, surface.owner.properties, point)
+          : undefined,
         friction: surface.modifier.tyreFriction,
         rollingResistance: 0,
         downforce: surface.modifier.downforce,
@@ -167,6 +300,7 @@ export class WorldCollision {
     const cell = this.cells.get(`${Math.floor(x / 4)},${Math.floor(z / 4)}`);
     if (!cell) return null;
     for (const s of cell) {
+      if (/^[!>?]/.test(s.material) || s.collisionMode === "edges") continue;
       if (s.normal.y < 0.45) continue;
       const { a, b, c } = s;
       const denom = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
@@ -226,11 +360,29 @@ export class WorldCollision {
 /** Bake static actor transforms and batch their triangles by material once.
  * The original hierarchy remains available from ACT parsing; batching is only
  * used for the static track, never articulated cars or pedestrians. */
-export function batchStaticWorld(source: THREE.Group): THREE.Group {
+export function batchStaticWorld(
+  source: THREE.Group,
+  retained: readonly THREE.Object3D[] = [],
+): THREE.Group {
   source.updateMatrixWorld(true);
+  const result = new THREE.Group();
+  result.name = source.name;
+  // Retained actors keep original hierarchy, private motion and shared geometry.
+  // They are removed before static batching and its temporary-geometry disposal.
+  const unique = [...new Set(retained)];
+  for (const actor of unique) {
+    let retainedParent = false;
+    for (let node=actor.parent;node;node=node.parent) if (unique.includes(node)) { retainedParent=true;break; }
+    if (!retainedParent) result.attach(actor);
+  }
   const batches = new Map<
     THREE.Material,
-    { positions: number[]; normals: number[]; uvs: number[]; faceFlags:number[] }
+    {
+      positions: number[];
+      normals: number[];
+      uvs: number[];
+      faceFlags: number[];
+    }
   >();
   const vertex = new THREE.Vector3(),
     normal = new THREE.Vector3(),
@@ -254,7 +406,7 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
       if (!mat) continue;
       let b = batches.get(mat);
       if (!b) {
-        b = { positions: [], normals: [], uvs: [], faceFlags:[] };
+        b = { positions: [], normals: [], uvs: [], faceFlags: [] };
         batches.set(mat, b);
       }
       for (let i = group.start; i < group.start + group.count; i++) {
@@ -264,8 +416,15 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
           : i;
         const j = index ? index.getX(sourceIndex) : sourceIndex;
         if (relative % 3 === 0) {
-          const flags=geometry.userData.sourceFaceFlags?.[Math.floor(sourceIndex/3)] ?? geometry.userData.sourceFaces?.[Math.floor(j/3)]?.flags ?? 0;
-          b.faceFlags.push(mirrored ? (flags & ~5) | ((flags & 1) << 2) | ((flags & 4) >> 2) : flags);
+          const flags =
+            geometry.userData.sourceFaceFlags?.[Math.floor(sourceIndex / 3)] ??
+            geometry.userData.sourceFaces?.[Math.floor(j / 3)]?.flags ??
+            0;
+          b.faceFlags.push(
+            mirrored
+              ? (flags & ~5) | ((flags & 1) << 2) | ((flags & 4) >> 2)
+              : flags,
+          );
         }
         vertex.fromBufferAttribute(p, j).applyMatrix4(o.matrixWorld);
         b.positions.push(vertex.x, vertex.y, vertex.z);
@@ -280,8 +439,6 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
       }
     }
   });
-  const result = new THREE.Group();
-  result.name = source.name;
   for (const [material, batch] of batches) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
@@ -293,7 +450,7 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
       new THREE.Float32BufferAttribute(batch.normals, 3),
     );
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute(batch.uvs, 2));
-    geometry.userData.sourceFaceFlags=Uint8Array.from(batch.faceFlags);
+    geometry.userData.sourceFaceFlags = Uint8Array.from(batch.faceFlags);
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = material.name;
@@ -304,6 +461,10 @@ export function batchStaticWorld(source: THREE.Group): THREE.Group {
   source.traverse((o) => {
     if (o instanceof THREE.Mesh) geometries.add(o.geometry);
   });
-  for (const geo of geometries) geo.dispose();
+  const retainedGeometries = new Set<THREE.BufferGeometry>();
+  result.traverse((o) => {
+    if (o instanceof THREE.Mesh) retainedGeometries.add(o.geometry);
+  });
+  for (const geo of geometries) if (!retainedGeometries.has(geo)) geo.dispose();
   return result;
 }

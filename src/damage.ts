@@ -7,6 +7,7 @@ import {
   Matrix4,
   Mesh,
   Object3D,
+  Quaternion,
   Texture,
   Vector3,
   DoubleSide,
@@ -29,6 +30,8 @@ import {
   type CrushLimits,
   type CrushVector,
 } from "./physics/crush";
+import { mineRandomFloat, mineRandomInteger } from "./physics/mines";
+import { detachedChildCenterOfMass } from "./physics/detached-com";
 import {
   createAttachmentState,
   createDetachmentSchedulingContext,
@@ -318,6 +321,20 @@ export interface DamageRuntimePart {
   flapCheckVertices: Uint8Array;
   flapParentAnchor: Vector3;
   flapParentReference: Vector3;
+  /** TotallySpam's direct FullyDetachPart request, consumed by physics owner. */
+  forcedFullDetach?: boolean;
+  /** Outward velocity in the car frame, magnitude8/6.9. Native spam also adds
+   * one extra car velocity after the usual inheritedDetachedVelocity. */
+  detachmentVelocityKick?: Vector3;
+}
+export interface SpamModelResult {
+  rays: { start: Vector3; direction: Vector3; force: number }[];
+  maxInfluence: number;
+  detachedParts: DamageRuntimePart[];
+  /** Random split435c90 uses model validator430730; unlike collision split,
+   * it does not use the world-edge430d80 gate. Simulation owns partitioning. */
+  splitRequest?: { normal: Vector3; constant: number };
+  bendCase?: number;
 }
 interface DamageMesh {
   mesh: Mesh<BufferGeometry>;
@@ -1330,7 +1347,11 @@ export class DamageSystem {
     return changed;
   }
 
-  private applyStructuralBend(bend: BendTransform, human: boolean): void {
+  private applyStructuralBend(
+    bend: BendTransform,
+    human: boolean,
+    damageComponents = true,
+  ): void {
     this.shellModelActive = false;
     this.bendVertexReferences.clear();
     this.bendVertexClasses.clear();
@@ -1341,7 +1362,7 @@ export class DamageSystem {
     this.group.updateMatrixWorld(true);
     const inverse = this.group.matrixWorld.clone().invert();
     for (const data of this.meshes) {
-      if (!data.runtime || data.runtime.state.phase !== 0) continue;
+      if (!data.runtime || !this.partReceivesCrush(data.runtime)) continue;
       const toCar = new Matrix4().multiplyMatrices(
         inverse,
         data.mesh.matrixWorld,
@@ -1410,17 +1431,23 @@ export class DamageSystem {
     }
     // DamageSystems43?→DoDamage increments10..40; repeat engine until80 or
     //30 attempts, then visit the other units once. Human driver remains immune.
-    const random = this.damageContext.random ?? Math.random;
-    for (let index = 0; index < 12; index++) {
-      let attempts = 0;
-      do {
-        this.componentLevels[index] = applyDamageUnit(
-          this.componentLevels[index],
-          index,
-          10 + Math.floor(random() * 31),
-          { ...this.damageContext, human },
+    if (damageComponents) {
+      const random = this.damageContext.random ?? Math.random;
+      for (let index = 0; index < 12; index++) {
+        let attempts = 0;
+        do {
+          this.componentLevels[index] = applyDamageUnit(
+            this.componentLevels[index],
+            index,
+            10 + Math.floor(random() * 31),
+            { ...this.damageContext, human },
+          );
+        } while (
+          index === 0 &&
+          this.componentLevels[0] < 80 &&
+          ++attempts < 30
         );
-      } while (index === 0 && this.componentLevels[0] < 80 && ++attempts < 30);
+      }
     }
     this.structuralBend = bend;
     if (this.wam?.version === 4) this.pendingShapeSwapFlags |= 0xb;
@@ -1572,6 +1599,189 @@ export class DamageSystem {
     );
   }
 
+  /** TotallySpamTheModel0x431560 directly sends ten random one-point crushes.
+   * It bypasses QueueCarCrush admission, car softness and component programs.
+   * Physics consumes forcedFullDetach requests and validates splitRequest.
+   */
+  spamModel(strength: number, timeMs: number, human = true): SpamModelResult {
+    const result: SpamModelResult = {
+      rays: [],
+      maxInfluence: 0,
+      detachedParts: [],
+    };
+    if (
+      !this.ready ||
+      !this.wam ||
+      !this.modelLimits ||
+      this.damageContext.invulnerable ||
+      this.snapped ||
+      this.structuralBend ||
+      !Number.isFinite(strength) ||
+      !Number.isFinite(timeMs)
+    )
+      return result;
+    const random = this.damageContext.random ?? Math.random;
+    // Original IDs are one-based WAM records, including entries with no detach data.
+    const selected = new Set(
+      Array.from({ length: 10 }, () =>
+        mineRandomInteger(random, 1, this.wam!.parts.length),
+      ),
+    );
+    this.group.updateMatrixWorld(true);
+    const inverse = this.group.matrixWorld.clone().invert();
+    const bounds = new Box3();
+    for (const shape of this.shapes)
+      for (const point of shape.vertices) bounds.expandByPoint(point);
+    if (bounds.isEmpty()) bounds.copy(this.bounds);
+    let detachedCount = this.runtimeParts.filter(
+      (part) => part.state.phase === 2 || part.forcedFullDetach,
+    ).length;
+    const detachOrder: DamageRuntimePart[] = [];
+    const visit = (actor: Object3D) => {
+      actor.children.forEach(visit);
+      const runtime = this.runtimeParts.find((part) => part.actor === actor);
+      if (runtime) detachOrder.push(runtime);
+    };
+    // 435d20 is child-first; a selected child can detach before its parent.
+    visit(this.group);
+    for (const runtime of detachOrder) {
+      if (
+        runtime.part.type === "boring" ||
+        !this.partReceivesCrush(runtime) ||
+        detachedCount >= 24 ||
+        !selected.has(this.wam.parts.indexOf(runtime.part) + 1)
+      )
+        continue;
+      const toCar = new Matrix4().multiplyMatrices(
+        inverse,
+        runtime.actor.matrixWorld,
+      );
+      const position = new Vector3(),
+        orientation = new Quaternion();
+      toCar.decompose(position, orientation, new Vector3());
+      const childCenter = detachedChildCenterOfMass(
+        runtime.bounds.min,
+        runtime.bounds.max,
+        { position, orientation },
+        bounds.min,
+        bounds.max,
+        { position: new Vector3(), orientation: new Quaternion() },
+      ).centerOfMass;
+      const kick = childCenter
+        .applyMatrix4(toCar)
+        .sub(this.currentCenterOfMass);
+      if (kick.length() <= 2.384185791015625e-7) kick.set(1, 0, 0);
+      else kick.normalize();
+      kick.multiplyScalar(8 / 6.9);
+      // Native4332a0 fully detaches immediately, separately from queue16.
+      cancelScheduledDetachment(this.detachmentScheduling, runtime.state);
+      runtime.forcedFullDetach = true;
+      runtime.detachmentVelocityKick = kick;
+      runtime.state.queuedAt = timeMs;
+      result.detachedParts.push(runtime);
+      detachedCount++;
+    }
+    // bb1 is captured once before all ten rays; it does not shrink between rays.
+    const expanded = bounds.clone().expandByScalar(0.2 / 6.9);
+    const force = Math.min(strength * 1.5, 0.5);
+    for (let i = 0; i < 10; i++) {
+      const face = mineRandomInteger(random, 0, 5),
+        axis = face >> 1;
+      const start = new Vector3(),
+        end = new Vector3();
+      start.setComponent(
+        axis,
+        (face & 1 ? expanded.min : expanded.max).getComponent(axis),
+      );
+      end.setComponent(
+        axis,
+        (face & 1 ? expanded.max : expanded.min).getComponent(axis),
+      );
+      for (let j = 1; j <= 2; j++) {
+        const component = (axis + j) % 3;
+        const low = expanded.min.getComponent(component),
+          high = expanded.max.getComponent(component);
+        start.setComponent(component, mineRandomFloat(random, low, high));
+        end.setComponent(component, mineRandomFloat(random, low, high));
+      }
+      const direction = end.sub(start);
+      if (direction.length() <= 2.384185791015625e-7) direction.set(1, 0, 0);
+      else direction.normalize();
+      result.rays.push({
+        start: start.clone(),
+        direction: direction.clone(),
+        force,
+      });
+      const crushed = this.applyModelCrush(
+        [start],
+        start,
+        direction,
+        force,
+        timeMs,
+        true,
+      );
+      result.maxInfluence = Math.max(result.maxInfluence, crushed.maxInfluence);
+    }
+    // GetCarDamage441240 returns remaining condition; clean cars return100.
+    const wheelAverage = Math.trunc(
+      Array.from(this.componentLevels.slice(8, 12)).reduce(
+        (sum, level) => sum + level,
+        0,
+      ) / 4,
+    );
+    const groups = [
+      this.componentLevels[0],
+      this.componentLevels[1],
+      this.componentLevels[2],
+      wheelAverage,
+    ];
+    const condition = this.wasted
+      ? 0
+      : groups.every((level) => level <= 75)
+        ? Math.max(
+            25,
+            100 - Math.trunc(groups.reduce((sum, level) => sum + level, 0) / 4),
+          )
+        : 100 - Math.max(...groups);
+    if (condition >= 75) return result;
+    const snapPercent = Math.trunc(this.wam.snappability * 25);
+    if (snapPercent !== 0 && mineRandomInteger(random, 0, 99) < snapPercent) {
+      const angle = mineRandomFloat(random, 0, Math.PI * 2);
+      const normal = new Vector3(Math.sin(angle), 0, Math.cos(angle));
+      result.splitRequest = {
+        normal,
+        constant: normal.dot(bounds.getCenter(new Vector3())),
+      };
+      return result;
+    }
+    if (!this.wam.bendability) return result;
+    const choice = mineRandomInteger(random, 1, 8);
+    const pivot = new Vector3(0, 0, this.wam.bendZMin);
+    let farZ = bounds.max.z,
+      angleX = 0,
+      angleY = 0;
+    if (choice <= 2) {
+      pivot.y = choice === 1 ? bounds.max.y : bounds.min.y;
+      angleX = choice === 1 ? 0xe002 : 0x1ffe;
+    } else if (choice <= 4) {
+      pivot.x = choice === 3 ? bounds.min.x : bounds.max.x;
+      angleY = choice === 3 ? 0xe002 : 0x1ffe;
+    } else {
+      pivot.copy(bounds.getCenter(new Vector3()));
+      pivot.z = this.wam.bendZMax;
+      farZ = bounds.min.z;
+      angleY = 0x1ffe;
+    }
+    // Spam passes BendCar's final pDamageSystems argument0, unlike collisions.
+    this.applyStructuralBend(
+      createBendTransform(bounds, pivot, farZ, angleX, angleY),
+      human,
+      false,
+    );
+    result.bendCase = choice;
+    return result;
+  }
+
   applyImpact(
     localContacts: Vector3[],
     localEnergyVector: Vector3,
@@ -1660,13 +1870,47 @@ export class DamageSystem {
         };
       }
     }
+    return {
+      ...this.applyModelCrush(contacts, mean, direction, force, nowMs),
+      componentEvents: component?.events ?? [],
+      queuedForce: force,
+    };
+  }
+
+  /** Shared ordinary vertex/texture/attachment path, without damage programs. */
+  private partReceivesCrush(runtime: DamageRuntimePart): boolean {
+    if (runtime.state.phase !== 0 || runtime.forcedFullDetach) return false;
+    // The native full-detach prepass removes the whole ACT subtree. Physics
+    // consumes our request after this method, so exclude its descendants now.
+    for (
+      let actor = runtime.actor.parent;
+      actor && actor !== this.group;
+      actor = actor.parent
+    )
+      if (
+        this.runtimeParts.some(
+          (part) => part.actor === actor && part.forcedFullDetach,
+        )
+      )
+        return false;
+    return true;
+  }
+
+  private applyModelCrush(
+    contacts: Vector3[],
+    mean: Vector3,
+    direction: Vector3,
+    force: number,
+    nowMs: number,
+    spam = false,
+  ) {
     this.shellModelActive = false;
-    let changed = this.crushShapes(contacts, direction, force);
+    let changed = this.crushShapes(contacts, direction, force, spam);
     let maxInfluence = 0;
     this.group.updateMatrixWorld(true);
     const inverse = this.group.matrixWorld.clone().invert();
     for (const runtime of this.runtimeParts) {
-      if (runtime.state.phase !== 0) continue;
+      if (!this.partReceivesCrush(runtime)) continue;
       const models = this.meshes.filter((data) => data.runtime === runtime);
       let influence = 0;
       for (const [detail, data] of models.entries()) {
@@ -1705,7 +1949,7 @@ export class DamageSystem {
         const result = crushModel({
           positions: position.array,
           vertexRegions: data.regions,
-          limits: this.modelLimits,
+          limits: this.modelLimits!,
           contacts: modelContacts,
           direction: vectorTuple(modelDirection),
           meanImpact: vectorTuple(modelMean),
@@ -1804,23 +2048,20 @@ export class DamageSystem {
       }
     }
     if (changed) this.deformationRevision++;
-    return {
-      componentEvents: component?.events ?? [],
-      queuedForce: force,
-      maxInfluence,
-    };
+    return { maxInfluence };
   }
 
   private crushShapes(
     contacts: Vector3[],
     direction: Vector3,
     force: number,
+    spam = false,
   ): boolean {
     if (this.wam?.version !== 4 || !this.physicsLimits || this.structuralBend)
       return false;
     const reduced = new Vector3(0, Math.min(direction.y, 0), direction.z);
     const ratio = reduced.length();
-    if (ratio < 0.00001) return false;
+    if ((spam ? ratio * force : ratio) < 0.00001) return false;
     reduced.divideScalar(ratio);
     const tuples = contacts.map(vectorTuple);
     let changed = false;
@@ -1851,7 +2092,9 @@ export class DamageSystem {
         }
         if (!point.equals(before)) changed = true;
       }
-    if (changed) this.pendingShapeSwapFlags |= 7;
+    // Spam's native root callback sets7 after visiting the vertices, even when
+    // packed stop planes prevent all movement. Preserve ordinary admission.
+    if (changed || spam) this.pendingShapeSwapFlags |= 7;
     return changed;
   }
 
@@ -1998,6 +2241,12 @@ export class DamageSystem {
       for (const state of this.detachmentScheduling.queued)
         cancelScheduledDetachment(this.detachmentScheduling, state);
       for (const runtime of this.runtimeParts) {
+        if (runtime.forcedFullDetach) {
+          cancelScheduledDetachment(this.detachmentScheduling, runtime.state);
+          runtime.forcedFullDetach = false;
+          runtime.detachmentVelocityKick = undefined;
+          changed = true;
+        }
         if (runtime.state.phase !== 0) {
           runtime.originalParent.add(runtime.actor);
           runtime.actor.matrix.copy(runtime.originalTransform);
@@ -2007,6 +2256,8 @@ export class DamageSystem {
             runtime.actor.scale,
           );
           resetAttachmentState(runtime.state);
+          runtime.forcedFullDetach = false;
+          runtime.detachmentVelocityKick = undefined;
           changed = true;
         }
         if (runtime.flap && !runtime.part.kevOFlap && runtime.flap.active) {
@@ -2074,6 +2325,8 @@ export class DamageSystem {
       );
       cancelScheduledDetachment(this.detachmentScheduling, runtime.state);
       resetAttachmentState(runtime.state);
+      runtime.forcedFullDetach = false;
+      runtime.detachmentVelocityKick = undefined;
       if (runtime.flap)
         runtime.flap = createFlapState(
           runtime.originalVertices[runtime.flapHinges[1]],

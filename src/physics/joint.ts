@@ -6,7 +6,7 @@ export interface JointPlaneLimit {
   parentNormal: Vector3;
 }
 export interface RigidJoint {
-  type: "ball" | "hinge" | "universal";
+  type: "ball" | "hinge" | "universal" | "translation";
   child: RigidBody;
   parent: RigidBody;
   childAnchor: Vector3;
@@ -20,6 +20,12 @@ export interface RigidJoint {
   planeLimits: JointPlaneLimit[];
   /** Original nonzero object mode permits constraints already inside the margin. */
   allowNearBoundary?: boolean;
+  /** Type5 WORLD_TRANSLATION_JOINT movement axis in child-local coordinates. */
+  translationAxis?: Vector3;
+  /** Loader-derived local transverse axes (tPhysics_joint offsets 0x20/0x2c). */
+  translationTransverse?: [Vector3, Vector3];
+  /** Type11 upper travel from the authored world anchor; lower end is at anchor. */
+  translationTravel?: number;
 }
 export interface JointReaction {
   joint: RigidJoint;
@@ -30,6 +36,8 @@ export interface JointReaction {
 
 const STEP = 0.04;
 const ANGULAR_BIAS = 0.001;
+const TRANSLATION_LIMIT_EPSILON = 0.001; // DAT_005897c0 / -DAT_00589828
+const TRANSLATION_CROSSING_EPSILON = 0.002; // DAT_00589838
 const axisBasis = [
   new Vector3(1, 0, 0),
   new Vector3(0, 1, 0),
@@ -84,6 +92,54 @@ export function createHingeJoint(
     childAxis: childAxis.clone().normalize(),
     parentAxis: parentAxis.clone().normalize(),
   };
+}
+
+/** Installed HW type5 WORLD_TRANSLATION_JOINT: two linear COM rows, free axial
+ * translation, and a type11 axial travel limit. It intentionally has no angular rows. */
+export function createTranslationJoint(
+  child: RigidBody,
+  infiniteWorldParent: RigidBody,
+  localAnchor: Vector3,
+  worldAnchor: Vector3,
+  localAxis: Vector3,
+  travel: number,
+): RigidJoint {
+  if (
+    localAxis.lengthSq() === 0 ||
+    !Number.isFinite(travel) ||
+    travel < 0 ||
+    !finiteVector(localAnchor) ||
+    !finiteVector(worldAnchor) ||
+    !finiteVector(localAxis)
+  ) throw new Error("Invalid translation joint data");
+  const movementAxis = localAxis.clone().normalize();
+  const absolute = movementAxis.toArray().map(Math.abs);
+  let transverse = new Vector3();
+  if (absolute[0] <= absolute[1] && absolute[0] <= absolute[2])
+    transverse.set(0, movementAxis.z, -movementAxis.y);
+  else if (absolute[1] <= absolute[2])
+    transverse.set(-movementAxis.z, 0, -movementAxis.x);
+  else transverse.set(movementAxis.y, -movementAxis.x, 0);
+  transverse.normalize();
+  const secondTransverse = movementAxis.clone().cross(transverse).normalize();
+  const parentAnchor = worldAnchor.clone()
+    .sub(infiniteWorldParent.state.position)
+    .applyQuaternion(infiniteWorldParent.state.orientation.clone().conjugate());
+  return {
+    type: "translation",
+    child,
+    parent: infiniteWorldParent,
+    childAnchor: localAnchor.clone(),
+    parentAnchor,
+    translationAxis: movementAxis,
+    translationTransverse: [transverse, secondTransverse],
+    translationTravel: travel,
+    planeLimits: [],
+  };
+}
+
+function finiteVector(value: Vector3): boolean {
+  return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
 }
 
 export interface OrdinaryDetachGeometry {
@@ -313,6 +369,8 @@ export interface JointConstraint {
   axis: Vector3;
   closingSpeed?: number;
   restRhs?: number;
+  /** Explicit native contact code for source type5 translation limits (type2). */
+  sourceType?: number;
 }
 
 /** Solved row metadata presented to the collision callback before application.
@@ -341,7 +399,9 @@ export function jointConstraintImpacts(
     joint: constraint.joint,
     a: constraint.joint.child,
     b: constraint.joint.parent,
-    sourceType: constraint.angular && constraint.unilateral ? 11 : 10,
+    sourceType:
+      constraint.sourceType ??
+      (constraint.angular && constraint.unilateral ? 11 : 10),
     normalImpulse: impulses[index],
     angularConstraintLocal: constraint.jacobians[0].angular
       .clone()
@@ -359,7 +419,8 @@ export function jointConstraintImpacts(
   }));
 }
 function inverseInertia(body: RigidBody, value: Vector3): Vector3 {
-  if (body.properties.rotationLocked) return new Vector3();
+  if (body.properties.rotationLocked || body.properties.immovable)
+    return new Vector3();
   const result = value
     .clone()
     .applyQuaternion(body.state.orientation.clone().conjugate());
@@ -423,13 +484,39 @@ function constraint(
     unilateral,
   };
 }
+function centerConstraint(
+  joint: RigidJoint,
+  axis: Vector3,
+  unilateral = false,
+  sourceType?: number,
+): JointConstraint {
+  const negative = axis.clone().negate();
+  const jacobians = [
+    jacobian(joint.child, axis.clone(), new Vector3()),
+    jacobian(joint.parent, negative, new Vector3()),
+  ];
+  const relativeSpeed = jacobians.reduce(
+    (sum, entry) => sum + entry.linear.dot(entry.body.state.velocity),
+    0,
+  );
+  return {
+    joint,
+    axis,
+    angular: false,
+    jacobians,
+    rhs: -relativeSpeed,
+    unilateral,
+    sourceType,
+  };
+}
 function matrixElement(a: JointConstraint, b: JointConstraint): number {
   let result = 0;
   for (const x of a.jacobians)
     for (const y of b.jacobians) {
       if (x.body.state !== y.body.state) continue;
       result +=
-        x.linear.dot(y.linear) / x.body.properties.mass +
+        x.linear.dot(y.linear) *
+          (x.body.properties.immovable ? 0 : 1 / x.body.properties.mass) +
         x.angular.dot(y.response);
     }
   return result;
@@ -557,6 +644,19 @@ export function buildJointConstraints(
 ): JointConstraint[] {
   const constraints: JointConstraint[] = [];
   for (const joint of joints) {
+    if (joint.type === "translation") {
+      if (!joint.translationTransverse)
+        throw new Error("Translation joint requires transverse axes");
+      for (const localAxis of joint.translationTransverse) {
+        constraints.push(
+          centerConstraint(
+            joint,
+            worldDirection(joint.child, localAxis).normalize(),
+          ),
+        );
+      }
+      continue;
+    }
     for (const axis of axisBasis)
       constraints.push(constraint(joint, axis.clone(), false));
     if (joint.type !== "ball") {
@@ -581,6 +681,39 @@ export function buildJointConstraints(
     }
   }
   if (!includeLimits) return constraints;
+  for (const joint of joints) {
+    if (joint.type !== "translation") continue;
+    if (!joint.translationAxis || joint.translationTravel === undefined)
+      throw new Error("Translation joint requires an axis and travel");
+    const axis = worldDirection(joint.child, joint.translationAxis, true).normalize();
+    const anchor = worldPoint(joint.parent, joint.parentAnchor);
+    const predictedPosition = joint.child.state.predictedPosition ?? joint.child.state.position;
+    const predictedOrientation = joint.child.state.predictedOrientation ?? joint.child.state.orientation;
+    const predictedCom = joint.child.properties.centerOfMass
+      .clone()
+      .applyQuaternion(predictedOrientation)
+      .add(predictedPosition);
+    const currentCom = worldPoint(joint.child, joint.child.properties.centerOfMass);
+    const predictedCoordinate = predictedCom.sub(anchor).dot(axis);
+    const currentCoordinate = currentCom.sub(anchor).dot(axis);
+    let normal: Vector3 | null = null;
+    if (
+      predictedCoordinate < -TRANSLATION_LIMIT_EPSILON &&
+      (currentCoordinate >= -TRANSLATION_CROSSING_EPSILON ||
+        predictedCoordinate < currentCoordinate)
+    ) normal = axis;
+    else if (
+      predictedCoordinate > joint.translationTravel + TRANSLATION_LIMIT_EPSILON &&
+      (currentCoordinate <= joint.translationTravel + TRANSLATION_CROSSING_EPSILON ||
+        predictedCoordinate > currentCoordinate)
+    ) normal = axis.clone().negate();
+    if (normal) {
+      const row = centerConstraint(joint, normal, true, 2);
+      row.closingSpeed = -row.rhs;
+      row.restRhs = row.rhs;
+      constraints.push(row);
+    }
+  }
   const limitRows: {
     joint: RigidJoint;
     axis: Vector3;
@@ -705,6 +838,7 @@ export function applyJointConstraintImpulses(
       : reaction.linearImpulse
     ).addScaledVector(row.axis, value);
     for (const entry of row.jacobians) {
+      if (entry.body.properties.immovable) continue;
       entry.body.state.velocity.addScaledVector(
         entry.linear,
         value / entry.body.properties.mass,
@@ -719,6 +853,16 @@ export function applyJointConstraintImpulses(
  * Call after advancing solver velocities, in parent-before-child tree order. */
 export function projectJointPositions(joints: RigidJoint[]): void {
   for (const joint of joints) {
+    if (joint.type === "translation") {
+      const axis = worldDirection(joint.child, joint.translationAxis!).normalize();
+      const anchor = worldPoint(joint.parent, joint.parentAnchor);
+      const childPoint = worldPoint(joint.child, joint.childAnchor);
+      const axialPosition = childPoint.sub(anchor).dot(axis);
+      const targetPoint = anchor.addScaledVector(axis, axialPosition);
+      joint.child.state.position.add(targetPoint.sub(worldPoint(joint.child, joint.childAnchor)));
+      joint.child.state.velocity.copy(axis.multiplyScalar(joint.child.state.velocity.dot(axis)));
+      continue;
+    }
     if (joint.type === "hinge" && joint.childAxis && joint.parentAxis) {
       const current = worldDirection(joint.child, joint.childAxis).normalize();
       const target = worldDirection(joint.parent, joint.parentAxis).normalize();

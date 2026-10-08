@@ -72,6 +72,87 @@ function mechanics(mass = 2, comZ = 0, rearGive = 0.08, frontGive = 0.12) {
   };
 }
 const neutral = { throttle: 0, steer: 0, brake: 0, handbrake: false };
+
+test("original volume gravity and viscosity reach the actual WheelForces velocity update", () => {
+  const p = createMotionParameters(mechanics());
+  const s = state(p, vector(4));
+  s.volumeGravityFactor = 0.6; // partial water: 1 - (1-.2)*.5
+  s.volumeDragFactor = 25; // viscosity50 * depth.5
+  const d = applyVehicleForces(
+    s,
+    neutral,
+    0.04,
+    p,
+    { raycast: () => null },
+    createMotionContext(),
+  );
+  near(d.force.y, -p.mass * 10 * 0.6);
+  const vy = (-10 * 0.6 * 0.04) / S;
+  const damping =
+    1 - (Math.hypot(4, vy) * 0.04 * 0.0005000000237487257 * 25 * S) / p.mass;
+  near(s.velocity.x, 4 * damping);
+  near(s.velocity.y, vy * damping);
+});
+
+test("authored volume material overrides wheel friction without changing spring loads", () => {
+  const p = createMotionParameters(mechanics());
+  const ordinary = preload(state(p, vector(4, 0, -10)), p);
+  const submerged = preload(state(p, vector(4, 0, -10)), p);
+  submerged.volumeSurface = { tyreFriction: 0.25, downforce: 0, bumpiness: 0 };
+  const a = applyVehicleForces(
+    ordinary,
+    neutral,
+    0.04,
+    p,
+    staticRoad(p),
+    createMotionContext(),
+  );
+  const b = applyVehicleForces(
+    submerged,
+    neutral,
+    0.04,
+    p,
+    staticRoad(p),
+    createMotionContext(),
+  );
+  assert.deepEqual(a.wheelSpringLoads, b.wheelSpringLoads);
+  for (let i = 0; i < 4; i++)
+    near(b.wheelCapacities[i], a.wheelCapacities[i] * 0.25);
+});
+
+test("per-wheel native oil factors reduce only the affected tyre capacities", () => {
+  const p = createMotionParameters(mechanics());
+  const ordinary = preload(state(p, vector(4, 0, -10)), p);
+  const oily = preload(state(p, vector(4, 0, -10)), p);
+  const road = staticRoad(p);
+  const a = applyVehicleForces(
+    ordinary,
+    neutral,
+    0.04,
+    p,
+    road,
+    createMotionContext(),
+  );
+  const b = applyVehicleForces(
+    oily,
+    neutral,
+    0.04,
+    p,
+    {
+      ...road,
+      sampleOil(points, grounded) {
+        near(points[0].x, p.wheelPositions[0].x);
+        assert.deepEqual(grounded, [true, true, true, true]);
+        return [0.08, 1, 0.15, 1];
+      },
+    },
+    createMotionContext(),
+  );
+  for (let i = 0; i < 4; i++)
+    near(b.wheelCapacities[i], a.wheelCapacities[i] * [0.08, 1, 0.15, 1][i]);
+  assert.deepEqual(b.oilWheelFactors, [0.08, 1, 0.15, 1]);
+  assert.deepEqual(b.wheelSpringLoads, a.wheelSpringLoads);
+});
 function state(p, velocity = vector()) {
   return initializeMotion(
     {
