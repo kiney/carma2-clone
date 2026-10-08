@@ -70,3 +70,5 @@ import "./ped-rules.test.mjs";
 import "./ped-proximity.test.mjs";
 import "./ped-blood.test.mjs";
 import "./wasted.test.mjs";
+import "./spawn.test.mjs";
+import "./pair-guard.test.mjs";

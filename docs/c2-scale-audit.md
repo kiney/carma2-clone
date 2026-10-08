@@ -6,7 +6,7 @@ The new screenshots warranted reopening the broad claim that vehicle scale had b
 
 A substantial camera discrepancy is confirmed. The browser uses a wider vertical field of view and a farther/higher chase camera than the original defaults. Correcting camera framing is justified by evidence; enlarging vehicle geometry is not. Exact original animated-pedestrian poses and a matched original-game screenshot have not been verified.
 
-The reported car interlocking and uneven-ground opponent spawn defects have separate Prio-1 TODO entries. Three DUNE BUGGERED opponents already penetrate the road before their first physics tick. Immediate wasting and persistent interlocking remain reported failure modes, not proven outcomes of this initial-placement measurement.
+The baseline audit below measured initial road penetration in three DUNE BUGGERED opponents. PHY-09 and AI-05 were subsequently fixed; the dated follow-up at the end records implementation and browser validation. The camera discrepancy remains open under REN-05.
 
 ## Geometry and unit evidence
 
@@ -53,7 +53,7 @@ Wider FOV alone reduces projected size to about 82.7% at the same depth. Combini
 
 ## Uneven-ground opponent placement
 
-`main.ts::loadRivals` offsets rivals by fixed X/Z displacements from the player, sets each origin Y using one `collision.height` sample, and immediately creates the body with the player's heading. It does not fit four wheel supports, orient the body to the terrain, validate the whole hull or reserve a clear grid position. The closest path node is used by the navigator, not as a validated spawn pose.
+At the audited baseline, `main.ts::loadRivals` offsets rivals by fixed X/Z displacements from the player, sets each origin Y using one `collision.height` sample, and immediately creates the body with the player's heading. It does not fit four wheel supports, orient the body to the terrain, validate the whole hull or reserve a clear grid position. The closest path node is used by the navigator, not as a validated spawn pose.
 
 In Chromium, paused at simulation time 0, the following maximum vertical hull-vertex penetrations were measured against local upward-facing road triangles:
 
@@ -73,3 +73,11 @@ Car-pair contacts and overlap recovery already exist, so the interlocking report
 The inspected rec2 checkout is commit `249f6be9925b7632295b74a47e3d4b07857b1649`; relevant files are `src/carma2/common/car.c`, `loading.c`, `init.c`, `pedestrn.c`, and BRender's transform/perspective implementation. It is reference material, not a vendored dependency. Runtime measurements used Chrome DevTools MCP and read-only original assets; the transient screenshot is `/tmp/c2-dune-scale-spawn-audit.png`.
 
 No vehicle enlargement, camera change or collision fix was made during this audit. The task here was to reconcile the reported bugs and investigate scale. The established evidence now points to camera fidelity, not a guessed geometry multiplier.
+
+## PHY-09 / AI-05 fix follow-up, 2026-10-08
+
+`placeCarAtStart` now fits original four-wheel anchors to finite local road support, preserves horizontal heading, checks the complete authored hulls against terrain and reserved cars/noncars, and searches nearby when necessary. It seeds actual wheel lengths, predicted poses and recovery history. Player and rivals use the same path; rival offsets rotate with the original grid heading and do not follow a player who drives away during asynchronous loading. No model scale or chase camera was changed.
+
+The production Chromium regression loads DUNE with green Eagle, Buggy and Bigdump, plus NEW CITY with Eagle3. All five cars in every grid start with zero measured road/car penetration and four supported wheels. All four opponents in every case move and remain alive after four seconds of normal AI/physics. The original initial-penetration measurements above are retained as historical evidence.
+
+The pair fix corrects native local-bounds centers and independently verifies final integration and joint projection against authored solid hulls. DUNE head-on and oblique crashes still cause persistent local deformation/component damage, remain SAT-disjoint, and release under the actual reverse key. Numerical regressions include yaw/pitch, pre-existing overlaps, wall-adjacent crushed bodies, different world fractions and complete rotation arcs. Details and limits are in [physics evidence](c2-physics-re.md). `npm run test:spawn-pairs` reproduces the dedicated browser checks; screenshots/reports remain in ignored `artifacts/`.

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { placeCarAtStart } from "./physics/spawn";
 import { Assets } from "./content";
 import {
   parseTrackConfig,
@@ -661,8 +662,6 @@ async function loadRace() {
     carConfig = newCarConfig;
     physicsConfig = physicsConfigFromCar(newCarConfig);
     const start = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
-    const ground = collision.height(start.x, start.z, start.y + 1);
-    if (ground !== null) start.y = ground;
     player = createSimulatedCar(
       car,
       carText,
@@ -671,6 +670,11 @@ async function loadRace() {
       ((track.heading ?? 0) * Math.PI) / 180,
       true,
     );
+    if (!placeCarAtStart(player, collision, noncarBodies).placed)
+      throw new Error(
+        "No supported, collision-free player start could be found near the race grid.",
+      );
+    start.copy(player.state.position);
     vehicle = player.state;
     repairControl = createRepairControl();
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
@@ -771,7 +775,7 @@ async function loadRace() {
       );
     };
     car.position.copy(start);
-    car.rotation.y = vehicle.heading;
+    car.quaternion.copy(vehicle.orientation);
     definition = races.find(
       (r) =>
         r.raceFilename.toLowerCase() ===
@@ -859,6 +863,8 @@ async function loadRivals(
 ) {
   if (!track || !vehicle || !collision) return;
   const activeTrack = currentTrack;
+  const gridOrigin = vehicle.position.clone();
+  const gridHeading = vehicle.heading;
   const nodes = track.pathNodes;
   if (!nodes.length) return;
   const ids = definition?.explicitOpponents.length
@@ -897,22 +903,16 @@ async function loadRivals(
     }
     let closest = 0,
       distance = Infinity;
-    const spawn = vehicle.position
+    const spawn = gridOrigin
       .clone()
       .add(
-        new THREE.Vector3((i % 2 ? 1 : -1) * 0.8, 0, 1 + Math.floor(i / 2) * 1),
+        new THREE.Vector3(
+          (i % 2 ? 1 : -1) * 0.8,
+          0,
+          1 + Math.floor(i / 2) * 1,
+        ).applyAxisAngle(new THREE.Vector3(0, 1, 0), gridHeading),
       );
-    for (let n = 0; n < nodes.length; n++) {
-      const d = new THREE.Vector3(...nodes[n]).distanceToSquared(spawn);
-      if (d < distance) {
-        distance = d;
-        closest = n;
-      }
-    }
-    const node = new THREE.Vector3(...nodes[closest]);
-    const y = collision.height(spawn.x, spawn.z, spawn.y + 1);
-    if (y !== null) spawn.y = y;
-    const heading = vehicle.heading;
+    const heading = gridHeading;
     const body = createSimulatedCar(
       model.group,
       text,
@@ -921,12 +921,33 @@ async function loadRivals(
       heading,
       false,
     );
+    const placement = placeCarAtStart(body, collision, [
+      ...(simulation?.cars ?? []),
+      ...(simulation?.noncars ?? []),
+    ]);
+    if (!placement.placed) {
+      console.warn(
+        `Skipping opponent ${candidates[i].id}: no supported, collision-free start near the race grid.`,
+      );
+      disposeGroup(model.group);
+      continue;
+    }
     const state = body.state;
+    for (let n = 0; n < nodes.length; n++) {
+      const d = new THREE.Vector3(...nodes[n]).distanceToSquared(
+        state.position,
+      );
+      if (d < distance) {
+        distance = d;
+        closest = n;
+      }
+    }
     if (upgradeSettings)
       state.powerMultiplier =
         player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
     simulation?.add(body);
-    model.group.position.copy(spawn);
+    model.group.position.copy(state.position);
+    model.group.quaternion.copy(state.orientation);
     scene.add(model.group);
     rivals.push({
       object: model.group,

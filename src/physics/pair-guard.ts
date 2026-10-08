@@ -1,0 +1,251 @@
+import { Box3, Quaternion, Vector3 } from "three";
+import type { RigidBody } from "./contact";
+import {
+  hullBounds,
+  hullPenetration,
+  sweepHulls,
+  transformHull,
+  type CollisionHull,
+} from "./geometry";
+
+export type HullBody = RigidBody & { hulls: CollisionHull[] };
+export interface GuardPose {
+  position: Vector3;
+  orientation: Quaternion;
+}
+export type PosePath = ((fraction: number) => GuardPose) & {
+  /** Total travel bounds, needed when a path makes complete rotations. */
+  angularTravel?: number;
+};
+const DEPTH_EPSILON = 1e-6;
+
+/** Actual joint ancestry, including a flap attached to a detached roof. */
+export function attachmentRoot(body: RigidBody): RigidBody {
+  const visited = new Set<RigidBody>();
+  while (!visited.has(body)) {
+    visited.add(body);
+    const joint =
+      "joint" in body
+        ? (body.joint as { parent: RigidBody } | undefined)
+        : undefined;
+    if (!joint) break;
+    body = joint.parent;
+  }
+  return body;
+}
+
+function radius(body: HullBody) {
+  let result = 0;
+  for (const hull of body.hulls)
+    for (const vertex of hull.vertices)
+      result = Math.max(
+        result,
+        vertex.distanceTo(body.properties.centerOfMass),
+      );
+  return result;
+}
+function at(body: HullBody, path: PosePath, fraction: number) {
+  const pose = path(fraction);
+  return body.hulls.map((hull) =>
+    transformHull(hull, pose.position, pose.orientation),
+  );
+}
+function depth(a: CollisionHull, b: CollisionHull) {
+  return hullBounds(a).intersectsBox(hullBounds(b)) ? hullPenetration(a, b) : 0;
+}
+
+/** Independent commit safety guard, NOT an alternative impulse/damage solver.
+ * The original feature emitter/normal equations remain authoritative. Verify
+ * the actual post-solver integration path so exhausting recollection passes
+ * cannot commit interlocking convex shapes. Existing overlap may escape.
+ * CCD between short angular samples also catches a crossing with clear ends. */
+export function guardPairTrajectory(
+  a: HullBody,
+  b: HullBody,
+  pathA: PosePath,
+  pathB: PosePath,
+): number {
+  const cacheA = new Map<number, CollisionHull[]>(),
+    cacheB = new Map<number, CollisionHull[]>();
+  const sample = (
+    body: HullBody,
+    path: PosePath,
+    cache: Map<number, CollisionHull[]>,
+    t: number,
+  ) => {
+    let hulls = cache.get(t);
+    if (!hulls) {
+      hulls = at(body, path, t);
+      cache.set(t, hulls);
+    }
+    return hulls;
+  };
+  const getA = (t: number) => sample(a, pathA, cacheA, t),
+    getB = (t: number) => sample(b, pathB, cacheB, t);
+  let oldA = getA(0),
+    oldB = getB(0);
+  let allowed = oldA.map((ah) => oldB.map((bh) => depth(ah, bh)));
+  const travel = (path: PosePath) => {
+    const poses = [0, 0.25, 0.5, 0.75, 1].map(path);
+    return {
+      poses,
+      angle: Math.max(
+        path.angularTravel ?? 0,
+        poses
+          .slice(1)
+          .reduce(
+            (sum, pose, i) =>
+              sum + poses[i].orientation.angleTo(pose.orientation),
+            0,
+          ),
+      ),
+    };
+  };
+  const ta = travel(pathA),
+    tb = travel(pathB);
+  const relative = ta.poses.map((pose, i) =>
+    pose.position.clone().sub(tb.poses[i].position),
+  );
+  const motion =
+    relative
+      .slice(1)
+      .reduce((sum, value, i) => sum + value.distanceTo(relative[i]), 0) +
+    ta.angle * radius(a) +
+    tb.angle * radius(b);
+  if (motion < 1e-12) return 1;
+  const steps = Math.min(
+    128,
+    Math.max(
+      1,
+      Math.ceil(motion / 0.01),
+      Math.ceil((ta.angle + tb.angle) / 0.025),
+    ),
+  );
+  const exceeds = (t: number) => {
+    const ha = getA(t),
+      hb = getB(t);
+    return ha.some((ah, i) =>
+      hb.some((bh, j) => depth(ah, bh) > allowed[i][j] + DEPTH_EPSILON),
+    );
+  };
+  let safe = 0;
+  for (let step = 1; step <= steps; step++) {
+    const end = step / steps,
+      nextA = getA(end),
+      nextB = getB(end);
+    let blocked = exceeds(end) ? end : Infinity;
+    for (let i = 0; i < oldA.length; i++)
+      for (let j = 0; j < oldB.length; j++) {
+        if (
+          allowed[i][j] > DEPTH_EPSILON ||
+          !oldA[i].faces.length ||
+          !oldB[j].faces.length
+        )
+          continue;
+        if (
+          !hullBounds(oldA[i])
+            .union(hullBounds(nextA[i]))
+            .expandByScalar(0.001)
+            .intersectsBox(
+              hullBounds(oldB[j])
+                .union(hullBounds(nextB[j]))
+                .expandByScalar(0.001),
+            )
+        )
+          continue;
+        const hit = sweepHulls(oldA[i], nextA[i], oldB[j], nextB[j]);
+        if (!hit || hit.fraction! < 0 || hit.fraction! > 1) continue;
+        // Source emitters extend edges and accept resting/tolerance contacts.
+        // Require real positive-depth evidence, never freeze a separating touch.
+        for (const delta of [0.0001, 0.001, 0.01, 0.1, 0.5]) {
+          const t = safe + (end - safe) * Math.min(1, hit.fraction! + delta);
+          if (exceeds(t)) {
+            blocked = Math.min(blocked, t);
+            break;
+          }
+        }
+      }
+    if (Number.isFinite(blocked)) {
+      let lo = safe,
+        hi = blocked;
+      for (let iteration = 0; iteration < 18; iteration++) {
+        const mid = (lo + hi) / 2;
+        if (exceeds(mid)) hi = mid;
+        else lo = mid;
+      }
+      return lo;
+    }
+    // Each local overlap must not deepen; after it clears, re-entry is new.
+    allowed = nextA.map((ah, i) =>
+      nextB.map((bh, j) => Math.min(allowed[i][j], depth(ah, bh))),
+    );
+    oldA = nextA;
+    oldB = nextB;
+    safe = end;
+  }
+  return 1;
+}
+
+/** Give each broadphase-connected group a common path parameter. Independent
+ * pair clamps can themselves introduce a new crossing when only A is slowed.
+ * Broadphase spheres enclose the entire rotation arc about the moving COM,
+ * unlike a union of endpoint AABBs. Each child's own hinge path is retained. */
+export function guardBodyTrajectories(
+  bodies: readonly HullBody[],
+  paths: Map<HullBody, PosePath>,
+): Map<HullBody, number> {
+  const parents = bodies.map((_, i) => i);
+  const roots = bodies.map(attachmentRoot);
+  const find = (i: number): number =>
+    parents[i] === i ? i : (parents[i] = find(parents[i]));
+  const union = (i: number, j: number) => {
+    parents[find(j)] = find(i);
+  };
+  const bounds = bodies.map((body) => {
+    const path = paths.get(body)!;
+    const center = (pose: GuardPose) =>
+      body.properties.centerOfMass
+        .clone()
+        .applyQuaternion(pose.orientation)
+        .add(pose.position);
+    return new Box3()
+      .setFromPoints([0, 0.25, 0.5, 0.75, 1].map((t) => center(path(t))))
+      .expandByScalar(
+        radius(body) +
+          2 * body.properties.centerOfMass.length() +
+          DEPTH_EPSILON,
+      );
+  });
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < bodies.length; i++)
+    for (let j = i + 1; j < bodies.length; j++) {
+      if (roots[i] === roots[j]) {
+        union(i, j);
+        continue;
+      }
+      if (bodies[i].properties.immovable && bodies[j].properties.immovable)
+        continue;
+      if (!bounds[i].intersectsBox(bounds[j])) continue;
+      // An immovable prop does not need its time scaled and must not join distant
+      // vehicles through a large scenery hull. It still constrains each car.
+      if (!bodies[i].properties.immovable && !bodies[j].properties.immovable)
+        union(i, j);
+      pairs.push([i, j]);
+    }
+  const limits = new Map<number, number>();
+  for (const [i, j] of pairs) {
+    const fraction = guardPairTrajectory(
+      bodies[i],
+      bodies[j],
+      paths.get(bodies[i])!,
+      paths.get(bodies[j])!,
+    );
+    for (const index of [i, j])
+      if (!bodies[index].properties.immovable)
+        limits.set(
+          find(index),
+          Math.min(limits.get(find(index)) ?? 1, fraction),
+        );
+  }
+  return new Map(bodies.map((body, i) => [body, limits.get(find(i)) ?? 1]));
+}

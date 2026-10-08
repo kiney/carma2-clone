@@ -116,8 +116,18 @@ try {
       smoothing.interpolatedFrames > smoothing.repeatedPhysics * 0.8,
       `smooth fixed-tick rendering: ${JSON.stringify(smoothing)}`,
     );
+  const steeringStart = await page.evaluate(() => ({
+    time: window.carma.simulation.elapsed,
+    heading: window.carma.vehicle.heading,
+  }));
   await page.keyboard.down("a");
-  await page.waitForTimeout(750);
+  // Use actual fixed-step time: a software WebGL frame can take >50ms while
+  // the application's frame-dt cap advances less simulation than wall time.
+  await page.waitForFunction(
+    (time) => window.carma.simulation.elapsed >= time + 0.75,
+    steeringStart.time,
+    { timeout: 15000 },
+  );
   await page.keyboard.up("a");
   await page.keyboard.up("w");
   const driving = await page.evaluate(() => ({
@@ -135,7 +145,14 @@ try {
       1,
     `keyboard throttle moves original car: ${JSON.stringify({ before, driving })}`,
   );
-  assert.ok(driving.heading > 0.01, "keyboard steering changes heading");
+  const steeringChange = Math.atan2(
+    Math.sin(driving.heading - steeringStart.heading),
+    Math.cos(driving.heading - steeringStart.heading),
+  );
+  assert.ok(
+    steeringChange > 0.01,
+    `keyboard steering changes heading: ${JSON.stringify({ steeringStart, driving, steeringChange })}`,
+  );
   assert.ok(driving.triangles > 1000, "original scene rendered");
   assert.equal(driving.ready, true);
   assert.deepEqual(driving.audio, [], "original audio loads");

@@ -70,6 +70,12 @@ import {
   type RigidJoint,
 } from "./joint";
 import { advanceRigidBody } from "./integrate";
+import {
+  attachmentRoot,
+  guardBodyTrajectories,
+  type HullBody,
+  type PosePath,
+} from "./pair-guard";
 import { SafeCarHistory, allWheelsSuspended } from "./recovery";
 import { OilRuntime } from "./oil";
 import {
@@ -1608,8 +1614,6 @@ export class VehicleSimulation {
                 )
             )
               continue;
-            const attachmentRoot = (body: SimulationBody): RigidBody =>
-              "owner" in body && body.joint ? body.joint.parent : body;
             const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
               ...(a.overlapRecovery || b.overlapRecovery
                 ? {
@@ -1618,8 +1622,16 @@ export class VehicleSimulation {
                       b,
                       sameAttachmentGroup:
                         attachmentRoot(a) === attachmentRoot(b),
-                      boundsCenterA: hullsBounds(oldA).getCenter(new Vector3()),
-                      boundsCenterB: hullsBounds(oldB).getCenter(new Vector3()),
+                      // HW0x427b56..427c67 transforms each LOCAL bounds
+                      // center. World AABB centers differ under rotation/crush.
+                      boundsCenterA: hullsBounds(a.hulls)
+                        .getCenter(new Vector3())
+                        .applyQuaternion(a.state.orientation)
+                        .add(a.state.position),
+                      boundsCenterB: hullsBounds(b.hulls)
+                        .getCenter(new Vector3())
+                        .applyQuaternion(b.state.orientation)
+                        .add(b.state.position),
                     },
                   }
                 : {}),
@@ -2202,11 +2214,71 @@ export class VehicleSimulation {
       resolveRestarts();
       guardResults.clear();
     }
-    for (const body of this.allBodies()) {
-      const guard =
-        guardResults.get(body) ?? this.advanceWorldContacts(body, true);
+    const committing = this.allBodies();
+    const worldFractions = new Map(
+      committing.map((body) => [
+        body,
+        (guardResults.get(body) ?? this.advanceWorldContacts(body, true))
+          .fraction,
+      ]),
+    );
+    const paths = new Map<HullBody, PosePath>(
+      committing.map((body) => {
+        const probe = {
+          ...body,
+          state: {
+            ...body.state,
+            position: body.state.position.clone(),
+            orientation: body.state.orientation.clone(),
+            velocity: body.state.velocity.clone(),
+            angularVelocity: body.state.angularVelocity.clone(),
+            predictedPosition: new Vector3(),
+            predictedOrientation: new Quaternion(),
+          },
+        };
+        const cache = new Map<
+          number,
+          { position: Vector3; orientation: Quaternion }
+        >();
+        const path: PosePath = (fraction) => {
+          let pose = cache.get(fraction);
+          if (!pose) {
+            candidate(
+              probe,
+              PHYSICS_STEP * worldFractions.get(body)! * fraction,
+            );
+            pose = {
+              position: probe.state.predictedPosition.clone(),
+              orientation: probe.state.predictedOrientation.clone(),
+            };
+            cache.set(fraction, pose);
+          }
+          return pose;
+        };
+        // Momentum / smallest principal inertia bounds all midpoint angular
+        // rates, including full turns hidden by identical endpoint quaternions.
+        const inertia = body.properties.inertia;
+        path.angularTravel =
+          body.properties.immovable || body.properties.rotationLocked
+            ? 0
+            : (body.state.angularVelocity
+                .clone()
+                .applyQuaternion(body.state.orientation.clone().invert())
+                .multiply(inertia)
+                .length() /
+                Math.min(inertia.x, inertia.y, inertia.z)) *
+              PHYSICS_STEP *
+              worldFractions.get(body)!;
+        return [body, path];
+      }),
+    );
+    const pairFractions = guardBodyTrajectories(committing, paths);
+    for (const body of committing) {
       if (!body.properties.immovable)
-        advance(body, PHYSICS_STEP * guard.fraction);
+        advance(
+          body,
+          PHYSICS_STEP * worldFractions.get(body)! * pairFractions.get(body)!,
+        );
       body.overlapRecovery = body.overlapDetected;
       body.worldRecovery = body.worldOverlapDetected;
     }
@@ -2252,6 +2324,44 @@ export class VehicleSimulation {
         body.state.position.copy(accepted.position);
         body.state.orientation.copy(accepted.orientation);
         body.worldRecovery = true;
+      }
+    }
+    // Joint projection can otherwise put an already-safe flap/roof through
+    // another car. Verify this second trajectory as well, without impulses.
+    if (beforeProjection.length) {
+      const projected = new Map(
+        beforeProjection.map((entry) => [entry.body, entry]),
+      );
+      const projectionPaths = new Map<HullBody, PosePath>(
+        this.allBodies().map((body) => {
+          const before = projected.get(body as (typeof joined)[number]);
+          const position = body.state.position.clone(),
+            orientation = body.state.orientation.clone();
+          return [
+            body,
+            (fraction) =>
+              before
+                ? {
+                    position: before.position.clone().lerp(position, fraction),
+                    orientation: before.orientation
+                      .clone()
+                      .slerp(orientation, fraction),
+                  }
+                : { position, orientation },
+          ];
+        }),
+      );
+      const fractions = guardBodyTrajectories(
+        this.allBodies(),
+        projectionPaths,
+      );
+      for (const { body } of beforeProjection) {
+        const fraction = fractions.get(body)!;
+        if (fraction < 1) {
+          const pose = projectionPaths.get(body)!(fraction);
+          body.state.position.copy(pose.position);
+          body.state.orientation.copy(pose.orientation);
+        }
       }
     }
     for (const car of this.cars) {

@@ -935,6 +935,19 @@ function axes(a: CollisionHull, b: CollisionHull): Vector3[] {
       );
   return result;
 }
+/** Depth-only solid-hull SAT for placement/integration verification. Wire
+ * shapes retain their native feature contacts; they have no solid volume. */
+export function hullPenetration(a: CollisionHull, b: CollisionHull): number {
+  if (!a.faces.length || !b.faces.length) return 0;
+  let depth = Infinity;
+  for (const axis of axes(a, b)) {
+    const [al, ah] = projection(a.vertices, axis, a.vertexOrder),
+      [bl, bh] = projection(b.vertices, axis, b.vertexOrder);
+    if (ah <= bl || bh <= al) return 0;
+    depth = Math.min(depth, ah - bl, bh - al);
+  }
+  return Number.isFinite(depth) ? depth : 0;
+}
 /** Full convex SAT, including edge-edge axes. Normal points from B into A. */
 export function collideHulls(
   a: CollisionHull,
