@@ -4,6 +4,23 @@
 
 This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians. Source-based vehicle motion, collision impulses, persistent crush, component damage, detachable parts, water, oil, noncars, lifts, world destruction, mines and recovery have numerical and Chromium checks. Original pedestrian populations, threat reactions, blood assets and WASTED lettering/sound are integrated. Game assets are read from the installation and are not included here. Remaining compatibility gaps and editable priorities are in [TODO.md](TODO.md).
 
+## Original vs. browser engine
+
+Technical comparison of car geometry, body deformation and city rendering: both scenes show the same four car models and textured fire escapes. The engine scene is arranged and paused, with Eagle deformation produced by its damage system and an independently implemented HUD.
+
+<table>
+  <tr>
+    <th>Original Carmageddon II</th>
+    <th>Browser engine</th>
+  </tr>
+  <tr>
+    <td><img src="https://gaming-cdn.com/images/products/16521/screenshot/carmageddon-2-carpocalypse-now-pc-gioco-steam-wallpaper-1.jpg?v=1712048231" width="600" alt="Original Carmageddon II: a damaged red Eagle, blue Coupe de Grace, yellow Buzzmobile and pink Slam Sedan beside city buildings"></td>
+    <td><img src="artifacts/readme-comparison/engine-city-comparison.png" width="600" alt="Browser engine: the same four car models arranged on a city street, with damaged Eagle bodywork, textured fire escapes and the independent browser HUD"></td>
+  </tr>
+</table>
+
+Original screenshot: [Instant Gaming](https://www.instant-gaming.com/de/16521-kaufen-carmageddon-2-carpocalypse-now-pc-steam/) (author uncredited). Game: Stainless Games; IP: THQ Nordic. Game imagery is excluded from the MIT license.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:
