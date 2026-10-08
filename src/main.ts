@@ -57,11 +57,17 @@ import { physicsConfigFromCar } from "./handling";
 import { RoadNavigator } from "./ai";
 import { PedestrianSystem } from "./pedestrians";
 import { AudioSystem } from "./audio";
+import { WastedFeedback } from "./wasted";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use mine/mortar/oil · Tab: select ability<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
 const view = el("view") as HTMLCanvasElement;
+const feedbackCanvas = document.createElement("canvas");
+feedbackCanvas.id = "feedback";
+feedbackCanvas.setAttribute("aria-label", "Original wasted feedback");
+app.append(feedbackCanvas);
+const feedbackContext = feedbackCanvas.getContext("2d")!;
 const renderer = new THREE.WebGLRenderer({ canvas: view, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -79,6 +85,7 @@ const camera = new THREE.PerspectiveCamera(
 );
 const assets = new Assets();
 const audio = new AudioSystem(assets);
+const wastedFeedback = new WastedFeedback(assets, audio);
 let content: THREE.Group | undefined,
   car: THREE.Group | undefined,
   sky: THREE.Mesh | undefined,
@@ -137,6 +144,7 @@ const stats = {
 const debug = {
   stats,
   audio,
+  wastedFeedback,
   get simulation() {
     return simulation;
   },
@@ -216,6 +224,8 @@ function setPaused(value: boolean) {
 }
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
+  feedbackCanvas.width = innerWidth;
+  feedbackCanvas.height = innerHeight;
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -309,6 +319,7 @@ async function init() {
     }
     await audio.init();
     await assets.common(status);
+    await wastedFeedback.init();
     await loadRace();
     setPaused(true);
   } catch (error) {
@@ -380,6 +391,7 @@ async function loadRace() {
   setPaused(true);
   el("play").setAttribute("disabled", "");
   stats.ready = false;
+  wastedFeedback.reset();
   try {
     currentTrack = trackSelect.value;
     currentCar = carSelect.value;
@@ -607,6 +619,8 @@ async function loadRace() {
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    simulation.onWorldGeometryChanged = () =>
+      pedestrians?.invalidateWorldGeometry();
     simulation.specialVolumes = parseTrackSpecialVolumes(trackText);
     simulation.defaultWaterVolume = parseDefaultWaterVolume(generalText);
     simulation.oil = new OilRuntime({ texture: assets.textures.get("oil") });
@@ -617,7 +631,8 @@ async function loadRace() {
     };
     simulation.onMineEvent = (event) => {
       if (event.kind === "impactSound") void audio.playSound(event.sound);
-      if (event.kind === "explode") void audio.playSound(5400);
+      if (event.kind === "explode")
+        void audio.playSound(explosionSettings.soundId);
       if (event.kind === "explode")
         explosions?.spawn(
           explosionSettings.groups,
@@ -675,7 +690,28 @@ async function loadRace() {
       }
     };
     simulation.onWasted = (body) => {
-      if (body.human) message("YOU ARE WASTED", 10);
+      const rival = rivals.find((r) => r.body === body);
+      wastedFeedback.wasted(
+        body.human ? "player" : "rival",
+        body.human ? "player" : (rival?.id ?? body.group.uuid),
+        rival ? (opponents[rival.id]?.driverShortName ?? body.group.name) : "",
+        simulation!.elapsed * 1000,
+        explosionSettings.soundId,
+        !!body.wastedByPlayer,
+      );
+      // CheckDamage 0x43f620 plays the configured wasted explosion before
+      // KnackerThisCar. RaceCompleted(6) supplies the original fancy text.
+      const bounds = new THREE.Box3();
+      for (const hull of body.hulls)
+        for (const vertex of hull.vertices) bounds.expandByPoint(vertex);
+      explosions?.spawn(
+        explosionSettings.groups,
+        body.state.position,
+        bounds,
+        simulation!.elapsed * 1000,
+        undefined,
+        body.state.orientation,
+      );
     };
     car.position.copy(start);
     car.rotation.y = vehicle.heading;
@@ -868,8 +904,8 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     text,
     collision.height.bind(collision),
     {
-      maxCount: 80,
       spawn: vehicle.position,
+      collision,
       onHit: (event) => {
         if (race?.status === "racing") {
           race.credits += event.count * 200;
@@ -885,6 +921,18 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     return;
   }
   pedestrians = system;
+  // Establish native processing/popup visibility before the first rendered
+  // frame, including a race which remains paused after its asynchronous load.
+  system.update(
+    0,
+    {
+      position: vehicle.position,
+      yaw: vehicle.heading,
+      speed: 0,
+      velocity: new THREE.Vector3(),
+    },
+    { cameraPosition: camera.position, threats: [] },
+  );
   scene.add(system.group);
 }
 function motionAnimation(body: SimulatedCar) {
@@ -964,39 +1012,20 @@ function updateRivals(dt: number) {
 }
 
 function recover() {
-  if (!vehicle || !race || !track || !collision) return;
+  if (!vehicle || !race || !track || !collision || !player || !simulation)
+    return;
   if (player?.knackered) {
     message("CAR WASTED · ENTER TO RESTART");
     return;
   }
-  let p = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
-  let best = Infinity;
-  for (const [from, to] of track.pathEdges) {
-    const a = track.pathNodes[from],
-      b = track.pathNodes[to];
-    if (!a || !b) continue;
-    const segment = new THREE.Line3(
-      new THREE.Vector3(...a),
-      new THREE.Vector3(...b),
-    );
-    const projected = segment.closestPointToPoint(
-      vehicle.position,
-      true,
-      new THREE.Vector3(),
-    );
-    const d =
-      (projected.x - vehicle.position.x) ** 2 +
-      (projected.z - vehicle.position.z) ** 2;
-    if (d < best) {
-      best = d;
-      p = projected;
-    }
-  }
-  const y = collision.height(p.x, p.z, p.y + 1);
-  if (y !== null) p.y = y;
-  const recovered = recoverVehicle(vehicle, race, p, vehicle.heading);
+  const recovered = recoverVehicle(
+    vehicle,
+    race,
+    vehicle.position,
+    vehicle.heading,
+  );
   if (recovered) {
-    if (player) simulation?.reset(player);
+    simulation.recover(player);
     pedestrians?.resetCar(vehicle.position);
     powerups?.resetPath(vehicle.position);
   }
@@ -1249,11 +1278,41 @@ function animate(now: number) {
                 : "CHECKPOINT!",
         );
       }
-      pedestrians?.update(dt, {
-        position: vehicle.position,
-        yaw: vehicle.heading,
-        speed: vehicle.speed,
-      });
+      pedestrians?.update(
+        dt,
+        {
+          position: vehicle.position,
+          yaw: vehicle.heading,
+          speed: vehicle.speed,
+          velocity: vehicle.velocity,
+        },
+        {
+          cameraPosition: camera.position,
+          threats: simulation
+            ? [...simulation.cars, ...simulation.noncars].map((body) => {
+                // Source SetObjectRadius uses the furthest authored bound on each
+                // axis, preserving different original car sizes in ped prediction.
+                const extent = new THREE.Vector3();
+                for (const hull of body.hulls)
+                  for (const point of hull.vertices) {
+                    extent.x = Math.max(extent.x, Math.abs(point.x));
+                    extent.y = Math.max(extent.y, Math.abs(point.y));
+                    extent.z = Math.max(extent.z, Math.abs(point.z));
+                  }
+                return {
+                  position: body.state.position,
+                  yaw: "heading" in body.state ? Number(body.state.heading) : 0,
+                  speed:
+                    "speed" in body.state
+                      ? Number(body.state.speed)
+                      : body.state.velocity.length(),
+                  velocity: body.state.velocity,
+                  radiusSquared: extent.lengthSq(),
+                };
+              })
+            : undefined,
+        },
+      );
       const victory = applyRaceObjectives(race, definition, {
         opponentsTotal: rivals.length,
         opponentsWasted: rivals.filter((r) => r.wasted).length,
@@ -1380,6 +1439,12 @@ function animate(now: number) {
     drawMap();
   }
   if (now > messageUntil) el("message").textContent = paused ? "PAUSED" : "";
+  feedbackContext.clearRect(0, 0, feedbackCanvas.width, feedbackCanvas.height);
+  if (simulation)
+    wastedFeedback.draw(
+      feedbackContext,
+      (simulation.elapsed + simulation.accumulator) * 1000,
+    );
   try {
     renderer.render(scene, camera);
   } finally {

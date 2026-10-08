@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { DEFAULT_SURFACE, surfaceIndex } from "./physics/surfaces";
 import type { SurfaceModifier } from "./physics/surfaces";
 import { pointVelocity, type RigidBody } from "./physics/contact";
+import { intersectWheelFace } from "./physics/wheel-ray";
 export interface Surface {
   a: THREE.Vector3;
   b: THREE.Vector3;
@@ -257,6 +258,7 @@ export class WorldCollision {
     direction: THREE.Vector3,
     maxDistance: number,
     includeNonSolid = false,
+    nativeWheel = false,
   ) {
     if (
       !Number.isFinite(maxDistance) ||
@@ -266,9 +268,12 @@ export class WorldCollision {
       return null;
     const ray = new THREE.Ray(origin, direction.clone().normalize()),
       end = ray.at(maxDistance, new THREE.Vector3());
-    const bounds = new THREE.Box3()
-      .setFromPoints([origin, end])
-      .expandByScalar(0.005);
+    const bounds = new THREE.Box3().setFromPoints([origin, end]);
+    if (nativeWheel)
+      bounds.expandByPoint(
+        origin.clone().addScaledVector(ray.direction, -0.5 / 6.9),
+      );
+    bounds.expandByScalar(0.005);
     let best: {
       distance: number;
       normal: THREE.Vector3;
@@ -296,17 +301,25 @@ export class WorldCollision {
         (!includeNonSolid && /^[!>]/.test(surface.material))
       )
         continue;
+      const wheelHit = nativeWheel
+        ? intersectWheelFace(origin, end.clone().sub(origin), surface)
+        : undefined;
       if (
-        !ray.intersectTriangle(
-          surface.a,
-          surface.b,
-          surface.c,
-          !surface.twoSided,
-          point,
-        )
+        nativeWheel
+          ? !wheelHit
+          : !ray.intersectTriangle(
+              surface.a,
+              surface.b,
+              surface.c,
+              !surface.twoSided,
+              point,
+            )
       )
         continue;
-      const distance = point.distanceTo(origin);
+      if (wheelHit) point.copy(wheelHit.point);
+      const distance = wheelHit
+        ? wheelHit.fraction * maxDistance
+        : point.distanceTo(origin);
       if (distance > maxDistance || (best && distance >= best.distance))
         continue;
       const normal = surface.normal.clone();
@@ -327,6 +340,14 @@ export class WorldCollision {
       };
     }
     return best;
+  }
+  /** WheelForces' signed finite-face query; other rays retain forward semantics. */
+  wheelRaycast(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    maxDistance: number,
+  ) {
+    return this.raycast(origin, direction, maxDistance, false, true);
   }
   height(x: number, z: number, nearY: number) {
     let best: number | null = null;

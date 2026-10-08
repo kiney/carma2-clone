@@ -263,6 +263,108 @@ try {
   );
   delete mineImpact.shapeBefore;
 
+  const snowRecovery = await page.evaluate(async () => {
+    const c = window.carma;
+    document.querySelector("#track-select").value = c.assets.resolve(
+      "data/RACES/skitrack3/skitrack3.txt",
+    );
+    document.querySelector("#car-select").value = c.assets.resolve(
+      "data/CARS/monsterbug/monsterbug.txt",
+    );
+    await c.loadRace();
+    c.paused = true;
+    document.querySelector("#panel").hidden = true;
+    const p = c.player,
+      start = p.state.position.clone();
+    for (let i = 0; i < 50; i++) c.simulation.step();
+    p.input.throttle = 1;
+    for (let i = 0; i < 90; i++) c.simulation.step();
+    p.input.throttle = 0;
+    const poses = p.recoveryHistory.snapshots;
+    const allWheels = p.state.wheelLengths.every(
+      (length, i) => length < p.motion.suspensionLength[i >> 1],
+    );
+    const expected =
+      poses[
+        allWheels &&
+        p.state.position.distanceToSquared(poses[0].position) <=
+          Math.fround(8.3015966)
+          ? 1
+          : 0
+      ];
+    return {
+      start: start.toArray(),
+      beached: p.state.position.toArray(),
+      distance: start.distanceTo(p.state.position),
+      expected: expected.position.toArray(),
+      expectedUp: expected.position
+        .clone()
+        .set(0, 1, 0)
+        .applyQuaternion(expected.orientation)
+        .toArray(),
+      credits: c.race.credits,
+    };
+  });
+  assert.ok(
+    snowRecovery.distance > 1,
+    "original Monsterbug drove into the Snow Way Out embankment",
+  );
+  await page.locator("#view").focus();
+  await page.evaluate(() => {
+    window.carma.paused = false;
+    // Exercise the real keyboard command, then freeze its restored pose before
+    // the next RAF; the subsequent fixed ticks verify settling and driving.
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.code === "KeyR") window.carma.paused = true;
+      },
+      { once: true },
+    );
+  });
+  await page.keyboard.press("r");
+  const recoveredSnow = await page.evaluate(() => {
+    const c = window.carma,
+      p = c.player;
+    const recovered = {
+      position: p.state.position.toArray(),
+      up: p.state.position
+        .clone()
+        .set(0, 1, 0)
+        .applyQuaternion(p.state.orientation)
+        .toArray(),
+      credits: c.race.credits,
+    };
+    for (let i = 0; i < 70; i++) c.simulation.step();
+    const before = p.state.position.clone();
+    p.input.throttle = -1;
+    for (let i = 0; i < 80; i++) c.simulation.step();
+    p.input.throttle = 0;
+    return {
+      ...recovered,
+      driveDistance: before.distanceTo(p.state.position),
+      wheelCount: p.state.groundedWheelCount,
+      positionAfterDriving: p.state.position.toArray(),
+    };
+  });
+  assert.equal(recoveredSnow.credits, snowRecovery.credits - 250);
+  assert.ok(
+    recoveredSnow.position.every(
+      (v, i) => Math.abs(v - snowRecovery.expected[i]) < (i === 1 ? 0.3 : 0.01),
+    ),
+    "R restores source-safe history instead of the adjacent snowbank path projection",
+  );
+  assert.ok(
+    recoveredSnow.up.every(
+      (v, i) => Math.abs(v - snowRecovery.expectedUp[i]) < 1e-7,
+    ),
+    "R restores full original safe rotation",
+  );
+  assert.ok(
+    recoveredSnow.driveDistance > 1,
+    "recovered Monsterbug can leave the contour again",
+  );
+
   await page.evaluate(async () => {
     const c = window.carma;
     document.querySelector("#track-select").value = c.assets.resolve(
@@ -690,6 +792,118 @@ try {
     });
   }
 
+  await page.evaluate(async () => {
+    const c = window.carma;
+    document.querySelector("#track-select").value = c.assets.resolve(
+      "data/RACES/newcity1/newcity1.txt",
+    );
+    document.querySelector("#car-select").value = c.assets.resolve(
+      "data/CARS/EAGLE3/EAGLE3.TXT",
+    );
+    await c.loadRace();
+    c.paused = true;
+  });
+  await page.waitForFunction(() => !!window.carma.pedestrians, {
+    timeout: 90000,
+  });
+  const pedestrians = await page.evaluate(() => {
+    const c = window.carma,
+      peds = c.pedestrians;
+    const target = peds.states[0].position.clone();
+    const position = target.clone();
+    position.z -= 0.1;
+    const car = { position, yaw: 0, speed: 0 };
+    peds.resetCar(position); // Recovery/teleport resets native popup hysteresis.
+    peds.update(0.1, car, { cameraPosition: target, threats: [] });
+    const before = peds.states[0];
+    const rival = {
+      position: target.clone(),
+      yaw: 0,
+      speed: 3,
+      velocity: target.clone().set(0, 0, -3),
+      radiusSquared: 0.2,
+    };
+    rival.position.z += 2;
+    peds.update(0.1, car, { cameraPosition: target, threats: [rival] });
+    const scared = peds.states[0];
+    peds.reset();
+    peds.resetCar(target.clone().add(target.clone().set(0, 0, 0.8)));
+    peds.update(
+      0.01,
+      { position: target, yaw: 0, speed: 3 },
+      { cameraPosition: target, threats: [] },
+    );
+    const impact = peds.bloodStats;
+    for (let i = 0; i < 25; i++)
+      peds.update(0.1, car, { cameraPosition: target, threats: [] });
+    const settled = peds.bloodStats;
+    return {
+      count: peds.count,
+      before: before.action,
+      scared: scared.action,
+      impact,
+      settled,
+      hits: peds.hits,
+      warnings: peds.warnings,
+    };
+  });
+  assert.equal(pedestrians.count, 791, "native complete stock race population");
+  assert.equal(pedestrians.before, 0);
+  assert.equal(
+    pedestrians.scared,
+    2,
+    "a moving rival triggers native panic prediction",
+  );
+  assert.ok(pedestrians.impact.clouds > 0 && pedestrians.impact.giblets > 0);
+  assert.ok(
+    pedestrians.settled.smears > 0,
+    "sliding corpse leaves original blood texture",
+  );
+  assert.deepEqual(pedestrians.warnings, []);
+
+  await page.evaluate(() => window.carma.audio.unlock());
+  const wasted = await page.evaluate(() => {
+    const c = window.carma,
+      p = c.player,
+      sounds = [];
+    const originalSound = c.audio.playSound.bind(c.audio);
+    c.audio.playSound = async (id, ...args) => {
+      sounds.push(id);
+      return originalSound(id, ...args);
+    };
+    try {
+      p.damage.componentLevels[0] = 99;
+      for (let i = 0; i < 40; i++) c.simulation.step();
+      const canvas = document.querySelector("#feedback"),
+        ctx = canvas.getContext("2d");
+      c.wastedFeedback.draw(ctx, c.simulation.elapsed * 1000);
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let visiblePixels = 0;
+      for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) visiblePixels++;
+      return {
+        sounds,
+        knackered: p.knackered,
+        visiblePixels,
+        lettering: c.wastedFeedback.playerTextVisible,
+        raceStatus: c.race.status,
+      };
+    } finally {
+      c.audio.playSound = originalSound;
+    }
+  });
+  assert.deepEqual(
+    wasted.sounds,
+    [5400],
+    "configured native wasted sound occurs once",
+  );
+  assert.ok(wasted.knackered && wasted.lettering && wasted.visiblePixels > 100);
+  assert.equal(
+    wasted.raceStatus,
+    "racing",
+    "original ten-second wreck countdown continues",
+  );
+  await page.screenshot({ path: "artifacts/browser-priority-wasted.png" });
+
   const glErrors = await page.evaluate(() => {
     const gl = document.querySelector("#view").getContext("webgl2");
     const errors = [];
@@ -713,6 +927,9 @@ try {
     water,
     liftImpact,
     airportSmash,
+    snowRecovery: { ...snowRecovery, after: recoveredSnow },
+    pedestrians,
+    wasted,
     glErrors,
     errors,
     failedRequests,

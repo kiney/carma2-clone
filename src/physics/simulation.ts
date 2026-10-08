@@ -70,6 +70,7 @@ import {
   type RigidJoint,
 } from "./joint";
 import { advanceRigidBody } from "./integrate";
+import { SafeCarHistory, allWheelsSuspended } from "./recovery";
 import { OilRuntime } from "./oil";
 import {
   releaseNonCar,
@@ -148,8 +149,11 @@ export interface SimulatedCar extends RigidBody {
   suspensionBendActive: boolean;
   splitRevision: number;
   wastedAt?: number;
+  /** Culprit of the damage transition, for DamagePost's player-waste headup. */
+  wastedByPlayer?: boolean;
   /** Source car+1d4: wasting persists through model/component repair. */
   knackered: boolean;
+  recoveryHistory: SafeCarHistory;
   repairing: boolean;
   repairAwaitingShapeSwap: boolean;
   lastAttributedImpactMs: number;
@@ -316,6 +320,7 @@ export function createSimulatedCar(
     repairing: false,
     repairAwaitingShapeSwap: false,
     knackered: false,
+    recoveryHistory: new SafeCarHistory(state),
     lastAttributedImpactMs: 0,
     armorLevel: human ? 1 : 0,
     offenseLevel: human ? 1 : 0,
@@ -378,6 +383,7 @@ export class VehicleSimulation {
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
   onWasted?: (car: SimulatedCar) => void;
+  onWorldGeometryChanged?: () => void;
   settings?: UpgradeSettings;
   skill: 0 | 1 | 2 = 0;
   specialVolumes?: SpecialVolumeConfig;
@@ -607,6 +613,7 @@ export class VehicleSimulation {
     if (event.kind === "crush") this.spamCar(event.victim, event.strength);
     else if (event.kind === "reaction") {
       const car = event.victim;
+      const wasWasted = car.damage.wasted;
       car.state.velocity.add(event.deltaVelocity);
       car.state.angularVelocity.add(
         event.deltaAngularVelocity
@@ -623,6 +630,8 @@ export class VehicleSimulation {
         );
       if (event.creditOwner?.human && !car.human)
         car.lastAttributedImpactMs = this.elapsed * 1000;
+      if (!wasWasted && car.damage.wasted)
+        car.wastedByPlayer = !!event.creditOwner?.human;
       car.state.health = 100 - Math.max(...car.damage.componentLevels);
     } else if (event.kind === "explode" || event.kind === "release") {
       const body = this.mineBodies.find((body) => body.mine === event.mine);
@@ -674,6 +683,85 @@ export class VehicleSimulation {
     car.state.predictedPosition = undefined;
     car.state.predictedOrientation = undefined;
     car.specialVolume = undefined;
+    this.oilWheelPrevious.delete(car);
+    this.sync(car);
+  }
+  /** Ordinary FlipUpCar: native saved poses, ceiling clearance, placement retry,
+   * attached-child reorientation and drive-state reset. Damage stays persistent. */
+  recover(car: SimulatedCar) {
+    let skipNewest = allWheelsSuspended({
+      wheelLengths: car.state.wheelLengths,
+      suspensionLengths: car.motion.suspensionLength,
+      roadFrictions: [],
+    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const saved = car.recoveryHistory.next(car.state.position, skipNewest);
+      skipNewest &&= saved.selectedIndex === 1;
+      car.state.position.copy(saved.position);
+      car.state.orientation.copy(saved.orientation);
+      const upwardClearance = 0.28985506296157837;
+      if (!this.world.raycast(car.state.position, Y, upwardClearance))
+        car.state.position.y += upwardClearance;
+      let sensible = false;
+      for (let push = 0; push <= 10; push++) {
+        const direction = this.placementDirection(car, car.hulls);
+        if (!direction) {
+          sensible = true;
+          break;
+        }
+        if (push === 10) break;
+        car.state.position.addScaledVector(direction, 0.07246376574039459);
+      }
+      // Local HW/SW retries older entries only after all ten nudges fail.
+      // rec2's unconditional three-iteration loop differs from this revision.
+      if (sensible) break;
+    }
+    const recoveredBodies: RigidBody[] = [car];
+    for (let i = 0; i < recoveredBodies.length; i++) {
+      const parent = recoveredBodies[i];
+      for (const child of this.debris) {
+        if (child.joint?.parent !== parent || recoveredBodies.includes(child))
+          continue;
+        child.state.orientation.copy(parent.state.orientation);
+        child.state.position
+          .copy(child.joint.parentAnchor)
+          .applyQuaternion(parent.state.orientation)
+          .add(parent.state.position)
+          .sub(
+            child.joint.childAnchor
+              .clone()
+              .applyQuaternion(child.state.orientation),
+          );
+        child.state.velocity.set(0, 0, 0);
+        child.state.angularVelocity.set(0, 0, 0);
+        child.state.predictedPosition = undefined;
+        child.state.predictedOrientation = undefined;
+        this.syncActor(child);
+        recoveredBodies.push(child);
+      }
+    }
+    car.poseEpoch++;
+    car.state.angularVelocity.set(0, 0, 0);
+    car.state.velocity
+      .set(0, 0, -Math.fround(0.0002))
+      .applyQuaternion(car.state.orientation);
+    const forward = new Vector3(0, 0, -1).applyQuaternion(
+      car.state.orientation,
+    );
+    car.state.heading = Math.atan2(-forward.x, -forward.z);
+    car.state.curvature =
+      car.state.turnSpeed =
+      car.state.rpm =
+      car.state.gear =
+      car.state.speed =
+        0;
+    car.state.wheelLengths = [0, 1, 2, 3].map(
+      (i) => car.motion.suspensionBase.rideHeight,
+    ) as typeof car.state.wheelLengths;
+    car.state.predictedPosition = undefined;
+    car.state.predictedOrientation = undefined;
+    car.overlapRecovery = car.worldRecovery = true;
+    if (car.specialVolume) car.specialVolume.automatic = null;
     this.oilWheelPrevious.delete(car);
     this.sync(car);
   }
@@ -731,6 +819,7 @@ export class VehicleSimulation {
   private oilGround(car: SimulatedCar) {
     return {
       raycast: this.world.raycast.bind(this.world),
+      wheelRaycast: this.world.wheelRaycast?.bind(this.world),
       worldWheelContact: (
         wheels: readonly {
           hit: import("./motion").MotionGroundHit | null | undefined;
@@ -781,6 +870,7 @@ export class VehicleSimulation {
         if (result.changes.some((change) => change.requiresRebuild)) {
           this.world.rebuildStatic();
           this.world.invalidateDynamic();
+          this.onWorldGeometryChanged?.();
         }
       },
       springReaction: (
@@ -1036,7 +1126,7 @@ export class VehicleSimulation {
    * This integration guard is separate from the original contact selection:
    * its normal-prefix rule can deliberately discard a simultaneous road face.
    */
-  private advanceWorldContacts(body: SimulationBody) {
+  private advanceWorldContacts(body: SimulationBody, refine = false) {
     if (
       body.properties.immovable ||
       ("kind" in body &&
@@ -1051,13 +1141,39 @@ export class VehicleSimulation {
         Math.ceil((body.state.angularVelocity.length() * PHYSICS_STEP) / 0.05),
       ),
     );
-    return this.sweepWorldTrajectory(body, samples, (fraction) => {
+    const pose = (fraction: number) => {
       candidate(body, PHYSICS_STEP * fraction);
       return {
         position: body.state.predictedPosition!,
         orientation: body.state.predictedOrientation!,
       };
-    });
+    };
+    const guard = this.sweepWorldTrajectory(body, samples, pose);
+    if (
+      refine &&
+      guard.contacts.length &&
+      guard.crossingFraction > guard.fraction
+    ) {
+      // A single angular sample formerly rejected the entire tick even with
+      // clearance before the contact. Prove a safe prefix against actual poses
+      // rather than assuming the interpolated time is safe for rigid rotation.
+      // Only final commitment needs this; contact solving retains its own rows.
+      let safe = guard.fraction,
+        blocked = guard.crossingFraction;
+      for (let i = 0; i < 8; i++) {
+        const trial = (safe + blocked) / 2;
+        const prefix = this.sweepWorldTrajectory(
+          body,
+          Math.max(1, Math.ceil(samples * trial)),
+          (fraction) => pose(fraction * trial),
+        );
+        if (prefix.contacts.length) blocked = trial;
+        else safe = trial;
+      }
+      guard.fraction = safe;
+      pose(safe);
+    }
+    return guard;
   }
   private sweepWorldTrajectory(
     body: SimulationBody,
@@ -1183,6 +1299,7 @@ export class VehicleSimulation {
     return {
       contacts,
       fraction: hits.length ? Math.max(0, earliest - 1 / samples) : 1,
+      crossingFraction: earliest,
     };
   }
   private placementDirection(
@@ -1645,6 +1762,7 @@ export class VehicleSimulation {
         if (rebuild) {
           this.world.rebuildStatic();
           this.world.invalidateDynamic();
+          this.onWorldGeometryChanged?.();
         }
         const capped =
           result.threshold !== undefined &&
@@ -1784,6 +1902,7 @@ export class VehicleSimulation {
               : 1,
           },
         );
+        const wasWasted = car.damage.wasted;
         car.damage.applyImpact(
           impact.contacts,
           vectors.damage,
@@ -1793,6 +1912,7 @@ export class VehicleSimulation {
           vectors.crush,
           impact.mean.divideScalar(impact.weight),
         );
+        if (!wasWasted && car.damage.wasted) car.wastedByPlayer = !!humanSource;
         this.onImpact?.(car, impact.severity);
       }
     for (const car of this.cars) this.syncStructuralState(car);
@@ -2083,7 +2203,8 @@ export class VehicleSimulation {
       guardResults.clear();
     }
     for (const body of this.allBodies()) {
-      const guard = guardResults.get(body) ?? this.advanceWorldContacts(body);
+      const guard =
+        guardResults.get(body) ?? this.advanceWorldContacts(body, true);
       if (!body.properties.immovable)
         advance(body, PHYSICS_STEP * guard.fraction);
       body.overlapRecovery = body.overlapDetected;
@@ -2155,6 +2276,16 @@ export class VehicleSimulation {
           .applyQuaternion(car.state.orientation.clone().invert()),
       );
       this.detachParts(car);
+      if (car.human)
+        car.recoveryHistory.remember(PHYSICS_STEP * 1000, car.state, {
+          wheelLengths: car.state.wheelLengths,
+          suspensionLengths: car.motion.suspensionLength,
+          roadFrictions: car.debug?.wheelRoadFrictions ?? [],
+          dynamicSupport: car.debug?.dynamicWheelSupport,
+          volumeGravity: car.specialVolume?.volume?.gravityMultiplier,
+          split: car.damage.snapped,
+          disabled: car.knackered,
+        });
     }
     for (const body of this.debris) {
       body.actor.position.copy(body.state.position);

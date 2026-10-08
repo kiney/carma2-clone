@@ -21,6 +21,7 @@ test("pedestrian config reads material density, exclusions, exceptions and perso
       group: 0,
       density: 2,
       exclusions: ["road"],
+      exclusionFlags: [1],
       exceptions: ["garden"],
     },
   ]);
@@ -166,11 +167,15 @@ test(
       ),
     );
     const positions = peds.group.children.map((p) => p.position.clone());
-    peds.update(0.1, {
-      position: new THREE.Vector3(54.061, 0.825, 23.629),
-      yaw: 0,
-      speed: 0,
-    });
+    peds.update(
+      0.1,
+      {
+        position: new THREE.Vector3(54.061, 0.825, 23.629),
+        yaw: 0,
+        speed: 0,
+      },
+      { cameraPosition: positions[0] },
+    );
     assert.ok(
       peds.group.children.some(
         (p, i) => p.position.distanceTo(positions[i]) > 0,

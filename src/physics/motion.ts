@@ -85,6 +85,11 @@ export interface MotionGroundHit {
   surface?: import("../world").Surface;
 }
 export interface MotionGround {
+  wheelRaycast?(
+    origin: Vector3,
+    direction: Vector3,
+    maxDistance: number,
+  ): MotionGroundHit | null;
   raycast(
     origin: Vector3,
     direction: Vector3,
@@ -140,6 +145,9 @@ export interface MotionParameters {
   random?: () => number;
 }
 export interface MotionDebug {
+  /** Original material_index[] friction and field_0x195c recovery gates. */
+  wheelRoadFrictions: readonly number[];
+  dynamicWheelSupport: boolean;
   wheelSpringLoads: [number, number, number, number];
   wheelCapacities: [number, number, number, number];
   wheelTyreForces: [number, number, number, number];
@@ -566,7 +574,12 @@ export function applyVehicleForces(
       .multiplyScalar(1 / S)
       .applyQuaternion(s.orientation)
       .add(s.position);
-    const rawHit = ground.raycast(start, rayDirection, rayLength / S);
+    const rawHit = (ground.wheelRaycast ?? ground.raycast).call(
+      ground,
+      start,
+      rayDirection,
+      rayLength / S,
+    );
     wheelPoints[i] = start.clone().multiplyScalar(S);
     wheelGrounded[i] = false;
     const hit =
@@ -999,6 +1012,8 @@ export function applyVehicleForces(
   s.curvature -= steeringDamage;
   return {
     wheelSpringLoads: loads,
+    wheelRoadFrictions: hits.map((hit) => hit?.friction ?? 0),
+    dynamicWheelSupport: hits.some((hit, i) => wheelGrounded[i] && !!hit?.body),
     wheelCapacities: caps,
     wheelTyreForces: actual,
     axleForces: [

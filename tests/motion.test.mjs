@@ -99,6 +99,7 @@ test("authored volume material overrides wheel friction without changing spring 
   const ordinary = preload(state(p, vector(4, 0, -10)), p);
   const submerged = preload(state(p, vector(4, 0, -10)), p);
   submerged.volumeSurface = { tyreFriction: 0.25, downforce: 0, bumpiness: 0 };
+  const road = staticRoad(p);
   const a = applyVehicleForces(
     ordinary,
     neutral,
@@ -112,10 +113,23 @@ test("authored volume material overrides wheel friction without changing spring 
     neutral,
     0.04,
     p,
-    staticRoad(p),
+    {
+      ...road,
+      raycast(...args) {
+        return {
+          ...road.raycast(...args),
+          surface: { modifier: { tyreFriction: 1 } },
+        };
+      },
+    },
     createMotionContext(),
   );
   assert.deepEqual(a.wheelSpringLoads, b.wheelSpringLoads);
+  assert.deepEqual(
+    b.wheelRoadFrictions,
+    [0.25, 0.25, 0.25, 0.25],
+    "safe-position history uses the effective native volume material index",
+  );
   for (let i = 0; i < 4; i++)
     near(b.wheelCapacities[i], a.wheelCapacities[i] * 0.25);
 });
