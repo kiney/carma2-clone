@@ -68,6 +68,11 @@ import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use mine/mortar/oil · Tab: select ability<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
+app.insertAdjacentHTML(
+  "beforeend",
+  '<div id="fps-counter" aria-label="Frames per second">FPS —</div>',
+);
+const fpsCounter = el("fps-counter");
 el("play").insertAdjacentHTML(
   "beforebegin",
   '<label class="debug-check"><input id="debug-menu-toggle" type="checkbox"> Debug mode (timer, credits, powerups)</label>',
@@ -1281,12 +1286,15 @@ function onPowerupEvent(event: PowerupEvent) {
 
 function animate(now: number) {
   requestAnimationFrame(animate);
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  const frameSeconds = (now - lastTime) / 1000;
+  const dt = Math.min(frameSeconds, 0.05);
   lastTime = now;
-  seconds += dt;
+  // Render FPS uses real elapsed time, independent of the gameplay dt cap.
+  seconds += frameSeconds;
   frames++;
   if (seconds >= 1) {
     fps = Math.round(frames / seconds);
+    fpsCounter.textContent = `${fps} FPS`;
     seconds = frames = 0;
   }
   debugPanel.refresh();

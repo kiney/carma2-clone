@@ -25,6 +25,19 @@ body,
   text-shadow: 2px 2px #140b00;
   font-weight: 900;
 }
+#fps-counter {
+  position: fixed;
+  right: 8px;
+  bottom: 6px;
+  z-index: 5;
+  pointer-events: none;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #17130f80;
+  color: #e4d7bd;
+  font: 11px/12px monospace;
+  font-variant-numeric: tabular-nums;
+}
 #feedback {
   position: fixed;
   inset: 0;
