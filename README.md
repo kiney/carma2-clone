@@ -61,6 +61,8 @@ Run `npm test` for parsers, assets and deterministic motion/contact/crush/compon
 
 ## Asset and license notes
 
-Use an installation you are entitled to use. Assets are read from that directory at runtime and are not copied into this repository or included in its license. Independently written project code is MIT licensed; see [LICENSE](LICENSE). The runtime depends on Three.js (MIT) and UTIF (MIT); see the package metadata and lockfile for dependency details.
+Use an installation you are entitled to use. Assets are read from that directory at runtime and are not copied into this repository or included in its license. Independently written project code is MIT licensed; see [LICENSE](LICENSE). The runtime depends on Three.js (MIT), UTIF (MIT), and UTIF's dependency pako (MIT and Zlib). UTIF also embeds a PDF.js/jpgjs JPEG decoder (Apache-2.0). Their copyright notices and license texts are included in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).
+
+Every production build includes `LICENSE.txt` and `THIRD_PARTY_LICENSES.txt` at the root of `dist/`. Keep both files with distributed builds. Update the third-party notices when upgrading bundled dependencies.
 
 Format research consulted rec2, dethrace, OpenC1, and ToxicRagers. No source code from those projects is included or used as a runtime dependency. Their licenses do not apply to this independent implementation, and this project's license grants no rights to Carmageddon II game data.
