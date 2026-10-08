@@ -52,6 +52,14 @@ export interface PowerupEvent {
   amount?: number;
 }
 
+const implementedActions = new Set([
+  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 27, 30, 34, 35, 46, 47, 51,
+]);
+
+export function isPowerupImplemented(definition: PowerupDefinition): boolean {
+  return implementedActions.has(definition.action);
+}
+
 /** Parse the line-oriented powerup table, retaining positional parameters. */
 export function parsePowerups(text: string): PowerupDefinition[] {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
@@ -217,11 +225,7 @@ export class PowerupSystem {
         );
         continue;
       }
-      if (
-        ![
-          0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 27, 30, 34, 35, 46, 47, 51,
-        ].includes(definition.action)
-      ) {
+      if (!isPowerupImplemented(definition)) {
         if (!this.unsupportedWarned.has(index)) {
           this.unsupportedWarned.add(index);
           this.warnings.push(
@@ -310,6 +314,19 @@ export class PowerupSystem {
 
   resetPath(position: THREE.Vector3): void {
     this.previous = position.clone();
+  }
+
+  /** Debug grants enter the ordinary pickup path without consuming a world actor.
+   * Durations, source parameters, charges and simulation events remain identical. */
+  grant(
+    index: number,
+    vehicle: VehicleState,
+    race: RaceState,
+    onEvent?: (event: PowerupEvent) => void,
+  ): boolean {
+    if (!Number.isSafeInteger(index) || !this.definitions[index]) return false;
+    this.apply(index, vehicle, race, onEvent);
+    return true;
   }
   /** Keyboard powerups use an input edge, not an every-frame cooldown.
    * Negative initialValue is the native charge count; successful calls consume

@@ -129,6 +129,99 @@ button:disabled {
 #panel[hidden] {
   display: none;
 }
+#debug-button {
+  position: fixed;
+  top: 65px;
+  left: calc(2% + 128px);
+  font-size: 12px;
+  padding: 7px;
+  background: #332b1c;
+  z-index: 3;
+}
+#debug-button[aria-pressed="true"] {
+  border-color: #ffd369;
+}
+#debug-panel {
+  position: fixed;
+  top: 105px;
+  left: 2%;
+  width: min(340px, 96vw);
+  max-height: calc(100vh - 145px);
+  overflow-y: auto;
+  background: #211a13f5;
+  border: 2px solid #b78b44;
+  padding: 14px;
+  z-index: 4;
+  font-size: 13px;
+  box-shadow: 0 6px 24px #0008;
+}
+#debug-panel[hidden] {
+  display: none;
+}
+.debug-header,
+.debug-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#debug-panel button {
+  padding: 7px;
+  font-size: 12px;
+}
+#debug-close {
+  font-size: 18px !important;
+}
+#debug-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.debug-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.debug-check input {
+  margin: 0;
+  accent-color: #ffd369;
+}
+#debug-credit-amount {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px;
+  background: #211a13;
+  color: #fff4d4;
+  border: 1px solid #b78b44;
+}
+#debug-panel select {
+  font-size: 12px;
+}
+#debug-panel small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #d1bc98;
+}
+#debug-panel button:disabled {
+  cursor: default;
+}
+#debug-panel .debug-row {
+  margin-top: 12px;
+}
+#debug-panel .debug-row button {
+  flex: 1;
+}
+#debug-restart {
+  margin-top: 8px;
+}
+#timer.debug-frozen::after {
+  content: " ⏸";
+  font-size: 0.5em;
+  vertical-align: middle;
+}
 h1 {
   margin: 0;
   font-size: 36px;

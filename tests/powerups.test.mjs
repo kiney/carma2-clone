@@ -29,6 +29,62 @@ function table(definitions) {
   return lines.join("\r\n");
 }
 
+test("debug grants preserve original pickup charges, event dispatch, renewed expiry and world actors", async () => {
+  const root = new THREE.Group(),
+    actor = new THREE.Group();
+  actor.name = "&£000001";
+  actor.position.x = 100;
+  root.add(actor);
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([
+          { action: 9, duration: 1, floats: [2, 1, 1, 1, 0, 0, 1] },
+          { action: 35, initialValue: -5 },
+          { action: 7 },
+        ]),
+    },
+    root,
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]),
+    events = [];
+  const onEvent = (event) => events.push(event.kind);
+  for (const index of [-1, 3, 0.5, NaN, Infinity])
+    assert.equal(system.grant(index, car, race, onEvent), false);
+  assert.deepEqual(events, []);
+  assert.equal(system.grant(0, car, race, onEvent), true);
+  assert.equal(system.update(0.6, car, race).accelerationMultiplier, 2);
+  system.grant(0, car, race, onEvent);
+  assert.equal(
+    system.update(0.6, car, race).accelerationMultiplier,
+    2,
+    "renewed source duration owns the timeout",
+  );
+  assert.equal(system.update(0.5, car, race).accelerationMultiplier, 1);
+  system.grant(1, car, race, onEvent);
+  system.activateAbility(race);
+  assert.equal(system.abilities.get(1).charges, 4);
+  system.grant(1, car, race, onEvent);
+  assert.equal(
+    system.abilities.get(1).charges,
+    5,
+    "grant refills original inventory rather than stacking arbitrary charges",
+  );
+  car.health = 20;
+  system.grant(2, car, race, onEvent);
+  assert.equal(car.health, 100);
+  assert.deepEqual(events, [
+    "engine",
+    "engine",
+    "ability",
+    "ability",
+    "repair",
+  ]);
+  assert.equal(system.pickups[0].collected, false);
+  assert.equal(actor.visible, true);
+});
+
 test("original negative charge count becomes edge-operated oil inventory and expires on its fifth use", async () => {
   const root = new THREE.Group();
   const actor = new THREE.Group();

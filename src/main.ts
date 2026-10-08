@@ -16,7 +16,12 @@ import { createRace, updateRace, speedMph, recoverVehicle } from "./gameplay";
 import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
 import { DamageSystem } from "./damage";
-import { PowerupSystem } from "./powerups";
+import {
+  PowerupSystem,
+  type PowerupEvent,
+  type PowerupDefinition,
+} from "./powerups";
+import { DebugPanel } from "./debug-panel";
 import { CarAnimation, TextureAnimation } from "./animation";
 import { applyRaceObjectives, isSupportedRace, objectiveText } from "./rules";
 import {
@@ -62,6 +67,10 @@ import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use mine/mortar/oil · Tab: select ability<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
+el("play").insertAdjacentHTML(
+  "beforebegin",
+  '<label class="debug-check"><input id="debug-menu-toggle" type="checkbox"> Debugmodus (Timer, Credits, Powerups)</label>',
+);
 const view = el("view") as HTMLCanvasElement;
 const feedbackCanvas = document.createElement("canvas");
 feedbackCanvas.id = "feedback";
@@ -145,6 +154,9 @@ const debug = {
   stats,
   audio,
   wastedFeedback,
+  get debugMode() {
+    return debugPanel;
+  },
   get simulation() {
     return simulation;
   },
@@ -374,6 +386,51 @@ let rivals: Rival[] = [];
 let pedestrians: PedestrianSystem | undefined;
 let powerups: PowerupSystem | undefined;
 let upgradeSettings: UpgradeSettings | undefined;
+const noPowerups: readonly PowerupDefinition[] = [];
+const debugPanel = new DebugPanel(app, {
+  ready: () => stats.ready && !loading && !!player && !!race && !!simulation,
+  running: () => race?.status === "racing",
+  definitions: () => powerups?.definitions ?? noPowerups,
+  credits: (amount) => {
+    if (!race) return;
+    race.credits = Math.min(Number.MAX_SAFE_INTEGER, race.credits + amount);
+    if (player?.upgrades) player.upgrades.credits = race.credits;
+    message(`DEBUG · +${amount} CR`);
+  },
+  time: (amount) => {
+    if (race) race.timeLeft += amount;
+    message(`DEBUG · +${amount} SECONDS`);
+  },
+  grant: (index) => {
+    if (vehicle && race) powerups?.grant(index, vehicle, race, onPowerupEvent);
+  },
+  repair: () => {
+    if (player && simulation) simulation.repair(player);
+    message(
+      player?.knackered
+        ? "REPAIRED · WASTED REQUIRES RESTART"
+        : "DEBUG · FULL REPAIR",
+    );
+  },
+  recover: () => {
+    if (!player || !simulation) return;
+    simulation.recover(player);
+    pedestrians?.resetCar(player.state.position);
+    powerups?.resetPath(player.state.position);
+    message(
+      player.knackered
+        ? "RECOVERED · WASTED REQUIRES RESTART"
+        : "DEBUG · FREE RECOVERY",
+    );
+  },
+  restart: () => {
+    void loadRace();
+  },
+  focusDriving: () => {
+    if (!paused) view.focus();
+  },
+  clearInput: () => keys.clear(),
+});
 function updateUpgradeFactors(body: SimulatedCar) {
   if (!body.upgrades || !upgradeSettings) return;
   const factors = upgradeFactors(body.upgrades, upgradeSettings);
@@ -1050,7 +1107,8 @@ addEventListener("keydown", (event) => {
     }
     return;
   }
-  if ((event.target as HTMLElement)?.tagName === "SELECT") return;
+  if ((event.target as HTMLElement)?.closest("input, select, textarea, button"))
+    return;
   if (
     ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(
       event.code,
@@ -1160,6 +1218,46 @@ function drawMap() {
   ctx.fill();
   ctx.restore();
 }
+function onPowerupEvent(event: PowerupEvent) {
+  if (event.kind === "ability") {
+    message(`${event.name} · ${event.amount} · F TO USE`);
+    audio.checkpoint();
+    return;
+  }
+  if (event.kind === "unsupported") {
+    message(`NOT IMPLEMENTED · ${event.name}`, 5);
+    return;
+  }
+  if (event.kind === "repair") {
+    if (player && simulation) simulation.repair(player);
+    else damage?.repair();
+  }
+  if (event.kind === "crash" && player && simulation) {
+    if (event.definition.action === 30)
+      simulation.hitMine(player, event.definition.floatParams);
+    if (event.definition.action === 12)
+      simulation.spamCar(player, (0.1 * player.damage.carSoftness * 10) / 7);
+  }
+  if (event.kind === "upgrade" && player?.upgrades && upgradeSettings && race) {
+    player.upgrades.credits = race.credits;
+    applyUpgradePickup(
+      player.upgrades,
+      upgradeSettings,
+      { skill: 0 },
+      event.definition.action as 46 | 47,
+      event.definition.integerParams,
+    );
+    race.credits = player.upgrades.credits;
+    updateUpgradeFactors(player);
+  }
+  message(
+    event.name === "n/a"
+      ? `${event.kind.toUpperCase()} +${event.amount ?? 0}`
+      : event.name,
+  );
+  audio.checkpoint();
+}
+
 function animate(now: number) {
   requestAnimationFrame(animate);
   const dt = Math.min((now - lastTime) / 1000, 0.05);
@@ -1170,61 +1268,22 @@ function animate(now: number) {
     fps = Math.round(frames / seconds);
     seconds = frames = 0;
   }
+  debugPanel.refresh();
   if (vehicle && car && race && collision) {
     if (!paused && race.status === "racing") {
       worldAnimation?.update(dt);
-      const modifiers = powerups?.update(dt, vehicle, race, (event) => {
-        if (event.kind === "ability") {
-          message(`${event.name} · ${event.amount} · F TO USE`);
-          audio.checkpoint();
-          return;
-        }
-        if (event.kind === "unsupported") {
-          message(`NOT IMPLEMENTED · ${event.name}`, 5);
-          return;
-        }
-        if (event.kind === "repair") {
-          if (player && simulation) simulation.repair(player);
-          else damage?.repair();
-        }
-        if (event.kind === "crash" && player && simulation) {
-          if (event.definition.action === 30)
-            simulation.hitMine(player, event.definition.floatParams);
-          if (event.definition.action === 12)
-            simulation.spamCar(
-              player,
-              (0.1 * player.damage.carSoftness * 10) / 7,
-            );
-        }
-        if (event.kind === "upgrade" && player?.upgrades && upgradeSettings) {
-          player.upgrades.credits = race!.credits;
-          applyUpgradePickup(
-            player.upgrades,
-            upgradeSettings,
-            { skill: 0 },
-            event.definition.action as 46 | 47,
-            event.definition.integerParams,
-          );
-          race!.credits = player.upgrades.credits;
-          updateUpgradeFactors(player);
-        }
-        message(
-          event.name === "n/a"
-            ? `${event.kind.toUpperCase()} +${event.amount ?? 0}`
-            : event.name,
-        );
-        audio.checkpoint();
-      });
+      const modifiers = powerups?.update(dt, vehicle, race, onPowerupEvent);
       previous.copy(vehicle.position);
       if (player && simulation) {
         player.state.engineFactor = modifiers?.accelerationMultiplier ?? 1;
         player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
         player.state.underwaterAbility = modifiers?.underwaterAbility ?? false;
         player.damage.damageContext.invulnerable =
-          modifiers?.invulnerable ?? false;
+          debugPanel.invulnerable || (modifiers?.invulnerable ?? false);
         player.damageMultiplier = modifiers?.damageMultiplier ?? 1;
         player.protection = modifiers?.protection ?? 1;
-        player.freeRepairs = modifiers?.freeRepairs ?? false;
+        player.freeRepairs =
+          debugPanel.freeRepairs || (modifiers?.freeRepairs ?? false);
         if (
           modifiers?.suspension &&
           modifiers.suspension !== player.suspensionPowerup
@@ -1265,7 +1324,11 @@ function animate(now: number) {
         race,
         previous,
         vehicle.position,
-        isSupportedRace(definition) && !modifiers?.timerFrozen ? dt : 0,
+        isSupportedRace(definition) &&
+          !modifiers?.timerFrozen &&
+          !debugPanel.timerFrozen
+          ? dt
+          : 0,
       )) {
         audio.checkpoint();
         message(
@@ -1436,6 +1499,10 @@ function animate(now: number) {
           pedestriansKilled: pedestrians?.hits ?? 0,
         });
     if (!isSupportedRace(definition)) el("timer").textContent = "FREE DRIVE";
+    el("timer").classList.toggle("debug-frozen", debugPanel.timerFrozen);
+    el("timer").title = debugPanel.timerFrozen
+      ? "Debugmodus: Renntimer angehalten"
+      : "";
     drawMap();
   }
   if (now > messageUntil) el("message").textContent = paused ? "PAUSED" : "";
