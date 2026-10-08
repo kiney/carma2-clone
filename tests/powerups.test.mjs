@@ -94,7 +94,11 @@ test("action 34 shares charged inventory and actions 12/30 dispatch crash events
   assert.equal(system.abilities.get(0).charges, 3);
   assert.deepEqual(
     events.map(({ kind, definition }) => [kind, definition.action]),
-    [["ability", 34], ["crash", 12], ["crash", 30]],
+    [
+      ["ability", 34],
+      ["crash", 12],
+      ["crash", 30],
+    ],
   );
   assert.equal(system.activateAbility(race), true);
   assert.equal(system.abilities.get(0).charges, 2);

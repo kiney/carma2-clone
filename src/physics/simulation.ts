@@ -8,8 +8,22 @@ import type { DamageSystem } from "../damage";
 import type { WorldDestruction } from "../world-destruction";
 import type { WorldGrooveRuntime } from "../world-groove";
 import { WorldActivationRuntime } from "../world-activation";
-import { prepareMovingWorldPose, commitMovingWorldPose, sweepHullMovingTriangle, type MovingWorldBody } from "./moving-world";
-import { MineRuntime, MINE_FLAGS, hitMineReaction, mineComponentDamage, type MineCar, type MineContact, type MineParameters, type MineEvent } from "./mines";
+import {
+  prepareMovingWorldPose,
+  commitMovingWorldPose,
+  sweepHullMovingTriangle,
+  type MovingWorldBody,
+} from "./moving-world";
+import {
+  MineRuntime,
+  MINE_FLAGS,
+  hitMineReaction,
+  mineComponentDamage,
+  type MineCar,
+  type MineContact,
+  type MineParameters,
+  type MineEvent,
+} from "./mines";
 import { createMineBody, type MineBody } from "./mine-body";
 import type { VehicleState, VehicleInput } from "../gameplay";
 import type { WorldCollision, Surface } from "../world";
@@ -165,7 +179,11 @@ export interface DetachedBody extends RigidBody {
   splitRevision?: number;
   specialVolume?: BodyVolumeState;
 }
-export type SimulationBody = SimulatedCar | DetachedBody | NonCarBody | MineBody<SimulatedCar>;
+export type SimulationBody =
+  | SimulatedCar
+  | DetachedBody
+  | NonCarBody
+  | MineBody<SimulatedCar>;
 const Y = new Vector3(0, 1, 0);
 export function boxVertices(bounds: Box3): Vector3[] {
   const result: Vector3[] = [];
@@ -351,8 +369,8 @@ export class VehicleSimulation {
   grooves?: WorldGrooveRuntime;
   readonly mines = new MineRuntime<SimulatedCar>();
   mineBodies: MineBody<SimulatedCar>[] = [];
-  mineFactory?: { actor: Object3D; bounds: Box3; mass:number };
-  onMineEvent?: (event: MineEvent<SimulatedCar>)=>void;
+  mineFactory?: { actor: Object3D; bounds: Box3; mass: number };
+  onMineEvent?: (event: MineEvent<SimulatedCar>) => void;
   accumulator = 0;
   elapsed = 0;
   lastImpacts: ContactImpact[] = [];
@@ -366,7 +384,9 @@ export class VehicleSimulation {
   defaultWaterVolume: SpecialVolume | null = null;
   oil?: OilRuntime;
   destruction?: WorldDestruction;
-  readonly worldActivations = new WorldActivationRuntime(()=>this.noncars,{onActivate:body=>this.dormantPoses.delete(body)});
+  readonly worldActivations = new WorldActivationRuntime(() => this.noncars, {
+    onActivate: (body) => this.dormantPoses.delete(body),
+  });
   private oilWheelPrevious = new WeakMap<SimulatedCar, Array<Vector3 | null>>();
   minSplitForcePerTonne = 2.5; // GENERAL gMin_force_to_split_XZ_per_tonne.
   /** Native BSS state survives car/race loads and advances once per force call. */
@@ -424,100 +444,213 @@ export class VehicleSimulation {
   }
   addMovingWorld(body: MovingWorldBody) {
     this.movingWorld.push(body);
-    this.world.addDynamic(body,body.actor,true,true);
+    this.world.addDynamic(body, body.actor, true, true);
   }
   private prepareMovingWorld() {
-    this.grooves?.update(this.elapsed*1000);
+    this.grooves?.update(this.elapsed * 1000);
     for (const body of this.movingWorld) {
-      body.actor.updateWorldMatrix(true,true);
-      const position=new Vector3(),orientation=new Quaternion();
-      body.actor.matrixWorld.decompose(position,orientation,new Vector3());
-      prepareMovingWorldPose(body,position,orientation,PHYSICS_STEP);
+      body.actor.updateWorldMatrix(true, true);
+      const position = new Vector3(),
+        orientation = new Quaternion();
+      body.actor.matrixWorld.decompose(position, orientation, new Vector3());
+      prepareMovingWorldPose(body, position, orientation, PHYSICS_STEP);
     }
   }
-  private movingSurfaceContact(body: RigidBody, hull: CollisionHull, surface: Surface): HullContact | null {
-    const owner=surface.owner as MovingWorldBody;
-    const inverse=owner.state.predictedOrientation.clone().invert();
-    const local=(point:Vector3) => point.clone().sub(owner.state.predictedPosition).applyQuaternion(inverse);
-    return sweepHullMovingTriangle(body,hull,{a:local(surface.a),b:local(surface.b),c:local(surface.c),owner,
-      sourceSurface:surface,edgeOnly:surface.collisionMode === "edges",materialIdentifier:surface.material,
-      materialFlags:surface.materialFlags,faceFlags:surface.faceFlags,twoSided:surface.twoSided,deferReduction:true});
+  private movingSurfaceContact(
+    body: RigidBody,
+    hull: CollisionHull,
+    surface: Surface,
+  ): HullContact | null {
+    const owner = surface.owner as MovingWorldBody;
+    const inverse = owner.state.predictedOrientation.clone().invert();
+    const local = (point: Vector3) =>
+      point.clone().sub(owner.state.predictedPosition).applyQuaternion(inverse);
+    return sweepHullMovingTriangle(body, hull, {
+      a: local(surface.a),
+      b: local(surface.b),
+      c: local(surface.c),
+      owner,
+      sourceSurface: surface,
+      edgeOnly: surface.collisionMode === "edges",
+      materialIdentifier: surface.material,
+      materialFlags: surface.materialFlags,
+      faceFlags: surface.faceFlags,
+      twoSided: surface.twoSided,
+      deferReduction: true,
+    });
   }
   private allBodies(): SimulationBody[] {
-    return [...this.cars, ...this.debris, ...this.noncars.filter(body => !this.disabledWorldActor(body)), ...this.mineBodies.filter(body => !(body.mine.flags&MINE_FLAGS.exploded))];
+    return [
+      ...this.cars,
+      ...this.debris,
+      ...this.noncars.filter((body) => !this.disabledWorldActor(body)),
+      ...this.mineBodies.filter(
+        (body) => !(body.mine.flags & MINE_FLAGS.exploded),
+      ),
+    ];
   }
   private mineCar(car: SimulatedCar): MineCar<SimulatedCar> {
-    return {victim:car,driver:car.human?8:6,mass:car.properties.mass,maxDamage:car.damage.carSoftness,protection:car.protection,
-      noCrush:!!car.damage.damageContext.invulnerable,noDamage:!!car.damage.damageContext.invulnerable};
+    return {
+      victim: car,
+      driver: car.human ? 8 : 6,
+      mass: car.properties.mass,
+      maxDamage: car.damage.carSoftness,
+      protection: car.protection,
+      noCrush: !!car.damage.damageContext.invulnerable,
+      noDamage: !!car.damage.damageContext.invulnerable,
+    };
   }
-  private mineContact(body: RigidBody|undefined): MineContact<SimulatedCar>|null {
-    if(!body)return null;
-    if("damage"in body)return {kind:"car",car:this.mineCar(body as SimulatedCar)};
-    if("kind"in body&&body.kind === "mine")return {kind:"mine",mine:(body as MineBody<SimulatedCar>).mine};
-    return {kind:"other",object:body};
+  private mineContact(
+    body: RigidBody | undefined,
+  ): MineContact<SimulatedCar> | null {
+    if (!body) return null;
+    if ("damage" in body)
+      return { kind: "car", car: this.mineCar(body as SimulatedCar) };
+    if ("kind" in body && body.kind === "mine")
+      return { kind: "mine", mine: (body as MineBody<SimulatedCar>).mine };
+    return { kind: "other", object: body };
   }
-  launchMine(car: SimulatedCar, parameters:MineParameters, powerupIndex=0) {
-    if(!this.mineFactory)return false;
-    const mine=this.mines.spawn(this.mineCar(car),{...car.state,bounds:hullsBounds(car.hulls)},parameters,this.elapsed*1000,powerupIndex);
-    if(!mine)return false;
-    this.mineBodies=this.mineBodies.filter(body=>{if(body.mine.slot !== mine.slot)return true;body.actor.removeFromParent();return false;});
-    const actor=this.mineFactory.actor.clone(true);
+  launchMine(car: SimulatedCar, parameters: MineParameters, powerupIndex = 0) {
+    if (!this.mineFactory) return false;
+    const mine = this.mines.spawn(
+      this.mineCar(car),
+      { ...car.state, bounds: hullsBounds(car.hulls) },
+      parameters,
+      this.elapsed * 1000,
+      powerupIndex,
+    );
+    if (!mine) return false;
+    this.mineBodies = this.mineBodies.filter((body) => {
+      if (body.mine.slot !== mine.slot) return true;
+      body.actor.removeFromParent();
+      return false;
+    });
+    const actor = this.mineFactory.actor.clone(true);
     this.scene.add(actor);
-    const body=createMineBody(mine,actor,this.mineFactory.bounds,this.mineFactory.mass,car.specialVolume);
+    const body = createMineBody(
+      mine,
+      actor,
+      this.mineFactory.bounds,
+      this.mineFactory.mass,
+      car.specialVolume,
+    );
     this.mineBodies.push(body);
-    const hull=transformHulls(body,body.hulls),center=mine.position;
-    const bounds=hullsBounds(hull).expandByScalar(.005);
-    const worldOverlap=worldPlacementContacts(hull,this.recoverySurfaces(this.world.querySurfaces(bounds.min,bounds.max)),center).length>0;
-    const other=this.allBodies().find(other=>other!==body&&other!==car&&transformHulls(other,other.hulls).some(b=>hull.some(a=>placementHullsOverlap(a,b))));
-    if(worldOverlap||other)this.mines.resolveLaunchContact(mine,{sensible:false,other:this.mineContact(other)}).forEach(event=>this.handleMineEvent(event));
+    const hull = transformHulls(body, body.hulls),
+      center = mine.position;
+    const bounds = hullsBounds(hull).expandByScalar(0.005);
+    const worldOverlap =
+      worldPlacementContacts(
+        hull,
+        this.recoverySurfaces(this.world.querySurfaces(bounds.min, bounds.max)),
+        center,
+      ).length > 0;
+    const other = this.allBodies().find(
+      (other) =>
+        other !== body &&
+        other !== car &&
+        transformHulls(other, other.hulls).some((b) =>
+          hull.some((a) => placementHullsOverlap(a, b)),
+        ),
+    );
+    if (worldOverlap || other)
+      this.mines
+        .resolveLaunchContact(mine, {
+          sensible: false,
+          other: this.mineContact(other),
+        })
+        .forEach((event) => this.handleMineEvent(event));
     else {
-      const displacement=mine.position.clone().sub(car.state.position);
-      const distance=displacement.length();
-      const face=this.world.raycast(car.state.position,displacement,distance);
-      this.mines.resolveLaunchContact(mine,{sensible:true,displacement,faceFraction:face?face.distance/distance:null}).forEach(event=>this.handleMineEvent(event));
+      const displacement = mine.position.clone().sub(car.state.position);
+      const distance = displacement.length();
+      const face = this.world.raycast(
+        car.state.position,
+        displacement,
+        distance,
+      );
+      this.mines
+        .resolveLaunchContact(mine, {
+          sensible: true,
+          displacement,
+          faceFraction: face ? face.distance / distance : null,
+        })
+        .forEach((event) => this.handleMineEvent(event));
     }
     this.syncActor(body);
     return true;
   }
-  hitMine(car:SimulatedCar,impulses:readonly number[]) {
-    hitMineReaction(this.mineCar(car),impulses,car.damage.damageContext.random ?? Math.random,event=>this.handleMineEvent(event));
+  hitMine(car: SimulatedCar, impulses: readonly number[]) {
+    hitMineReaction(
+      this.mineCar(car),
+      impulses,
+      car.damage.damageContext.random ?? Math.random,
+      (event) => this.handleMineEvent(event),
+    );
   }
-  spamCar(car:SimulatedCar,strength:number) {
-    const result=car.damage.spamModel(strength,this.elapsed*1000,car.human);
-    if(result.splitRequest) {
-      const plane=car.damage.prepareSplitPlane(result.splitRequest.normal,result.splitRequest.constant);
-      if(plane)this.performSplit(car,plane);
+  spamCar(car: SimulatedCar, strength: number) {
+    const result = car.damage.spamModel(
+      strength,
+      this.elapsed * 1000,
+      car.human,
+    );
+    if (result.splitRequest) {
+      const plane = car.damage.prepareSplitPlane(
+        result.splitRequest.normal,
+        result.splitRequest.constant,
+      );
+      if (plane) this.performSplit(car, plane);
     }
-    this.syncStructuralState(car);this.detachParts(car);
+    this.syncStructuralState(car);
+    this.detachParts(car);
     return result;
   }
-  private handleMineEvent(event:MineEvent<SimulatedCar>) {
-    if(event.kind === "crush")this.spamCar(event.victim,event.strength);
-    else if(event.kind === "reaction") {
-      const car=event.victim;
+  private handleMineEvent(event: MineEvent<SimulatedCar>) {
+    if (event.kind === "crush") this.spamCar(event.victim, event.strength);
+    else if (event.kind === "reaction") {
+      const car = event.victim;
       car.state.velocity.add(event.deltaVelocity);
-      car.state.angularVelocity.add(event.deltaAngularVelocity.clone().applyQuaternion(car.state.orientation));
-      for(const increment of event.components)car.damage.componentLevels[increment.unit]=mineComponentDamage(car.damage.componentLevels[increment.unit],increment,event.damageMode,car.human?8:6,!!car.damage.damageContext.invulnerable);
-      if(event.creditOwner?.human&&!car.human)car.lastAttributedImpactMs=this.elapsed*1000;
-      car.state.health=100-Math.max(...car.damage.componentLevels);
-    } else if(event.kind === "explode"||event.kind === "release") {
-      const body=this.mineBodies.find(body=>body.mine === event.mine);
+      car.state.angularVelocity.add(
+        event.deltaAngularVelocity
+          .clone()
+          .applyQuaternion(car.state.orientation),
+      );
+      for (const increment of event.components)
+        car.damage.componentLevels[increment.unit] = mineComponentDamage(
+          car.damage.componentLevels[increment.unit],
+          increment,
+          event.damageMode,
+          car.human ? 8 : 6,
+          !!car.damage.damageContext.invulnerable,
+        );
+      if (event.creditOwner?.human && !car.human)
+        car.lastAttributedImpactMs = this.elapsed * 1000;
+      car.state.health = 100 - Math.max(...car.damage.componentLevels);
+    } else if (event.kind === "explode" || event.kind === "release") {
+      const body = this.mineBodies.find((body) => body.mine === event.mine);
       body?.actor.removeFromParent();
-      if(event.kind === "release")this.mineBodies=this.mineBodies.filter(candidate=>candidate!==body);
+      if (event.kind === "release")
+        this.mineBodies = this.mineBodies.filter(
+          (candidate) => candidate !== body,
+        );
     }
     this.onMineEvent?.(event);
   }
   private disabledWorldActor(body: SimulationBody) {
     if (!("actor" in body)) return false;
-    for (let node: Object3D|null=body.actor;node;node=node.parent) if (node.userData.worldSmashDisabled) return true;
+    for (let node: Object3D | null = body.actor; node; node = node.parent)
+      if (node.userData.worldSmashDisabled) return true;
     return false;
   }
-  private syncActor(body: { actor:Object3D; state:RigidBody["state"] }) {
-    body.actor.position.copy(body.state.position);body.actor.quaternion.copy(body.state.orientation);
-    if(body.actor.parent) {
-      body.actor.parent.updateWorldMatrix(true,false);
-      body.actor.position.applyMatrix4(body.actor.parent.matrixWorld.clone().invert());
-      body.actor.quaternion.premultiply(body.actor.parent.getWorldQuaternion(new Quaternion()).invert());
+  private syncActor(body: { actor: Object3D; state: RigidBody["state"] }) {
+    body.actor.position.copy(body.state.position);
+    body.actor.quaternion.copy(body.state.orientation);
+    if (body.actor.parent) {
+      body.actor.parent.updateWorldMatrix(true, false);
+      body.actor.position.applyMatrix4(
+        body.actor.parent.matrixWorld.clone().invert(),
+      );
+      body.actor.quaternion.premultiply(
+        body.actor.parent.getWorldQuaternion(new Quaternion()).invert(),
+      );
     }
     body.actor.updateMatrixWorld(true);
   }
@@ -598,23 +731,57 @@ export class VehicleSimulation {
   private oilGround(car: SimulatedCar) {
     return {
       raycast: this.world.raycast.bind(this.world),
-      worldWheelContact:(wheels:readonly {hit:import("./motion").MotionGroundHit|null|undefined;load:number;point?:Vector3}[])=>{
-        if(!this.destruction)return;
-        const seen=new Set<Surface>();
-        let selected:typeof wheels[number]|undefined,maximum=0;
-        for(const wheel of wheels){
-          const surface=wheel.hit?.surface;
-          if(!surface || !this.destruction.hasMaterialTrigger(surface.material) || seen.has(surface))continue;
-          if(surface.owner&&!("kind"in surface.owner&&surface.owner.kind === "moving-world"))continue;
+      worldWheelContact: (
+        wheels: readonly {
+          hit: import("./motion").MotionGroundHit | null | undefined;
+          load: number;
+          point?: Vector3;
+        }[],
+      ) => {
+        if (!this.destruction) return;
+        const seen = new Set<Surface>();
+        let selected: (typeof wheels)[number] | undefined,
+          maximum = 0;
+        for (const wheel of wheels) {
+          const surface = wheel.hit?.surface;
+          if (
+            !surface ||
+            !this.destruction.hasMaterialTrigger(surface.material) ||
+            seen.has(surface)
+          )
+            continue;
+          if (
+            surface.owner &&
+            !("kind" in surface.owner && surface.owner.kind === "moving-world")
+          )
+            continue;
           seen.add(surface);
-          const metric=Math.fround(Math.fround(wheel.load)*Math.fround(.04));
-          if(metric>maximum){maximum=metric;selected=wheel;}
+          const metric = Math.fround(
+            Math.fround(wheel.load) * Math.fround(0.04),
+          );
+          if (metric > maximum) {
+            maximum = metric;
+            selected = wheel;
+          }
         }
-        const surface=selected?.hit?.surface;
-        if(!surface?.actor)return;
-        const result=this.destruction.handleContact({actor:surface.actor,faceIndex:surface.faceIndex,material:surface.material,normalImpulse:maximum,kind:"wheel",
-          point:selected!.point,bodyActor:car.group,impacteeVelocity:car.state.velocity,impacteeTransform:car.group.matrixWorld,timeMs:this.elapsed*1000});
-        if(result.changes.some(change=>change.requiresRebuild)){this.world.rebuildStatic();this.world.invalidateDynamic();}
+        const surface = selected?.hit?.surface;
+        if (!surface?.actor) return;
+        const result = this.destruction.handleContact({
+          actor: surface.actor,
+          faceIndex: surface.faceIndex,
+          material: surface.material,
+          normalImpulse: maximum,
+          kind: "wheel",
+          point: selected!.point,
+          bodyActor: car.group,
+          impacteeVelocity: car.state.velocity,
+          impacteeTransform: car.group.matrixWorld,
+          timeMs: this.elapsed * 1000,
+        });
+        if (result.changes.some((change) => change.requiresRebuild)) {
+          this.world.rebuildStatic();
+          this.world.invalidateDynamic();
+        }
       },
       springReaction: (
         hit: import("./motion").MotionGroundHit,
@@ -633,7 +800,7 @@ export class VehicleSimulation {
         if (noncar) {
           noncar.motor.sleeping = false;
           noncar.properties.immovable = false;
-          noncar.actor.userData.noncarPulled=true;
+          noncar.actor.userData.noncarPulled = true;
         }
         applyImpulse(body.state, body.properties, hit.point, impulse);
       },
@@ -772,7 +939,7 @@ export class VehicleSimulation {
     return surfaces.map((surface) => ({
       ...surface,
       sourceSurface: surface,
-      edgeOnly:surface.collisionMode === "edges",
+      edgeOnly: surface.collisionMode === "edges",
       materialIdentifier: surface.material,
       faceFriction: surface.modifier.wallFriction,
     }));
@@ -802,7 +969,7 @@ export class VehicleSimulation {
       const nearby = this.world.querySurfaces(bounds.min, bounds.max);
       for (const surface of nearby)
         if (!surfaces.includes(surface)) surfaces.push(surface);
-      const staticNearby=nearby.filter(surface => !surface.owner);
+      const staticNearby = nearby.filter((surface) => !surface.owner);
       const recovery = carBody.worldRecovery
         ? recoverWorldContacts(
             old[i],
@@ -815,8 +982,12 @@ export class VehicleSimulation {
       const candidates: HullContact[] = [...(recovery?.contacts ?? [])];
       for (const surface of nearby) {
         if (surface.owner) {
-          const hit=this.movingSurfaceContact(body,hulls[i],surface);
-          if(hit) candidates.push({...hit,faceFriction:surface.modifier.wallFriction});
+          const hit = this.movingSurfaceContact(body, hulls[i], surface);
+          if (hit)
+            candidates.push({
+              ...hit,
+              faceFriction: surface.modifier.wallFriction,
+            });
           continue;
         }
         const hit = sweepHullTriangle(
@@ -826,8 +997,8 @@ export class VehicleSimulation {
           surface.b,
           surface.c,
           {
-            sourceSurface:surface,
-            edgeOnly:surface.collisionMode === "edges",
+            sourceSurface: surface,
+            edgeOnly: surface.collisionMode === "edges",
             materialIdentifier: surface.material,
             materialFlags: surface.materialFlags,
             faceFlags: surface.faceFlags,
@@ -854,7 +1025,7 @@ export class VehicleSimulation {
       sourceType: hit.contactTypes?.[0],
       penetration: hit.penetration,
       faceFriction: hit.faceFriction ?? 1,
-      sourceSurface:hit.sourceSurface,
+      sourceSurface: hit.sourceSurface,
     }));
   }
   /** The impulse solve changes the trajectory which was used to collect its
@@ -909,7 +1080,9 @@ export class VehicleSimulation {
         const bounds = hullBounds(old[shape])
           .union(hullBounds(next[shape]))
           .expandByScalar(0.005);
-        const nearby = this.world.querySurfaces(bounds.min, bounds.max).filter(surface => !surface.owner);
+        const nearby = this.world
+          .querySurfaces(bounds.min, bounds.max)
+          .filter((surface) => !surface.owner);
         const recovery =
           body.worldRecovery || body.worldOverlapDetected
             ? recoverWorldContacts(
@@ -931,8 +1104,8 @@ export class VehicleSimulation {
             surface.b,
             surface.c,
             {
-              sourceSurface:surface,
-              edgeOnly:surface.collisionMode === "edges",
+              sourceSurface: surface,
+              edgeOnly: surface.collisionMode === "edges",
               materialIdentifier: surface.material,
               materialFlags: surface.materialFlags,
               faceFlags: surface.faceFlags,
@@ -975,7 +1148,7 @@ export class VehicleSimulation {
               measures: [time],
               contactTypes: [hit.contactTypes?.[index] ?? 1],
               faceFriction: hit.faceFriction,
-              sourceSurface:hit.sourceSurface,
+              sourceSurface: hit.sourceSurface,
             });
           }
         }
@@ -1001,7 +1174,7 @@ export class VehicleSimulation {
           normal: hit.normal,
           sourceType: hit.contactTypes?.[0],
           faceFriction: hit.faceFriction,
-          sourceSurface:hit.sourceSurface,
+          sourceSurface: hit.sourceSurface,
         }),
       );
     // A source feature sweep interpolates its endpoints linearly. Committing
@@ -1094,73 +1267,76 @@ export class VehicleSimulation {
       }
     }
   }
-  private performSplit(body:SimulatedCar,plane:NonNullable<ReturnType<DamageSystem["prepareSplitPlane"]>>) {
-    if(body.protection !== 1)return;
-        const oldCenter = body.properties.centerOfMass.clone(),
-          oldVelocity = body.state.velocity.clone();
-        const result = body.damage.splitAtPlane(plane, body.human);
-        if (!result) return;
-        const velocityFor = (center: Vector3) =>
-          oldVelocity
-            .clone()
-            .add(
-              new Vector3().crossVectors(
-                body.state.angularVelocity,
-                center
-                  .clone()
-                  .sub(oldCenter)
-                  .applyQuaternion(body.state.orientation),
-              ),
-            );
-        const child: DetachedBody = {
-          actor: result.actor,
-          owner: body,
-          part: -1,
-          splitRevision: body.damage.splitRevision,
-          hulls: result.shapes.filter((v) => v.length >= 4).map(buildHull),
-          overlapRecovery: true,
-          overlapDetected: false,
-          worldRecovery: true,
-          worldOverlapDetected: false,
-          state: {
-            position: body.state.position.clone(),
-            orientation: body.state.orientation.clone(),
-            velocity: velocityFor(result.negative.centerOfMass),
-            angularVelocity: body.state.angularVelocity.clone(),
-          },
-          properties: {
-            ...result.negative,
-            centerOfMass: result.negative.centerOfMass.clone(),
-            inertia: result.negative.inertia.clone(),
-            worldFriction: 0,
-            objectFriction: 0.4,
-          },
-        };
-        // Source42e230 assigns physics children by the original parent-local
-        // joint anchor. Their world pose and joint geometry remain unchanged.
-        for (const piece of this.debris)
-          if (
-            piece.joint?.parent === body &&
-            result.plane.normal.dot(piece.joint.parentAnchor) -
-              result.plane.constant <
-              0
-          ) {
-            piece.joint.parent = child;
-            piece.overlapRecovery = piece.worldRecovery = true;
-          }
-        body.state.velocity.copy(velocityFor(result.positive.centerOfMass));
-        body.properties.mass = body.motion.mass = result.positive.mass;
-        body.properties.inertia.copy(result.positive.inertia);
-        body.motion.inertia.copy(result.positive.inertia);
-        body.properties.centerOfMass.copy(result.positive.centerOfMass);
-        // Source42e230 retains spring/damping after the partition but resets
-        // prior wheel lengths to ride height for the next suspension tick.
-        body.state.wheelLengths.fill(body.motion.suspensionBase.rideHeight);
-        body.state.groundedWheelCount = 0;
-        if (result.disableMotion) body.state.rpm = 0;
-        this.scene.add(result.actor);
-        this.debris.push(child);
-        this.syncStructuralState(body);
+  private performSplit(
+    body: SimulatedCar,
+    plane: NonNullable<ReturnType<DamageSystem["prepareSplitPlane"]>>,
+  ) {
+    if (body.protection !== 1) return;
+    const oldCenter = body.properties.centerOfMass.clone(),
+      oldVelocity = body.state.velocity.clone();
+    const result = body.damage.splitAtPlane(plane, body.human);
+    if (!result) return;
+    const velocityFor = (center: Vector3) =>
+      oldVelocity
+        .clone()
+        .add(
+          new Vector3().crossVectors(
+            body.state.angularVelocity,
+            center
+              .clone()
+              .sub(oldCenter)
+              .applyQuaternion(body.state.orientation),
+          ),
+        );
+    const child: DetachedBody = {
+      actor: result.actor,
+      owner: body,
+      part: -1,
+      splitRevision: body.damage.splitRevision,
+      hulls: result.shapes.filter((v) => v.length >= 4).map(buildHull),
+      overlapRecovery: true,
+      overlapDetected: false,
+      worldRecovery: true,
+      worldOverlapDetected: false,
+      state: {
+        position: body.state.position.clone(),
+        orientation: body.state.orientation.clone(),
+        velocity: velocityFor(result.negative.centerOfMass),
+        angularVelocity: body.state.angularVelocity.clone(),
+      },
+      properties: {
+        ...result.negative,
+        centerOfMass: result.negative.centerOfMass.clone(),
+        inertia: result.negative.inertia.clone(),
+        worldFriction: 0,
+        objectFriction: 0.4,
+      },
+    };
+    // Source42e230 assigns physics children by the original parent-local
+    // joint anchor. Their world pose and joint geometry remain unchanged.
+    for (const piece of this.debris)
+      if (
+        piece.joint?.parent === body &&
+        result.plane.normal.dot(piece.joint.parentAnchor) -
+          result.plane.constant <
+          0
+      ) {
+        piece.joint.parent = child;
+        piece.overlapRecovery = piece.worldRecovery = true;
+      }
+    body.state.velocity.copy(velocityFor(result.positive.centerOfMass));
+    body.properties.mass = body.motion.mass = result.positive.mass;
+    body.properties.inertia.copy(result.positive.inertia);
+    body.motion.inertia.copy(result.positive.inertia);
+    body.properties.centerOfMass.copy(result.positive.centerOfMass);
+    // Source42e230 retains spring/damping after the partition but resets
+    // prior wheel lengths to ride height for the next suspension tick.
+    body.state.wheelLengths.fill(body.motion.suspensionBase.rideHeight);
+    body.state.groundedWheelCount = 0;
+    if (result.disableMotion) body.state.rpm = 0;
+    this.scene.add(result.actor);
+    this.debris.push(child);
+    this.syncStructuralState(body);
     return child;
   }
   private trySplit(
@@ -1230,9 +1406,10 @@ export class VehicleSimulation {
           total = candidate.contact.normalImpulse;
           threshold = candidate.threshold;
         }
-        const child=this.performSplit(body,plane);
-        if(!child)continue;
-        occurred=true;members.add(child);
+        const child = this.performSplit(body, plane);
+        if (!child) continue;
+        occurred = true;
+        members.add(child);
         if (total > threshold) {
           restarting = true;
           const factor = threshold / total;
@@ -1262,11 +1439,15 @@ export class VehicleSimulation {
     contacts.push(...this.collectBodyContacts(bodies));
     return contacts;
   }
-  private collectBodyContacts(bodies:SimulationBody[]): Contact[] {
-    const contacts:Contact[]=[];
+  private collectBodyContacts(bodies: SimulationBody[]): Contact[] {
+    const contacts: Contact[] = [];
     const poses = new Map(
       bodies.map((body) => {
-        if ("kind" in body && body.kind === "noncar" && body.properties.immovable) {
+        if (
+          "kind" in body &&
+          body.kind === "noncar" &&
+          body.properties.immovable
+        ) {
           const cached = this.dormantPoses.get(body);
           if (cached) return [body, cached] as const;
         }
@@ -1274,7 +1455,11 @@ export class VehicleSimulation {
           next = transformHulls(body, body.hulls, true);
         const bounds = hullsBounds(old).union(hullsBounds(next));
         const result = { old, next, bounds };
-        if ("kind" in body && body.kind === "noncar" && body.properties.immovable)
+        if (
+          "kind" in body &&
+          body.kind === "noncar" &&
+          body.properties.immovable
+        )
           this.dormantPoses.set(body, result);
         return [body, result] as const;
       }),
@@ -1347,12 +1532,22 @@ export class VehicleSimulation {
     jointImpacts: JointConstraintImpact[],
     restarts: Set<SimulationBody>[],
   ): boolean | void {
-    for(const impact of impacts) {
-      if(impact.sourceType === 9 || impact.normalImpulse<=0)continue;
-      for(const [body,other]of [[impact.a,impact.b],[impact.b,impact.a]]as const)
-        if(body&&"kind"in body&&body.kind === "mine")this.mines.contact((body as MineBody<SimulatedCar>).mine,this.mineContact(other),impact.normalImpulse).forEach(event=>this.handleMineEvent(event));
+    for (const impact of impacts) {
+      if (impact.sourceType === 9 || impact.normalImpulse <= 0) continue;
+      for (const [body, other] of [
+        [impact.a, impact.b],
+        [impact.b, impact.a],
+      ] as const)
+        if (body && "kind" in body && body.kind === "mine")
+          this.mines
+            .contact(
+              (body as MineBody<SimulatedCar>).mine,
+              this.mineContact(other),
+              impact.normalImpulse,
+            )
+            .forEach((event) => this.handleMineEvent(event));
     }
-    if (this.processWorldSmash(impacts,restarts)) return false;
+    if (this.processWorldSmash(impacts, restarts)) return false;
     if (this.processNonCarContacts(impacts, restarts)) return false;
     const split = this.trySplit(impacts, restarts);
     if (split.restart) return false;
@@ -1397,39 +1592,86 @@ export class VehicleSimulation {
     }
     this.applyImpactDamage(impacts);
   }
-  private processWorldSmash(impacts: ContactImpact[], restarts: Set<SimulationBody>[]) {
+  private processWorldSmash(
+    impacts: ContactImpact[],
+    restarts: Set<SimulationBody>[],
+  ) {
     if (!this.destruction) return false;
-    for (const [index,impact] of impacts.entries()) {
+    for (const [index, impact] of impacts.entries()) {
       if (impact.sourceType === 9 || impact.normalImpulse <= 0) continue;
-      const targets:Array<{actor:Object3D;body:RigidBody;point:Vector3;surface?:Surface}>=[];
-      if(impact.sourceSurface?.actor)targets.push({actor:impact.sourceSurface.actor,body:impact.a,point:impact.pointB??impact.point,surface:impact.sourceSurface});
-      else for(const [body,other,point] of [[impact.a,impact.b,impact.point],[impact.b,impact.a,impact.pointB??impact.point]] as const)
-        if(body&&other&&"kind"in body&&body.kind === "noncar")targets.push({actor:(body as NonCarBody).actor,body,point});
-      for(const target of targets) {
+      const targets: Array<{
+        actor: Object3D;
+        body: RigidBody;
+        point: Vector3;
+        surface?: Surface;
+      }> = [];
+      if (impact.sourceSurface?.actor)
+        targets.push({
+          actor: impact.sourceSurface.actor,
+          body: impact.a,
+          point: impact.pointB ?? impact.point,
+          surface: impact.sourceSurface,
+        });
+      else
+        for (const [body, other, point] of [
+          [impact.a, impact.b, impact.point],
+          [impact.b, impact.a, impact.pointB ?? impact.point],
+        ] as const)
+          if (body && other && "kind" in body && body.kind === "noncar")
+            targets.push({ actor: (body as NonCarBody).actor, body, point });
+      for (const target of targets) {
         // Thresholds apply to EACH solved row, not their sum. Stop after the
         // first topology change and recollect before using any old face index.
-        const bodyActor="group"in target.body?(target.body as SimulatedCar).group:"actor"in target.body?(target.body as NonCarBody).actor:undefined;
-        const result=this.destruction.handleContact({actor:target.actor,faceIndex:target.surface?.faceIndex,material:target.surface?.material,
-          normalImpulse:impact.normalImpulse,kind:"body",point:target.point,timeMs:this.elapsed*1000,bodyActor,
-          impacteeVelocity:target.body.state.velocity,impacteeTransform:bodyActor?.matrixWorld});
-        if(!result.changed)continue;
-        const rebuild=result.changes.some(change=>change.requiresRebuild);
-        if(rebuild){this.world.rebuildStatic();this.world.invalidateDynamic();}
-        const capped=result.threshold !== undefined && result.threshold<impact.normalImpulse;
-        if(!rebuild&&!capped)continue;
+        const bodyActor =
+          "group" in target.body
+            ? (target.body as SimulatedCar).group
+            : "actor" in target.body
+              ? (target.body as NonCarBody).actor
+              : undefined;
+        const result = this.destruction.handleContact({
+          actor: target.actor,
+          faceIndex: target.surface?.faceIndex,
+          material: target.surface?.material,
+          normalImpulse: impact.normalImpulse,
+          kind: "body",
+          point: target.point,
+          timeMs: this.elapsed * 1000,
+          bodyActor,
+          impacteeVelocity: target.body.state.velocity,
+          impacteeTransform: bodyActor?.matrixWorld,
+        });
+        if (!result.changed) continue;
+        const rebuild = result.changes.some((change) => change.requiresRebuild);
+        if (rebuild) {
+          this.world.rebuildStatic();
+          this.world.invalidateDynamic();
+        }
+        const capped =
+          result.threshold !== undefined &&
+          result.threshold < impact.normalImpulse;
+        if (!rebuild && !capped) continue;
         // Installed41c1d0 returns BEFORE crush/split on a smash cap. Native
         // 4ba2f0 sums up to20 positive rows from its first threshold onward;
         // old type9 rows carry this cap but do not apply stale velocities.
-        const selected=capped?impacts.slice(index).filter(row=>row.normalImpulse>0).slice(0,20):[];
-        const total=selected.reduce((sum,row)=>sum+row.normalImpulse,0);
-        const factor=capped?Math.min(1,result.threshold!/total):0;
-        const members=new Set<SimulationBody>();
-        for(const row of impacts){
-          if("hulls"in row.a)members.add(row.a as SimulationBody);
-          if(row.b&&"hulls"in row.b)members.add(row.b as SimulationBody);
-          row.normalImpulse=selected.includes(row)?row.normalImpulse*factor:0;row.sourceType=9;
+        const selected = capped
+          ? impacts
+              .slice(index)
+              .filter((row) => row.normalImpulse > 0)
+              .slice(0, 20)
+          : [];
+        const total = selected.reduce((sum, row) => sum + row.normalImpulse, 0);
+        const factor = capped ? Math.min(1, result.threshold! / total) : 0;
+        const members = new Set<SimulationBody>();
+        for (const row of impacts) {
+          if ("hulls" in row.a) members.add(row.a as SimulationBody);
+          if (row.b && "hulls" in row.b) members.add(row.b as SimulationBody);
+          row.normalImpulse = selected.includes(row)
+            ? row.normalImpulse * factor
+            : 0;
+          row.sourceType = 9;
         }
-        restarts.push(members);return true;
+        restarts.push(members);
+        return true;
       }
     }
     return false;
@@ -1577,7 +1819,7 @@ export class VehicleSimulation {
             this.dormantPoses.delete(noncar);
             noncar.properties.immovable = false;
             changed = true;
-            noncar.actor.userData.noncarPulled=true;
+            noncar.actor.userData.noncarPulled = true;
           }
         }
         const lever = (
@@ -1620,9 +1862,11 @@ export class VehicleSimulation {
     this.onBeforeStep?.();
     this.elapsed += PHYSICS_STEP;
     this.prepareMovingWorld();
-    this.destruction?.update(this.elapsed*1000);
-    this.worldActivations.update(this.elapsed*1000);
-    this.mines.process(this.elapsed*1000,event=>this.handleMineEvent(event));
+    this.destruction?.update(this.elapsed * 1000);
+    this.worldActivations.update(this.elapsed * 1000);
+    this.mines.process(this.elapsed * 1000, (event) =>
+      this.handleMineEvent(event),
+    );
     this.world.refreshDynamic?.();
     this.oil?.update(this.elapsed * 1000, this.projectOil.bind(this));
     const previousVelocities = new Map(
@@ -1742,7 +1986,9 @@ export class VehicleSimulation {
       body.properties.immovable = body.motor.sleeping;
       body.collisionFlags = 0;
     }
-    for(const body of this.mineBodies)if(!(body.mine.flags&MINE_FLAGS.exploded))this.applyFreeBodyForces(body);
+    for (const body of this.mineBodies)
+      if (!(body.mine.flags & MINE_FLAGS.exploded))
+        this.applyFreeBodyForces(body);
     const bodies = this.allBodies();
     prepareJointVelocities(this.allJoints());
     for (const body of this.noncars)
@@ -1766,13 +2012,17 @@ export class VehicleSimulation {
     );
     // Source split invalidates the old contact solve. Rebuild the changed group
     // immediately, with the original 30-pass guard, before advancing this tick.
-    const restartCounts=new Map<SimulationBody,number>();
+    const restartCounts = new Map<SimulationBody, number>();
     const resolveRestarts = () => {
       while (restartGroups.length) {
         const members = restartGroups.shift()!;
-        const changed = [...members].filter(body => "hulls" in body && !this.disabledWorldActor(body));
-        if(changed.some(body=>(restartCounts.get(body)??0)>=30))continue;
-        for(const body of changed)restartCounts.set(body,(restartCounts.get(body)??0)+1);
+        const changed = [...members].filter(
+          (body) => "hulls" in body && !this.disabledWorldActor(body),
+        );
+        if (changed.some((body) => (restartCounts.get(body) ?? 0) >= 30))
+          continue;
+        for (const body of changed)
+          restartCounts.set(body, (restartCounts.get(body) ?? 0) + 1);
         for (const body of changed) candidate(body, PHYSICS_STEP);
         const changedJoints = [...this.debris, ...this.noncars].flatMap((b) =>
           b.joint && members.has(b) ? [b.joint] : [],
@@ -1810,7 +2060,16 @@ export class VehicleSimulation {
       // Impulses may create a body-pair crossing which was absent from the
       // first trajectory. Recollect the same authored hulls, not only roads.
       contacts.push(...this.collectBodyContacts(this.allBodies()));
-      if(this.movingWorld.length)for(const body of this.allBodies())contacts.push(...this.worldContacts(body,body.hulls).filter(contact=>contact.b&&"kind"in contact.b&&contact.b.kind === "moving-world"));
+      if (this.movingWorld.length)
+        for (const body of this.allBodies())
+          contacts.push(
+            ...this.worldContacts(body, body.hulls).filter(
+              (contact) =>
+                contact.b &&
+                "kind" in contact.b &&
+                contact.b.kind === "moving-world",
+            ),
+          );
       if (!contacts.length) break;
       this.lastImpacts.push(
         ...resolveContactGroups(
@@ -1901,7 +2160,8 @@ export class VehicleSimulation {
       body.actor.position.copy(body.state.position);
       body.actor.quaternion.copy(body.state.orientation);
     }
-    for(const body of this.mineBodies)if(!(body.mine.flags&MINE_FLAGS.exploded))this.syncActor(body);
+    for (const body of this.mineBodies)
+      if (!(body.mine.flags & MINE_FLAGS.exploded)) this.syncActor(body);
     for (const body of this.noncars) {
       if (
         body.attached &&
@@ -2062,8 +2322,8 @@ export class VehicleSimulation {
     this.oil?.dispose();
     this.destruction?.dispose();
     this.mines.clear();
-    for(const body of this.mineBodies)body.actor.removeFromParent();
-    this.mineBodies=[];
+    for (const body of this.mineBodies) body.actor.removeFromParent();
+    this.mineBodies = [];
     // Reunite private split geometries before the content loader disposes the
     // scene. Otherwise pristine and secondary meshes become unreachable.
     for (const car of this.cars) car.damage.repair();
@@ -2085,7 +2345,7 @@ export class VehicleSimulation {
     for (const body of this.noncars) this.world.removeDynamic(body);
     this.noncars = [];
     for (const body of this.movingWorld) this.world.removeDynamic(body);
-    this.movingWorld=[];
+    this.movingWorld = [];
     this.cars = [];
   }
 }

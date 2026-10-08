@@ -32,8 +32,10 @@ export class WorldCollision {
     this.rebuildStatic();
   }
   rebuildStatic() {
-    this.cells.clear();this.triangles=0;
-    for(const surface of this.makeSurfaces(this.sourceRoot)) this.indexSurface(surface);
+    this.cells.clear();
+    this.triangles = 0;
+    for (const surface of this.makeSurfaces(this.sourceRoot))
+      this.indexSurface(surface);
   }
   private dynamic = new Map<
     RigidBody,
@@ -67,8 +69,9 @@ export class WorldCollision {
     group.updateMatrixWorld(true);
     group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
-      if(object.userData.skipWorldCollision) return;
-      for(let node:THREE.Object3D|null=object;node;node=node.parent) if(node.userData.worldSmashDisabled) return;
+      if (object.userData.skipWorldCollision) return;
+      for (let node: THREE.Object3D | null = object; node; node = node.parent)
+        if (node.userData.worldSmashDisabled) return;
       if (!owner) {
         let node: THREE.Object3D | null = object;
         while (node) {
@@ -82,7 +85,8 @@ export class WorldCollision {
       if (!pos) return;
       const count = index ? index.count : pos.count;
       for (let i = 0; i < count; i += 3) {
-        if(geo.userData.worldSmashFaceModes?.[i/3] === "passthrough") continue;
+        if (geo.userData.worldSmashFaceModes?.[i / 3] === "passthrough")
+          continue;
         const vertices = [0, 1, 2].map((j) =>
           new THREE.Vector3()
             .fromBufferAttribute(pos, index ? index.getX(i + j) : i + j)
@@ -106,7 +110,9 @@ export class WorldCollision {
           actor: object,
           faceIndex: i / 3,
           owner,
-          collisionMode: geo.userData.worldSmashFaceModes?.[i/3] ?? (material?.name.startsWith("?")?"edges":"solid"),
+          collisionMode:
+            geo.userData.worldSmashFaceModes?.[i / 3] ??
+            (material?.name.startsWith("?") ? "edges" : "solid"),
           a,
           b,
           c,
@@ -135,7 +141,12 @@ export class WorldCollision {
     });
     return surfaces;
   }
-  addDynamic(owner: RigidBody, actor: THREE.Object3D, drivable = true, worldCollider = false) {
+  addDynamic(
+    owner: RigidBody,
+    actor: THREE.Object3D,
+    drivable = true,
+    worldCollider = false,
+  ) {
     this.dynamic.set(owner, {
       actor,
       drivable,
@@ -150,16 +161,15 @@ export class WorldCollision {
     this.dynamic.delete(owner);
   }
   invalidateDynamic(owner?: RigidBody) {
-    for (const [body, entry] of this.dynamic) if (!owner || body === owner) entry.pose = "";
+    for (const [body, entry] of this.dynamic)
+      if (!owner || body === owner) entry.pose = "";
     this.refreshDynamic(owner);
   }
   refreshDynamic(owner?: RigidBody) {
     for (const [body, entry] of this.dynamic) {
       if (owner && body !== owner) continue;
-      entry.actor.updateWorldMatrix(true,true);
-      const pose = [
-        ...entry.actor.matrixWorld.elements,
-      ].join(",");
+      entry.actor.updateWorldMatrix(true, true);
+      const pose = [...entry.actor.matrixWorld.elements].join(",");
       if (entry.pose === pose) continue;
       entry.pose = pose;
       entry.surfaces = this.makeSurfaces(entry.actor, body);
@@ -207,14 +217,33 @@ export class WorldCollision {
     const bounds = new THREE.Box3(min, max);
     for (const [body, entry] of this.dynamic) {
       if (!entry.worldCollider || !entry.actor.visible) continue;
-      const oldBounds = entry.bounds.clone().translate(body.state.position.clone().sub(body.state.predictedPosition ?? body.state.position));
+      const oldBounds = entry.bounds
+        .clone()
+        .translate(
+          body.state.position
+            .clone()
+            .sub(body.state.predictedPosition ?? body.state.position),
+        );
       // Rotation can sweep farther than the endpoint boxes. Bound by the
       // authored triangle radius about the actor origin rather than filling
       // the concave actor with a convex collision shape.
-      const radius = entry.bounds.getSize(new THREE.Vector3()).length() + entry.bounds.getCenter(new THREE.Vector3()).distanceTo(body.state.predictedPosition ?? body.state.position);
-      oldBounds.union(entry.bounds).union(new THREE.Box3().setFromCenterAndSize(body.state.position, new THREE.Vector3(2*radius,2*radius,2*radius)));
+      const radius =
+        entry.bounds.getSize(new THREE.Vector3()).length() +
+        entry.bounds
+          .getCenter(new THREE.Vector3())
+          .distanceTo(body.state.predictedPosition ?? body.state.position);
+      oldBounds
+        .union(entry.bounds)
+        .union(
+          new THREE.Box3().setFromCenterAndSize(
+            body.state.position,
+            new THREE.Vector3(2 * radius, 2 * radius, 2 * radius),
+          ),
+        );
       if (!oldBounds.intersectsBox(bounds)) continue;
-      for (const surface of entry.surfaces) if (includeNonSolid || !/^[!>]/.test(surface.material)) result.add(surface);
+      for (const surface of entry.surfaces)
+        if (includeNonSolid || !/^[!>]/.test(surface.material))
+          result.add(surface);
     }
     return [...result];
   }
@@ -257,7 +286,11 @@ export class WorldCollision {
       ...this.querySurfaces(bounds.min, bounds.max, includeNonSolid),
       ...this.dynamicSurfaces(bounds),
     ]) {
-      if(!includeNonSolid && (surface.collisionMode === "edges" || surface.material.startsWith("?")))continue;
+      if (
+        !includeNonSolid &&
+        (surface.collisionMode === "edges" || surface.material.startsWith("?"))
+      )
+        continue;
       if (
         surface.enabled === false ||
         (!includeNonSolid && /^[!>]/.test(surface.material))
@@ -372,7 +405,11 @@ export function batchStaticWorld(
   const unique = [...new Set(retained)];
   for (const actor of unique) {
     let retainedParent = false;
-    for (let node=actor.parent;node;node=node.parent) if (unique.includes(node)) { retainedParent=true;break; }
+    for (let node = actor.parent; node; node = node.parent)
+      if (unique.includes(node)) {
+        retainedParent = true;
+        break;
+      }
     if (!retainedParent) result.attach(actor);
   }
   const batches = new Map<

@@ -192,9 +192,9 @@ export class AudioSystem {
     void this.playOneShot(this.checkpointId, 0.55, 1);
   }
   /** Original event IDs, including mine5400 and low-impact5403. */
-  async playSound(id: number, volume = .65): Promise<void> {
+  async playSound(id: number, volume = 0.65): Promise<void> {
     if (!this.context || this.context.state !== "running") return;
-    await this.playOneShot(id,volume,1);
+    await this.playOneShot(id, volume, 1);
   }
 
   dispose(): void {

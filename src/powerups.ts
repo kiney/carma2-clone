@@ -218,9 +218,9 @@ export class PowerupSystem {
         continue;
       }
       if (
-        ![0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 27, 30, 34, 35, 46, 47, 51].includes(
-          definition.action,
-        )
+        ![
+          0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 27, 30, 34, 35, 46, 47, 51,
+        ].includes(definition.action)
       ) {
         if (!this.unsupportedWarned.has(index)) {
           this.unsupportedWarned.add(index);

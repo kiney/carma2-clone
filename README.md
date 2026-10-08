@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians. Ordinary-road vehicle dynamics, collision impulses, persistent crush, component damage and physical vehicle parts have numerical, headless, and prior browser checks. Water, oil, moving platforms, world destruction, noncars and mines now have source-based runtime paths and headless coverage; browser regression for this newer integration remains pending. Game assets are read from the installation and are not included here.
+This independent browser engine uses assets from a local Carmageddon II installation to render original cars, tracks, and textured pedestrians. Source-based vehicle motion, collision impulses, persistent crush, component damage, detachable parts, water, oil, noncars, lifts, world destruction and mines have numerical and Chromium checks. Game assets are read from the installation and are not included here. Remaining compatibility gaps and editable priorities are in [TODO.md](TODO.md).
 
 ## Run it
 
@@ -47,7 +47,7 @@ The engine also includes graph-following opponents, checkpoint/lap races, textur
 
 ## Tests
 
-Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs an installed Chromium smoke test when available; existing checks exercise driving and checkpoints on stock and Advanced content. Browser regression for the newer water/oil, world destruction, noncar, platform, and mine paths remains pending. Screenshots are saved under ignored test artifacts. `npm run test:crashes` records original-car plane/pair scenarios in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
+Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs installed Chromium when available: stock/Advanced driving and race completion, mine pickup/impact/repair, oil grip, water, Carrier lift and Airport door destruction. Screenshots and reports are saved under ignored test artifacts. `npm run test:crashes` records original-car plane/pair scenarios in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
 
 ## Asset and license notes
 

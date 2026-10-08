@@ -81,7 +81,8 @@ export type OilSurfaceProjector = (
  * 0x4a7570. Times are absolute milliseconds, matching GetTotalTime().
  */
 export class OilRuntime {
-  private readonly slots: (OilSpill | null)[] = Array(OIL_SPILL_CAPACITY).fill(null);
+  private readonly slots: (OilSpill | null)[] =
+    Array(OIL_SPILL_CAPACITY).fill(null);
   private readonly random: () => number;
   private readonly material: MeshBasicMaterial;
   private readonly geometry: PlaneGeometry;
@@ -132,12 +133,15 @@ export class OilRuntime {
     suppliedTime?: number,
     optionsOrSurface: OilQueueOptions | OilSurface = {},
   ): OilSpill | null {
-    const options = "normal" in optionsOrSurface
-      ? { surface: optionsOrSurface }
-      : optionsOrSurface;
+    const options =
+      "normal" in optionsOrSurface
+        ? { surface: optionsOrSurface }
+        : optionsOrSurface;
     if (this.disposed) return null;
-    const position = positionOrTime instanceof Vector3 ? positionOrTime : undefined;
-    const time = typeof positionOrTime === "number" ? positionOrTime : suppliedTime;
+    const position =
+      positionOrTime instanceof Vector3 ? positionOrTime : undefined;
+    const time =
+      typeof positionOrTime === "number" ? positionOrTime : suppliedTime;
     if (time === undefined) return null;
     if (!Number.isFinite(time)) return null;
     const origin = position ?? owner?.state.position;
@@ -147,15 +151,21 @@ export class OilRuntime {
       options.nativeOwnerCar &&
       this.slots.some(
         (spill) =>
-          spill !== null && spill.nativeOwnerCar === options.nativeOwnerCar && time >= spill.queuedAt &&
+          spill !== null &&
+          spill.nativeOwnerCar === options.nativeOwnerCar &&
+          time >= spill.queuedAt &&
           time - spill.queuedAt < OWNER_REUSE_DELAY_MS,
       )
-    ) return null;
+    )
+      return null;
 
     let slot = this.slots.findIndex((spill) => spill === null);
     if (slot < 0) {
-      slot = this.slots.reduce((oldest, spill, index, all) =>
-        spill!.queuedAt < all[oldest]!.queuedAt ? index : oldest, 0);
+      slot = this.slots.reduce(
+        (oldest, spill, index, all) =>
+          spill!.queuedAt < all[oldest]!.queuedAt ? index : oldest,
+        0,
+      );
       this.slots[slot]!.mesh.removeFromParent();
     }
 
@@ -205,13 +215,19 @@ export class OilRuntime {
       if (spill.pending) {
         const candidate = spill.owner?.state.position ?? spill.position;
         let placement: OilPlacement | null | undefined;
-        if (projector) placement = projector(candidate.clone(), spill.fullSize, spill.owner);
+        if (projector)
+          placement = projector(candidate.clone(), spill.fullSize, spill.owner);
         else {
           const fallbackSurface = spill.placementSurface;
-          if (fallbackSurface) placement = { ...fallbackSurface, position: candidate.clone() };
+          if (fallbackSurface)
+            placement = { ...fallbackSurface, position: candidate.clone() };
         }
         if (placement === undefined) continue;
-        if (!placement || !finiteVector(placement.position) || !validOilSurface(placement)) {
+        if (
+          !placement ||
+          !finiteVector(placement.position) ||
+          !validOilSurface(placement)
+        ) {
           spill.mesh.removeFromParent();
           this.slots[i] = null;
           continue;
@@ -221,19 +237,27 @@ export class OilRuntime {
         spill.mesh.position.copy(spill.position);
         spill.mesh.quaternion.setFromUnitVectors(UP, spill.normal);
         spill.mesh.rotateY(spill.yaw);
-        spill.originalOwnerPosition = spill.nativeOwnerCar?.state.position.clone() ?? null;
+        spill.originalOwnerPosition =
+          spill.nativeOwnerCar?.state.position.clone() ?? null;
         spill.spillTime = now;
         spill.pending = false;
         spill.mesh.visible = true;
       }
-      if (spill.nativeOwnerCar && spill.originalOwnerPosition && spill.stopTime === 0) {
-        const delta = spill.originalOwnerPosition.clone().sub(spill.nativeOwnerCar.state.position);
+      if (
+        spill.nativeOwnerCar &&
+        spill.originalOwnerPosition &&
+        spill.stopTime === 0
+      ) {
+        const delta = spill.originalOwnerPosition
+          .clone()
+          .sub(spill.nativeOwnerCar.state.position);
         if (delta.lengthSq() > STOP_DISTANCE_SQUARED) spill.stopTime = now;
       }
       if (!spill.stopTime || now < spill.stopTime) {
         spill.currentSize = Math.min(
           spill.fullSize,
-          OIL_INITIAL_HALF_SIZE + Math.max(0, now - spill.spillTime) * spill.growRate,
+          OIL_INITIAL_HALF_SIZE +
+            Math.max(0, now - spill.spillTime) * spill.growRate,
         );
       }
       const plane = spill.mesh.children[0] as Mesh;
@@ -250,12 +274,15 @@ export class OilRuntime {
       if (!spill || spill.pending) continue;
       const dx = point.x / OIL_WORLD_SCALE - spill.position.x;
       const dz = point.z / OIL_WORLD_SCALE - spill.position.z;
-      const limit = spill.currentSize * spill.currentSize * WHEEL_RADIUS_SQUARED_FACTOR;
+      const limit =
+        spill.currentSize * spill.currentSize * WHEEL_RADIUS_SQUARED_FACTOR;
       const dy = Math.abs(point.y / OIL_WORLD_SCALE - spill.position.y);
       if (dx * dx < limit && dz * dz < limit && dy < VERTICAL_TOLERANCE_MODEL)
         hit = spill;
     }
-    return hit ? { grip: randomBetween(this.random, ...OIL_GRIP), spill: hit } : null;
+    return hit
+      ? { grip: randomBetween(this.random, ...OIL_GRIP), spill: hit }
+      : null;
   }
 
   /**
@@ -268,10 +295,12 @@ export class OilRuntime {
     points: readonly (Vector3 | null)[],
   ): [number, number, number, number] {
     const result: [number, number, number, number] = [1, 1, 1, 1];
-    const trail = this.wheelTrails.get(car) ?? Array.from({ length: 4 }, () => ({
-      frictionMultiplier: 1,
-      remaining: 0,
-    }));
+    const trail =
+      this.wheelTrails.get(car) ??
+      Array.from({ length: 4 }, () => ({
+        frictionMultiplier: 1,
+        remaining: 0,
+      }));
     this.wheelTrails.set(car, trail);
     for (let i = 0; i < 4; i++) {
       const point = points[i];
@@ -279,7 +308,10 @@ export class OilRuntime {
         const hit = this.tractionAt(point);
         if (hit) {
           trail[i].frictionMultiplier = hit.grip;
-          trail[i].remaining = randomBetween(this.random, ...OIL_MARK_REMAINING);
+          trail[i].remaining = randomBetween(
+            this.random,
+            ...OIL_MARK_REMAINING,
+          );
         }
       }
       if (trail[i].remaining > 0) result[i] = trail[i].frictionMultiplier;
@@ -289,7 +321,12 @@ export class OilRuntime {
 
   /** Native SkidMark subtracts model-space travel distance from wheel oil. */
   consumeOilMark(car: RigidBody, wheel: number, distance: number): number {
-    if (!Number.isInteger(wheel) || wheel < 0 || wheel > 3 || !Number.isFinite(distance))
+    if (
+      !Number.isInteger(wheel) ||
+      wheel < 0 ||
+      wheel > 3 ||
+      !Number.isFinite(distance)
+    )
       return 0;
     const trail = this.wheelTrails.get(car)?.[wheel];
     if (!trail) return 0;
@@ -310,7 +347,8 @@ export class OilRuntime {
 
 /** Native near-flat surface and neighboring-plane rejection from OKToSpillOil. */
 export function validOilSurface(surface: OilSurface): boolean {
-  if (!finiteVector(surface.normal) || surface.normal.lengthSq() === 0) return false;
+  if (!finiteVector(surface.normal) || surface.normal.lengthSq() === 0)
+    return false;
   const normal = surface.normal.clone().normalize();
   return normal.y >= 0.97 && validNearbyFaces(normal, surface);
 }
@@ -327,11 +365,19 @@ function validNearbyFaces(normal: Vector3, surface: OilSurface): boolean {
   return true;
 }
 
-function randomBetween(random: () => number, low: number, high: number): number {
+function randomBetween(
+  random: () => number,
+  low: number,
+  high: number,
+): number {
   const sample = Math.max(0, Math.min(32767, Math.floor(random() * 32768)));
   return low + (sample / 32768) * (high - low);
 }
 
 function finiteVector(value: Vector3): boolean {
-  return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
+  return (
+    Number.isFinite(value.x) &&
+    Number.isFinite(value.y) &&
+    Number.isFinite(value.z)
+  );
 }

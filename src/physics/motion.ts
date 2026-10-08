@@ -93,7 +93,13 @@ export interface MotionGround {
   /** Native wheel spring reaction into a drivable physics object418870. */
   springReaction?(hit: MotionGroundHit, impulse: Vector3): void;
   supports?(owners: readonly (RigidBody | undefined)[]): void;
-  worldWheelContact?(wheels: readonly { hit: MotionGroundHit | null | undefined; load:number; point?:Vector3 }[]):void;
+  worldWheelContact?(
+    wheels: readonly {
+      hit: MotionGroundHit | null | undefined;
+      load: number;
+      point?: Vector3;
+    }[],
+  ): void;
   sampleOil?(
     wheelPointsMetric: readonly (Vector3 | null)[],
     grounded: readonly boolean[],
@@ -494,7 +500,7 @@ export function applyVehicleForces(
   const actual: MotionDebug["wheelTyreForces"] = [0, 0, 0, 0];
   const hits: Array<MotionGroundHit | null> = [];
   const wheelPoints: Array<Vector3 | null> = [];
-  const wheelSmashPoints: Array<Vector3|undefined> = [];
+  const wheelSmashPoints: Array<Vector3 | undefined> = [];
   const wheelGrounded: boolean[] = [];
   const rearDirection = new Vector3(),
     frontDirection = new Vector3();
@@ -618,12 +624,23 @@ export function applyVehicleForces(
         );
     }
     s.wheelLengths[i] = length;
-    if(wheelGrounded[i])wheelSmashPoints[i]=start.clone().multiplyScalar(S).addScaledVector(rayDirection,length).multiplyScalar(Math.fround(1/S));
+    if (wheelGrounded[i])
+      wheelSmashPoints[i] = start
+        .clone()
+        .multiplyScalar(S)
+        .addScaledVector(rayDirection, length)
+        .multiplyScalar(Math.fround(1 / S));
   }
   ground.supports?.(
     hits.map((hit, i) => (wheelGrounded[i] ? hit?.body : undefined)),
   );
-  ground.worldWheelContact?.(hits.map((hit,i)=>({hit:wheelGrounded[i]?hit:null,load:loads[i],point:wheelSmashPoints[i]})));
+  ground.worldWheelContact?.(
+    hits.map((hit, i) => ({
+      hit: wheelGrounded[i] ? hit : null,
+      load: loads[i],
+      point: wheelSmashPoints[i],
+    })),
+  );
   F.add(
     new Vector3(
       0,

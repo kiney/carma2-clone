@@ -3,6 +3,7 @@ import type { NonCarMechanics } from "../noncars";
 import type { RigidBody } from "./contact";
 import { buildHull, hullsBounds, type CollisionHull } from "./geometry";
 import { buildBoxHull } from "./box-hull";
+import { buildWireHull } from "./wire-hull";
 import { createBallJoint, type RigidJoint } from "./joint";
 import { createNonCarMotorState, type NonCarMotorState } from "./noncar-motion";
 import type { BodyVolumeState } from "./simulation";
@@ -40,6 +41,11 @@ export function createNonCarBody(
     scale = new Vector3();
   actor.matrixWorld.decompose(position, orientation, scale);
   const hulls = mechanics.shapes.map((shape) => {
+    if (shape.kind === "wire")
+      return buildWireHull(
+        shape.vertices.map((point) => new Vector3(...point).multiply(scale)),
+        shape.edges,
+      );
     if (shape.kind === "box")
       return buildBoxHull(
         new Vector3(...shape.bounds.min).multiply(scale),

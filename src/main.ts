@@ -399,14 +399,19 @@ async function loadRace() {
       if (oilPath) await assets.pixelmaps(oilPath);
     }
     const generalText = await assets.text("data/GENERAL.TXT");
-    const loadedMine = await assets.scene("data/MINE","ShitMine");
-    const explosionSettings=parseWastedExplosionSettings(generalText);
-    for(const frame of new Set(explosionSettings.groups.flatMap(group=>group.frames.map(frame=>frame.pixelmap)))) {
-      const path=assets.resolve(`data/COMMON/boom/PIX8/${frame}.PIX`);
-      if(path && !assets.textures.has(frame.toLowerCase()))await assets.pixelmaps(path);
+    const loadedMine = await assets.scene("data/MINE", "ShitMine");
+    const explosionSettings = parseWastedExplosionSettings(generalText);
+    for (const frame of new Set(
+      explosionSettings.groups.flatMap((group) =>
+        group.frames.map((frame) => frame.pixelmap),
+      ),
+    )) {
+      const path = assets.resolve(`data/COMMON/boom/PIX8/${frame}.PIX`);
+      if (path && !assets.textures.has(frame.toLowerCase()))
+        await assets.pixelmaps(path);
     }
     const mineMass = parseMineMass(generalText);
-    if(!mineMass)throw new Error("GENERAL.TXT: mine/mortar weight missing");
+    if (!mineMass) throw new Error("GENERAL.TXT: mine/mortar weight missing");
     upgradeSettings ??= parseUpgradeSettings(generalText);
     const carText = await assets.text(currentCar);
     const newCarConfig = parseCarConfig(carText);
@@ -465,32 +470,57 @@ async function loadRace() {
     );
     const loadedGrooves = new WorldGrooveRuntime(world.group, trackText);
     const movingWorld = [...loadedGrooves.actors]
-      .filter(actor => !noncarBodies.some(body => body.actor === actor))
-      .map(actor => { actor.userData.dynamicBody=true; return createMovingWorldBody(actor); });
-    const loadedDestruction = new WorldDestruction(world.group, parseTrackSmashables(trackText,currentTrack), {
-      models: world.models, textures: world.textures,
-      materials: world.materials,
-      onActivation: (activation, contact) => simulation?.worldActivations.enqueue(activation, contact),
-      onConnotations:(data,contact)=>{
-        for(const id of data.sounds)void audio.playSound(id);
-        if(data.explosions.length){
-          const source=contact.bodyActor ?? contact.actor;
-          source.updateWorldMatrix(true,true);
-          const bounds=new THREE.Box3().setFromObject(source).applyMatrix4(source.matrixWorld.clone().invert());
-          explosions?.spawn(data.explosions,contact.point ?? source.getWorldPosition(new THREE.Vector3()),bounds,contact.timeMs ?? 0,undefined,source.getWorldQuaternion(new THREE.Quaternion()));
-        }
-      },
-    });
-    await loadedDestruction.preload(async name => {
-      const path=assets.resolve(`${dirOf(currentTrack)}/${name.replace(/\.(act|dat)$/i,"")}.DAT`);
-      if (!path) return;
-      const models=parseDat(await assets.bytes(path));
-      return models.find(model => model.name.toLowerCase() === name.toLowerCase()) ?? models[0];
-    });
-    world.group = batchStaticWorld(
+      .filter((actor) => !noncarBodies.some((body) => body.actor === actor))
+      .map((actor) => {
+        actor.userData.dynamicBody = true;
+        return createMovingWorldBody(actor);
+      });
+    const loadedDestruction = new WorldDestruction(
       world.group,
-      [...noncarBodies.map((body) => body.actor), ...loadedGrooves.actors, ...loadedDestruction.retainActors],
+      parseTrackSmashables(trackText, currentTrack),
+      {
+        models: world.models,
+        textures: world.textures,
+        materials: world.materials,
+        onActivation: (activation, contact) =>
+          simulation?.worldActivations.enqueue(activation, contact),
+        onConnotations: (data, contact) => {
+          for (const id of data.sounds) void audio.playSound(id);
+          if (data.explosions.length) {
+            const source = contact.bodyActor ?? contact.actor;
+            source.updateWorldMatrix(true, true);
+            const bounds = new THREE.Box3()
+              .setFromObject(source)
+              .applyMatrix4(source.matrixWorld.clone().invert());
+            explosions?.spawn(
+              data.explosions,
+              contact.point ?? source.getWorldPosition(new THREE.Vector3()),
+              bounds,
+              contact.timeMs ?? 0,
+              undefined,
+              source.getWorldQuaternion(new THREE.Quaternion()),
+            );
+          }
+        },
+      },
     );
+    await loadedDestruction.preload(async (name) => {
+      const path = assets.resolve(
+        `${dirOf(currentTrack)}/${name.replace(/\.(act|dat)$/i, "")}.DAT`,
+      );
+      if (!path) return;
+      const models = parseDat(await assets.bytes(path));
+      return (
+        models.find(
+          (model) => model.name.toLowerCase() === name.toLowerCase(),
+        ) ?? models[0]
+      );
+    });
+    world.group = batchStaticWorld(world.group, [
+      ...noncarBodies.map((body) => body.actor),
+      ...loadedGrooves.actors,
+      ...loadedDestruction.retainActors,
+    ]);
     const newCollision = new WorldCollision(
       world.group,
       parseSurfaceModifiers(trackText),
@@ -498,9 +528,12 @@ async function loadRace() {
     noncarRenderBatch?.dispose();
     simulation?.dispose();
     explosions?.dispose();
-    explosions=new ExplosionRuntime(scene,new Map([...world.textures,...assets.textures]));
-    if(mineModel)disposeGroup(mineModel);
-    mineModel=loadedMine.group;
+    explosions = new ExplosionRuntime(
+      scene,
+      new Map([...world.textures, ...assets.textures]),
+    );
+    if (mineModel) disposeGroup(mineModel);
+    mineModel = loadedMine.group;
     carAnimation?.dispose();
     carTextures?.dispose();
     worldAnimation?.dispose();
@@ -577,16 +610,33 @@ async function loadRace() {
     simulation.specialVolumes = parseTrackSpecialVolumes(trackText);
     simulation.defaultWaterVolume = parseDefaultWaterVolume(generalText);
     simulation.oil = new OilRuntime({ texture: assets.textures.get("oil") });
-    simulation.mineFactory={actor:mineModel,bounds:new THREE.Box3().setFromObject(mineModel),mass:mineMass};
-    simulation.onMineEvent=event=>{
-      if(event.kind === "impactSound")void audio.playSound(event.sound);
-      if(event.kind === "explode")void audio.playSound(5400);
-      if(event.kind === "explode")explosions?.spawn(explosionSettings.groups,event.mine.position,simulation!.mineFactory!.bounds,simulation!.elapsed*1000,new THREE.Vector3(...explosionSettings.groups[0].offset).negate(),event.mine.orientation);
+    simulation.mineFactory = {
+      actor: mineModel,
+      bounds: new THREE.Box3().setFromObject(mineModel),
+      mass: mineMass,
+    };
+    simulation.onMineEvent = (event) => {
+      if (event.kind === "impactSound") void audio.playSound(event.sound);
+      if (event.kind === "explode") void audio.playSound(5400);
+      if (event.kind === "explode")
+        explosions?.spawn(
+          explosionSettings.groups,
+          event.mine.position,
+          simulation!.mineFactory!.bounds,
+          simulation!.elapsed * 1000,
+          new THREE.Vector3(...explosionSettings.groups[0].offset).negate(),
+          event.mine.orientation,
+        );
     };
     simulation.destruction = loadedDestruction;
     simulation.grooves = loadedGrooves;
     for (const body of movingWorld) simulation.addMovingWorld(body);
-    assets.warnings.push(...loadedDestruction.diagnostics, ...loadedGrooves.diagnostics.map(item => `${currentTrack}: ${item.message}`));
+    assets.warnings.push(
+      ...loadedDestruction.diagnostics,
+      ...loadedGrooves.diagnostics.map(
+        (item) => `${currentTrack}: ${item.message}`,
+      ),
+    );
     for (const warning of simulation.specialVolumes.diagnostics)
       assets.warnings.push(`${currentTrack}: ${warning}`);
     renderPoses = new RenderPoses();
@@ -989,9 +1039,16 @@ addEventListener("keydown", (event) => {
           const placed = simulation?.dropOil(player!);
           message(placed ? "OIL DROPPED" : "OIL · NO SUITABLE SURFACE");
         }
-        if(event.definition.action === 34) {
-          const launched=simulation?.launchMine(player!,mineParameters(event.definition.floatParams,event.definition.integerParams),event.definition.index);
-          message(launched?event.name:"MINE POOL FULL");
+        if (event.definition.action === 34) {
+          const launched = simulation?.launchMine(
+            player!,
+            mineParameters(
+              event.definition.floatParams,
+              event.definition.integerParams,
+            ),
+            event.definition.index,
+          );
+          message(launched ? event.name : "MINE POOL FULL");
         }
       },
       player.knackered,
@@ -1101,9 +1158,14 @@ function animate(now: number) {
           if (player && simulation) simulation.repair(player);
           else damage?.repair();
         }
-        if(event.kind === "crash" && player && simulation) {
-          if(event.definition.action === 30)simulation.hitMine(player,event.definition.floatParams);
-          if(event.definition.action === 12)simulation.spamCar(player,.1*player.damage.carSoftness*10/7);
+        if (event.kind === "crash" && player && simulation) {
+          if (event.definition.action === 30)
+            simulation.hitMine(player, event.definition.floatParams);
+          if (event.definition.action === 12)
+            simulation.spamCar(
+              player,
+              (0.1 * player.damage.carSoftness * 10) / 7,
+            );
         }
         if (event.kind === "upgrade" && player?.upgrades && upgradeSettings) {
           player.upgrades.credits = race!.credits;
@@ -1158,8 +1220,8 @@ function animate(now: number) {
           handbrake: keys.has("Space"),
         };
         updateRivals(dt);
-      simulation.update(dt);
-      explosions?.update(simulation.elapsed*1000);
+        simulation.update(dt);
+        explosions?.update(simulation.elapsed * 1000);
         // Installed C2 RaceCompleted(reason6) lets the wasted body continue
         // simulating during its ten-second end countdown.
         if (
@@ -1255,7 +1317,7 @@ function animate(now: number) {
       for (const body of simulation.noncars)
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.mineBodies)
-        if(body.actor.parent)renderPoses.apply(body,body.actor,renderAlpha);
+        if (body.actor.parent) renderPoses.apply(body, body.actor, renderAlpha);
     }
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(
       renderOrientation,

@@ -45,20 +45,44 @@ interface InstanceGroup {
 const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
 function sameMaterial(a: MaterialSet, b: MaterialSet): boolean {
   if (a === b) return true;
-  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+  return (
+    Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((v, i) => v === b[i])
+  );
 }
-function sameMatrix(a: THREE.Matrix4, b: THREE.Matrix4, epsilon = 1e-8): boolean {
+function sameMatrix(
+  a: THREE.Matrix4,
+  b: THREE.Matrix4,
+  epsilon = 1e-8,
+): boolean {
   return a.elements.every((v, i) => Math.abs(v - b.elements[i]) <= epsilon);
 }
-function sameObjectSnapshot(node: ObjectRecord, checkVisibility = true): boolean {
+function sameObjectSnapshot(
+  node: ObjectRecord,
+  checkVisibility = true,
+): boolean {
   const object = node.object;
-  if (object.parent !== node.parent || object.children.length !== node.children.length ||
-      (checkVisibility && object.visible !== node.visible)) return false;
-  for (let i = 0; i < node.children.length; i++) if (object.children[i] !== node.children[i]) return false;
-  if (!object.position.equals(node.position) || !object.quaternion.equals(node.quaternion) || !object.scale.equals(node.scale)) return false;
-  return object.matrixAutoUpdate === node.matrixAutoUpdate &&
+  if (
+    object.parent !== node.parent ||
+    object.children.length !== node.children.length ||
+    (checkVisibility && object.visible !== node.visible)
+  )
+    return false;
+  for (let i = 0; i < node.children.length; i++)
+    if (object.children[i] !== node.children[i]) return false;
+  if (
+    !object.position.equals(node.position) ||
+    !object.quaternion.equals(node.quaternion) ||
+    !object.scale.equals(node.scale)
+  )
+    return false;
+  return (
+    object.matrixAutoUpdate === node.matrixAutoUpdate &&
     (object.matrixAutoUpdate || sameMatrix(object.matrix, node.matrix)) &&
-    sameMatrix(object.matrixWorld, node.matrixWorld);
+    sameMatrix(object.matrixWorld, node.matrixWorld)
+  );
 }
 
 /** Batches sleeping noncar meshes by their shared source geometry/material.
@@ -72,36 +96,61 @@ export class NonCarRenderBatch {
   private readonly poseScratch = new THREE.Matrix4();
   private disposed = false;
 
-  constructor(bodies: readonly NonCarBody[], private readonly scene: THREE.Object3D) {
+  constructor(
+    bodies: readonly NonCarBody[],
+    private readonly scene: THREE.Object3D,
+  ) {
     this.group.name = "sleeping-noncar-instances";
     this.group.matrixAutoUpdate = false;
     this.group.matrix.identity();
     scene.add(this.group);
     scene.updateWorldMatrix(true, false);
-    const geometryGroups = new Map<THREE.BufferGeometry, Array<{ material: MaterialSet; records: MeshRecord[] }>>();
+    const geometryGroups = new Map<
+      THREE.BufferGeometry,
+      Array<{ material: MaterialSet; records: MeshRecord[] }>
+    >();
     for (const body of new Set(bodies)) {
       const record = this.capture(body);
       this.bodies.set(body, record);
       for (const meshRecord of record.meshes) {
         let groups = geometryGroups.get(meshRecord.geometry);
         if (!groups) geometryGroups.set(meshRecord.geometry, (groups = []));
-        let materialGroup = groups.find((candidate) => sameMaterial(candidate.material, meshRecord.material));
-        if (!materialGroup) groups.push((materialGroup = { material: meshRecord.material, records: [] }));
+        let materialGroup = groups.find((candidate) =>
+          sameMaterial(candidate.material, meshRecord.material),
+        );
+        if (!materialGroup)
+          groups.push(
+            (materialGroup = { material: meshRecord.material, records: [] }),
+          );
         materialGroup.records.push(meshRecord);
       }
     }
-    for (const [geometry, groups] of geometryGroups) for (const materialGroup of groups) {
-      const instance = new THREE.InstancedMesh(geometry, materialGroup.material, materialGroup.records.length);
-      instance.name = "sleeping-noncar-instance-set";
-      instance.frustumCulled = false;
-      instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      materialGroup.records.forEach((_, index) => instance.setMatrixAt(index, HIDDEN));
-      instance.instanceMatrix.needsUpdate = true;
-      this.group.add(instance);
-      const batch = { mesh: instance, records: materialGroup.records, dirty: false };
-      this.instances.push(batch);
-      materialGroup.records.forEach((record, index) => { record.batch = batch; record.slot = index; });
-    }
+    for (const [geometry, groups] of geometryGroups)
+      for (const materialGroup of groups) {
+        const instance = new THREE.InstancedMesh(
+          geometry,
+          materialGroup.material,
+          materialGroup.records.length,
+        );
+        instance.name = "sleeping-noncar-instance-set";
+        instance.frustumCulled = false;
+        instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        materialGroup.records.forEach((_, index) =>
+          instance.setMatrixAt(index, HIDDEN),
+        );
+        instance.instanceMatrix.needsUpdate = true;
+        this.group.add(instance);
+        const batch = {
+          mesh: instance,
+          records: materialGroup.records,
+          dirty: false,
+        };
+        this.instances.push(batch);
+        materialGroup.records.forEach((record, index) => {
+          record.batch = batch;
+          record.slot = index;
+        });
+      }
     this.update();
   }
 
@@ -123,15 +172,24 @@ export class NonCarRenderBatch {
       matrixAutoUpdate: object.matrixAutoUpdate,
     });
     const ancestors: ObjectRecord[] = [];
-    for (let current = actor.parent; current && current !== this.scene; current = current.parent)
+    for (
+      let current = actor.parent;
+      current && current !== this.scene;
+      current = current.parent
+    )
       ancestors.push(snapshot(current));
-    const nodes: BodyRecord["nodes"] = [], meshes: MeshRecord[] = [];
+    const nodes: BodyRecord["nodes"] = [],
+      meshes: MeshRecord[] = [];
     actor.traverse((object) => {
       const node = snapshot(object);
       nodes.push(node);
       if (!(object instanceof THREE.Mesh)) return;
       const path: THREE.Object3D[] = [];
-      for (let current: THREE.Object3D | null = object; current; current = current.parent) {
+      for (
+        let current: THREE.Object3D | null = object;
+        current;
+        current = current.parent
+      ) {
         path.push(current);
         if (current === actor) break;
       }
@@ -141,15 +199,22 @@ export class NonCarRenderBatch {
         material: object.material,
         visible: object.visible,
         renderable: object.visible && path.every((node) => node.visible),
-        localToScene: this.poseScratch.multiplyMatrices(this.sceneInverse, object.matrixWorld).clone(),
+        localToScene: this.poseScratch
+          .multiplyMatrices(this.sceneInverse, object.matrixWorld)
+          .clone(),
         uploaded: false,
       };
       node.meshRecord = record;
       meshes.push(record);
     });
     const record: BodyRecord = {
-      body, actorParent: actor.parent, ancestors, nodes, meshes,
-      position: body.state.position.clone(), orientation: body.state.orientation.clone(),
+      body,
+      actorParent: actor.parent,
+      ancestors,
+      nodes,
+      meshes,
+      position: body.state.position.clone(),
+      orientation: body.state.orientation.clone(),
       pulled: false,
     };
     return record;
@@ -157,22 +222,52 @@ export class NonCarRenderBatch {
 
   private stillMatches(record: BodyRecord): boolean {
     const { body } = record;
-    if (body.motor.sleeping !== true || body.actor.parent !== record.actorParent || !body.actor.visible) return false;
-    if (body.state.position.distanceToSquared(record.position) > 1e-12 || 1 - Math.abs(body.state.orientation.dot(record.orientation)) > 1e-10) return false;
+    if (
+      body.motor.sleeping !== true ||
+      body.actor.parent !== record.actorParent ||
+      !body.actor.visible
+    )
+      return false;
+    if (
+      body.state.position.distanceToSquared(record.position) > 1e-12 ||
+      1 - Math.abs(body.state.orientation.dot(record.orientation)) > 1e-10
+    )
+      return false;
     for (const node of record.ancestors) {
       if (!sameObjectSnapshot(node) || !node.object.visible) return false;
     }
     for (const node of record.nodes) {
       // Mesh visibility is changed by this batch itself; all parent visibility
       // and every local transform remain checked without world-matrix rebuilds.
-      if (!(node.object instanceof THREE.Mesh) && !sameObjectSnapshot(node)) return false;
+      if (!(node.object instanceof THREE.Mesh) && !sameObjectSnapshot(node))
+        return false;
       if (node.object instanceof THREE.Mesh) {
         const source = node.meshRecord;
-        if (!source || node.object.parent !== node.parent || node.object.children.length !== node.children.length) return false;
-        for (let i = 0; i < node.children.length; i++) if (node.object.children[i] !== node.children[i]) return false;
-        if (!node.object.position.equals(node.position) || !node.object.quaternion.equals(node.quaternion) || !node.object.scale.equals(node.scale)) return false;
-        if (node.object.matrixAutoUpdate !== node.matrixAutoUpdate || (!node.object.matrixAutoUpdate && !sameMatrix(node.object.matrix, node.matrix))) return false;
-        if (node.object.geometry !== source.geometry || !sameMaterial(node.object.material, source.material)) return false;
+        if (
+          !source ||
+          node.object.parent !== node.parent ||
+          node.object.children.length !== node.children.length
+        )
+          return false;
+        for (let i = 0; i < node.children.length; i++)
+          if (node.object.children[i] !== node.children[i]) return false;
+        if (
+          !node.object.position.equals(node.position) ||
+          !node.object.quaternion.equals(node.quaternion) ||
+          !node.object.scale.equals(node.scale)
+        )
+          return false;
+        if (
+          node.object.matrixAutoUpdate !== node.matrixAutoUpdate ||
+          (!node.object.matrixAutoUpdate &&
+            !sameMatrix(node.object.matrix, node.matrix))
+        )
+          return false;
+        if (
+          node.object.geometry !== source.geometry ||
+          !sameMaterial(node.object.material, source.material)
+        )
+          return false;
       }
     }
     return true;
@@ -196,19 +291,29 @@ export class NonCarRenderBatch {
     this.group.visible = true;
     for (const record of this.bodies.values()) {
       if (record.pulled) continue;
-      if (!this.stillMatches(record)) { this.pull(record); continue; }
+      if (!this.stillMatches(record)) {
+        this.pull(record);
+        continue;
+      }
       for (const source of record.meshes) {
-        if (!source.renderable || source.uploaded || !source.batch || source.slot === undefined) continue;
+        if (
+          !source.renderable ||
+          source.uploaded ||
+          !source.batch ||
+          source.slot === undefined
+        )
+          continue;
         source.batch.mesh.setMatrixAt(source.slot, source.localToScene);
         source.batch.dirty = true;
         source.uploaded = true;
         source.mesh.visible = false;
       }
     }
-    for (const instance of this.instances) if (instance.dirty) {
-      instance.mesh.instanceMatrix.needsUpdate = true;
-      instance.dirty = false;
-    }
+    for (const instance of this.instances)
+      if (instance.dirty) {
+        instance.mesh.instanceMatrix.needsUpdate = true;
+        instance.dirty = false;
+      }
   }
 
   dispose(): void {

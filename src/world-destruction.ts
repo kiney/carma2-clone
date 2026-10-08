@@ -465,7 +465,7 @@ export class WorldDestruction {
         else this.diagnostics.push(`Missing replacement model '${name}'`);
       }
   }
-  hasMaterialTrigger(name:string):boolean {
+  hasMaterialTrigger(name: string): boolean {
     return this.bindings.has(`material:${key(name)}`);
   }
   private resolveModel(name: string): DestructionModelAsset | undefined {

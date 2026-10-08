@@ -61,3 +61,5 @@ import "./priority-world-simulation.test.mjs";
 import "./mines-simulation.test.mjs";
 import "./world-activation.test.mjs";
 import "./explosion.test.mjs";
+import "./guard-pairs.test.mjs";
+import "./noncar-hull.test.mjs";

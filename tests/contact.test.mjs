@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Quaternion, Vector3 } from "three";
-import { createBallJoint, createHingeJoint, createSdbHingeJoint, buildQuickHingeConstraints, projectQuickHingeVelocities } from "../src/physics/joint.ts";
+import {
+  createBallJoint,
+  createHingeJoint,
+  createSdbHingeJoint,
+  buildQuickHingeConstraints,
+  projectQuickHingeVelocities,
+} from "../src/physics/joint.ts";
 import { kevFlapTearThreshold } from "../src/physics/attachment.ts";
 import {
   applyImpulse,
@@ -547,21 +553,24 @@ test("mutable joint row impulses and type9 are honored by normal application", (
   }
 });
 
-
 test("quick hinge closing speed is measured after its hidden velocity projection", () => {
-  const child = body(), parent = body();
+  const child = body(),
+    parent = body();
   child.state.angularVelocity.x = 20;
   const joint = createSdbHingeJoint(child, parent, [v(), v(0, 1), v(1)], 1);
   joint.planeLimits = [];
-  const [impact] = resolveContacts([
-    { ...contact(child, v(0, 0, 1), v(0, 1)), faceFriction: 0 },
-  ], 0.04, [joint]);
+  const [impact] = resolveContacts(
+    [{ ...contact(child, v(0, 0, 1), v(0, 1)), faceFriction: 0 }],
+    0.04,
+    [joint],
+  );
   near(impact.closingSpeed, 10);
   near(child.state.angularVelocity.x, parent.state.angularVelocity.x);
 });
 
 test("full hinge/contact response equals source three-hidden/two-explicit Schur elimination", () => {
-  const child = body(2, v(1, -3, 0.2)), parent = body(7, v(-0.5, -1, 0.8));
+  const child = body(2, v(1, -3, 0.2)),
+    parent = body(7, v(-0.5, -1, 0.8));
   child.state.orientation.setFromAxisAngle(v(0, 1), 0.4);
   parent.state.orientation.setFromAxisAngle(v(1, 8, 2).normalize(), 0.3);
   child.state.angularVelocity.set(0.3, 0.5, -0.2);
@@ -570,59 +579,143 @@ test("full hinge/contact response equals source three-hidden/two-explicit Schur 
   parent.properties.centerOfMass.set(-0.3, 0.1, -0.2);
   child.properties.inertia.set(0.8, 1.7, 2.1);
   parent.properties.inertia.set(3.2, 4.4, 5.8);
-  const joint = createSdbHingeJoint(child, parent, [v(0.4, -0.1, 0.2), v(0.4, 0.9, 0.2), v(1.4, -0.1, 0.2)], 1);
+  const joint = createSdbHingeJoint(
+    child,
+    parent,
+    [v(0.4, -0.1, 0.2), v(0.4, 0.9, 0.2), v(1.4, -0.1, 0.2)],
+    1,
+  );
   joint.planeLimits = [];
   projectQuickHingeVelocities(joint);
-  const hidden = buildQuickHingeConstraints(joint).map(row => row.jacobians);
-  const com = b => b.properties.centerOfMass.clone().applyQuaternion(b.state.orientation).add(b.state.position);
-  const anchor = b => (b === child ? joint.childAnchor : joint.parentAnchor).clone().applyQuaternion(b.state.orientation).add(b.state.position);
+  const hidden = buildQuickHingeConstraints(joint).map((row) => row.jacobians);
+  const com = (b) =>
+    b.properties.centerOfMass
+      .clone()
+      .applyQuaternion(b.state.orientation)
+      .add(b.state.position);
+  const anchor = (b) =>
+    (b === child ? joint.childAnchor : joint.parentAnchor)
+      .clone()
+      .applyQuaternion(b.state.orientation)
+      .add(b.state.position);
   const entry = (b, point, direction) => {
     const angular = point.clone().sub(com(b)).cross(direction);
-    const response = angular.clone().applyQuaternion(b.state.orientation.clone().conjugate()).divide(b.properties.inertia).applyQuaternion(b.state.orientation);
+    const response = angular
+      .clone()
+      .applyQuaternion(b.state.orientation.clone().conjugate())
+      .divide(b.properties.inertia)
+      .applyQuaternion(b.state.orientation);
     return { body: b, linear: direction.clone(), angular, response };
   };
-  const normal = v(0, 1), point = com(child).add(v(-0.2, 0, 0.4));
+  const normal = v(0, 1),
+    point = com(child).add(v(-0.2, 0, 0.4));
   const explicit = [
     [entry(child, point, normal)],
-    ...joint.hingeBasis.map(local => {
+    ...joint.hingeBasis.map((local) => {
       const axis = local.clone().applyQuaternion(child.state.orientation);
-      return [entry(child, anchor(child), axis), entry(parent, anchor(parent), axis.clone().negate())];
+      return [
+        entry(child, anchor(child), axis),
+        entry(parent, anchor(parent), axis.clone().negate()),
+      ];
     }),
   ];
-  const k = (a, b) => a.reduce((sum, x) => sum + b.reduce((s, y) => s + (x.body === y.body ? x.linear.dot(y.linear) / x.body.properties.mass + x.angular.dot(y.response) : 0), 0), 0);
+  const k = (a, b) =>
+    a.reduce(
+      (sum, x) =>
+        sum +
+        b.reduce(
+          (s, y) =>
+            s +
+            (x.body === y.body
+              ? x.linear.dot(y.linear) / x.body.properties.mass +
+                x.angular.dot(y.response)
+              : 0),
+          0,
+        ),
+      0,
+    );
   const solve = (matrix, rhs) => {
-    const rows = matrix.map((row, i) => [...row, rhs[i]]), n = rhs.length;
+    const rows = matrix.map((row, i) => [...row, rhs[i]]),
+      n = rhs.length;
     for (let column = 0; column < n; column++) {
       let pivot = column;
-      for (let i = column + 1; i < n; i++) if (Math.abs(rows[i][column]) > Math.abs(rows[pivot][column])) pivot = i;
+      for (let i = column + 1; i < n; i++)
+        if (Math.abs(rows[i][column]) > Math.abs(rows[pivot][column]))
+          pivot = i;
       [rows[column], rows[pivot]] = [rows[pivot], rows[column]];
       const divisor = rows[column][column];
       for (let j = column; j <= n; j++) rows[column][j] /= divisor;
-      for (let i = 0; i < n; i++) if (i !== column) {
-        const scale = rows[i][column];
-        for (let j = column; j <= n; j++) rows[i][j] -= scale * rows[column][j];
-      }
+      for (let i = 0; i < n; i++)
+        if (i !== column) {
+          const scale = rows[i][column];
+          for (let j = column; j <= n; j++)
+            rows[i][j] -= scale * rows[column][j];
+        }
     }
-    return rows.map(row => row[n]);
+    return rows.map((row) => row[n]);
   };
-  const B = hidden.map(a => hidden.map(b => k(a, b)));
-  const hc = explicit.map(c => hidden.map(h => k(h, c)));
-  const reactions = hc.map(column => solve(B, column));
-  const reduced = explicit.map((a, i) => explicit.map((b, j) => k(a, b) - hc[i].reduce((sum, value, index) => sum + value * reactions[j][index], 0)));
-  const speed = row => row.reduce((sum, x) => sum + x.linear.dot(x.body.state.velocity) + x.angular.dot(x.body.state.angularVelocity), 0);
+  const B = hidden.map((a) => hidden.map((b) => k(a, b)));
+  const hc = explicit.map((c) => hidden.map((h) => k(h, c)));
+  const reactions = hc.map((column) => solve(B, column));
+  const reduced = explicit.map((a, i) =>
+    explicit.map(
+      (b, j) =>
+        k(a, b) -
+        hc[i].reduce(
+          (sum, value, index) => sum + value * reactions[j][index],
+          0,
+        ),
+    ),
+  );
+  const speed = (row) =>
+    row.reduce(
+      (sum, x) =>
+        sum +
+        x.linear.dot(x.body.state.velocity) +
+        x.angular.dot(x.body.state.angularVelocity),
+      0,
+    );
   const closing = -speed(explicit[0]);
   assert.ok(closing > 0.01);
-  const lambda = solve(reduced, [0.01 + 1.001 * closing, ...explicit.slice(1).map(row => -speed(row))]);
+  const lambda = solve(reduced, [
+    0.01 + 1.001 * closing,
+    ...explicit.slice(1).map((row) => -speed(row)),
+  ]);
   assert.ok(lambda[0] > 0);
-  const hiddenLambda = solve(B, hidden.map((_, i) => -lambda.reduce((sum, value, j) => sum + hc[j][i] * value, 0)));
-  const expected = new Map([child, parent].map(b => [b, { velocity: b.state.velocity.clone(), omega: b.state.angularVelocity.clone() }]));
-  const apply = (rows, values) => rows.forEach((row, i) => row.forEach(x => {
-    expected.get(x.body).velocity.addScaledVector(x.linear, values[i] / x.body.properties.mass);
-    expected.get(x.body).omega.addScaledVector(x.response, values[i]);
-  }));
+  const hiddenLambda = solve(
+    B,
+    hidden.map(
+      (_, i) => -lambda.reduce((sum, value, j) => sum + hc[j][i] * value, 0),
+    ),
+  );
+  const expected = new Map(
+    [child, parent].map((b) => [
+      b,
+      {
+        velocity: b.state.velocity.clone(),
+        omega: b.state.angularVelocity.clone(),
+      },
+    ]),
+  );
+  const apply = (rows, values) =>
+    rows.forEach((row, i) =>
+      row.forEach((x) => {
+        expected
+          .get(x.body)
+          .velocity.addScaledVector(
+            x.linear,
+            values[i] / x.body.properties.mass,
+          );
+        expected.get(x.body).omega.addScaledVector(x.response, values[i]);
+      }),
+    );
   apply(explicit, lambda);
   apply(hidden, hiddenLambda);
-  const [impact] = resolveContacts([{ ...contact(child, point, normal), faceFriction: 0 }], 0.04, [joint]);
+  const [impact] = resolveContacts(
+    [{ ...contact(child, point, normal), faceFriction: 0 }],
+    0.04,
+    [joint],
+  );
   near(impact.normalImpulse, lambda[0], 1e-8);
   for (const b of [child, parent]) {
     near(b.state.velocity.distanceTo(expected.get(b).velocity), 0, 1e-8);
@@ -631,10 +724,15 @@ test("full hinge/contact response equals source three-hidden/two-explicit Schur 
 });
 
 test("source friction remains a free body impulse after quick hinge normal coupling", () => {
-  const child = body(1, v(0, -1, 2)), parent = body(1, v(0, -1, 2));
+  const child = body(1, v(0, -1, 2)),
+    parent = body(1, v(0, -1, 2));
   const joint = createSdbHingeJoint(child, parent, [v(), v(0, 0, 1), v(1)], 1);
   joint.planeLimits = [];
-  const [impact] = resolveContacts([{ ...contact(child, v(), v(0, 1)), faceFriction: 10 }], 0.04, [joint]);
+  const [impact] = resolveContacts(
+    [{ ...contact(child, v(), v(0, 1)), faceFriction: 10 }],
+    0.04,
+    [joint],
+  );
   near(impact.normalImpulse, 2.022);
   near(child.state.velocity.z, 0);
   near(parent.state.velocity.z, 2);

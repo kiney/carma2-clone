@@ -240,9 +240,13 @@ test("indexed ordinary detach preserves index and selects its nearest part corne
   assert.throws(() => selectOrdinaryDetachGeometry([], v(), v()));
 });
 
-
 test("SDB hinges preserve the source transverse basis and quick type", () => {
-  const joint = createSdbHingeJoint(body(), body(), [v(), v(1, 2, 3), v(0, 1)], 1);
+  const joint = createSdbHingeJoint(
+    body(),
+    body(),
+    [v(), v(1, 2, 3), v(0, 1)],
+    1,
+  );
   assert.equal(joint.quickHinge, true);
   near(joint.hingeBasis[0].distanceTo(v(-3, 0, 1).normalize()), 0);
   near(joint.hingeBasis[1].dot(joint.childAxis), 0);
@@ -250,7 +254,8 @@ test("SDB hinges preserve the source transverse basis and quick type", () => {
 });
 
 test("quick hinge preprojection constrains axial anchor motion and two angular freedoms", () => {
-  const child = body(1), parent = body(3);
+  const child = body(1),
+    parent = body(3);
   child.state.velocity.set(4, 8, 6);
   child.state.angularVelocity.set(4, 8, 12);
   const joint = createSdbHingeJoint(child, parent, [v(), v(0, 1), v(1)], 1);
@@ -268,12 +273,16 @@ test("quick hinge preprojection constrains axial anchor motion and two angular f
 });
 
 test("pre-candidate preparation resolves bilateral anchor velocities without angular limits", () => {
-  const child = body(), parent = body(4);
+  const child = body(),
+    parent = body(4);
   child.state.velocity.set(5, -3, 2);
   child.state.angularVelocity.set(2, 5, 3);
   const joint = createSdbHingeJoint(child, parent, [v(), v(0, 1), v(1)], 1);
   // A stale candidate crossing the limit must not enter the preparation solve.
-  child.state.predictedOrientation = new Quaternion().setFromAxisAngle(v(0, 1), 2);
+  child.state.predictedOrientation = new Quaternion().setFromAxisAngle(
+    v(0, 1),
+    2,
+  );
   const reactions = prepareJointVelocities([joint]);
   near(child.state.velocity.distanceTo(parent.state.velocity), 0);
   near(child.state.velocity.x, 1);
@@ -285,7 +294,9 @@ test("pre-candidate preparation resolves bilateral anchor velocities without ang
 });
 
 test("only the first quick hinge sharing a body retains the source optimization", () => {
-  const parent = body(), a = body(), b = body();
+  const parent = body(),
+    a = body(),
+    b = body();
   const first = createSdbHingeJoint(a, parent, [v(), v(0, 1), v(1)], 1);
   const second = createSdbHingeJoint(b, parent, [v(), v(0, 1), v(1)], 1);
   selectQuickHinges([first, second]);

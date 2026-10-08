@@ -95,7 +95,8 @@ function recoveryRay(
     surface: WorldRecoverySurface;
   } | null = null;
   for (const surface of surfaces) {
-    if (surface.edgeOnly || /^[!>?]/.test(surface.materialIdentifier ?? "")) continue;
+    if (surface.edgeOnly || /^[!>?]/.test(surface.materialIdentifier ?? ""))
+      continue;
     const { a, b, c } = surface;
     const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
     if (!normal.lengthSq()) continue;
@@ -372,6 +373,7 @@ export function placementHullsOverlap(
   const directed = (moving: CollisionHull, target: CollisionHull) => {
     const local = target.localHull && target.position && target.orientation;
     const planes = local ? target.localHull!.faces : target.faces;
+    if (!planes.length) return false; // Native point-vs-wire has no interior.
     const vertices = moving.vertices.map((point) => {
       const value = point.clone();
       if (local)
@@ -559,7 +561,7 @@ function planeSide(plane: IncrementalPlane, point: Vector3): number {
  * insertions, stable horizon edges and stable removal of unused vertices.
  * Authored storage remains unchanged; feature indices exclude interior points.
  * Local HW0x420fd0/0x421210/0x4217b0, with stored float32 plane coefficients. */
-export function buildHull(points: readonly Vector3[]): CollisionHull {
+function buildHullIncremental(points: readonly Vector3[]): CollisionHull {
   if (
     points.length < 4 ||
     points.length > 1024 ||
@@ -717,6 +719,62 @@ export function buildHull(points: readonly Vector3[]): CollisionHull {
     faces,
     edges: edges.map((edge) => [edge.a, edge.b]),
   };
+}
+
+export function buildHull(points: readonly Vector3[]): CollisionHull {
+  try {
+    return buildHullIncremental(points);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "Degenerate collision hull horizon" ||
+      points.length > 64
+    )
+      throw error;
+    // Original AddPoint4217b0 can leave a horizon's second plane unwritten
+    // after inserting redundant collinear edge vertices. The installed native
+    // hull accepts both stock monorails. Repair this undefined incidence only;
+    // successful native-order car hulls retain their full original path.
+    const retained = points.flatMap((point, index) => {
+      for (let a = 0; a < points.length; a++) {
+        if (a === index) continue;
+        const offset = point.clone().sub(points[a]);
+        for (let b = a + 1; b < points.length; b++) {
+          if (b === index) continue;
+          const segment = points[b].clone().sub(points[a]);
+          const projection = offset.dot(segment);
+          if (
+            projection > 0 &&
+            projection < segment.lengthSq() &&
+            offset.clone().cross(segment).lengthSq() === 0
+          )
+            return [];
+        }
+      }
+      return [index];
+    });
+    if (retained.length === points.length || retained.length < 4) throw error;
+    const hull = buildHullIncremental(retained.map((index) => points[index]));
+    if (
+      hull.faces.some((face) =>
+        points.some(
+          (point) =>
+            face.normal.dot(point) - face.constant > HULL_PLANE_TOLERANCE,
+        ),
+      )
+    )
+      throw error;
+    // Preserve authored IDs for crush/actor references and exact source bounds.
+    return {
+      vertices: points.map((point) => point.clone()),
+      vertexOrder: hull.vertexOrder!.map((index) => retained[index]),
+      faces: hull.faces.map((face) => ({
+        ...face,
+        indices: face.indices.map((index) => retained[index]),
+      })),
+      edges: hull.edges.map(([a, b]) => [retained[a], retained[b]]),
+    };
+  }
 }
 export function transformHull(
   hull: CollisionHull,
@@ -1007,14 +1065,17 @@ function blendedPairNormal(
 }
 
 function localPointInside(hull: CollisionHull, point: Vector3): boolean {
-  return hull.faces.every((face) => {
-    const normal = new Vector3(
-      Math.fround(face.normal.x),
-      Math.fround(face.normal.y),
-      Math.fround(face.normal.z),
-    );
-    return Math.fround(Math.fround(face.constant) - normal.dot(point)) >= 0;
-  });
+  return (
+    hull.faces.length > 0 &&
+    hull.faces.every((face) => {
+      const normal = new Vector3(
+        Math.fround(face.normal.x),
+        Math.fround(face.normal.y),
+        Math.fround(face.normal.z),
+      );
+      return Math.fround(Math.fround(face.constant) - normal.dot(point)) >= 0;
+    })
+  );
 }
 function pairPointVelocity(body: RigidBody, point: Vector3): Vector3 {
   const center = body.properties.centerOfMass
@@ -1224,6 +1285,7 @@ export function sweepHulls(
       // Original edge emitter excludes a crossing buried inside the target
       // polyhedron; boundary features remain eligible.
       if (
+        oldB.localHull!.faces.length > 0 &&
         oldB.localHull!.faces.every(
           (face) => face.normal.dot(hit.points[0]) < face.constant - EPS,
         )
@@ -1358,7 +1420,7 @@ export function sweepHullTriangle(
   const finiteTriangle = new Triangle(a, b, c);
   const vertexContacts: HullContact[] = [];
   for (const i of old.vertexOrder ?? old.vertices.map((_, index) => index)) {
-    if(options.edgeOnly) break;
+    if (options.edgeOnly) break;
     if (options.suppressedVertices?.has(i)) continue;
     const start = old.vertices[i];
     const direction = predicted.vertices[i].clone().sub(start);
@@ -1402,7 +1464,7 @@ export function sweepHullTriangle(
   const triangleVertices = [a, b, c];
   const faceContacts: HullContact[] = [];
   for (let i = 0; i < triangleVertices.length; i++) {
-    if(options.edgeOnly) break;
+    if (options.edgeOnly) break;
     if (options.skipWorldEdges || options.skipWorldVertices) break;
     // World vertices are emitted as endpoints of an enabled triangle edge.
     if (
@@ -1446,7 +1508,7 @@ export function sweepHullTriangle(
       ]);
   if (retained.length)
     return {
-      sourceSurface:options.sourceSurface,
+      sourceSurface: options.sourceSurface,
       normal: retained[0].normal,
       points: retained.flatMap((contact) => contact.points),
       pointsB: retained.map(

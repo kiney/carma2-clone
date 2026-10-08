@@ -363,21 +363,33 @@ export function applyGenericVolumeForces(
   dt: number,
   extraWaterTransitionDrag = false,
 ) {
-  if (!(dt > 0 && Number.isFinite(dt))) throw new Error("Invalid volume force timestep");
+  if (!(dt > 0 && Number.isFinite(dt)))
+    throw new Error("Invalid volume force timestep");
   const gravity = volume ? volume.gravityMultiplier * depth : 1;
   body.state.velocity.y -= (9.8 / 6.9) * gravity * dt;
   const viscosity = volume ? volume.viscosityMultiplier * depth : 1;
   const dragPass = () => {
     const k = dt * 0.0005000000237487257 * viscosity;
-    body.state.velocity.multiplyScalar(Math.max(0, 1 - body.state.velocity.length() * k * 6.9 / body.properties.mass));
+    body.state.velocity.multiplyScalar(
+      Math.max(
+        0,
+        1 - (body.state.velocity.length() * k * 6.9) / body.properties.mass,
+      ),
+    );
     const inverse = body.state.orientation.clone().invert();
     const omega = body.state.angularVelocity.clone().applyQuaternion(inverse);
     const length = omega.length();
     for (let axis = 0; axis < 3; axis++) {
       const inertia = body.properties.inertia.getComponent(axis);
-      omega.setComponent(axis, omega.getComponent(axis) * Math.max(0, 1 - length * k / (inertia * 47.61000061035156)));
+      omega.setComponent(
+        axis,
+        omega.getComponent(axis) *
+          Math.max(0, 1 - (length * k) / (inertia * 47.61000061035156)),
+      );
     }
-    body.state.angularVelocity.copy(omega.applyQuaternion(body.state.orientation));
+    body.state.angularVelocity.copy(
+      omega.applyQuaternion(body.state.orientation),
+    );
   };
   dragPass();
   if (extraWaterTransitionDrag) dragPass();

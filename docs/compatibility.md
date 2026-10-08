@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The engine loads stock and Advanced tracks and cars from a local installation, including original geometry, materials, pixelmaps, and TIFF textures. Ordinary driving and crash behavior has numerical, headless, and prior Chromium checks. Water, oil, moving platforms, world destruction, noncars, and mines now have source-based runtime paths and stock/headless coverage; the current integration of these newer systems still awaits browser regression. Mission, campaign, AI, and several animation systems remain incomplete.
+The engine loads stock and Advanced tracks and cars from a local installation, including original geometry, materials, pixelmaps, and TIFF textures. Driving, crashes, water, oil, lifts, world destruction, noncars and mines have source-based runtime paths, stock/headless tests and Chromium validation. Mission, campaign, AI, and several animation systems remain incomplete; [TODO.md](../TODO.md) tracks priorities and remaining gaps.
 
 ## Supported content
 
@@ -16,7 +16,7 @@ Power-up support covers original placed credit, repair, time bonuses/freezing, w
 
 ## Known limits
 
-Water and oil formulas have source-based stock tests and prior MCP checks; the latest world/powerup integration still needs browser regression. Moving-platform contact is headless integrated, with exact native callback behavior still unproven. Mine sphere contacts remain approximate; wire contacts are not implemented. FLIC playback, replays, campaign progression/unlocks, remaining power-up effects, full mission logic, and BON/SKL playback remain incomplete. Funk/groove support is selective and does not reproduce every original directive.
+Source water/oil formulas and native noncar lift activation, forces, joints and finite travel have stock tests and browser checks. GROOVE-driven geometry uses an independent relative-frame contact integration; exact native interruption callbacks remain unproven. Mine sphere contacts remain sampled. Native noncar wire points/edges are supported; custom-car wire integration remains open. World smash state, material changes, removal/replacement, sound, explosion animation and delayed activation run; shrapnel/ghostparts, awards, scripts and variable connotations remain incomplete. FLIC playback, replays, campaign progression/unlocks, remaining power-up effects, full mission logic, and BON/SKL playback remain incomplete.
 
 Some source content has concrete data issues. Legacy ACT string references with stale chunk lengths, including `CPOINT.ACT`, are supported. `PROG.ACT` lacks a BRender header. The ADV Digga ACT is truncated; two Forklift DATs contain non-finite UV values, normalized with diagnostics while preserving strict finite geometry parsing. All 52 stock car mechanics/shape pipelines now load, including Forklift. The Nuke race config has no player start and its expected ACT is absent. These entries may fail to load or cannot be driven as configured. Some mission/arena configs contain no usable checkpoint gates and therefore cannot complete a checkpoint race.
 
@@ -24,4 +24,4 @@ The Advanced installation also contains malformed MAT and UI PIX files. Some Adv
 
 ## Tests
 
-`npm test` runs unit and fixture tests; tests requiring the original installation skip when it is absent. `npm run test:browser` builds the production app and launches an installed Chromium through Playwright Core. Existing browser checks cover configured stock and Advanced driving/races; browser regression for the newer water/oil, world destruction, noncar, platform, and mine paths is still pending. Screenshots are stored in ignored test artifacts. The browser check requires a local installation and a compatible Chromium binary.
+`npm test` runs unit and fixture tests; tests requiring the original installation skip when it is absent. All 212 valid stock noncar definitions construct complete bodies, including five repaired monorail instances and two authored wire forms; three oversized OILDRUM definitions remain intentional parse failures. `npm run test:browser` builds the app and launches installed Chromium through Playwright Core. Checks cover stock/Advanced driving/races, mine contact damage/deformation/detachment/repair, oil, finite water, Carrier lift and Airport localized door destruction. Chrome DevTools MCP separately verifies actual world-prop collisions, lift travel/end stop, rotating GROOVEs, rendering and console state. Screenshots are stored in ignored test artifacts. These checks use software WebGL and do not establish hardware-GPU performance or full-game parity.

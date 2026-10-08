@@ -111,7 +111,8 @@ export function createTranslationJoint(
     !finiteVector(localAnchor) ||
     !finiteVector(worldAnchor) ||
     !finiteVector(localAxis)
-  ) throw new Error("Invalid translation joint data");
+  )
+    throw new Error("Invalid translation joint data");
   const movementAxis = localAxis.clone().normalize();
   const absolute = movementAxis.toArray().map(Math.abs);
   let transverse = new Vector3();
@@ -122,7 +123,8 @@ export function createTranslationJoint(
   else transverse.set(movementAxis.y, -movementAxis.x, 0);
   transverse.normalize();
   const secondTransverse = movementAxis.clone().cross(transverse).normalize();
-  const parentAnchor = worldAnchor.clone()
+  const parentAnchor = worldAnchor
+    .clone()
     .sub(infiniteWorldParent.state.position)
     .applyQuaternion(infiniteWorldParent.state.orientation.clone().conjugate());
   return {
@@ -139,7 +141,11 @@ export function createTranslationJoint(
 }
 
 function finiteVector(value: Vector3): boolean {
-  return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
+  return (
+    Number.isFinite(value.x) &&
+    Number.isFinite(value.y) &&
+    Number.isFinite(value.z)
+  );
 }
 
 export interface OrdinaryDetachGeometry {
@@ -556,7 +562,9 @@ function denseSolve(
 /** The three rows eliminated by C2's quick hinge: axial anchor motion and
  * both transverse angular motions (0x4b8a90). Their response projector is
  * P = M^-1 - M^-1 H^T (H M^-1 H^T)^-1 H M^-1. */
-export function buildQuickHingeConstraints(joint: RigidJoint): JointConstraint[] {
+export function buildQuickHingeConstraints(
+  joint: RigidJoint,
+): JointConstraint[] {
   if (joint.type !== "hinge" || !joint.childAxis)
     throw new Error("Quick hinge requires a hinge axis");
   const axis = worldDirection(joint.child, joint.childAxis).normalize();
@@ -578,7 +586,11 @@ export function buildQuickHingeConstraints(joint: RigidJoint): JointConstraint[]
 export function projectQuickHingeVelocities(joint: RigidJoint): JointReaction {
   const rows = buildQuickHingeConstraints(joint);
   const matrix = rows.map((a) => rows.map((b) => matrixElement(a, b)));
-  const impulses = denseSolve(matrix, rows.map((row) => row.rhs), [0, 1, 2]);
+  const impulses = denseSolve(
+    matrix,
+    rows.map((row) => row.rhs),
+    [0, 1, 2],
+  );
   return applyJointConstraintImpulses([joint], rows, impulses)[0];
 }
 
@@ -599,23 +611,39 @@ export function selectQuickHinges(joints: readonly RigidJoint[]): void {
 
 function finishQuickHingeProjection(joint: RigidJoint): void {
   const childAxis = worldDirection(joint.child, joint.childAxis!).normalize();
-  const parentAxis = worldDirection(joint.parent, joint.parentAxis!).normalize();
+  const parentAxis = worldDirection(
+    joint.parent,
+    joint.parentAxis!,
+  ).normalize();
   const parentPerpendicular = joint.parent.state.angularVelocity
     .clone()
-    .addScaledVector(parentAxis, -joint.parent.state.angularVelocity.dot(parentAxis));
+    .addScaledVector(
+      parentAxis,
+      -joint.parent.state.angularVelocity.dot(parentAxis),
+    );
   joint.child.state.angularVelocity
-    .copy(childAxis.clone().multiplyScalar(joint.child.state.angularVelocity.dot(childAxis)))
+    .copy(
+      childAxis
+        .clone()
+        .multiplyScalar(joint.child.state.angularVelocity.dot(childAxis)),
+    )
     .add(parentPerpendicular);
-  const childLever = joint.childAnchor.clone()
+  const childLever = joint.childAnchor
+    .clone()
     .sub(joint.child.properties.centerOfMass)
     .applyQuaternion(joint.child.state.orientation);
-  const parentLever = joint.parentAnchor.clone()
+  const parentLever = joint.parentAnchor
+    .clone()
     .sub(joint.parent.properties.centerOfMass)
     .applyQuaternion(joint.parent.state.orientation);
-  const parentPointVelocity = joint.parent.state.angularVelocity.clone()
-    .cross(parentLever).add(joint.parent.state.velocity);
-  const childPointVelocity = joint.child.state.angularVelocity.clone()
-    .cross(childLever).add(joint.child.state.velocity);
+  const parentPointVelocity = joint.parent.state.angularVelocity
+    .clone()
+    .cross(parentLever)
+    .add(joint.parent.state.velocity);
+  const childPointVelocity = joint.child.state.angularVelocity
+    .clone()
+    .cross(childLever)
+    .add(joint.child.state.velocity);
   joint.child.state.velocity.addScaledVector(
     childAxis,
     parentPointVelocity.sub(childPointVelocity).dot(childAxis),
@@ -685,15 +713,24 @@ export function buildJointConstraints(
     if (joint.type !== "translation") continue;
     if (!joint.translationAxis || joint.translationTravel === undefined)
       throw new Error("Translation joint requires an axis and travel");
-    const axis = worldDirection(joint.child, joint.translationAxis, true).normalize();
+    const axis = worldDirection(
+      joint.child,
+      joint.translationAxis,
+      true,
+    ).normalize();
     const anchor = worldPoint(joint.parent, joint.parentAnchor);
-    const predictedPosition = joint.child.state.predictedPosition ?? joint.child.state.position;
-    const predictedOrientation = joint.child.state.predictedOrientation ?? joint.child.state.orientation;
+    const predictedPosition =
+      joint.child.state.predictedPosition ?? joint.child.state.position;
+    const predictedOrientation =
+      joint.child.state.predictedOrientation ?? joint.child.state.orientation;
     const predictedCom = joint.child.properties.centerOfMass
       .clone()
       .applyQuaternion(predictedOrientation)
       .add(predictedPosition);
-    const currentCom = worldPoint(joint.child, joint.child.properties.centerOfMass);
+    const currentCom = worldPoint(
+      joint.child,
+      joint.child.properties.centerOfMass,
+    );
     const predictedCoordinate = predictedCom.sub(anchor).dot(axis);
     const currentCoordinate = currentCom.sub(anchor).dot(axis);
     let normal: Vector3 | null = null;
@@ -701,12 +738,16 @@ export function buildJointConstraints(
       predictedCoordinate < -TRANSLATION_LIMIT_EPSILON &&
       (currentCoordinate >= -TRANSLATION_CROSSING_EPSILON ||
         predictedCoordinate < currentCoordinate)
-    ) normal = axis;
+    )
+      normal = axis;
     else if (
-      predictedCoordinate > joint.translationTravel + TRANSLATION_LIMIT_EPSILON &&
-      (currentCoordinate <= joint.translationTravel + TRANSLATION_CROSSING_EPSILON ||
+      predictedCoordinate >
+        joint.translationTravel + TRANSLATION_LIMIT_EPSILON &&
+      (currentCoordinate <=
+        joint.translationTravel + TRANSLATION_CROSSING_EPSILON ||
         predictedCoordinate > currentCoordinate)
-    ) normal = axis.clone().negate();
+    )
+      normal = axis.clone().negate();
     if (normal) {
       const row = centerConstraint(joint, normal, true, 2);
       row.closingSpeed = -row.rhs;
@@ -854,13 +895,20 @@ export function applyJointConstraintImpulses(
 export function projectJointPositions(joints: RigidJoint[]): void {
   for (const joint of joints) {
     if (joint.type === "translation") {
-      const axis = worldDirection(joint.child, joint.translationAxis!).normalize();
+      const axis = worldDirection(
+        joint.child,
+        joint.translationAxis!,
+      ).normalize();
       const anchor = worldPoint(joint.parent, joint.parentAnchor);
       const childPoint = worldPoint(joint.child, joint.childAnchor);
       const axialPosition = childPoint.sub(anchor).dot(axis);
       const targetPoint = anchor.addScaledVector(axis, axialPosition);
-      joint.child.state.position.add(targetPoint.sub(worldPoint(joint.child, joint.childAnchor)));
-      joint.child.state.velocity.copy(axis.multiplyScalar(joint.child.state.velocity.dot(axis)));
+      joint.child.state.position.add(
+        targetPoint.sub(worldPoint(joint.child, joint.childAnchor)),
+      );
+      joint.child.state.velocity.copy(
+        axis.multiplyScalar(joint.child.state.velocity.dot(axis)),
+      );
       continue;
     }
     if (joint.type === "hinge" && joint.childAxis && joint.parentAxis) {
