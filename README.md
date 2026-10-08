@@ -21,6 +21,17 @@ Technical comparison of car geometry, body deformation and city rendering: both 
 
 Original screenshot: [Instant Gaming](https://www.instant-gaming.com/de/16521-kaufen-carmageddon-2-carpocalypse-now-pc-steam/) (author uncredited). Game: Stainless Games; IP: THQ Nordic. Game imagery is excluded from the MIT license.
 
+## Tech stack
+
+- **Frontend:** TypeScript with plain HTML/CSS.
+- **Rendering:** Three.js with WebGL2.
+- **Audio:** Web Audio API playing original WAV assets.
+- **Physics:** Custom C2 reconstruction covering vehicle motion, collision impulses, persistent crush, component damage and detachable parts.
+- **Server and build:** Node.js and Vite; original assets are served locally from loose files and TWT archives.
+- **Tests:** Node's test runner with `tsx`, plus Playwright and Chromium for browser checks.
+
+The engine runs directly in the browser. See [architecture notes](docs/architecture.md) for more detail.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:
