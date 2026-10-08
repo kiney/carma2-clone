@@ -1,0 +1,22 @@
+# C2 pickup and race event audio
+
+The previous browser event handler played the checkpoint sample on almost every powerup effect, charged-ability grant, checkpoint, lap, completion and timer failure. Effect application is now separate from actual world collection. Crate reward grants and debug grants do not synthesize a flask/checkpoint sound.
+
+## Pickup evidence
+
+**Verified from installed HW binary and original data** (reference map: rec2 smash/powerup subsystems; installed addresses differ from some rec2 annotations):
+
+| Path                                                                                                       | Evidence                                                                                                                                                                                 | Browser implementation                                                                                               |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `ReadPowerupSmashables` installed `0x4ef780`                                                               | Loads GENERAL's Powerup connotations at `0x6a3960`; sound count at +`18`, IDs at +`1c`. Stock list is one sound5401, `FlaskGone.WAV`. It is not selected by beneficial/harmful polarity. | Bounds-checked GENERAL sound-list parser; loaded at race start.                                                      |
+| Flask collision `0x4f1043`, smash pipeline `0x4f4bc0`, connotations `0x4ed200`                             | Sound call at `0x4ed253` chooses a configured list entry, volume255, pitch inclusive `[0xe000,0x12000]`, speed`0x10000`.                                                                 | World pickup callback only, volume1, rate.875–1.125.                                                                 |
+| World mine pickup index14, branch `0x4f0f9b`                                                               | Explicit sound5400 at `0x4f1010`, stock `PUPXPLOD.WAV`.                                                                                                                                  | Separate mine pickup sound, rather than flask/checkpoint.                                                            |
+| `GotPowerupX` installed `0x4d8f30`; inventory use `0x4db365`; `LosePowerupX` `0x4db410`; expiry `0x4daf90` | No generic pickup sound in effect grant, ability activation or expiry. Individual effect handlers can have sounds (e.g. cancellificator3802).                                            | No generic sound from grant/use/expiry. Existing mine impact and world-smash connotations retain their own dispatch. |
+
+The native connotation call uses a spatial outlet/position. This engine still uses its existing non-spatial Web Audio mixer; spatial outlets remain AUD-03. The browser random source supplies the bounded inclusive pitch interval rather than claiming the original RNG sequence. Powerup respawn sound5402 and effect-specific cancellation sounds remain separate compatibility work; no generic expiry sound is invented.
+
+## Race evidence
+
+**Reconstructed by rec2** `structur.c`: `Checkpoint` annotated `0x503270`, `IncrementCheckpoint` `0x5032a0` and `RaceCompleted` distinguish checkpoint8012, final lap8014, completion8011 and out-of-time8010. Final-lap and completion announcements replace the finishing gate's checkpoint voice, so one crossing does not stack announcements. An ordinary lap's gate still sounds once. Wrong checkpoint8013 is a separate source event, currently outside the browser race logic. Damage wasting keeps its independently reconstructed GENERAL explosion/WASTED path.
+
+`event-audio.ts` selects race voices; the actual main loop dispatches them once per event batch. Headless tests exercise parsing, malformed counts/IDs, installed GENERAL, voice batches and collection/grant/use/expiry separation. Chromium verifies original WAV decoding and actual world pickup/checkpoint dispatch without fatal console, request or WebGL errors. Exact spatial outlets, speech interruption priorities and other mission-completion paths remain outside this fix.

@@ -180,6 +180,8 @@ export class PowerupSystem {
   readonly pickups: Pickup[] = [];
   readonly abilities = new Map<number, PowerupAbility>();
   selectedAbility: number | null = null;
+  /** Actual world collection is distinct from applying/granting an effect. */
+  onPickup?: (definition: PowerupDefinition) => void;
   private active: ActiveEffect[] = [];
   private previous?: THREE.Vector3;
   private unsupportedWarned = new Set<number>();
@@ -294,6 +296,7 @@ export class PowerupSystem {
     for (const { pickup } of hits) {
       pickup.collected = true;
       pickup.object.visible = false;
+      this.onPickup?.(this.definitions[pickup.index]);
       this.apply(pickup.index, vehicle, race, onEvent);
     }
     this.previous = current;

@@ -72,3 +72,6 @@ import "./ped-blood.test.mjs";
 import "./wasted.test.mjs";
 import "./spawn.test.mjs";
 import "./pair-guard.test.mjs";
+
+import "./barrier-release.test.mjs";
+import "./event-audio.test.mjs";

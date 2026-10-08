@@ -465,6 +465,8 @@ async function loadRace() {
     const newTrack = parseTrackConfig(trackText);
     const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
     const loadedPowerups = new PowerupSystem(assets, world.group);
+    loadedPowerups.onPickup = (definition) =>
+      audio.powerupPickup(definition.index);
     await loadedPowerups.init();
     status("Parsing original car…");
     if (!assets.textures.has("oil")) {
@@ -474,6 +476,7 @@ async function loadRace() {
       if (oilPath) await assets.pixelmaps(oilPath);
     }
     const generalText = await assets.text("data/GENERAL.TXT");
+    audio.configurePowerups(generalText);
     const loadedMine = await assets.scene("data/MINE", "ShitMine");
     const explosionSettings = parseWastedExplosionSettings(generalText);
     for (const frame of new Set(
@@ -1247,7 +1250,6 @@ function drawMap() {
 function onPowerupEvent(event: PowerupEvent) {
   if (event.kind === "ability") {
     message(`${event.name} · ${event.amount} · F TO USE`);
-    audio.checkpoint();
     return;
   }
   if (event.kind === "unsupported") {
@@ -1281,7 +1283,6 @@ function onPowerupEvent(event: PowerupEvent) {
       ? `${event.kind.toUpperCase()} +${event.amount ?? 0}`
       : event.name,
   );
-  audio.checkpoint();
 }
 
 function animate(now: number) {
@@ -1349,7 +1350,7 @@ function animate(now: number) {
           message("YOU ARE WASTED · ENTER TO RESTART", 10);
         }
       }
-      for (const event of updateRace(
+      const raceEvents = updateRace(
         race,
         previous,
         vehicle.position,
@@ -1358,8 +1359,9 @@ function animate(now: number) {
           !debugPanel.timerFrozen
           ? dt
           : 0,
-      )) {
-        audio.checkpoint();
+      );
+      audio.raceEvents(raceEvents, race.laps);
+      for (const event of raceEvents) {
         message(
           event.type === "completed"
             ? "RACE COMPLETED · ENTER TO RESTART"

@@ -10,12 +10,13 @@
     "build": "tsc --noEmit && vite build",
     "start": "node server/dev.mjs --production",
     "test": "node --import tsx tests/run.mjs",
-    "test:browser": "npm run build && node tests/browser.mjs && node tests/browser-priority.mjs && node tests/browser-debug.mjs && node tests/browser-spawn-pairs.mjs",
+    "test:browser": "npm run build && node tests/browser.mjs && node tests/browser-priority.mjs && node tests/browser-debug.mjs && node tests/browser-spawn-pairs.mjs && node tests/browser-event-audio.mjs",
     "test:spawn-pairs": "npm run build && node tests/browser-spawn-pairs.mjs",
     "test:debug": "npm run build && node tests/browser-debug.mjs",
     "format": "prettier --write src server tests docs README.md index.html package.json tsconfig.json vite.config.js",
     "test:crashes": "node --import tsx tools/crash-report.mjs",
-    "test:car-damage": "node --import tsx tools/car-damage-audit.mjs"
+    "test:car-damage": "node --import tsx tools/car-damage-audit.mjs",
+    "test:event-audio": "npm run build && node tests/browser-event-audio.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

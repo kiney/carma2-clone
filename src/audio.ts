@@ -1,4 +1,6 @@
 import type { Assets } from "./content";
+import type { RaceEvent } from "./gameplay";
+import { parsePowerupPickupSounds, raceEventSoundIds } from "./event-audio";
 
 type SoundDefinition = { id: number; file: string };
 const SOUND_TABLE = "data/SOUND/SOUND.TXT";
@@ -22,6 +24,7 @@ export class AudioSystem {
   private engineVolume = 0;
   private impactIds: number[] = [];
   private checkpointId?: number;
+  private pickupIds: number[] = [];
   private disposed = false;
 
   constructor(assets: Assets) {
@@ -190,6 +193,28 @@ export class AudioSystem {
     )
       return;
     void this.playOneShot(this.checkpointId, 0.55, 1);
+  }
+  configurePowerups(generalText: string): void {
+    this.pickupIds = parsePowerupPickupSounds(generalText);
+  }
+  /** World flask connotations only. Grants, use and expiry have no generic
+   * sound. HW0x4f1010 gives the authored mine pickup(index14) its own explosion. */
+  powerupPickup(index: number, random: () => number = Math.random): void {
+    if (!this.context || this.context.state !== "running") return;
+    if (index === 14) {
+      void this.playOneShot(5400, 1, 1);
+      return;
+    }
+    if (!this.pickupIds.length) return;
+    const id = this.pickupIds[Math.floor(random() * this.pickupIds.length)];
+    const pitch = (0xe000 + Math.floor(random() * 0x4001)) / 0x10000;
+    void this.playOneShot(id, 1, pitch);
+  }
+  raceEvents(events: readonly RaceEvent[], totalLaps: number): void {
+    for (const id of raceEventSoundIds(events, totalLaps)) {
+      if (id === 8012) this.checkpoint();
+      else void this.playSound(id, 0.55);
+    }
   }
   /** Original event IDs, including mine5400 and low-impact5403. */
   async playSound(id: number, volume = 0.65): Promise<void> {

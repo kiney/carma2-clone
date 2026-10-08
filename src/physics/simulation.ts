@@ -53,6 +53,7 @@ import {
   reduceWorldContacts,
   finalizeWorldContacts,
   recoverWorldContacts,
+  recoverShallowWorldContacts,
   worldPlacementContacts,
   worldPlacementDirection,
   placementHullsOverlap,
@@ -1217,8 +1218,33 @@ export class VehicleSimulation {
                   .add(old[shape].position!),
               )
             : undefined;
+        // Only this independent trajectory guard detects shallow old overlap
+        // without a native prior flag. Keep normal worldContacts untouched.
+        // Per-face suppression prevents an old floor overlap hiding a NEW wall.
+        const shallow = new Map<
+          Surface,
+          ReturnType<typeof recoverShallowWorldContacts>
+        >();
+        if (!recovery) {
+          const center = body.properties.centerOfMass
+            .clone()
+            .applyQuaternion(old[shape].orientation!)
+            .add(old[shape].position!);
+          for (const surface of nearby) {
+            const found = recoverShallowWorldContacts(
+              old[shape],
+              next[shape],
+              this.recoverySurfaces([surface])[0],
+              center,
+            );
+            if (found) shallow.set(surface, found);
+          }
+        }
         const shapeHits = [...(recovery?.contacts ?? [])];
+        for (const found of shallow.values())
+          shapeHits.push(...found!.contacts);
         for (const surface of nearby) {
+          const faceRecovery = recovery ?? shallow.get(surface);
           const hit = sweepHullTriangle(
             old[shape],
             next[shape],
@@ -1233,9 +1259,9 @@ export class VehicleSimulation {
               faceFlags: surface.faceFlags,
               twoSided: surface.twoSided,
               deferReduction: true,
-              suppressedVertices: recovery?.suppressedVertices,
-              skipWorldEdges: !!recovery?.overlapDetected,
-              skipWorldVertices: body.worldRecovery,
+              suppressedVertices: faceRecovery?.suppressedVertices,
+              skipWorldEdges: !!faceRecovery?.overlapDetected,
+              skipWorldVertices: body.worldRecovery || !!shallow.get(surface),
             },
           );
           if (hit)

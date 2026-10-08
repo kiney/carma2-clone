@@ -213,6 +213,42 @@ export function recoverWorldContacts(
   return result;
 }
 
+/** Browser trajectory guard only: recognize a shallow EXISTING finite-face
+ * intersection before treating a two-sided underside exit as a new collision.
+ * Use the source recovery rays/suppression, not a push or alternate impulse.
+ * Native worldContacts and its prior-tick flags must remain unchanged.
+ * The .003 bound is the source emitter's endpoint slack, in world units. */
+export function recoverShallowWorldContacts(
+  old: CollisionHull,
+  predicted: CollisionHull,
+  surface: WorldRecoverySurface,
+  centerOfMassWorld: Vector3,
+): WorldRecoveryResult | undefined {
+  if (!old.faces.length) return;
+  const normal = surface.b
+    .clone()
+    .sub(surface.a)
+    .cross(surface.c.clone().sub(surface.a))
+    .normalize();
+  const side = normal.dot(centerOfMassWorld.clone().sub(surface.a));
+  if (Math.abs(side) < EPS) return;
+  if (side < 0) normal.negate();
+  let minimum = Infinity;
+  for (const index of old.vertexOrder ?? old.vertices.map((_, i) => i))
+    minimum = Math.min(
+      minimum,
+      normal.dot(old.vertices[index].clone().sub(surface.a)),
+    );
+  if (minimum >= -EPS || minimum < -0.003 - EPS) return;
+  const result = recoverWorldContacts(
+    old,
+    predicted,
+    [surface],
+    centerOfMassWorld,
+  );
+  return result.overlapDetected ? result : undefined;
+}
+
 /** Original per-shape world emitter deduplication and four-contact limit.
  * Feed all triangle candidates for ONE authored collision shape together. */
 export function reduceWorldContacts(contacts: HullContact[]): HullContact[] {
