@@ -69,7 +69,7 @@ app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canv
 const el = (id: string) => document.getElementById(id)!;
 el("play").insertAdjacentHTML(
   "beforebegin",
-  '<label class="debug-check"><input id="debug-menu-toggle" type="checkbox"> Debugmodus (Timer, Credits, Powerups)</label>',
+  '<label class="debug-check"><input id="debug-menu-toggle" type="checkbox"> Debug mode (timer, credits, powerups)</label>',
 );
 const view = el("view") as HTMLCanvasElement;
 const feedbackCanvas = document.createElement("canvas");
@@ -1501,7 +1501,7 @@ function animate(now: number) {
     if (!isSupportedRace(definition)) el("timer").textContent = "FREE DRIVE";
     el("timer").classList.toggle("debug-frozen", debugPanel.timerFrozen);
     el("timer").title = debugPanel.timerFrozen
-      ? "Debugmodus: Renntimer angehalten"
+      ? "Debug mode: race timer frozen"
       : "";
     drawMap();
   }

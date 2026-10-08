@@ -51,7 +51,7 @@ The engine also includes graph-following opponents, checkpoint/lap races, engine
 
 ## Debug mode
 
-Enable **Debugmodus** in the race menu, or click the always-visible **DEBUG · AUS** button while driving. The panel lets you freeze the race countdown (physics, opponents and timed powerups continue), add an editable amount of credits or 60 seconds, grant original powerups, refill all weapon/oil abilities, fully repair, recover for free, and restart. Optional invulnerability and free held/automatic repairs are available. F and Tab use/select granted abilities normally.
+Enable **Debug mode** in the race menu, or click the always-visible **DEBUG · OFF** button while driving. The panel lets you freeze the race countdown (physics, opponents and timed powerups continue), add an editable amount of credits or 60 seconds, grant original powerups, refill all weapon/oil abilities, fully repair, recover for free, and restart. Optional invulnerability and free held/automatic repairs are available. F and Tab use/select granted abilities normally.
 
 Debug mode is off on page load and stays selected across race changes within that session. Turning it off removes timer, immunity and free-repair overrides; granted credits, charges, upgrades and timed pickup effects remain. Unsupported original powerups are labelled and disabled in the list. Repair does not undo wasting: restart a wasted/finished race. Debug tools also work from the pause menu; adding time does not revive an already finished race.
 

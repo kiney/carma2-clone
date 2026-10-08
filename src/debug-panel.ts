@@ -48,25 +48,25 @@ export class DebugPanel {
     app.insertAdjacentHTML(
       "beforeend",
       `
-      <button id="debug-button" aria-controls="debug-panel" aria-expanded="false">DEBUG · AUS</button>
-      <section id="debug-panel" aria-label="Debugmodus" hidden>
-        <div class="debug-header"><strong>DEBUGMODUS</strong><button id="debug-close" aria-label="Debugfenster schließen">×</button></div>
-        <label class="debug-check"><input id="debug-enabled" type="checkbox"> Debugmodus aktiv</label>
+      <button id="debug-button" aria-controls="debug-panel" aria-expanded="false">DEBUG · OFF</button>
+      <section id="debug-panel" aria-label="Debug mode" hidden>
+        <div class="debug-header"><strong>DEBUG MODE</strong><button id="debug-close" aria-label="Close debug panel">×</button></div>
+        <label class="debug-check"><input id="debug-enabled" type="checkbox"> Enable debug mode</label>
         <fieldset id="debug-controls" disabled>
-          <label class="debug-check"><input id="debug-freeze" type="checkbox" checked> Renntimer anhalten</label>
-          <label class="debug-check"><input id="debug-immune" type="checkbox"> Unverwundbar</label>
-          <label class="debug-check"><input id="debug-repairs" type="checkbox"> Kostenlose Reparaturen (E)</label>
-          <label>Credits hinzufügen<input id="debug-credit-amount" type="number" min="1" max="100000000" step="1" value="10000" required></label>
-          <button id="debug-add-credits" type="button">Credits vergeben</button>
-          <button id="debug-add-time" type="button">+60 Sekunden</button>
-          <label>Original-Powerup<select id="debug-powerup"></select></label>
-          <button id="debug-grant" type="button">Powerup vergeben</button>
-          <button id="debug-abilities" type="button">Alle Waffen / Öl laden</button>
-          <div class="debug-row"><button id="debug-repair" type="button">Voll reparieren</button><button id="debug-recover" type="button">Gratis bergen</button></div>
-          <button id="debug-restart" type="button">Rennen neu starten</button>
+          <label class="debug-check"><input id="debug-freeze" type="checkbox" checked> Freeze race timer</label>
+          <label class="debug-check"><input id="debug-immune" type="checkbox"> Invulnerable</label>
+          <label class="debug-check"><input id="debug-repairs" type="checkbox"> Free repairs (E)</label>
+          <label>Credits to add<input id="debug-credit-amount" type="number" min="1" max="100000000" step="1" value="10000" required></label>
+          <button id="debug-add-credits" type="button">Add credits</button>
+          <button id="debug-add-time" type="button">+60 seconds</button>
+          <label>Original powerup<select id="debug-powerup"></select></label>
+          <button id="debug-grant" type="button">Grant powerup</button>
+          <button id="debug-abilities" type="button">Refill all weapons / oil</button>
+          <div class="debug-row"><button id="debug-repair" type="button">Full repair</button><button id="debug-recover" type="button">Free recovery</button></div>
+          <button id="debug-restart" type="button">Restart race</button>
         </fieldset>
-        <p id="debug-status" role="status">Lade ein Rennen, um die Debugwerkzeuge zu nutzen.</p>
-        <small>Timerstopp hält nur die Rennzeit an. Powerups laufen normal ab; F benutzt Waffen/Öl, Tab wechselt die Auswahl. Vergebene Credits und Powerups bleiben beim Ausschalten bestehen. Wasted bleibt bis zum Neustart bestehen.</small>
+        <p id="debug-status" role="status">Load a race to use the debug tools.</p>
+        <small>Timer freezing only stops the race countdown. Powerups expire normally; F uses weapons/oil, Tab changes the selection. Granted credits and powerups remain when debug mode is turned off. Wasting persists until restart.</small>
       </section>`,
     );
     const get = <T extends HTMLElement>(id: string) =>
@@ -120,12 +120,25 @@ export class DebugPanel {
       });
     action("debug-add-credits", () => {
       const input = get<HTMLInputElement>("debug-credit-amount");
-      if (!input.reportValidity()) return false;
       const amount = input.valueAsNumber;
-      if (!Number.isSafeInteger(amount) || amount < 1 || amount > 100000000)
-        return false;
+      // Browser-default validation messages follow the browser locale, so supply
+      // our own English message even when the browser is configured in German.
+      const valid =
+        Number.isSafeInteger(amount) && amount >= 1 && amount <= 100000000;
+      input.setCustomValidity(
+        valid
+          ? ""
+          : "Enter a whole number of credits between 1 and 100,000,000.",
+      );
+      if (!input.reportValidity()) return false;
       actions.credits(amount);
     });
+    get<HTMLInputElement>("debug-credit-amount").addEventListener(
+      "input",
+      (event) => {
+        (event.target as HTMLInputElement).setCustomValidity("");
+      },
+    );
     action("debug-add-time", () => actions.time(60), true);
     action("debug-grant", () => actions.grant(Number(this.select.value)), true);
     action(
@@ -153,7 +166,7 @@ export class DebugPanel {
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.toggle.checked = this.menuToggle.checked = enabled;
-    this.button.textContent = enabled ? "DEBUG · AN" : "DEBUG · AUS";
+    this.button.textContent = enabled ? "DEBUG · ON" : "DEBUG · OFF";
     this.button.setAttribute("aria-pressed", String(enabled));
     this.refresh();
     this.show(enabled);
@@ -171,12 +184,12 @@ export class DebugPanel {
       this.running = running;
       this.controls.disabled = !ready || !this.enabled;
       document.getElementById("debug-status")!.textContent = !ready
-        ? "Lade ein Rennen, um die Debugwerkzeuge zu nutzen."
+        ? "Load a race to use the debug tools."
         : this.enabled
           ? running
-            ? "Aktiv · Timerstopp pausiert weder Physik noch KI."
-            : "Rennen beendet · Neustarten, um weiterzufahren."
-          : "Debugmodus ist ausgeschaltet.";
+            ? "Active · Timer freezing keeps physics and AI running."
+            : "Race finished · Restart to continue driving."
+          : "Debug mode is off.";
       for (const id of ["debug-add-time", "debug-grant", "debug-abilities"])
         (document.getElementById(id) as HTMLButtonElement).disabled = !running;
     }
@@ -187,7 +200,7 @@ export class DebugPanel {
     for (const definition of definitions) {
       const supported = isPowerupImplemented(definition);
       const option = new Option(
-        `${definition.index}: ${definition.message} (${definition.action})${supported ? "" : " · nicht implementiert"}`,
+        `${definition.index}: ${definition.message} (${definition.action})${supported ? "" : " · not implemented"}`,
         String(definition.index),
       );
       option.disabled = !supported;

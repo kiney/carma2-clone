@@ -48,6 +48,7 @@ try {
   });
   const page = await browser.newPage({
     viewport: { width: 1280, height: 800 },
+    locale: "de-DE",
   });
   const errors = [],
     failedRequests = [];
@@ -62,6 +63,7 @@ try {
   await page.waitForFunction(() => window.carma?.stats.ready, null, {
     timeout: 90000,
   });
+  assert.equal(await page.locator("html").getAttribute("lang"), "en");
   assert.equal(await page.locator("#debug-menu-toggle").isChecked(), false);
   await page.evaluate(() => {
     document.querySelector("#track-select").value = window.carma.assets.resolve(
@@ -71,7 +73,25 @@ try {
       "data/CARS/EAGLE3/EAGLE3.TXT",
     );
   });
-  await page.check("#debug-menu-toggle");
+  assert.equal(
+    await page
+      .getByRole("button", { name: "DEBUG · OFF", exact: true })
+      .count(),
+    1,
+  );
+  await page
+    .getByLabel("Debug mode (timer, credits, powerups)", { exact: true })
+    .check();
+  assert.equal(
+    await page
+      .getByRole("region", { name: "Debug mode", exact: true })
+      .isVisible(),
+    true,
+  );
+  assert.equal(
+    await page.getByLabel("Freeze race timer", { exact: true }).isChecked(),
+    true,
+  );
   assert.equal(await page.locator("#debug-panel").isVisible(), true);
   assert.equal(
     await page.locator("#debug-controls").isDisabled(),
@@ -136,6 +156,18 @@ try {
     window.carma.paused = true;
   });
   const creditsBefore = await page.evaluate(() => window.carma.race.credits);
+  await page.fill("#debug-credit-amount", "");
+  await page.getByRole("button", { name: "Add credits", exact: true }).click();
+  assert.equal(
+    await page.evaluate(() => window.carma.race.credits),
+    creditsBefore,
+  );
+  assert.match(
+    await page
+      .locator("#debug-credit-amount")
+      .evaluate((input) => input.validationMessage),
+    /^Enter a whole number of credits/,
+  );
   await page.fill("#debug-credit-amount", "23456");
   await page.click("#debug-add-credits");
   assert.equal(
@@ -191,7 +223,7 @@ try {
   );
   assert.ok(
     unsupported.length > 0 &&
-      unsupported.every((text) => text.includes("nicht implementiert")),
+      unsupported.every((text) => text.includes("not implemented")),
   );
 
   // Exercise repair/recovery while paused and broke, through their visible UI.
