@@ -6,3 +6,4 @@
 /artifacts/
 *.tsbuildinfo
 .env
+screenvid*.mp4
