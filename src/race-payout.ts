@@ -66,15 +66,20 @@ export class RacePayout {
     this.finished = true;
   }
 
-  update(dtMs: number): RacePayoutSound[] {
+  update(dtMs: number, gameTimeMs?: number): RacePayoutSound[] {
     if (!Number.isFinite(dtMs) || dtMs < 0)
       throw new RangeError("Race payout timestep must be finite and nonnegative");
+    if (gameTimeMs !== undefined &&
+      (!Number.isFinite(gameTimeMs) || gameTimeMs < 0))
+      throw new RangeError("Invalid race payout game timestamp");
     if (this.finished) return [];
     const previousClock = Math.floor(this.clockMs);
-    this.clockMs += dtMs;
+    this.clockMs = gameTimeMs ?? this.clockMs + dtMs;
     const now = Math.floor(this.clockMs);
     if (this.state === 0) {
-      this.finishDelayMs -= now - previousClock;
+      // Native finish countdown uses frame period, while later states use
+      // absolute GetTotalTime timestamps, which can regress after stalls.
+      this.finishDelayMs -= gameTimeMs === undefined ? now - previousClock : dtMs;
       if (this.finishDelayMs <= 0) {
         // 0x493b6f–0x493bf3: no animation with zero timer or runtime 99.
         if (this.timerMs === 0 || this.suppressPresentation) this.skip();

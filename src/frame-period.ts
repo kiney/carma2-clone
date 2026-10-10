@@ -51,7 +51,15 @@ export class NativeFramePeriodClock {
     this.cameraPeriod = 100;
   }
 
-  /** Advance once per rendered frame using integer OS ticks and native race age. */
+  /** Browser pause extension: exclude the inactive interval from sampling,
+   * while retaining the native moving average and previous frame period. */
+  rebaseSampling(nowMs: number): void {
+    const now = tick(nowMs, "sampling tick");
+    this.actualLastTick = now;
+    this.lastTick = now;
+  }
+
+  /** Advance once per gameplay frame using integer OS ticks and native race age. */
   advance(nowMs: number, raceElapsedMs: number): FramePeriodSample {
     const now = tick(nowMs, "OS tick");
     const raceElapsed = tick(raceElapsedMs, "race elapsed time");

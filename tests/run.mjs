@@ -94,3 +94,7 @@ import "./global-gravity.test.mjs";
 import "./pinball.test.mjs";
 
 import "./gravity-simulation.test.mjs";
+import "./game-clock.test.mjs";
+import "./physics-frame-window.test.mjs";
+
+import "./powerup-phases.test.mjs";

@@ -29,38 +29,118 @@ ms after that point first substitutes `average/10` and snaps the predicted
 tick; the later signed error correction can add much of the stall back. Periods
 over 1000 ms cap at 1000 ms. `MainGameLoop` initializes actual/predicted tick
 to OS time and frame period to 100 ms, but does not reset the process-global
-average. `DoRace` captures race start from `GetTotalTime` before that loop
-initialization. Single-player `GetTotalTime` is predicted tick plus current
+average. `DoRace` captures an earlier race-start value, but MainGameLoop
+overwrites it with OS time after the initial clock update: installed
+`0x4928b3` calls the OS timer and `0x4928b8` stores `0x760980`. The earlier
+DoRace epoch is not authoritative for the running loop. Single-player `GetTotalTime` is predicted tick plus current
 period minus accumulated lost time in rec2's `common/utility.c`; menu pause adds
-the menu's OS duration to lost time. The installed `GetTotalTime` mapping and
-lost-time field address remain unverified, so those semantics are not treated
-as binary-confirmed.
+the menu's OS duration to lost time. Installed `GetTotalTime` at `0x514610`, specifically `0x514636–49`,
+confirms the single-player sum and lost-time field `0x6aa094`. Installed
+`AddLostTime` at `0x514660` adds the argument to that field. These are now
+binary-confirmed, rather than source-only semantics.
 
-## Browser path and open integration work
+## Native fixed-step frame windows
 
-The current browser loop computes RAF elapsed time, caps active gameplay `dt`
-at 50 ms, and uses a 40 ms fixed physics step with a five-step accumulator
-(`src/main.ts`, `src/physics/simulation.ts`). Since a normal RAF call supplies
-at most 50 ms, the 200 ms accumulator cap is not reached through this path.
-The browser still differs from C2's one-frame-period/one-physics-update model:
-AI, pedestrian, race, animation, and powerup clocks update at RAF cadence while
-physics advances in 40 ms steps. At render rates above 100 Hz, applying the
-native 10 ms frame-period floor once per RAF would over-advance gameplay time;
-a browser integration must apply the period as a game-time clock, not as a
-per-RAF multiplier.
+PHILDoPhysics is installed at `0x4b63d0`. It retains fixed 40 ms steps and
+limits each call to five iterations (`0x4b650d`, `0x4b6882`). At
+`0x4b641b–2f`, when frame start exceeds the last physics tick (`0x74878c`),
+resynchronize to `40*floor(frameStart/40)`. Step while frame end is strictly
+greater than that tick. This can advance physics ahead of the requested end.
+The earlier note describing native physics as variable-period stepping was
+incorrect; the discrepancy was the absolute frame window, not step size.
 
-`src/frame-period.ts` is a standalone implementation and is not wired into the
-runtime. It preserves integer tick state, the 32-bit average operation, lost
-time, and a main-loop reset that retains process-global average/lost-time
-state. Before integration, resolve the epoch mismatch between `DoRace`'s
-pre-loop `GetTotalTime` race-start value and the first `MainGameLoop` reset.
-Also define pause handling: browser RAF continues while paused, whereas C2's
-interface loop returns lost duration through `AddLostTime`. Finally, choose how
-to reconcile native variable-period physics with the browser's fixed 40 ms
-solver and keep AI/control updates aligned with whichever cadence is selected.
+Interpolation at `0x4b689b–e4` computes backward fraction
+`(lastPhysicsTick-frameEnd)*.025`. If outside `[0,1]`, replace it with zero,
+meaning latest pose; do not saturate it to one. The browser forward alpha is
+`1-backward`, retaining the same fallback when a long frame exhausts the
+five-step budget.
 
-Useful conformance cases are 16 ms cadence through the 2 s smoothing threshold,
-the 10 ms and 1000 ms clamps, a >500 ms stall, unsigned average overflow,
-pause/lost-time continuity, and equal elapsed time partitioned across 60 Hz,
-100 Hz, and >100 Hz RAF schedules. No runtime behavior is claimed until those
-integration decisions are implemented and tested.
+## Browser integration
+
+`src/game-clock.ts` samples `NativeFramePeriodClock` with integer wall ticks
+and supplies native frame periods to gameplay. It renders independently and
+processes gameplay no faster than 100 Hz. This cadence gate is an explicit
+browser scheduling extension: applying the native 10 ms floor at every
+144/240 Hz RAF would multiply gameplay time. Filtering uses wall age since
+the actual race epoch, including pauses, rather than physics elapsed.
+
+`simulation.updateFrame(startMs,periodMs)` now accepts the absolute predicted
+frame window and reproduces native newer-start resynchronization, 40 ms steps,
+five-step budget and interpolation. Timed physics state advances with the
+resynchronized tick; skipped time does not invent additional force integration.
+Legacy `update(dt)` remains for tests/tools, with an explicit transition that
+clears a pose-only remainder before using it as step debt.
+
+Pause accumulates lost wall duration and rebases sampling while retaining the
+native moving average. The rebase is an explicit browser extension to prevent
+a menu duration becoming a gameplay stall. Active stalls retain native
+filtering and the 1000 ms limit rather than discarding everything above 50 ms.
+The camera uses the separately clamped native period for gameplay frames;
+paused camera settling remains a presentation extension.
+
+Numerical checks cover native first-frame seeding, 60/100/144/240 Hz schedules,
+10 ms cadence gating, comparable elapsed time, active stalls, pause continuity,
+new-race retained averaging, fixed-step windows, equality/no-step boundaries,
+five-step exhaustion, subsequent resynchronization and interpolation fallback.
+Browser validation of the integrated path is recorded below; numerical
+checks alone were not used to close PHY-07.
+
+## Timed consumers
+
+Installed GotPowerupX `0x4d8f30`, specifically `0x4d928c` and
+`0x4d92bb–c6`, stores `got_time=GetTotalTime()` and
+`lose_time=now+duration` for an ordinary timed single-player effect. Loader
+`0x4d983d–984e` converts integer configuration seconds to milliseconds.
+DoPowerupPeriodics `0x4daf90` samples GetTotalTime once; `0x4db092/095` skips
+loss only while unsigned now<deadline, so equality expires the effect. Renewal
+creates a fresh deadline rather than extending the previous one. Whole-race
+and instant types remain distinct; keyboard inventory budgets use a separate
+path and are not ordinary effect deadlines.
+
+The browser now stores absolute expiry milliseconds, avoiding the floating
+remaining-seconds error at a 999ms+1ms boundary. It supplies the pause-adjusted
+GetTotalTime-style race timestamp for these deadlines and Bounce age, and its
+process-clock timestamp for repair double-tap control. Race timer subtraction
+continues to use native frame period (CheckTimer in rec2); payout presentation
+uses elapsed game-clock timestamps rather than assuming all frame periods sum
+to GetTotalTime. Native unsigned deadline wrap is plain addition/comparison;
+the browser's race-relative epoch does not attempt multi-day wrap parity.
+
+MainGameLoop's installed physics call `0x492c0c` precedes
+DoPowerupPeriodics at `0x492de7`. The runtime therefore samples grant time and
+collects pickups in `beginFrame`, retains modifiers through the physics window,
+and expires due effects in `finishFrame` before Bounce callbacks and timer
+checks. Direct `update` remains the combined compatibility API. Tests cover
+gravity/Pinball at equality, no expired Bounce impulse and a renewed pickup's
+fresh deadline.
+
+Finish countdown and payout presentation are intentionally separate clocks:
+state0 subtracts frame period, while states1–6 use absolute game timestamps.
+Tests preserve the native predicted-time regression `2000→1032→1048` after
+a stall; clamping a negative delta to zero would count the corrected interval
+twice. BrowserGameClock exposes the signed delta, and payout uses the absolute
+timestamp directly rather than accumulating it. Positive keyboard inventory
+budgets still have their separate native activated-frame-period path
+(`0x4db3d6–ee`); remaining unsupported inventory behaviors stay under PUP-15.
+
+## Integrated validation
+
+All 716 automated tests and the production build pass. Production bundle
+`index-CagOa8j5.js` passes `browser-timebase`, `browser-priority`,
+`browser-debug`, `browser-race-awards` and `browser-motion-powerups`. Real
+W input moves the original Eagle approximately .596 model units, with
+RPM3328, speed1.503 and gear1 over about two seconds of game time.
+A real 650ms blocked event loop yields a captured capped1000ms frame, exactly
+five physics steps and760ms skipped; the next frame window is127ms. These
+are recorded call results, not synthetic clock replacements.
+
+A 600ms Escape pause leaves gameframes/time, physics, powerup beginFrame calls
+and race timer unchanged while seven render frames continue. Resume excludes
+the paused interval. Debug timer freeze independently leaves timer120 while
+physics advances1.28→2.48 seconds. Existing water, underwater exit, mine/oil,
+lift/smash, recovery, pedestrians/WASTED, suspension/Bounce/wall/gravity/Pinball
+and payout checks pass. The Eye payout still settles exactly160180 credits.
+Reports contain no console, failed-network or WebGL errors; screenshots were
+inspected. Chrome DevTools MCP was unavailable, so validation uses the
+established real Chromium/Playwright fallback. Ignored artifacts retain the
+numerical browser trace and screenshots; proprietary assets remain read-only.

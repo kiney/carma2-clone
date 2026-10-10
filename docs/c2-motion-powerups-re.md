@@ -22,8 +22,8 @@ wheels on the ground. It saves the timestamp, adds `amount/6.9` to world Y
 velocity and plays sound 9010. The callback at `0x4e0c50` is a bare return;
 this effect does not consume ability charges. Nonzero bounce period prevents
 the already reconstructed stationary settling branch. Browser periodic dispatch
-runs after physics, and its age uses consumed gameplay milliseconds. Broader
-native frame-clock differences remain PHY-07, not a claim of elapsed-time parity.
+runs after physics, and its age uses the pause-adjusted game timestamp supplied by the native frame
+clock integration (PHY-07). Direct tool/test updates retain elapsed-delta mode.
 Cars have no independent sleep-disable flag in the current integrator; the
 native wake instruction therefore has no additional browser state to clear.
 

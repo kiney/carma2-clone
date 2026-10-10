@@ -164,6 +164,7 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
+  expiresAtMs: number;
   action: 5 | 6 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 27 | 28;
 }
 export interface PowerupAbility {
@@ -295,26 +296,33 @@ export class PowerupSystem {
     return this;
   }
 
-  /** Collect by swept sphere test and return vehicle multipliers for this frame. */
+  /** Combined compatibility API for direct tools/tests. */
   update(
     dt: number,
     vehicle: VehicleState,
     race: RaceState,
     onEvent?: (event: PowerupEvent) => void,
+    gameTimeMs?: number,
   ): PowerupModifiers {
+    this.beginFrame(dt, vehicle, race, onEvent, gameTimeMs);
+    return this.finishFrame();
+  }
+
+  /** Sample grant time and collect swept pickups; retain existing effects for
+   * the whole physics window. Installed MainGameLoop expires them afterward. */
+  beginFrame(
+    dt: number,
+    vehicle: VehicleState,
+    race: RaceState,
+    onEvent?: (event: PowerupEvent) => void,
+    gameTimeMs?: number,
+  ): PowerupModifiers {
+    if (gameTimeMs !== undefined &&
+      (!Number.isFinite(gameTimeMs) || gameTimeMs < 0))
+      throw new Error("Invalid powerup game timestamp");
     if (Number.isFinite(dt) && dt > 0) {
-      this.elapsedMs += dt * 1000;
-      for (const effect of this.active) {
-        if (effect.duration > 0) {
-          effect.remaining -= dt;
-          if (effect.remaining <= 0) {
-            this.resetEffect(effect.action);
-          }
-        }
-      }
-      this.active = this.active.filter(
-        (effect) => effect.duration <= 0 || effect.remaining > 0,
-      );
+      const nextTime = gameTimeMs ?? this.elapsedMs + dt * 1000;
+      this.elapsedMs = nextTime;
     }
     const current = vehicle.position.clone();
     const from = this.previous?.clone() ?? current.clone();
@@ -344,6 +352,24 @@ export class PowerupSystem {
       this.apply(pickup.index, vehicle, race, onEvent);
     }
     this.previous = current;
+    return this.currentModifiers();
+  }
+
+  /** Native DoPowerupPeriodics expiry precedes periodic callbacks (e.g. Bounce). */
+  finishFrame(): PowerupModifiers {
+    for (const effect of this.active) {
+      if (effect.duration > 0) {
+        effect.remaining = (effect.expiresAtMs - this.elapsedMs) / 1000;
+        if (this.elapsedMs >= effect.expiresAtMs) this.resetEffect(effect.action);
+      }
+    }
+    this.active = this.active.filter(
+      (effect) => effect.duration <= 0 || effect.remaining > 0,
+    );
+    return this.currentModifiers();
+  }
+
+  private currentModifiers(): PowerupModifiers {
     const modifiers: PowerupModifiers = {
       accelerationMultiplier: this.motionFactors.engineFactor,
       maxSpeedMultiplier: 1,
@@ -584,6 +610,7 @@ export class PowerupSystem {
           index,
           remaining: duration,
           duration,
+          expiresAtMs: this.elapsedMs + duration * 1000,
           action: def.action,
         });
         onEvent?.({
@@ -669,6 +696,7 @@ export class PowerupSystem {
           index,
           remaining: duration,
           duration,
+          expiresAtMs: this.elapsedMs + duration * 1000,
           action: def.action,
         });
         onEvent?.({

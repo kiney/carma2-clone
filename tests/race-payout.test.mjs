@@ -128,3 +128,42 @@ test("rejects invalid timesteps without advancing the payout", () => {
     assert.equal(payout.credits, 1000);
   }
 });
+
+test("finish countdown advances by frame periods, not absolute game time", () => {
+  const payout = createPayout();
+  payout.update(9999, 50_000);
+  assert.equal(payout.state, 0);
+  assert.equal(payout.timeLeft, 2);
+  assert.equal(payout.credits, 1000);
+
+  payout.update(1, 50_000);
+  assert.equal(payout.state, 1);
+  assert.equal(payout.credits, 1000);
+});
+
+test("presentation thresholds use absolute time through a predicted-clock regression", () => {
+  const payout = createPayout();
+  payout.update(10_000, 0);
+  assert.equal(payout.state, 1);
+
+  payout.update(0, 2000);
+  assert.equal(payout.state, 2);
+  assert.equal(payout.credits, 1120);
+
+  payout.update(1000, 1032);
+  assert.equal(payout.state, 2, "period cannot advance the presentation state");
+  payout.update(1000, 1048);
+  assert.equal(
+    payout.state,
+    2,
+    "small recovery after regression does not double count",
+  );
+  assert.equal(payout.credits, 1120);
+
+  payout.update(0, 4000);
+  assert.equal(
+    payout.state,
+    3,
+    "state 2 ends at its absolute 2000ms threshold",
+  );
+});

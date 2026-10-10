@@ -1,4 +1,5 @@
 import { parseDefaultGravityMultiplier } from "./physics/global-gravity";
+import { BrowserGameClock } from "./game-clock";
 import * as THREE from "three";
 import { placeCarAtStart } from "./physics/spawn";
 import { Assets } from "./content";
@@ -143,6 +144,7 @@ let chaseDistance = 1.55,
   chaseHeight = 0.8,
   carTargetHeight = 0.18;
 let repairControl = createRepairControl();
+const gameClock = new BrowserGameClock();
 let lastTime = performance.now(),
   messageUntil = 0,
   seconds = 0,
@@ -181,6 +183,10 @@ const stats = {
   fps: 0,
   drawCalls: 0,
   triangles: 0,
+  gameFrames: 0,
+  framePeriodMs: 0,
+  gameTimeMs: 0,
+  physicsSkippedMs: 0,
   assetWarnings: assets.warnings,
 };
 const debug = {
@@ -268,6 +274,7 @@ function message(text: string, duration = 3) {
   messageUntil = performance.now() + duration * 1000;
 }
 function setPaused(value: boolean) {
+  gameClock.setPaused(value, performance.now());
   paused = value;
   keys.clear();
   el("panel").hidden = !value;
@@ -910,6 +917,7 @@ async function loadRace() {
     camera.position.copy(start).add(new THREE.Vector3(0, 1, 2));
     camera.lookAt(start);
     stats.ready = true;
+    gameClock.start(performance.now(), true);
     status(
       `Loaded ${world.stats.models} track models, ${loadedCar.stats.models} car models; ${world.stats.missingTextures} unresolved world textures.`,
     );
@@ -1487,8 +1495,21 @@ function ensureRacePayout() {
 function animate(now: number) {
   requestAnimationFrame(animate);
   const frameSeconds = (now - lastTime) / 1000;
-  const dt = Math.min(frameSeconds, 0.05);
   lastTime = now;
+  const gameFrame = gameClock.sample(
+    performance.now(), stats.ready && !loading && !paused,
+  );
+  const dt = (gameFrame?.periodMs ?? 0) / 1000;
+  if (gameFrame) {
+    stats.gameFrames++;
+    stats.framePeriodMs = gameFrame.periodMs;
+    stats.gameTimeMs = gameFrame.endMs;
+  }
+  const cameraDt = gameFrame
+    ? gameFrame.cameraPeriodMs / 1000
+    : paused
+      ? Math.min(frameSeconds, 1)
+      : 0;
   // Render FPS uses real elapsed time, independent of the gameplay dt cap.
   seconds += frameSeconds;
   frames++;
@@ -1499,9 +1520,11 @@ function animate(now: number) {
   }
   debugPanel.refresh();
   if (vehicle && car && race && collision) {
-    if (!paused && race.status === "racing") {
+    if (gameFrame && !paused && race.status === "racing") {
       worldAnimation?.update(dt);
-      const modifiers = powerups?.update(dt, vehicle, race, onPowerupEvent);
+      let modifiers = powerups?.beginFrame(
+        dt, vehicle, race, onPowerupEvent, gameFrame.endMs,
+      );
       previous.copy(vehicle.position);
       if (player && simulation) {
         simulation.gravityMultiplier =
@@ -1528,7 +1551,7 @@ function animate(now: number) {
         player.repairing = updateRepairControl(
           repairControl,
           keys.has("KeyE"),
-          now,
+          gameFrame.totalTimeMs,
           player.knackered,
         );
         player.input = {
@@ -1556,7 +1579,17 @@ function animate(now: number) {
           player.input.handbrake = false;
         }
         updateRivals(dt);
-        simulation.update(dt);
+        const physicsWindow = simulation.updateFrame(
+          gameFrame.startMs, gameFrame.periodMs,
+        );
+        stats.physicsSkippedMs += physicsWindow.skippedMs;
+        modifiers = powerups?.finishFrame();
+        if (modifiers) {
+          simulation.gravityMultiplier = modifiers.gravityMultiplier;
+          simulation.pinballFactor = modifiers.pinballFactor;
+          player.state.wallClimb = modifiers.wallClimb;
+          player.state.bounceRate = modifiers.bouncePeriodMs;
+        }
         if (powerups?.periodicBounce(player.state)) void audio.playSound(9010);
         explosions?.update(simulation.elapsed * 1000);
         // Installed C2 RaceCompleted(reason6) lets the wasted body continue
@@ -1698,7 +1731,7 @@ function animate(now: number) {
           cameraGoal,
           Math.max(0.18, obstruction.fraction),
         );
-      camera.position.lerp(cameraGoal, 1 - Math.exp(-dt * 6));
+      camera.position.lerp(cameraGoal, 1 - Math.exp(-cameraDt * 6));
       target.addScaledVector(forward, 0.65);
       car.visible = true;
     } else if (cameraMode === 1) {
@@ -1718,9 +1751,10 @@ function animate(now: number) {
       sky.position.z = camera.position.z;
     }
     ensureRacePayout();
-    if (racePayout && !paused && !racePayout.finished) {
+    if (gameFrame && racePayout && !paused && !racePayout.finished) {
       const oldState = racePayout.state;
-      for (const id of racePayout.update(dt * 1000)) void audio.playSound(id);
+      for (const id of racePayout.update(gameFrame.periodMs, gameFrame.endMs))
+        void audio.playSound(id);
       race.credits = racePayout.credits;
       race.timeLeft = racePayout.timeLeft;
       if (

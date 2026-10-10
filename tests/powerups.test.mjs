@@ -856,3 +856,19 @@ test("gravity and Pinball pickups assign independent globals and restore authore
   assert.equal(modifiers.gravityMultiplier, 0.75);
   assert.equal(modifiers.pinballFactor, 0);
 });
+
+test("native game timestamps drive expiry independently of frame-period timer subtraction", async () => {
+  const system = await new PowerupSystem(
+    { text: async () => table([{ action: 16, duration: 1, floats: [0.2] }]) },
+    new THREE.Group(),
+  ).init();
+  const car = createVehicle(new THREE.Vector3()), race = createRace([]);
+  system.update(0.016, car, race, undefined, 32);
+  system.grant(0, car, race);
+  assert.equal(system.update(0.016, car, race, undefined, 1031).gravityMultiplier,
+    Math.fround(0.2), "999ms game age remains active despite a small frame period");
+  assert.equal(system.update(0.016, car, race, undefined, 1032).gravityMultiplier, 1,
+    "the absolute game deadline expires at exactly one second");
+  for (const time of [-1, NaN, Infinity])
+    assert.throws(() => system.update(0.016, car, race, undefined, time));
+});

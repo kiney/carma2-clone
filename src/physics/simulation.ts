@@ -1,4 +1,5 @@
 import { applyWorldPinball } from "./pinball";
+import { planPhysicsFrameWindow } from "./frame-window";
 import { Box3, Group, Object3D, Quaternion, Triangle, Vector3 } from "three";
 import {
   parseCarMechanics,
@@ -389,6 +390,7 @@ export class VehicleSimulation {
   onMineEvent?: (event: MineEvent<SimulatedCar>) => void;
   accumulator = 0;
   elapsed = 0;
+  private frameWindowActive = false;
   gravityMultiplier = 1;
   pinballFactor = 0;
   onPinball?: (body: RigidBody) => void;
@@ -1035,6 +1037,11 @@ export class VehicleSimulation {
     resetMotionSuspension(car.motion);
   }
   update(dt: number) {
+    // updateFrame's accumulator is a pose fraction, not legacy step debt.
+    if (this.frameWindowActive) {
+      this.accumulator = 0;
+      this.frameWindowActive = false;
+    }
     this.accumulator = Math.min(
       this.accumulator + Math.max(0, dt),
       PHYSICS_STEP * 5,
@@ -1043,6 +1050,22 @@ export class VehicleSimulation {
       this.step();
       this.accumulator -= PHYSICS_STEP;
     }
+  }
+  /** Native absolute race-relative window; elapsed remains the physics tick.
+   * A skipped interval advances timed physics state without inventing forces.
+   * Calling legacy update next clears the interpolation-only accumulator. */
+  updateFrame(frameStartMs: number, framePeriodMs: number) {
+    const window = planPhysicsFrameWindow(
+      Math.round(this.elapsed * 1000),
+      frameStartMs,
+      framePeriodMs,
+    );
+    this.frameWindowActive = true;
+    this.elapsed = window.stepStartMs / 1000;
+    for (let i = 0; i < window.steps; i++) this.step();
+    this.elapsed = window.lastPhysicsTickMs / 1000;
+    this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
+    return window;
   }
   private recoverySurfaces(surfaces: readonly Surface[]) {
     return surfaces.map((surface) => ({
