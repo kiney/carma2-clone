@@ -87,3 +87,5 @@ import "./engine-noise.test.mjs";
 
 import "./suspension-powerups.test.mjs";
 import "./bounce-powerups.test.mjs";
+
+import "./frame-period.test.mjs";
