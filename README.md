@@ -27,7 +27,8 @@ Original screenshot: [Instant Gaming](https://www.instant-gaming.com/de/16521-ka
 - **Rendering:** Three.js with WebGL2.
 - **Audio:** Web Audio API playing original WAV assets.
 - **Physics:** Custom C2 reconstruction covering vehicle motion, collision impulses, persistent crush, component damage and detachable parts.
-- **Server and build:** Node.js and Vite; original assets are served locally from loose files and TWT archives.
+- **Assets:** Custom parsers for original C2 files and TWT archives, with UTIF for TIFF textures; game data stays in the local installation.
+- **Server and build:** Node.js and Vite, with a local asset server.
 - **Tests:** Node's test runner with `tsx`, plus Playwright and Chromium for browser checks.
 
 The engine runs directly in the browser. See [architecture notes](docs/architecture.md) for more detail.
