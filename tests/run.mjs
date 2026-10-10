@@ -9,6 +9,8 @@ import "./pedestrians.test.mjs";
 import "./damage.test.mjs";
 import "./animation.test.mjs";
 import "./rules.test.mjs";
+import "./race-flags.test.mjs";
+import "./smash-missions.test.mjs";
 import "./handling.test.mjs";
 import "./powerups.test.mjs";
 

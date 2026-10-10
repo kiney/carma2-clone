@@ -12,6 +12,8 @@ export interface RaceProgress {
   groupCounts?: ReadonlyMap<number, { total: number; killed: number }>;
   /** False while asynchronous population loading is still in progress. */
   opponentsReady?: boolean;
+  /** Signed native runtime byte, read after a full connotation or selected kill. */
+  smashValue?: number;
   pedestriansReady?: boolean;
 }
 export interface ObjectiveResult {
@@ -29,9 +31,14 @@ const raceType = (definition?: RaceCatalogEntry) =>
   definition?.raceType ?? "carma";
 
 export function isSupportedRace(definition?: RaceCatalogEntry): boolean {
-  return ["carma", "cars", "peds", "checkpoints"].includes(
-    String(raceType(definition)),
-  );
+  return [
+    "carma",
+    "cars",
+    "peds",
+    "checkpoints",
+    "smash",
+    "smashAndPed",
+  ].includes(String(raceType(definition)));
 }
 
 export function objectiveText(
@@ -72,7 +79,7 @@ export function objectiveText(
     return `Hit all mission pedestrians${progress ? ` · ${count(progress.pedestriansKilled)}/${count(progress.pedestriansTotal)}` : ""}`;
   }
   if (type === "smash" || type === "smashAndPed")
-    return "Unsupported smash objective · free driving";
+    return `${type === "smashAndPed" ? "Destroy targets / hit mission pedestrians" : "Destroy mission targets"} · ${progress?.smashValue ?? 0}/${definition?.smashTarget ?? 0}`;
   return "Unsupported race objective · free driving";
 }
 
@@ -82,8 +89,8 @@ export function objectiveText(
  * empty checkpoint list when constructed, even if their track contains gates.
  * Opponent IDs/group counts improve mission fidelity when provided; otherwise
  * totals refer to the browser's bounded visible population. Zero or still-
- * loading populations never count as a completed objective. Smash missions are
- * unsupported; the caller owns their free-driving mode and timer policy.
+ * loading populations never count as a completed objective. Smash missions use
+ * the installed signed-byte >= target comparison, shared with selected kills.
  */
 export function applyRaceObjectives(
   race: RaceState,
@@ -136,6 +143,13 @@ export function applyRaceObjectives(
       won = allPedestrians;
     }
     message = "PEDESTRIAN OBJECTIVE COMPLETE";
+  }
+  if (type === "smash" || type === "smashAndPed") {
+    won =
+      Number.isInteger(progress.smashValue) &&
+      definition?.smashTarget != null &&
+      progress.smashValue! >= definition.smashTarget;
+    message = "SMASH OBJECTIVE COMPLETE";
   }
   if (won) {
     race.status = "completed";

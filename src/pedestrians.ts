@@ -42,6 +42,8 @@ export interface PedSpawnSpec {
   exceptions: string[];
 }
 export interface PedHitEvent {
+  /** Original spawn group index, used by SmashAndPed mission accounting. */
+  group: number;
   count: number;
   total: number;
   speed: number;
@@ -1019,6 +1021,7 @@ export class PedestrianSystem {
           timeMs,
         );
         this.options.onHit?.({
+          group: ped.spec.group,
           count: 1,
           total: this.hits,
           speed: Math.abs(car.speed),

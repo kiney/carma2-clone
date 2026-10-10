@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Vector3 } from "three";
 import { createRace, updateRace } from "../src/gameplay.ts";
+import { MissionVariables } from "../src/mission-variables.ts";
 import {
   applyRaceObjectives,
   objectiveText,
@@ -186,29 +187,85 @@ test("checkpoint-only missions ignore kills and retain gameplay lap completion w
   assert.equal(race.credits, credits);
 });
 
-test("unsupported smash objectives are explicit, do not mutate timers and cannot win through kills", () => {
-  for (const type of ["smash", "smashAndPed"]) {
-    const mission = definition(type),
-      race = createRace([]);
-    const result = applyRaceObjectives(
-      race,
-      mission,
-      progress({ opponentsWasted: 4, pedestriansKilled: 20 }),
-    );
-    assert.equal(result.supported, false);
-    assert.equal(result.completed, false);
-    assert.equal(
-      result.objectiveText,
-      "Unsupported smash objective · free driving",
-    );
-    assert.equal(race.timeLeft, 180);
-    assert.equal(isSupportedRace(mission), false);
-  }
-  assert.ok(objectiveText(definition("peds"), progress()).includes("0/20"));
-  const failed = createRace([], { timeLimit: 0 });
+test("smash missions require their signed target and add pedestrian objectives only when encoded", () => {
+  const smash = definition("smash", { smashVariable: 1, smashTarget: 2 });
+  const regularKills = progress({ opponentsWasted: 4, pedestriansKilled: 20 });
+  const ordinary = createRace([]);
+  assert.equal(isSupportedRace(smash), true);
   assert.equal(
-    applyRaceObjectives(failed, undefined, progress({ opponentsWasted: 4 }))
+    applyRaceObjectives(ordinary, smash, regularKills).completed,
+    false,
+    "ordinary opponent and pedestrian kills cannot satisfy a smash objective",
+  );
+  assert.equal(ordinary.credits, 1000);
+
+  const below = applyRaceObjectives(
+    ordinary,
+    smash,
+    progress({ smashValue: 1, opponentsWasted: 4, pedestriansKilled: 20 }),
+  );
+  assert.equal(below.completed, false);
+  assert.match(below.objectiveText, /1\/2/);
+  const connotation = new MissionVariables();
+  connotation.apply([
+    [1, 2],
+    [1, -1],
+  ]);
+  assert.equal(
+    applyRaceObjectives(
+      ordinary,
+      smash,
+      progress({ smashValue: connotation.get(1) }),
+    ).completed,
+    false,
+    "victory checks use the final value after the full connotation list",
+  );
+  assert.equal(
+    applyRaceObjectives(ordinary, smash, progress({ smashValue: -1 }))
       .completed,
     false,
+    "negative signed runtime values remain below the target",
   );
+  const edge = applyRaceObjectives(
+    ordinary,
+    smash,
+    progress({ smashValue: 2 }),
+  );
+  assert.equal(edge.completed, true, "the exact target completes the mission");
+  assert.equal(ordinary.credits, 3000);
+  assert.equal(
+    applyRaceObjectives(ordinary, smash, progress({ smashValue: 127 }))
+      .completed,
+    false,
+    "an already-ended race cannot award completion twice",
+  );
+  assert.equal(ordinary.credits, 3000);
+
+  const additive = definition("smashAndPed", {
+    smashVariable: 1,
+    smashTarget: 2,
+    pedGroupsToKill: [56],
+  });
+  const additiveRace = createRace([]);
+  assert.equal(
+    applyRaceObjectives(
+      additiveRace,
+      additive,
+      progress({
+        smashValue: 2,
+        pedestriansKilled: 0,
+        groupCounts: new Map([[56, { total: 3, killed: 0 }]]),
+      }),
+    ).completed,
+    true,
+    "smashAndPed retains the additive smash threshold without inventing a pedestrian conjunction",
+  );
+  assert.equal(additiveRace.credits, 3000);
+
+  const failed = createRace([], { timeLimit: 0 });
+  assert.equal(
+    applyRaceObjectives(failed, smash, progress({ smashValue: 2 })).completed,
+    false,
+  );
+  assert.ok(objectiveText(definition("peds"), progress()).includes("0/20"));
 });

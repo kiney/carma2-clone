@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { VehicleState, RaceState } from "./gameplay";
+import { awardRaceTime } from "./gameplay";
 import {
   setTemporaryMotionPowerup,
   resetTemporaryMotionPowerup,
@@ -185,12 +186,15 @@ export class PowerupSystem {
   private active: ActiveEffect[] = [];
   private previous?: THREE.Vector3;
   private unsupportedWarned = new Set<number>();
+  private readonly exclusions: ReadonlySet<number>;
 
   constructor(
     private readonly assets: AssetTextSource,
     private readonly sourceWorldGroup: THREE.Group,
     private readonly random: () => number = Math.random,
+    exclusions: readonly number[] = [],
   ) {
+    this.exclusions = new Set(exclusions);
     this.group.name = "Original powerups";
   }
 
@@ -427,6 +431,9 @@ export class PowerupSystem {
     onEvent?: (event: PowerupEvent) => void,
     randomPath: ReadonlySet<number> = new Set(),
   ): void {
+    // Installed GotPowerupX0x4d8ffc substitutes excluded requests with index0
+    // once. Keep world actors, weighted draws and debug grants on this path.
+    if (this.exclusions.has(index)) index = 0;
     const def = this.definitions[index];
     if (!def) return;
     switch (def.action) {
@@ -537,12 +544,12 @@ export class PowerupSystem {
         const low = def.integerParams[0] ?? 0,
           high = def.integerParams[1] ?? low;
         const seconds = this.randomBetween(low, high);
-        race.timeLeft += seconds;
+        const awarded = awardRaceTime(race, seconds);
         onEvent?.({
           kind: "time",
           name: def.message,
           definition: def,
-          amount: seconds,
+          amount: awarded ? seconds : 0,
         });
         break;
       }

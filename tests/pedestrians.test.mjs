@@ -78,6 +78,11 @@ test("pedestrian population uses matching surfaces, swept hits pay once, reset a
   assert.ok(events.length >= 1);
   assert.equal(events[0].count, 1);
   assert.equal(events[0].total, 1);
+  assert.equal(
+    events[0].group,
+    0,
+    "hit event preserves the original spawn group",
+  );
   const hits = peds.hits;
   peds.update(0, { position: target, yaw: 0, speed: 3 });
   assert.equal(peds.hits, hits);

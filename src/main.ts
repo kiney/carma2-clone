@@ -13,7 +13,13 @@ import type {
   RaceCatalogEntry,
   OpponentConfig,
 } from "./config";
-import { createRace, updateRace, speedMph, recoverVehicle } from "./gameplay";
+import {
+  createRace,
+  updateRace,
+  speedMph,
+  recoverVehicle,
+  awardRaceTime,
+} from "./gameplay";
 import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
 import { DamageSystem } from "./damage";
@@ -42,6 +48,7 @@ import { parseNonCarMechanics, parseTrackNonCarFiles } from "./noncars";
 import { createNonCarBody, nonCarActors } from "./physics/noncar-body";
 import { NonCarRenderBatch } from "./noncar-render";
 import { WorldDestruction } from "./world-destruction";
+import { MissionVariables } from "./mission-variables";
 import { parseTrackSmashables } from "./world-smash";
 import { WorldGrooveRuntime } from "./world-groove";
 import { createMovingWorldBody } from "./physics/moving-world";
@@ -98,6 +105,8 @@ const camera = new THREE.PerspectiveCamera(
   0.035,
   1800,
 );
+const missionVariables = new MissionVariables();
+const raceCatalogs = new Map<string, RaceCatalogEntry[]>();
 const assets = new Assets();
 const audio = new AudioSystem(assets);
 const wastedFeedback = new WastedFeedback(assets, audio);
@@ -196,6 +205,10 @@ const debug = {
   get race() {
     return race;
   },
+  get raceDefinition() {
+    return definition;
+  },
+  missionVariables,
   get track() {
     return track;
   },
@@ -273,11 +286,15 @@ function stemOf(path: string) {
 async function init() {
   try {
     await assets.init();
-    let catalogPath = assets.resolve("data/RACES.TXT");
-    if (catalogPath) {
-      const catalog = parseRaceCatalog(await assets.text(catalogPath));
-      races = catalog.races;
+    for (const root of ["data", "adv_data"]) {
+      const catalogPath = assets.resolve(`${root}/RACES.TXT`);
+      if (catalogPath)
+        raceCatalogs.set(
+          root,
+          parseRaceCatalog(await assets.text(catalogPath)).races,
+        );
     }
+    races = raceCatalogs.get("data") ?? [];
     const opponentPath = assets.resolve("data/OPPONENT.TXT");
     if (opponentPath)
       opponents = parseOpponents(await assets.text(opponentPath));
@@ -290,7 +307,9 @@ async function init() {
     for (const entry of tracks) {
       if (!assets.resolve(`${dirOf(entry.path)}/${stemOf(entry.path)}.act`))
         continue;
-      const raceEntry = races.find(
+      const raceEntry = (
+        raceCatalogs.get(entry.path.split("/")[0].toLowerCase()) ?? []
+      ).find(
         (r) =>
           r.raceFilename.toLowerCase() ===
           entry.path.split("/").pop()!.toLowerCase(),
@@ -464,7 +483,20 @@ async function loadRace() {
     const trackText = await assets.text(currentTrack);
     const newTrack = parseTrackConfig(trackText);
     const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
-    const loadedPowerups = new PowerupSystem(assets, world.group);
+    definition = (
+      raceCatalogs.get(currentTrack.split("/")[0].toLowerCase()) ?? []
+    ).find(
+      (r) =>
+        r.raceFilename.toLowerCase() ===
+        currentTrack.split("/").pop()!.toLowerCase(),
+    );
+    missionVariables.clear();
+    const loadedPowerups = new PowerupSystem(
+      assets,
+      world.group,
+      Math.random,
+      definition?.powerupExclusions ?? [],
+    );
     loadedPowerups.onPickup = (definition) =>
       audio.powerupPickup(definition.index);
     await loadedPowerups.init();
@@ -563,6 +595,8 @@ async function loadRace() {
         onActivation: (activation, contact) =>
           simulation?.worldActivations.enqueue(activation, contact),
         onConnotations: (data, contact) => {
+          missionVariables.apply(data.variableChanges);
+          checkSmashObjective();
           for (const id of data.sounds) void audio.playSound(id);
           if (data.explosions.length) {
             const source = contact.bodyActor ?? contact.actor;
@@ -784,11 +818,6 @@ async function loadRace() {
     };
     car.position.copy(start);
     car.quaternion.copy(vehicle.orientation);
-    definition = races.find(
-      (r) =>
-        r.raceFilename.toLowerCase() ===
-        currentTrack.split("/").pop()!.toLowerCase(),
-    );
     const lapRace =
       !definition ||
       ["carma", "checkpoints"].includes(String(definition.raceType));
@@ -798,6 +827,7 @@ async function loadRace() {
       })),
       {
         laps: definition?.laps ?? 4,
+        disableTimeAwards: definition?.disableTimeAwards ?? false,
         timeLimit: definition?.initialTimer[0] ?? 180,
         credits: player.upgrades.credits,
         checkpointBonusSeconds: track.checkpoints[0]?.timerIncrement?.[0] ?? 20,
@@ -994,10 +1024,18 @@ async function loadPedestrians(text: string, loadGeneration: number) {
       collision,
       onHit: (event) => {
         if (race?.status === "racing") {
+          if (
+            definition?.raceType === "smashAndPed" &&
+            definition.pedGroupsToKill.includes(event.group) &&
+            definition.smashVariable != null
+          ) {
+            missionVariables.add(definition.smashVariable, event.count);
+          }
           race.credits += event.count * 200;
-          race.timeLeft += event.count * 8;
+          awardRaceTime(race, event.count * 8);
           message(`PEDESTRIAN HIT · +${event.count * 200} CR`);
           audio.impact(0.25);
+          checkSmashObjective();
         }
       },
     },
@@ -1082,7 +1120,7 @@ function updateRivals(dt: number) {
       r.wasted = true;
       r.body.input = { throttle: 0, steer: 0, brake: 0, handbrake: false };
       race.credits += 2500;
-      race.timeLeft += 15;
+      awardRaceTime(race, 15);
       message("OPPONENT WASTED · +2500 CR");
       r.object.traverse((o) => {
         if (o instanceof THREE.Mesh)
@@ -1247,6 +1285,31 @@ function drawMap() {
   ctx.fill();
   ctx.restore();
 }
+/** Native completion checks occur at event dispatch, before another event can
+ * wrap or subtract from the same byte. End-frame checks alone miss crossings. */
+function checkSmashObjective() {
+  if (
+    !race ||
+    !definition ||
+    !["smash", "smashAndPed"].includes(String(definition.raceType))
+  )
+    return;
+  const victory = applyRaceObjectives(race, definition, {
+    opponentsTotal: 0,
+    opponentsWasted: 0,
+    pedestriansTotal: 0,
+    pedestriansKilled: 0,
+    smashValue:
+      definition.smashVariable != null
+        ? missionVariables.get(definition.smashVariable)
+        : undefined,
+  });
+  if (victory.completed) {
+    audio.raceEvents([{ type: "completed", lap: race.lap }], race.laps);
+    message(victory.message ?? "RACE COMPLETED", 8);
+  }
+}
+
 function onPowerupEvent(event: PowerupEvent) {
   if (event.kind === "ability") {
     message(`${event.name} · ${event.amount} · F TO USE`);
@@ -1413,6 +1476,10 @@ function animate(now: number) {
         pedestriansTotal: pedestrians?.count ?? 0,
         pedestriansKilled: pedestrians?.hits ?? 0,
         groupCounts: pedestrians?.groupCounts,
+        smashValue:
+          definition?.smashVariable != null
+            ? missionVariables.get(definition.smashVariable)
+            : undefined,
         opponentsReady: rivalsReady,
         pedestriansReady,
         opponentsWastedIds: definition?.opponentsToKill.every((id) =>
@@ -1421,7 +1488,10 @@ function animate(now: number) {
           ? new Set(rivals.filter((r) => r.wasted).map((r) => r.id))
           : undefined,
       });
-      if (victory.completed) message(victory.message ?? "RACE COMPLETED", 8);
+      if (victory.completed) {
+        audio.raceEvents([{ type: "completed", lap: race.lap }], race.laps);
+        message(victory.message ?? "RACE COMPLETED", 8);
+      }
       const animationInput = {
         ...(player ? motionAnimation(player) : {}),
         speed: vehicle.speed,
@@ -1528,6 +1598,11 @@ function animate(now: number) {
           opponentsWasted: rivals.filter((r) => r.wasted).length,
           pedestriansTotal: pedestrians?.count ?? 0,
           pedestriansKilled: pedestrians?.hits ?? 0,
+          groupCounts: pedestrians?.groupCounts,
+          smashValue:
+            definition?.smashVariable != null
+              ? missionVariables.get(definition.smashVariable)
+              : undefined,
         });
     if (!isSupportedRace(definition)) el("timer").textContent = "FREE DRIVE";
     el("timer").classList.toggle("debug-frozen", debugPanel.timerFrozen);

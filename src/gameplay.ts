@@ -231,6 +231,7 @@ export interface RaceOptions {
   checkpointBonusSeconds: number;
   checkpointCredits: number;
   completionCredits: number;
+  disableTimeAwards: boolean;
 }
 export interface RaceState extends RaceOptions {
   checkpoints: Checkpoint[];
@@ -258,6 +259,7 @@ export function createRace(
     checkpointBonusSeconds: 15,
     checkpointCredits: 100,
     completionCredits: 2000,
+    disableTimeAwards: false,
     ...options,
   };
   o.laps = Math.max(1, Math.floor(o.laps));
@@ -323,6 +325,14 @@ export function checkpointCrossing(
   return t;
 }
 
+/** Installed AddTimeAward0x44baf0 checks the current race's no_time flag.
+ * Debug time editing is deliberately separate from ordinary game awards. */
+export function awardRaceTime(race: RaceState, seconds: number): boolean {
+  if (race.disableTimeAwards || !Number.isFinite(seconds)) return false;
+  race.timeLeft += seconds;
+  return true;
+}
+
 /** Awards only ordered gates. Processes multiple gates chronologically in a
  * single move and interpolates crossing times so a late gate cannot revive a
  * timer that expired before the car reached it. Completed/failed races freeze.
@@ -346,7 +356,7 @@ export function updateRace(
     race.timeLeft -= elapsed;
     race.elapsed += elapsed;
     previousFraction = fraction;
-    race.timeLeft += race.checkpointBonusSeconds;
+    awardRaceTime(race, race.checkpointBonusSeconds);
     race.credits += race.checkpointCredits;
     events.push({ type: "checkpoint", checkpoint, lap: race.lap });
     race.nextCheckpoint++;

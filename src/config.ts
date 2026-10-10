@@ -82,6 +82,8 @@ export interface RaceCatalogEntry {
   opponentsToKill: number[];
   numberOfPedGroupsToKill: number | null;
   pedGroupsToKill: number[];
+  smashVariable: number | null;
+  smashTarget: number | null;
   description: string;
   expansion: number;
   raceCompletedBonus: Vec3[];
@@ -701,6 +703,22 @@ function parseTuple(
   return nums.slice(0, size);
 }
 
+/** Installed LoadRaces0x48c221 terminates an exclusion list at a negative
+ * index. rec2's loader map omits this check; slash is also a native delimiter. */
+export function parsePowerupExclusions(line: string): number[] {
+  const result: number[] = [];
+  for (const token of line.split(/[\s,/]+/).filter(Boolean)) {
+    const index = Number(token);
+    if (!Number.isSafeInteger(index))
+      throw new Error(`RACES.TXT: invalid powerup exclusion: ${token}`);
+    if (index < 0) break;
+    if (result.length >= 50)
+      throw new Error("RACES.TXT: too many powerup exclusions");
+    result.push(index);
+  }
+  return result;
+}
+
 /** Parse the race progression table (`RACES.TXT`), including mission/type and opponent ids. */
 export function parseRaceCatalog(text: string): RaceCatalog {
   const lines = dataLines(text);
@@ -725,11 +743,7 @@ export function parseRaceCatalog(text: string): RaceCatalog {
       explicitOpponents.push(parseIntLine(lines, cursor));
     const opponentNastinessLevel = parseIntLine(lines, cursor);
     const exclusionLine = lines[cursor.value++] ?? "";
-    const powerupExclusions = exclusionLine
-      .split(/[\s,]+/)
-      .filter(Boolean)
-      .map(Number)
-      .filter(Number.isFinite);
+    const powerupExclusions = parsePowerupExclusions(exclusionLine);
     const disableTimeAwards = parseIntLine(lines, cursor) !== 0;
     const mission = parseIntLine(lines, cursor) !== 0;
     const raceTypeValue = parseIntLine(lines, cursor);
@@ -748,6 +762,8 @@ export function parseRaceCatalog(text: string): RaceCatalog {
     let opponentsToKill: number[] = [];
     let numberOfPedGroupsToKill: number | null = null;
     let pedGroupsToKill: number[] = [];
+    let smashVariable: number | null = null;
+    let smashTarget: number | null = null;
     if (raceTypeValue === 0 || raceTypeValue === 3) {
       laps = parseIntLine(lines, cursor);
     } else if (raceTypeValue === 1) {
@@ -763,8 +779,8 @@ export function parseRaceCatalog(text: string): RaceCatalog {
         parseIntLine(lines, cursor),
       );
     } else if (raceTypeValue === 4 || raceTypeValue === 5) {
-      parseIntLine(lines, cursor); // smash variable id
-      parseIntLine(lines, cursor); // smash target
+      smashVariable = parseIntLine(lines, cursor);
+      smashTarget = parseIntLine(lines, cursor);
       if (raceTypeValue === 5)
         pedGroupsToKill.push(parseIntLine(lines, cursor));
     }
@@ -791,6 +807,8 @@ export function parseRaceCatalog(text: string): RaceCatalog {
       opponentsToKill,
       numberOfPedGroupsToKill,
       pedGroupsToKill,
+      smashVariable,
+      smashTarget,
       description,
       expansion,
       raceCompletedBonus,
