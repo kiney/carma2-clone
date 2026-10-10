@@ -1633,10 +1633,10 @@ function animate(now: number) {
       if (vehicle.position.y < -80) recover();
     }
     audio.update(
-      Math.abs(vehicle.speed) / Math.max(physicsConfig.maxSpeed ?? 12.96, 1),
-      Number(keys.has("KeyW") || keys.has("ArrowUp")),
-      vehicle.health / 100,
+      player?.state.rpm ?? 0,
+      player?.specialVolume?.volume?.engineNoiseIndex ?? 0,
       paused || race.status !== "racing",
+      player?.state.engineFactor ?? 1,
     );
     const renderAlpha =
       paused || race.status !== "racing"

@@ -1,3 +1,4 @@
+import { engineNoise } from "./engine-noise";
 import type { Assets } from "./content";
 import type { RaceEvent } from "./gameplay";
 import { parsePowerupPickupSounds, raceEventSoundIds } from "./event-audio";
@@ -127,10 +128,10 @@ export class AudioSystem {
   }
 
   update(
-    speed: number,
-    throttle: number,
-    health: number,
+    revs: number,
+    engineNoiseIndex: number,
     paused: boolean,
+    engineFactor = 1,
   ): void {
     if (
       this.disposed ||
@@ -139,32 +140,26 @@ export class AudioSystem {
       !this.engineGain
     )
       return;
-    const maxSpeed = Math.max(0, Number.isFinite(speed) ? speed : 0);
-    const gas = clamp(Number.isFinite(throttle) ? throttle : 0, 0, 1);
-    const condition = clamp(Number.isFinite(health) ? health : 1, 0, 1);
-    const moving = maxSpeed > 0.02 && !paused && !!this.engineBuffer;
-    this.engineWanted = moving;
-    if (!moving) {
+    const audible = !paused && !!this.engineBuffer;
+    this.engineWanted = audible;
+    if (!audible) {
       this.engineGain.gain.setTargetAtTime(0, this.context.currentTime, 0.08);
       if (paused || !this.engineBuffer) this.stopEngine();
       return;
     }
     this.startEngine();
-    this.engineRate = clamp(0.72 + maxSpeed * 0.75 + gas * 0.22, 0.65, 2.2);
-    this.engineVolume = clamp(
-      (0.14 + gas * 0.22 + maxSpeed * 0.18) * (0.45 + condition * 0.55),
-      0,
-      0.52,
-    );
-    this.engineSource!.playbackRate.setTargetAtTime(
+    // rec2 MungeEngineNoise: source remains active at standstill. Player revs
+    // come from reconstructed motion; speedo cycling is an AI-only proxy.
+    const values = engineNoise(revs, engineNoiseIndex, engineFactor);
+    this.engineRate = values.playbackRate;
+    this.engineVolume = values.gain;
+    this.engineSource!.playbackRate.setValueAtTime(
       this.engineRate,
       this.context.currentTime,
-      0.12,
     );
-    this.engineGain.gain.setTargetAtTime(
+    this.engineGain.gain.setValueAtTime(
       this.engineVolume,
       this.context.currentTime,
-      0.12,
     );
   }
 
