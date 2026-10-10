@@ -13,13 +13,17 @@ export interface GameFrame {
 }
 
 function wallTick(now: number): number {
-  if (!Number.isFinite(now) || now < 0 || !Number.isSafeInteger(Math.floor(now)))
+  if (
+    !Number.isFinite(now) ||
+    now < 0 ||
+    !Number.isSafeInteger(Math.floor(now))
+  )
     throw new Error("Invalid browser wall tick");
   return Math.floor(now);
 }
 
 /** Native frame sampling with explicit browser scheduling extensions:
- * render independently, gate gameplay to <=100Hz, and rebase paused sampling.
+ * render independently, gate gameplay to <=100Hz, and shift paused sampling origins.
  * The native period, smoothing, error correction and clamps remain unchanged.
  */
 export class BrowserGameClock {
@@ -50,10 +54,11 @@ export class BrowserGameClock {
     if (paused) {
       this.pauseStart ??= tick;
     } else if (this.pauseStart !== undefined) {
-      if (tick < this.pauseStart) throw new Error("Browser wall time went backwards");
+      if (tick < this.pauseStart)
+        throw new Error("Browser wall time went backwards");
       this.native.addLostTime(tick - this.pauseStart);
-      this.native.rebaseSampling(tick);
-      this.lastFrameWall = tick;
+      this.native.shiftSampling(tick - this.pauseStart);
+      this.lastFrameWall += tick - this.pauseStart;
       this.pauseStart = undefined;
     }
   }
@@ -63,7 +68,8 @@ export class BrowserGameClock {
     if (!this.started) return;
     this.setPaused(!active, tick);
     if (!active) return;
-    if (tick < this.lastFrameWall) throw new Error("Browser wall time went backwards");
+    if (tick < this.lastFrameWall)
+      throw new Error("Browser wall time went backwards");
     // Without this gate a 144/240Hz RAF would multiply the native 10ms floor.
     if (tick - this.lastFrameWall < 10) return;
     const sample = this.native.advance(tick, (tick - this.wallRaceStart) >>> 0);

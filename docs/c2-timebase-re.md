@@ -71,9 +71,16 @@ resynchronized tick; skipped time does not invent additional force integration.
 Legacy `update(dt)` remains for tests/tools, with an explicit transition that
 clears a pose-only remainder before using it as step debt.
 
-Pause accumulates lost wall duration and rebases sampling while retaining the
-native moving average. The rebase is an explicit browser extension to prevent
-a menu duration becoming a gameplay stall. Active stalls retain native
+Pause accumulates lost wall duration and shifts both actual/predicted sampling
+origins and the cadence gate by that duration, retaining the native moving
+average, prediction error and pre-pause active cadence remainder. This is an
+explicit browser extension to prevent a menu duration becoming a gameplay
+stall. Snapping the origins to the resume wall tick was incorrect: it could
+change the next physics window and shorten absolute powerup deadlines.
+Deterministic paused/unpaused comparisons cover a 102 ms prediction offset and
+a six-millisecond pre-pause cadence remainder. Native OS race-age filtering
+continues to include paused wall duration; equivalence comparisons retain the
+same side of its 2000 ms branch. Active stalls retain native
 filtering and the 1000 ms limit rather than discarding everything above 50 ms.
 The camera uses the separately clamped native period for gameplay frames;
 paused camera settling remains a presentation extension.

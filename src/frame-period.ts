@@ -59,6 +59,15 @@ export class NativeFramePeriodClock {
     this.lastTick = now;
   }
 
+  /** Browser pause extension: shift both OS sampling origins equally, retaining
+   * their prediction error. Combined with AddLostTime this cancels the inactive
+   * interval without snapping game time to the wall clock on resume. */
+  shiftSampling(milliseconds: number): void {
+    const duration = tick(milliseconds, "sampling shift");
+    this.actualLastTick = u32(this.actualLastTick + duration);
+    this.lastTick = u32(this.lastTick + duration);
+  }
+
   /** Advance once per gameplay frame using integer OS ticks and native race age. */
   advance(nowMs: number, raceElapsedMs: number): FramePeriodSample {
     const now = tick(nowMs, "OS tick");

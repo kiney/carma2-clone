@@ -123,5 +123,62 @@ test("native prediction regressions remain signed rather than double-counting el
   assert.equal(corrected.endMs, 1032);
   assert.equal(corrected.clockDeltaMs, -968);
   assert.equal(next.endMs, 1048);
-  assert.equal(stalled.clockDeltaMs + corrected.clockDeltaMs + next.clockDeltaMs, 1048);
+  assert.equal(
+    stalled.clockDeltaMs + corrected.clockDeltaMs + next.clockDeltaMs,
+    1048,
+  );
+});
+
+test("pause retains native prediction error instead of snapping game timestamps to wall time", () => {
+  for (const schedule of [
+    [16, 36, 76, 136],
+    [30, 60, 95, 200],
+    [50, 100, 250, 300],
+  ]) {
+    const plain = new BrowserGameClock(),
+      paused = new BrowserGameClock();
+    plain.start(10_000);
+    paused.start(10_000);
+    for (const ms of schedule)
+      assert.deepEqual(
+        paused.sample(10_000 + ms, true),
+        plain.sample(10_000 + ms, true),
+      );
+    const pauseAt = 10_000 + schedule.at(-1) + 3;
+    paused.setPaused(true, pauseAt);
+    paused.setPaused(false, pauseAt + 600);
+    const resumed = paused.sample(pauseAt + 638, true);
+    const continued = plain.sample(pauseAt + 38, true);
+    assert.deepEqual(resumed, continued);
+  }
+});
+
+test("pause shifts the gameplay cadence gate without discarding active pre-pause remainder", () => {
+  const plain = new BrowserGameClock(),
+    paused = new BrowserGameClock();
+  plain.start(1000);
+  paused.start(1000);
+  plain.sample(1016, true);
+  paused.sample(1016, true);
+  paused.setPaused(true, 1022);
+  paused.setPaused(false, 1622);
+  assert.deepEqual(paused.sample(1626, true), plain.sample(1026, true));
+});
+
+test("pause preserves an established 102ms prediction offset and its physics window", () => {
+  const plain = new BrowserGameClock(),
+    paused = new BrowserGameClock();
+  plain.start(1000);
+  paused.start(1000);
+  for (const ms of [3016, 3032, 3144]) {
+    plain.sample(ms, true);
+    paused.sample(ms, true);
+  }
+  paused.setPaused(true, 3144);
+  paused.setPaused(false, 3744);
+  const resumed = paused.sample(3782, true);
+  assert.deepEqual(resumed, plain.sample(3182, true));
+  assert.equal(resumed.periodMs, 41);
+  assert.equal(resumed.startMs, 2156);
+  assert.equal(resumed.endMs, 2197);
 });

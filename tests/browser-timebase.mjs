@@ -65,7 +65,7 @@ try {
   await page.waitForFunction(() => window.carma?.stats.ready, null, {
     timeout: 90000,
   });
-  await page.evaluate(async () => {
+  const timedEffect = await page.evaluate(async () => {
     const c = window.carma;
     const track = c.assets.resolve("data/RACES/newcity1/newcity1.txt");
     const car = c.assets.resolve("data/CARS/EAGLE3/EAGLE3.TXT");
@@ -95,12 +95,119 @@ try {
       });
       return originalPowerupUpdate(...args);
     };
+    const lastGameTimeDescriptor = Object.getOwnPropertyDescriptor(
+      c.stats,
+      "gameTimeMs",
+    );
+    let gameTimeMs = lastGameTimeDescriptor.value;
+    window.__awaitingResumeFrame = false;
+    window.__resumeFrame = undefined;
+    window.__lastActiveSample = undefined;
+    Object.defineProperty(c.stats, "gameTimeMs", {
+      configurable: true,
+      enumerable: true,
+      get: () => gameTimeMs,
+      set: (value) => {
+        const previousEndMs = gameTimeMs;
+        gameTimeMs = value;
+        if (window.__awaitingResumeFrame && !c.paused) {
+          window.__awaitingResumeFrame = false;
+          window.__resumeFrame = {
+            wallNow: performance.now(),
+            resumeEventAt: window.__pauseTransitions
+              .filter((transition) => transition.wasPaused)
+              .at(-1)?.at,
+            pauseEventAt: window.__pauseTransitions
+              .filter((transition) => !transition.wasPaused)
+              .at(-1)?.at,
+            frame: c.stats.gameFrames,
+            startMs: value - c.stats.framePeriodMs,
+            endMs: value,
+            clockDeltaMs: value - previousEndMs,
+            periodMs: c.stats.framePeriodMs,
+            previousActiveFrameWallNow: window.__pauseTransitions
+              .filter((transition) => !transition.wasPaused)
+              .at(-1)?.lastActiveSample?.wallNow,
+            previousActiveFrameEndMs: window.__lastActiveSample?.endMs,
+          };
+        }
+        if (!c.paused)
+          window.__lastActiveSample = {
+            wallNow: performance.now(),
+            endMs: value,
+            periodMs: c.stats.framePeriodMs,
+          };
+      },
+    });
+    const initialTimeLeft = Object.getOwnPropertyDescriptor(
+      c.race,
+      "timeLeft",
+    ).value;
+    let timeLeft = initialTimeLeft;
+    window.__awaitingResumeTimer = false;
+    window.__resumeTimer = undefined;
+    Object.defineProperty(c.race, "timeLeft", {
+      configurable: true,
+      enumerable: true,
+      get: () => timeLeft,
+      set: (value) => {
+        const previous = timeLeft;
+        timeLeft = value;
+        if (window.__awaitingResumeTimer && window.__resumeFrame) {
+          window.__awaitingResumeTimer = false;
+          window.__resumeTimer = {
+            frame: c.stats.gameFrames,
+            timeLeft: value,
+            delta: previous - value,
+            previous,
+          };
+        }
+      },
+    });
+    window.__pauseTransitions = [];
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.code !== "Escape") return;
+        const wasPaused = c.paused;
+        const at = performance.now();
+        window.__pauseTransitions.push({
+          wasPaused,
+          at,
+          lastActiveSample: window.__lastActiveSample,
+        });
+        if (wasPaused) {
+          window.__awaitingResumeFrame = true;
+          window.__awaitingResumeTimer = true;
+        }
+      },
+      true,
+    );
+    const timedEffect = c.powerups.definitions.find(
+      (definition) => definition.action === 27 && definition.duration > 0,
+    );
+    if (!timedEffect)
+      throw new Error("Stock table has no timed protection powerup");
+    c.powerups.grant(timedEffect.index, c.vehicle, c.race);
+    window.__readTimedEffect = () => {
+      const active = c.powerups.active.find(
+        (effect) => effect.index === timedEffect.index,
+      );
+      return active
+        ? { remaining: active.remaining, expiresAtMs: active.expiresAtMs }
+        : null;
+    };
     window.__rafTicks = 0;
     const countRaf = () => {
       window.__rafTicks++;
       requestAnimationFrame(countRaf);
     };
     requestAnimationFrame(countRaf);
+    return {
+      index: timedEffect.index,
+      action: timedEffect.action,
+      duration: timedEffect.duration,
+    };
   });
   await page.waitForFunction(
     () => window.carma.stats.ready && window.carma.paused,
@@ -120,6 +227,7 @@ try {
       physicsElapsed: c.simulation.elapsed,
       position: state.position.toArray(),
       timeLeft: c.race.timeLeft,
+      timedEffect: window.__readTimedEffect(),
     };
   });
   await page.evaluate(() => (window.carma.paused = false));
@@ -245,11 +353,13 @@ try {
     const c = window.carma;
     return {
       gameFrames: c.stats.gameFrames,
+      wallNow: performance.now(),
       gameTimeMs: c.stats.gameTimeMs,
       physicsElapsed: c.simulation.elapsed,
       physicsCount: window.__timebaseTrace.physics.length,
       powerupCount: window.__timebaseTrace.powerups.length,
       timeLeft: c.race.timeLeft,
+      timedEffect: window.__readTimedEffect(),
       renders: c.stats.frames,
       rafTicks: window.__rafTicks,
     };
@@ -259,11 +369,13 @@ try {
     const c = window.carma;
     return {
       gameFrames: c.stats.gameFrames,
+      wallNow: performance.now(),
       gameTimeMs: c.stats.gameTimeMs,
       physicsElapsed: c.simulation.elapsed,
       physicsCount: window.__timebaseTrace.physics.length,
       powerupCount: window.__timebaseTrace.powerups.length,
       timeLeft: c.race.timeLeft,
+      timedEffect: window.__readTimedEffect(),
       renders: c.stats.frames,
       rafTicks: window.__rafTicks,
     };
@@ -274,6 +386,8 @@ try {
   assert.equal(stillPaused.physicsCount, paused.physicsCount);
   assert.equal(stillPaused.powerupCount, paused.powerupCount);
   assert.equal(stillPaused.timeLeft, paused.timeLeft);
+  assert.deepEqual(stillPaused.timedEffect, paused.timedEffect);
+  assert.ok(stillPaused.wallNow - paused.wallNow >= 500);
   assert.ok(
     stillPaused.rafTicks > paused.rafTicks,
     "RAF continues while paused",
@@ -281,23 +395,55 @@ try {
 
   await page.keyboard.press("Escape");
   await page.waitForFunction(
-    (oldFrame) => window.carma.stats.gameFrames > oldFrame,
-    paused.gameFrames,
+    () =>
+      window.__resumeFrame !== undefined && window.__resumeTimer !== undefined,
     { timeout: 5000 },
   );
   const resumed = await page.evaluate(() => ({
+    wallNow: performance.now(),
     gameFrames: window.carma.stats.gameFrames,
     gameTimeMs: window.carma.stats.gameTimeMs,
     physicsElapsed: window.carma.simulation.elapsed,
     timeLeft: window.carma.race.timeLeft,
     latestPhysics: window.__timebaseTrace.physics.at(-1),
     latestPowerup: window.__timebaseTrace.powerups.at(-1),
+    resumeFrame: window.__resumeFrame,
+    resumeTimer: window.__resumeTimer,
+    timedEffect: window.__readTimedEffect(),
   }));
+  const resumeActiveWallMs =
+    resumed.resumeFrame.wallNow - resumed.resumeFrame.resumeEventAt;
+  const prePauseActiveRemainderMs =
+    resumed.resumeFrame.pauseEventAt -
+    resumed.resumeFrame.previousActiveFrameWallNow;
+  const activeElapsedAcrossPauseMs =
+    prePauseActiveRemainderMs + resumeActiveWallMs;
+  // Native period correction can differ from wall time; this scenario checks
+  // that the predicted interval continues from the prior game-clock end.
+  assert.ok(resumed.resumeFrame.clockDeltaMs >= 0);
   assert.ok(
-    resumed.gameTimeMs - paused.gameTimeMs < 200,
-    "pause duration leaked into game clock",
+    Number.isFinite(prePauseActiveRemainderMs) &&
+      prePauseActiveRemainderMs >= 0,
   );
-  assert.ok(resumed.timeLeft > stillPaused.timeLeft - 0.1);
+  assert.ok(Number.isFinite(resumeActiveWallMs) && resumeActiveWallMs >= 0);
+  assert.ok(
+    resumed.resumeFrame.periodMs > 10 && resumed.resumeFrame.periodMs < 1000,
+    `resume fixture did not exercise an unclamped native period: ${JSON.stringify(resumed.resumeFrame)}`,
+  );
+  assert.ok(
+    Math.abs(
+      resumed.resumeFrame.startMs -
+        resumed.resumeFrame.previousActiveFrameEndMs,
+    ) <= 1,
+    `normal resumed frame skipped or duplicated game-clock time: ${JSON.stringify({ paused, stillPaused, resumed, prePauseActiveRemainderMs, resumeActiveWallMs, activeElapsedAcrossPauseMs })}`,
+  );
+  assert.ok(resumed.timedEffect.remaining < paused.timedEffect.remaining);
+  assert.equal(resumed.resumeTimer.frame, resumed.resumeFrame.frame);
+  assert.ok(
+    Math.abs(resumed.resumeTimer.delta - resumed.resumeFrame.periodMs / 1000) <
+      0.001,
+    `first resumed race timer update did not match its native frame dt: ${JSON.stringify({ resumed, stillPaused })}`,
+  );
   assert.ok(resumed.latestPhysics);
   assert.ok(resumed.latestPowerup?.gameTimeMs >= resumed.gameTimeMs - 1);
 
