@@ -128,3 +128,8 @@ import "./race-path-route.test.mjs";
 import "./race-route-state.test.mjs";
 import "./path-follow-geometry.test.mjs";
 import "./path-struggle.test.mjs";
+import "./ai-objective.test.mjs";
+import "./path-follow.test.mjs";
+import "./target-search.test.mjs";
+import "./ai-proximity.test.mjs";
+import "./target-acquisition.test.mjs";

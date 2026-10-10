@@ -36,7 +36,13 @@ export function nextProjectedPathSlot(
  * Objective-specific acquisition and physical path following are separate. */
 export class NativeProjectedRoute {
   private readonly incident: number[][];
-  private readonly route: ProjectedPathSection[] = [];
+  // Native BSS initializes all twelve entries. Clear changes only count;
+  // target acquisition subsequently reads unused/stale backing slots.
+  private readonly route: ProjectedPathSection[] = Array.from(
+    { length: 12 },
+    () => ({ section: 0, direction: 0 }),
+  );
+  private count = 0;
   private readonly sections: TrackPathSection[];
 
   constructor(nodeCount: number, sections: readonly TrackPathSection[]) {
@@ -61,11 +67,28 @@ export class NativeProjectedRoute {
   }
 
   get entries(): readonly ProjectedPathSection[] {
-    return this.route.map((entry) => ({ ...entry }));
+    return this.route.slice(0, this.count).map((entry) => ({ ...entry }));
   }
 
   clear(): void {
-    this.route.length = 0;
+    this.count = 0;
+  }
+
+  /** Read native backing storage, not just the logical route. Slot12 is an
+   * adjacent opponent flags word in C2 and belongs to the acquisition caller. */
+  storedEntry(slot: number): ProjectedPathSection {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= 12)
+      throw new Error("Invalid projected opponent backing slot");
+    return { ...this.route[slot] };
+  }
+
+  /** Acquisition4ac780 writes only the section ID, retaining the direction
+   * and logical count even when the previous route entry is overwritten. */
+  overwriteStoredSection(slot: number, section: number): void {
+    if (!Number.isInteger(section) || !this.sections[section])
+      throw new Error("Invalid projected opponent path section");
+    this.storedEntry(slot); // Validate the native backing-store index.
+    this.route[slot].section = section;
   }
 
   append(section: number, direction: 0 | 1): boolean {
@@ -75,16 +98,20 @@ export class NativeProjectedRoute {
       (direction !== 0 && direction !== 1)
     )
       throw new Error("Invalid projected opponent path section");
-    if (this.route.length >= 12) return false;
-    this.route.push({ section, direction });
+    if (this.count >= 12) return false;
+    this.route[this.count++] = { section, direction };
     return true;
   }
 
   shift(places: number): boolean {
     if (!Number.isInteger(places) || places < 0)
       throw new Error("Invalid projected opponent route shift");
-    if (places >= this.route.length) return false;
-    this.route.splice(0, places);
+    if (places >= this.count) return false;
+    // Native shifts backing storage through slot11, including unused entries;
+    // the trailing slots retain their previous contents.
+    for (let index = places; index < 12; index++)
+      this.route[index - places] = { ...this.route[index] };
+    this.count -= places;
     return true;
   }
 
@@ -99,13 +126,13 @@ export class NativeProjectedRoute {
   }
 
   topUpRandom(add: number, cheating: boolean, random = Math.random): void {
-    if (!Number.isInteger(add) || add === 0 || this.route.length === 0)
+    if (!Number.isInteger(add) || add === 0 || this.count === 0)
       throw new Error(
         "Random opponent route requires a seed and nonzero count",
       );
-    const target = add < 0 ? 12 : Math.min(12, this.route.length + add);
-    while (this.route.length < target) {
-      const previous = this.route[this.route.length - 1];
+    const target = add < 0 ? 12 : Math.min(12, this.count + add);
+    while (this.count < target) {
+      const previous = this.route[this.count - 1];
       const finish = this.endpoints(previous)[1];
       const eligible = this.incident[finish].filter((index) => {
         const section = this.sections[index];
@@ -146,15 +173,15 @@ export class NativeProjectedRoute {
     random = Math.random,
   ): RaceRouteState {
     let { foundRaceSection, finished } = previousState;
-    if (this.route.length >= 12) return { foundRaceSection, finished };
-    if (!this.route.length) {
+    if (this.count >= 12) return { foundRaceSection, finished };
+    if (!this.count) {
       foundRaceSection = finished = false;
       if (nearestSection === undefined) return { foundRaceSection, finished };
       this.append(nearestSection, 1);
       foundRaceSection = this.sections[nearestSection].type === 1;
     }
-    while (this.route.length < 12 && !finished) {
-      const previous = this.route[this.route.length - 1];
+    while (this.count < 12 && !finished) {
+      const previous = this.route[this.count - 1];
       const finish = this.endpoints(previous)[1];
       const forwardRace: number[] = [];
       const forwardOther: number[] = [];

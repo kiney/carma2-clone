@@ -101,6 +101,49 @@ test("route directions map authored endpoint order in forward and reverse", () =
   assert.deepEqual(route.endpoints(route.entries[2]), [1, 2]);
 });
 
+test("native backing storage starts zeroed and clear preserves unused records", () => {
+  const route = new NativeProjectedRoute(3, [section(0, 1), section(1, 2)]);
+  for (let slot = 0; slot < 12; slot++)
+    assert.deepEqual(route.storedEntry(slot), { section: 0, direction: 0 });
+  route.append(1, 1);
+  route.clear();
+  assert.deepEqual(route.entries, []);
+  assert.deepEqual(route.storedEntry(0), { section: 1, direction: 1 });
+  const snapshot = route.storedEntry(0);
+  snapshot.section = 0;
+  assert.equal(route.storedEntry(0).section, 1);
+  assert.throws(() => route.storedEntry(12));
+  assert.throws(() => route.storedEntry(-1));
+  assert.throws(() => route.storedEntry(0.5));
+});
+
+test("native shift copies unused backing records without clearing trailing slots", () => {
+  const route = new NativeProjectedRoute(3, [section(0, 1), section(1, 2)]);
+  for (let slot = 0; slot < 12; slot++) route.append(slot % 2, slot % 2);
+  route.clear();
+  route.append(0, 1);
+  route.append(1, 0);
+  const before = Array.from({ length: 12 }, (_, slot) =>
+    route.storedEntry(slot),
+  );
+  assert.equal(route.shift(1), true);
+  assert.deepEqual(route.entries, [before[1]]);
+  for (let slot = 0; slot < 11; slot++)
+    assert.deepEqual(route.storedEntry(slot), before[slot + 1]);
+  assert.deepEqual(route.storedEntry(11), before[11]);
+});
+
+test("acquisition ID overwrite preserves directions and logical count", () => {
+  const route = new NativeProjectedRoute(3, [section(0, 1), section(1, 2)]);
+  route.append(0, 1);
+  route.overwriteStoredSection(0, 1);
+  route.overwriteStoredSection(11, 1);
+  assert.deepEqual(route.entries, [{ section: 1, direction: 1 }]);
+  assert.deepEqual(route.storedEntry(11), { section: 1, direction: 0 });
+  assert.throws(() => route.overwriteStoredSection(12, 0));
+  assert.throws(() => route.overwriteStoredSection(0, 2));
+});
+
 test("random top-up fills twelve for negative requests and adds bounded positive counts", () => {
   const ring = Array.from({ length: 14 }, (_, i) => section(i, (i + 1) % 14));
   const negative = new NativeProjectedRoute(14, ring);
