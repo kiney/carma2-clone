@@ -1,5 +1,6 @@
 import type { RaceCatalogEntry } from "./config";
 import type { RaceState } from "./gameplay";
+import { completeRace } from "./gameplay";
 
 export interface RaceProgress {
   opponentsTotal: number;
@@ -102,7 +103,8 @@ export function applyRaceObjectives(
     objectiveText: objectiveText(definition, progress),
     supported: isSupportedRace(definition),
   };
-  if (race.status !== "racing" || !result.supported) return result;
+  if (race.status !== "racing" || race.awardsClosed || !result.supported)
+    return result;
   const type = raceType(definition);
   const allOpponents =
     progress.opponentsReady !== false &&
@@ -152,8 +154,14 @@ export function applyRaceObjectives(
     message = "SMASH OBJECTIVE COMPLETE";
   }
   if (won) {
-    race.status = "completed";
-    race.credits += race.completionCredits;
+    completeRace(
+      race,
+      type === "smash" || type === "smashAndPed"
+        ? 3
+        : type === "peds" || (type === "carma" && !allOpponents)
+          ? 1
+          : 2,
+    );
     result.completed = true;
     result.message = message;
   }

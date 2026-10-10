@@ -68,7 +68,7 @@ Choose a race and car, then select **Load Race**. The browser menus and HUD are 
 | C                     | Cycle chase, cockpit, and overhead cameras  |
 | M                     | Show or hide the minimap                    |
 | Escape                | Pause or return to the menu                 |
-| Enter                 | Restart after a race                        |
+| Enter                 | Skip bonus payout / restart after a race    |
 
 Vehicle mechanics and WAM data drive suspension, tyres, steering, gears, mass/inertia, localized dents, structural bending and body splitting. Twelve component damage units affect handling; detached parts have their own rigid state and joints. Held repair restores eligible bodywork and charges repaired component levels; split bodywork requires the full-repair pickup or reloading; wasting and its countdown persist until reloading. The ordinary physics equations are independently reconstructed from the local C2 executable; see [the evidence notes](docs/c2-physics-re.md).
 
@@ -77,6 +77,8 @@ Recovery keeps twenty complete safe poses, using the original suspension, grip, 
 Pedestrian populations follow original race surface densities, with the native 2000-person limit. Personality/movement data drives walking, panic, running, threat prediction, turns and obstacle/floor avoidance. Original blood cloud textures, giblet models, slicks and smears are visible. Pedestrian collision/corpse motion and skeletal animation still have separate limitations: root displacement currently uses authored per-frame averages, and limbs animate procedurally. See [pedestrian evidence](docs/c2-pedestrians-re.md).
 
 The engine also includes graph-following opponents, checkpoint/lap races, engine, impact, native pickup, checkpoint, final-lap, completion and time-expiry sounds, and original credit, repair, time, weighted random, engine and grip pickups, plus invulnerability, granite protection, damage magnification, free repairs and permanent armour/power/offense upgrades. Actions 34/35 provide charged mine/mortar and oil abilities. Mines use the GENERAL mass and timed source lifecycle; mine sphere contacts are still approximated with a sampled hull, and explosions have no radial damage. Water and oil use reconstructed source formulas. Unsupported powerup effects show an explicit notification when collected. Race catalog exclusions and no-time flags follow installed C2 behavior. Smash missions use authored runtime-variable targets; Smash-and-Ped combines selected pedestrian kills with smash events in the same signed counter. Remaining award, population and world-script gaps are documented in [race rules evidence](docs/c2-race-rules-re.md) and [TODO.md](TODO.md).
+
+Ordinary checkpoint credits, pedestrian base rewards/combos and waste rewards use original tables. Completion selects the authored victory-reason bonus and converts remaining time after the native finish delay; Enter skips the payout while retaining its full total. Special pedestrian score classifications and parts of opponent attribution remain open under RAC-04.
 
 ## Debug mode
 
@@ -87,6 +89,8 @@ Debug mode is off on page load and stays selected across race changes within tha
 ## Tests
 
 Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance, wheel rays, terrain contours, recovery history, pedestrian population/reactions/blood and WASTED tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs installed Chromium when available: stock/Advanced driving and race completion, mine pickup/impact/repair, oil grip, water, Carrier lift, Airport door destruction, real-key Snow Way Out recovery, pedestrian reactions/blood and original WASTED drawing/audio dispatch. It also checks visible debug controls, timer freezing while driving, grants, ability use, repair/recovery, input isolation, disabling overrides and restarting; run `npm run test:debug` for that check alone. It additionally checks uneven-ground start grids with Eagle, Buggy and Bigdump, car-pair penetration, persistent crash deformation and real-key reverse escape on DUNE BUGGERED; run `npm run test:spawn-pairs` for that check alone. Original world pickup, actual checkpoint crossing, debug grants, ability use and expiry also have an event-audio regression; run `npm run test:event-audio` alone. Pickup/race voice selection follows the [audio evidence](docs/c2-event-audio-re.md). Screenshots and reports are saved under ignored test artifacts. `npm run test:crashes` records original-car plane/pair scenarios in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
+
+`npm run test:race-awards` checks original mission completion, deferred payout and Enter skip, Stock/Advanced pedestrian tables and combos, attributed rival rewards, and final-goal reward suppression in Chromium.
 
 ## Asset and license notes
 

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { VehicleState, RaceState } from "./gameplay";
-import { awardRaceTime } from "./gameplay";
+import { awardRaceTime, awardRaceCredits } from "./gameplay";
 import {
   setTemporaryMotionPowerup,
   resetTemporaryMotionPowerup,
@@ -561,12 +561,12 @@ export class PowerupSystem {
           high = def.integerParams[1] ?? low;
         // Installed GotCredits 0x4dbf60 truncates the sampled award to hundreds.
         const award = Math.trunc(this.randomBetween(low, high) / 100) * 100;
-        race.credits += award;
+        const credited = awardRaceCredits(race, award);
         onEvent?.({
           kind: "credits",
           name: def.message,
           definition: def,
-          amount: award,
+          amount: credited ? award : 0,
         });
         break;
       }

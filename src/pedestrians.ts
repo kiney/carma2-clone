@@ -42,6 +42,8 @@ export interface PedSpawnSpec {
   exceptions: string[];
 }
 export interface PedHitEvent {
+  /** Simulation clock, unaffected by frozen race countdown. */
+  timeMs: number;
   /** Original spawn group index, used by SmashAndPed mission accounting. */
   group: number;
   count: number;
@@ -1021,6 +1023,7 @@ export class PedestrianSystem {
           timeMs,
         );
         this.options.onHit?.({
+          timeMs,
           group: ped.spec.group,
           count: 1,
           total: this.hits,

@@ -164,6 +164,9 @@ export interface SimulatedCar extends RigidBody {
   repairing: boolean;
   repairAwaitingShapeSwap: boolean;
   lastAttributedImpactMs: number;
+  /** Separate native earnings attribution: never infer an attacker from time0. */
+  lastAwardAttacker?: SimulatedCar;
+  lastAwardImpactMs?: number;
   armorLevel: number;
   offenseLevel: number;
   armorFactor?: number;
@@ -635,6 +638,10 @@ export class VehicleSimulation {
           car.human ? 8 : 6,
           !!car.damage.damageContext.invulnerable,
         );
+      if (event.creditOwner && event.creditOwner !== car) {
+        car.lastAwardAttacker = event.creditOwner;
+        car.lastAwardImpactMs = this.elapsed * 1000;
+      }
       if (event.creditOwner?.human && !car.human)
         car.lastAttributedImpactMs = this.elapsed * 1000;
       if (!wasWasted && car.damage.wasted)
@@ -1909,6 +1916,27 @@ export class VehicleSimulation {
         const humanSource =
           otherCar?.human ||
           (piece && !piece.joint && piece.owner !== car && piece.owner.human);
+        const directAttacker =
+          otherCar && otherCar !== car
+            ? otherCar
+            : piece && !piece.joint && piece.owner !== car
+              ? piece.owner
+              : undefined;
+        let awardAttacker = directAttacker;
+        // Installed null-other continuation440a6f has a strict5s window.
+        // Car-car sector/control attribution remains RAC-04; an AI source must
+        // overwrite previous human attribution, never inherit its reward.
+        if (
+          !other &&
+          car.lastAwardAttacker &&
+          car.lastAwardImpactMs !== undefined &&
+          this.elapsed * 1000 - car.lastAwardImpactMs < 5000
+        )
+          awardAttacker = car.lastAwardAttacker;
+        if (awardAttacker) {
+          car.lastAwardAttacker = awardAttacker;
+          car.lastAwardImpactMs = this.elapsed * 1000;
+        }
         if (humanSource && !car.human)
           car.lastAttributedImpactMs = this.elapsed * 1000;
         const vectors = scaleImpactVectors(
@@ -1950,7 +1978,8 @@ export class VehicleSimulation {
           vectors.crush,
           impact.mean.divideScalar(impact.weight),
         );
-        if (!wasWasted && car.damage.wasted) car.wastedByPlayer = !!humanSource;
+        if (!wasWasted && car.damage.wasted)
+          car.wastedByPlayer = !!awardAttacker?.human;
         this.onImpact?.(car, impact.severity);
       }
     for (const car of this.cars) this.syncStructuralState(car);

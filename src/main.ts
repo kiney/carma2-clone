@@ -49,6 +49,13 @@ import { createNonCarBody, nonCarActors } from "./physics/noncar-body";
 import { NonCarRenderBatch } from "./noncar-render";
 import { WorldDestruction } from "./world-destruction";
 import { MissionVariables } from "./mission-variables";
+import { RacePayout } from "./race-payout";
+import {
+  parseRaceAwards,
+  parsePedAwards,
+  PedAwardCounter,
+  wastedCarCredits,
+} from "./race-awards";
 import { commandJump, instantHandbrake } from "./physics/command-powerups";
 import { parseTrackSmashables } from "./world-smash";
 import { WorldGrooveRuntime } from "./world-groove";
@@ -74,7 +81,7 @@ import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -150,6 +157,10 @@ let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
 const renderPosition = new THREE.Vector3(),
   renderOrientation = new THREE.Quaternion();
+let racePayout: RacePayout | undefined;
+let raceAwards: ReturnType<typeof parseRaceAwards> | undefined;
+let pedAwards: ReturnType<typeof parsePedAwards> | undefined;
+let pedAwardCounter = new PedAwardCounter();
 let rivalsReady = false,
   pedestriansReady = false;
 const keys = new Set<string>(),
@@ -208,6 +219,9 @@ const debug = {
   },
   get raceDefinition() {
     return definition;
+  },
+  get racePayout() {
+    return racePayout;
   },
   missionVariables,
   get track() {
@@ -475,6 +489,7 @@ async function loadRace() {
   el("play").setAttribute("disabled", "");
   stats.ready = false;
   wastedFeedback.reset();
+  racePayout = undefined;
   try {
     currentTrack = trackSelect.value;
     currentCar = carSelect.value;
@@ -509,6 +524,13 @@ async function loadRace() {
       if (oilPath) await assets.pixelmaps(oilPath);
     }
     const generalText = await assets.text("data/GENERAL.TXT");
+    raceAwards = parseRaceAwards(generalText);
+    pedAwards = parsePedAwards(
+      await assets.text(
+        `${currentTrack.toLowerCase().startsWith("adv_data/") ? "adv_data" : "data"}/PEDS/settings.txt`,
+      ),
+    );
+    pedAwardCounter = new PedAwardCounter();
     audio.configurePowerups(generalText);
     const loadedMine = await assets.scene("data/MINE", "ShitMine");
     const explosionSettings = parseWastedExplosionSettings(generalText);
@@ -794,6 +816,8 @@ async function loadRace() {
       }
     };
     simulation.onWasted = (body) => {
+      if (body.human && race) race.awardsClosed = true;
+      else checkRaceObjective();
       const rival = rivals.find((r) => r.body === body);
       wastedFeedback.wasted(
         body.human ? "player" : "rival",
@@ -831,7 +855,14 @@ async function loadRace() {
         disableTimeAwards: definition?.disableTimeAwards ?? false,
         timeLimit: definition?.initialTimer[0] ?? 180,
         credits: player.upgrades.credits,
-        checkpointBonusSeconds: track.checkpoints[0]?.timerIncrement?.[0] ?? 20,
+        checkpointBonusSeconds: 0,
+        deferCompletionAwards: true,
+        checkpointCredits: raceAwards.checkpointCredits[0],
+        completionTimeCreditRate: raceAwards.timeBonusCredits[0],
+        completionCreditsByReason:
+          definition?.raceType === "carma"
+            ? definition.raceCompletedBonus.map((bonus) => bonus[0])
+            : Array(4).fill(definition?.raceCompletedBonus[0]?.[0] ?? 20000),
         completionCredits: definition?.raceCompletedBonus[0]?.[0] ?? 20000,
       },
     );
@@ -1024,7 +1055,7 @@ async function loadPedestrians(text: string, loadGeneration: number) {
       spawn: vehicle.position,
       collision,
       onHit: (event) => {
-        if (race?.status === "racing") {
+        if (race?.status === "racing" && !race.awardsClosed) {
           if (
             definition?.raceType === "smashAndPed" &&
             definition.pedGroupsToKill.includes(event.group) &&
@@ -1032,9 +1063,16 @@ async function loadPedestrians(text: string, loadGeneration: number) {
           ) {
             missionVariables.add(definition.smashVariable, event.count);
           }
-          race.credits += event.count * 200;
-          awardRaceTime(race, event.count * 8);
-          message(`PEDESTRIAN HIT · +${event.count * 200} CR`);
+          // Native direct-kill path calls OneLessPed/completion before scoring.
+          checkRaceObjective();
+          if (pedAwards && race.status === "racing") {
+            const award = pedAwardCounter.score(event.timeMs, pedAwards, 0);
+            race.credits += award.credits;
+            awardRaceTime(race, award.seconds);
+            message(
+              `PEDESTRIAN HIT · +${award.credits} CR${award.combo > 1 ? ` · COMBO ${award.combo}` : ""}`,
+            );
+          }
           audio.impact(0.25);
           checkSmashObjective();
         }
@@ -1119,10 +1157,22 @@ function updateRivals(dt: number) {
     r.object.quaternion.copy(r.state.orientation);
     if (r.damage.wasted) {
       r.wasted = true;
+      checkRaceObjective();
       r.body.input = { throttle: 0, steer: 0, brake: 0, handbrake: false };
-      race.credits += 2500;
-      awardRaceTime(race, 15);
-      message("OPPONENT WASTED · +2500 CR");
+      if (
+        r.body.wastedByPlayer &&
+        raceAwards &&
+        !race.awardsClosed &&
+        race.status === "racing"
+      ) {
+        const credits = wastedCarCredits(
+          raceAwards.wastingCredits[0],
+          r.damage.carSoftness,
+        );
+        race.credits += credits;
+        awardRaceTime(race, raceAwards.wastingTime[0]);
+        message(`OPPONENT WASTED · +${credits} CR`);
+      }
       r.object.traverse((o) => {
         if (o instanceof THREE.Mesh)
           for (const m of Array.isArray(o.material)
@@ -1235,7 +1285,17 @@ addEventListener("keydown", (event) => {
     mapVisible = !mapVisible;
     el("map").hidden = !mapVisible;
   }
-  if (event.code === "Enter" && race?.status !== "racing") void loadRace();
+  if (
+    (event.code === "Enter" || event.code === "NumpadEnter") &&
+    race?.status !== "racing"
+  ) {
+    ensureRacePayout();
+    if (racePayout && !racePayout.finished) {
+      racePayout.skip();
+      race!.credits = racePayout.credits;
+      message("RACE COMPLETED · ENTER TO RESTART", 10);
+    } else void loadRace();
+  }
 });
 addEventListener("keyup", (event) => keys.delete(event.code));
 addEventListener("blur", () => {
@@ -1302,6 +1362,32 @@ function drawMap() {
 }
 /** Native completion checks occur at event dispatch, before another event can
  * wrap or subtract from the same byte. End-frame checks alone miss crossings. */
+function checkRaceObjective() {
+  if (!race) return;
+  const victory = applyRaceObjectives(race, definition, {
+    opponentsTotal: rivals.length,
+    opponentsWasted: rivals.filter((r) => r.damage.wasted).length,
+    pedestriansTotal: pedestrians?.count ?? 0,
+    pedestriansKilled: pedestrians?.hits ?? 0,
+    groupCounts: pedestrians?.groupCounts,
+    smashValue:
+      definition?.smashVariable != null
+        ? missionVariables.get(definition.smashVariable)
+        : undefined,
+    opponentsReady: rivalsReady,
+    pedestriansReady,
+    opponentsWastedIds: definition?.opponentsToKill.every((id) =>
+      rivals.some((r) => r.id === id),
+    )
+      ? new Set(rivals.filter((r) => r.damage.wasted).map((r) => r.id))
+      : undefined,
+  });
+  if (victory.completed) {
+    audio.raceEvents([{ type: "completed", lap: race.lap }], race.laps);
+    message(victory.message ?? "RACE COMPLETED", 8);
+  }
+}
+
 function checkSmashObjective() {
   if (
     !race ||
@@ -1361,6 +1447,25 @@ function onPowerupEvent(event: PowerupEvent) {
       ? `${event.kind.toUpperCase()} +${event.amount ?? 0}`
       : event.name,
   );
+}
+
+function ensureRacePayout() {
+  if (
+    !race ||
+    race.status !== "completed" ||
+    racePayout ||
+    !race.deferCompletionAwards
+  )
+    return;
+  const reason = race.completionReason ?? 0;
+  racePayout = new RacePayout({
+    snapshotCredits: race.credits,
+    completionBonus:
+      race.completionCreditsByReason?.[reason] ?? race.completionCredits,
+    timeLeft: race.timeLeft,
+    rate: race.completionTimeCreditRate ?? 0,
+    suppressPresentation: missionVariables.get(99) !== 0,
+  });
 }
 
 function animate(now: number) {
@@ -1499,28 +1604,7 @@ function animate(now: number) {
             : undefined,
         },
       );
-      const victory = applyRaceObjectives(race, definition, {
-        opponentsTotal: rivals.length,
-        opponentsWasted: rivals.filter((r) => r.wasted).length,
-        pedestriansTotal: pedestrians?.count ?? 0,
-        pedestriansKilled: pedestrians?.hits ?? 0,
-        groupCounts: pedestrians?.groupCounts,
-        smashValue:
-          definition?.smashVariable != null
-            ? missionVariables.get(definition.smashVariable)
-            : undefined,
-        opponentsReady: rivalsReady,
-        pedestriansReady,
-        opponentsWastedIds: definition?.opponentsToKill.every((id) =>
-          rivals.some((r) => r.id === id),
-        )
-          ? new Set(rivals.filter((r) => r.wasted).map((r) => r.id))
-          : undefined,
-      });
-      if (victory.completed) {
-        audio.raceEvents([{ type: "completed", lap: race.lap }], race.laps);
-        message(victory.message ?? "RACE COMPLETED", 8);
-      }
+      checkRaceObjective();
       const animationInput = {
         ...(player ? motionAnimation(player) : {}),
         speed: vehicle.speed,
@@ -1610,6 +1694,26 @@ function animate(now: number) {
     if (sky) {
       sky.position.x = camera.position.x;
       sky.position.z = camera.position.z;
+    }
+    ensureRacePayout();
+    if (racePayout && !paused && !racePayout.finished) {
+      const oldState = racePayout.state;
+      for (const id of racePayout.update(dt * 1000)) void audio.playSound(id);
+      race.credits = racePayout.credits;
+      race.timeLeft = racePayout.timeLeft;
+      if (
+        racePayout.state !== oldState ||
+        racePayout.state === 3 ||
+        racePayout.state === 5
+      )
+        message(
+          racePayout.finished
+            ? "RACE COMPLETED · ENTER TO RESTART"
+            : racePayout.state < 3
+              ? `COMPLETION BONUS · ${racePayout.completionBonus} CR · ENTER TO SKIP`
+              : `TIME BONUS · ${racePayout.displayedBonus} CR · ENTER TO SKIP`,
+          10,
+        );
     }
     el("speed").textContent = String(Math.round(Math.abs(speedMph(vehicle))));
     el("damage").textContent = `ARMOUR ${Math.round(vehicle.health)}%`;

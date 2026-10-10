@@ -228,12 +228,19 @@ export interface RaceOptions {
   laps: number;
   timeLimit: number;
   credits: number;
+  /** Legacy option retained for callers; native C2 gates award no time. */
   checkpointBonusSeconds: number;
   checkpointCredits: number;
   completionCredits: number;
   disableTimeAwards: boolean;
+  completionCreditsByReason?: readonly number[];
+  completionTimeCreditRate?: number;
+  deferCompletionAwards?: boolean;
 }
 export interface RaceState extends RaceOptions {
+  /** Native finished guard while a wasted body still simulates its countdown. */
+  awardsClosed?: boolean;
+  completionReason?: 0 | 1 | 2 | 3;
   checkpoints: Checkpoint[];
   nextCheckpoint: number;
   /** Current lap, starting at one; remains at the final lap upon completion. */
@@ -256,7 +263,7 @@ export function createRace(
     laps: 3,
     timeLimit: 180,
     credits: 1000,
-    checkpointBonusSeconds: 15,
+    checkpointBonusSeconds: 0,
     checkpointCredits: 100,
     completionCredits: 2000,
     disableTimeAwards: false,
@@ -325,11 +332,48 @@ export function checkpointCrossing(
   return t;
 }
 
+/** Installed EarnCredits2 0x44b960 rejects finished races and zero amounts.
+ * Debug credit editing and post-race settlement deliberately bypass this. */
+export function awardRaceCredits(race: RaceState, amount: number): boolean {
+  if (
+    race.status !== "racing" ||
+    race.awardsClosed ||
+    !Number.isFinite(amount) ||
+    amount === 0
+  )
+    return false;
+  race.credits += amount;
+  return true;
+}
+
 /** Installed AddTimeAward0x44baf0 checks the current race's no_time flag.
  * Debug time editing is deliberately separate from ordinary game awards. */
 export function awardRaceTime(race: RaceState, seconds: number): boolean {
-  if (race.disableTimeAwards || !Number.isFinite(seconds)) return false;
+  if (
+    race.status !== "racing" ||
+    race.awardsClosed ||
+    race.disableTimeAwards ||
+    !Number.isFinite(seconds) ||
+    seconds === 0
+  )
+    return false;
   race.timeLeft += seconds;
+  return true;
+}
+
+/** Installed completion selection0x493adb: classic rows0/1/2 are laps,
+ * pedestrians, opponents; missions pass the same row for every reason.
+ * Browser races defer settlement to RacePayout; standalone headless callers
+ * may request the final total immediately with the default option. */
+export function completeRace(race: RaceState, reason: 0 | 1 | 2 | 3): boolean {
+  if (race.status !== "racing" || race.awardsClosed) return false;
+  race.status = "completed";
+  race.completionReason = reason;
+  if (!race.deferCompletionAwards)
+    race.credits +=
+      (race.completionCreditsByReason?.[reason] ?? race.completionCredits) +
+      Math.floor(Math.max(0, race.timeLeft)) *
+        (race.completionTimeCreditRate ?? 0);
   return true;
 }
 
@@ -343,7 +387,13 @@ export function updateRace(
   to: Vector3,
   dt: number,
 ): RaceEvent[] {
-  if (race.status !== "racing" || !Number.isFinite(dt) || dt < 0) return [];
+  if (
+    race.status !== "racing" ||
+    race.awardsClosed ||
+    !Number.isFinite(dt) ||
+    dt < 0
+  )
+    return [];
   const events: RaceEvent[] = [];
   let previousFraction = 0;
   let checks = 0;
@@ -356,21 +406,20 @@ export function updateRace(
     race.timeLeft -= elapsed;
     race.elapsed += elapsed;
     previousFraction = fraction;
-    awardRaceTime(race, race.checkpointBonusSeconds);
-    race.credits += race.checkpointCredits;
     events.push({ type: "checkpoint", checkpoint, lap: race.lap });
     race.nextCheckpoint++;
     if (race.nextCheckpoint === race.checkpoints.length) {
       race.nextCheckpoint = 0;
       if (race.lap === race.laps) {
-        race.status = "completed";
-        race.credits += race.completionCredits;
+        completeRace(race, 0);
         events.push({ type: "completed", lap: race.lap });
         return events;
       }
       race.lap++;
       events.push({ type: "lap", lap: race.lap });
     }
+    // Installed IncrementCheckpoint skips this award after the finishing gate.
+    awardRaceCredits(race, race.checkpointCredits);
   }
   const remaining = dt * (1 - previousFraction);
   race.elapsed += Math.min(race.timeLeft, remaining);

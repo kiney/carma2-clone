@@ -2,6 +2,8 @@ import "./assets.test.mjs";
 import "./formats.test.mjs";
 import "./config.test.mjs";
 import "./gameplay.test.mjs";
+import "./race-awards.test.mjs";
+import "./race-payout.test.mjs";
 import "./world.test.mjs";
 import "./tiff.test.mjs";
 import "./ai.test.mjs";
@@ -78,3 +80,5 @@ import "./pair-guard.test.mjs";
 
 import "./barrier-release.test.mjs";
 import "./event-audio.test.mjs";
+
+import "./earnings-attribution.test.mjs";

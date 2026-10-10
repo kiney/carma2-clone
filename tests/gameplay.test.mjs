@@ -9,6 +9,8 @@ import {
   speedMph,
   checkpointCrossing,
   createRace,
+  completeRace,
+  awardRaceTime,
   updateRace,
   repairVehicle,
   recoverVehicle,
@@ -181,21 +183,21 @@ test("racing requires checkpoints in order, progresses laps, freezes completion 
   );
   assert.equal(race.lap, 2);
   assert.equal(race.credits, 1200);
-  assert.equal(race.timeLeft, 38);
+  assert.equal(race.timeLeft, 8);
   events = updateRace(race, new Vector3(0, 1, 5), new Vector3(0, 1, -5), 1);
   assert.deepEqual(
     events.map((e) => e.type),
     ["checkpoint", "checkpoint", "completed"],
   );
   assert.equal(race.status, "completed");
-  assert.equal(race.credits, 3400);
+  assert.equal(race.credits, 3300);
   assert.equal(race.lap, 2);
   const elapsed = race.elapsed;
   assert.deepEqual(updateRace(race, new Vector3(), new Vector3(), 100), []);
   assert.equal(race.elapsed, elapsed);
 });
 
-test("checkpoint timing cannot revive an expired timer but timely crossings grant their bonus", () => {
+test("checkpoint crossing awards no time and can be followed by native timed failure", () => {
   const from = new Vector3(0, 1, 5);
   const to = new Vector3(0, 1, -5);
   const expired = createRace([gate(0)], { timeLimit: 0.4 });
@@ -212,10 +214,104 @@ test("checkpoint timing cannot revive an expired timer but timely crossings gran
   });
   assert.deepEqual(
     updateRace(timely, from, to, 1).map((e) => e.type),
+    ["checkpoint", "lap", "failed"],
+  );
+  assert.equal(timely.timeLeft, 0);
+  assert.ok(Math.abs(timely.elapsed - 0.6) < 1e-9);
+  assert.equal(timely.credits, 1100);
+});
+
+test("source checkpoint credits apply only before the finishing gate", () => {
+  const race = createRace([gate(0)], {
+    laps: 2,
+    timeLimit: 10,
+    credits: 1000,
+    checkpointCredits: 2000,
+    completionCredits: 777,
+  });
+  assert.deepEqual(
+    updateRace(race, new Vector3(0, 1, 5), new Vector3(0, 1, -5), 0.1).map(
+      (event) => event.type,
+    ),
     ["checkpoint", "lap"],
   );
-  assert.ok(Math.abs(timely.timeLeft - 4.6) < 1e-9);
-  assert.equal(timely.elapsed, 1);
+  assert.equal(race.credits, 3000);
+  assert.deepEqual(
+    updateRace(race, new Vector3(0, 1, 5), new Vector3(0, 1, -5), 0.1).map(
+      (event) => event.type,
+    ),
+    ["checkpoint", "completed"],
+  );
+  assert.equal(
+    race.credits,
+    3777,
+    "the final gate adds only the completion row",
+  );
+});
+
+test("completion selects reason rows, floors remaining-time credit, and awards once", () => {
+  const classic = createRace([], {
+    credits: 100,
+    completionCreditsByReason: [1000, 2000, 3000, 4000],
+    completionTimeCreditRate: 3,
+  });
+  classic.timeLeft = 12.99;
+  assert.equal(completeRace(classic, 1), true);
+  assert.equal(classic.credits, 2136, "reason 1 plus floor(12.99) × 3");
+  assert.equal(completeRace(classic, 2), false);
+  assert.equal(classic.credits, 2136);
+
+  const mission = createRace([], {
+    credits: 100,
+    completionCreditsByReason: [5000, 5000, 5000, 5000],
+    completionTimeCreditRate: 0,
+  });
+  assert.equal(completeRace(mission, 3), true);
+  assert.equal(
+    mission.credits,
+    5100,
+    "mission row is shared across completion reasons",
+  );
+});
+
+test("failed races cannot complete and time awards reject zero or finished states", () => {
+  const failed = createRace([], { timeLimit: 0, credits: 50 });
+  assert.equal(completeRace(failed, 0), false);
+  assert.equal(failed.credits, 50);
+  assert.equal(awardRaceTime(failed, 10), false);
+
+  const race = createRace([], { timeLimit: 20 });
+  assert.equal(awardRaceTime(race, 0), false);
+  assert.equal(race.timeLeft, 20);
+  assert.equal(awardRaceTime(race, 5), true);
+  assert.equal(race.timeLeft, 25);
+  race.status = "completed";
+  assert.equal(awardRaceTime(race, 10), false);
+  assert.equal(race.timeLeft, 25);
+});
+
+test("closed race awards stay blocked while a wasted car countdown is racing", () => {
+  const race = createRace([gate(0)], {
+    timeLimit: 20,
+    credits: 100,
+    completionCredits: 500,
+    awardsClosed: true,
+  });
+  assert.equal(
+    race.status,
+    "racing",
+    "the wasted body countdown has not ended",
+  );
+  assert.equal(awardRaceTime(race, 10), false);
+  assert.deepEqual(
+    updateRace(race, new Vector3(0, 1, 5), new Vector3(0, 1, -5), 0.1),
+    [],
+  );
+  assert.equal(completeRace(race, 0), false);
+  assert.equal(race.timeLeft, 20);
+  assert.equal(race.elapsed, 0);
+  assert.equal(race.nextCheckpoint, 0);
+  assert.equal(race.credits, 100);
 });
 
 test("repairs and recovery spend credits atomically and recovery resets motion", () => {
@@ -259,4 +355,20 @@ test("one checkpoint accepts crossing either of its original disjoint quads", ()
     checkpointCrossing(new Vector3(-1, 0, 2.5), new Vector3(1, 0, 2.5), gate),
     null,
   );
+});
+
+test("browser completion defers credits with a stable reason for native payout", () => {
+  const race = createRace([], {
+    credits: 1000,
+    timeLimit: 12.75,
+    completionCreditsByReason: [20000, 75000, 20000],
+    completionTimeCreditRate: 15,
+    deferCompletionAwards: true,
+  });
+  assert.equal(completeRace(race, 1), true);
+  assert.equal(race.credits, 1000);
+  assert.equal(race.timeLeft, 12.75);
+  assert.equal(race.completionReason, 1);
+  assert.equal(completeRace(race, 2), false);
+  assert.equal(race.completionReason, 1);
 });
