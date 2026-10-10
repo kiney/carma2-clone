@@ -259,7 +259,7 @@ try {
       (index) => window.carma.powerups.abilities.get(index).charges,
       mine.index,
     ),
-    -mine.initialValue - 1,
+    -2 * mine.initialValue - 1,
   );
 
   // Text/arrow entry must never reach driving input.

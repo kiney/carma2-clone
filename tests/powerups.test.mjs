@@ -68,8 +68,8 @@ test("debug grants preserve original pickup charges, event dispatch, renewed exp
   system.grant(1, car, race, onEvent);
   assert.equal(
     system.abilities.get(1).charges,
-    5,
-    "grant refills original inventory rather than stacking arbitrary charges",
+    9,
+    "installed inventory addition preserves four remaining charges and adds five",
   );
   car.health = 20;
   system.grant(2, car, race, onEvent);

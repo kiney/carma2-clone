@@ -39,3 +39,10 @@ Activation requests force-feedback `Kangeroo`, Pratcam42, and sound9010 (`0x2332
 ## Implementation status
 
 This note records source behavior for PUP-06; it does not claim these three actions are implemented or runtime-validated. Integration must share ordinary grant/use/expiry paths with debug grants, preserve failed-use guards and recovery sample resets, and validate cumulative vouchers/charges, expiry, airborne stopping/jumping and additive jump velocity in the application.
+
+The existing Actions 34/35 inventory now accumulates repeated grants using
+this verified shared path: five initial oil charges, one use, another pickup
+leaves nine. The focused debug browser test checks a bulk grant followed by
+another mine grant and one activation against twice the authored charge count
+minus one. PUP-15 remains partial until the other cooldown/fizzle rules are
+validated; this change does not implement the three PUP-06 handlers.

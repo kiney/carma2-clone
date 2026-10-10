@@ -61,7 +61,7 @@ export class DebugPanel {
           <button id="debug-add-time" type="button">+60 seconds</button>
           <label>Original powerup<select id="debug-powerup"></select></label>
           <button id="debug-grant" type="button">Grant powerup</button>
-          <button id="debug-abilities" type="button">Refill all weapons / oil</button>
+          <button id="debug-abilities" type="button">Grant weapons / oil charges</button>
           <div class="debug-row"><button id="debug-repair" type="button">Full repair</button><button id="debug-recover" type="button">Free recovery</button></div>
           <button id="debug-restart" type="button">Restart race</button>
         </fieldset>

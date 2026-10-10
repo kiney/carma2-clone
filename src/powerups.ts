@@ -439,7 +439,11 @@ export class PowerupSystem {
     switch (def.action) {
       case 34:
       case 35: {
-        const charges = Math.max(0, -def.initialValue);
+        // Installed GotPowerupEarwig0x4d8e69 adds the authored initial value
+        // to existing inventory; preserve remaining charges on repeat pickups.
+        const charges =
+          (this.abilities.get(index)?.charges ?? 0) +
+          Math.max(0, -def.initialValue);
         this.abilities.set(index, { definition: def, charges });
         this.selectedAbility = index;
         onEvent?.({
