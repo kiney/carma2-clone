@@ -34,6 +34,7 @@ export interface PowerupModifiers {
   protection: number;
   timerFrozen: boolean;
   underwaterAbility: boolean;
+  instantHandbrake: boolean;
 }
 
 export interface PowerupEvent {
@@ -54,7 +55,8 @@ export interface PowerupEvent {
 }
 
 const implementedActions = new Set([
-  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 27, 30, 34, 35, 46, 47, 51,
+  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 26, 27, 28, 30, 34, 35, 36, 46, 47,
+  51,
 ]);
 
 export function isPowerupImplemented(definition: PowerupDefinition): boolean {
@@ -150,7 +152,7 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  action: 5 | 6 | 8 | 9 | 10 | 21 | 22 | 27;
+  action: 5 | 6 | 8 | 9 | 10 | 21 | 22 | 27 | 28;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -175,6 +177,17 @@ export class PowerupSystem {
   private protection = 1;
   private timerFrozen = false;
   private underwaterAbility = false;
+  private instantHandbrake = false;
+  private vouchers = 0;
+  get recoveryVouchers(): number {
+    return this.vouchers;
+  }
+  /** Consume at successful recovery execution, not when the key is pressed. */
+  consumeRecoveryVoucher(): boolean {
+    if (this.vouchers === 0) return false;
+    this.vouchers = (this.vouchers - 1) | 0;
+    return true;
+  }
   readonly group = new THREE.Group();
   readonly definitions: PowerupDefinition[] = [];
   readonly warnings: string[] = [];
@@ -314,6 +327,7 @@ export class PowerupSystem {
       protection: this.protection,
       timerFrozen: this.timerFrozen,
       underwaterAbility: this.underwaterAbility,
+      instantHandbrake: this.instantHandbrake,
     };
     if (this.suspension) modifiers.suspension = this.suspension;
     return modifiers;
@@ -376,6 +390,7 @@ export class PowerupSystem {
     this.abilities.clear();
     this.selectedAbility = null;
     this.cancelEffects();
+    this.vouchers = 0;
   }
 
   /** Independent reset assignments verified in original handler table.
@@ -399,6 +414,9 @@ export class PowerupSystem {
         break;
       case 27:
         this.protection = 1;
+        break;
+      case 28:
+        this.instantHandbrake = false;
         break;
       case 9:
       case 21: {
@@ -438,7 +456,8 @@ export class PowerupSystem {
     if (!def) return;
     switch (def.action) {
       case 34:
-      case 35: {
+      case 35:
+      case 36: {
         // Installed GotPowerupEarwig0x4d8e69 adds the authored initial value
         // to existing inventory; preserve remaining charges on repeat pickups.
         const charges =
@@ -490,13 +509,15 @@ export class PowerupSystem {
       case 8:
       case 10:
       case 22:
-      case 27: {
+      case 27:
+      case 28: {
         if (def.action === 5) this.invulnerable = true;
         if (def.action === 6) this.freeRepairs = true;
         if (def.action === 8) this.timerFrozen = true;
         if (def.action === 10) this.underwaterAbility = true;
         if (def.action === 22) this.damageMultiplier = def.floatParams[0] ?? 1;
         if (def.action === 27) this.protection = def.floatParams[0] ?? 1;
+        if (def.action === 28) this.instantHandbrake = true;
         // A renewed effect owns its new timeout; an old timeout cannot undo it.
         this.active = this.active.filter(
           (effect) => effect.action !== def.action,
@@ -516,6 +537,15 @@ export class PowerupSystem {
         });
         break;
       }
+      case 26:
+        this.vouchers = (this.vouchers + (def.integerParams[0] ?? 0)) | 0;
+        onEvent?.({
+          kind: "effect",
+          name: def.message,
+          definition: def,
+          amount: this.vouchers,
+        });
+        break;
       case 51:
         this.cancelEffects();
         onEvent?.({ kind: "effect", name: def.message, definition: def });

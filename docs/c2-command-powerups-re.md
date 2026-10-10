@@ -24,7 +24,7 @@ Got/reset affect only the local-human car, setting global `gInstant_handbrake` a
 
 This is a **control-time velocity operation**, not a tyre-grip coefficient or stronger brake force. Installed `PollCarControls` branch `0x443e5a` corresponds to rec2 `BrakeInstantly`: when the handbrake control is held, the flag is set and the race is unfinished, revs become0 and collision linear velocity X/Y/Z become0. Angular velocity is untouched. It also stops an airborne car; grounding is only used for screech feedback. With the effect absent or the race finished, that control sets normal `keys.brake`.
 
-Speed squared above`0.0001` with at least one grounded wheel triggers Pratcam41 and five tyre-screech sounds9000–9004. Speed squared above`0.1` triggers the `Instant_Handbrake` force-feedback effect. The installed inlined branch ends with stores to collision offsets`0x68`, `0x6c`, `0x70` at `0x443f18`. Browser integration should perform the operation before the ordinary physics step and preserve angular state; physical forces may subsequently generate velocity during that step.
+Speed squared above`0.0001` with at least one grounded wheel triggers Pratcam41 and all five tyre-screech sounds9000–9004 (verified loop, not a random choice). Speed squared above`0.1` triggers the `Instant_Handbrake` force-feedback effect. The installed inlined branch ends with stores to collision offsets`0x68`, `0x6c`, `0x70` at `0x443f18`. Browser integration should perform the operation before the ordinary physics step and preserve angular state; physical forces may subsequently generate velocity during that step. The ordinary handbrake input bit must be cleared after this branch: source execution bypasses normal rear-wheel braking and its gear/wheelspin behavior.
 
 ## Command jump and inventory
 
@@ -38,7 +38,7 @@ Activation requests force-feedback `Kangeroo`, Pratcam42, and sound9010 (`0x2332
 
 ## Implementation status
 
-This note records source behavior for PUP-06; it does not claim these three actions are implemented or runtime-validated. Integration must share ordinary grant/use/expiry paths with debug grants, preserve failed-use guards and recovery sample resets, and validate cumulative vouchers/charges, expiry, airborne stopping/jumping and additive jump velocity in the application.
+The three PUP-06 actions are now integrated through ordinary grant/use/expiry and recovery paths. Numerical tests and actual Chromium checks pass for all three actions. The browser keeps existing approximate recovery pricing and omits original Pratcam/force-feedback output. Cars are always integrated, so command jump needs no separate sleeping flag. Vouchers are consumed after recovery executes successfully; administrative debug free recovery does not spend one.
 
 The existing Actions 34/35 inventory now accumulates repeated grants using
 this verified shared path: five initial oil charges, one use, another pickup
@@ -46,3 +46,23 @@ leaves nine. The focused debug browser test checks a bulk grant followed by
 another mine grant and one activation against twice the authored charge count
 minus one. PUP-15 remains partial until the other cooldown/fizzle rules are
 validated; this change does not implement the three PUP-06 handlers.
+
+## Runtime validation
+
+The visible debug UI grants original definitions 38/32/54. Two voucher grants
+give ten; ordinary R recovery at zero credits succeeds and spends one, while
+knackered and failed-race attempts preserve the count. Space on an airborne car
+zeros linear velocity and RPM before physics, preserves angular velocity, and
+bypasses ordinary handbrake input. The timed effect expires normally. Two jump
+grants give six charges; F adds exactly 12/6.9 to airborne world Y while leaving
+X/Z and angular velocity unchanged. A repeated keydown spends no extra charge;
+a second input edge spends one and sound 9010 is dispatched on each use.
+Ordinary ArrowUp driving remains functional; no fatal console, asset-request or
+WebGL errors occur. The screenshot was inspected; its sky-only background is
+intentional because this deterministic airborne check places the car above the
+city, not a claim of a rendering regression. Original Stock and Advanced table
+parameters are checked without copying fixtures. New City unsupported-definition
+warnings decrease from 27 to 24 as these three actions become supported.
+
+Chrome DevTools MCP is unavailable in this session. Tests use the existing
+actual Chromium/Playwright harness; generated artifacts are ignored.

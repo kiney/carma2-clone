@@ -49,6 +49,7 @@ import { createNonCarBody, nonCarActors } from "./physics/noncar-body";
 import { NonCarRenderBatch } from "./noncar-render";
 import { WorldDestruction } from "./world-destruction";
 import { MissionVariables } from "./mission-variables";
+import { commandJump, instantHandbrake } from "./physics/command-powerups";
 import { parseTrackSmashables } from "./world-smash";
 import { WorldGrooveRuntime } from "./world-groove";
 import { createMovingWorldBody } from "./physics/moving-world";
@@ -73,7 +74,7 @@ import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use mine/mortar/oil · Tab: select ability<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -1142,18 +1143,27 @@ function recover() {
     message("CAR WASTED · ENTER TO RESTART");
     return;
   }
+  const voucher = (powerups?.recoveryVouchers ?? 0) !== 0;
   const recovered = recoverVehicle(
     vehicle,
     race,
     vehicle.position,
     vehicle.heading,
+    voucher ? 0 : 250,
   );
   if (recovered) {
     simulation.recover(player);
+    if (voucher) powerups?.consumeRecoveryVoucher();
     pedestrians?.resetCar(vehicle.position);
     powerups?.resetPath(vehicle.position);
   }
-  message(recovered ? "RECOVERED · CR -250" : "NOT ENOUGH CREDITS");
+  message(
+    recovered
+      ? voucher
+        ? "RECOVERED · VOUCHER USED"
+        : "RECOVERED · CR -250"
+      : "NOT ENOUGH CREDITS",
+  );
 }
 el("play").addEventListener("click", () => {
   void audio.unlock();
@@ -1189,6 +1199,11 @@ addEventListener("keydown", (event) => {
     powerups?.activateAbility(
       race,
       (event) => {
+        if (event.definition.action === 36) {
+          commandJump(player!.state, event.definition.floatParams[0] ?? 0);
+          void audio.playSound(9010);
+          message(event.name);
+        }
         if (event.definition.action === 35) {
           const placed = simulation?.dropOil(player!);
           message(placed ? "OIL DROPPED" : "OIL · NO SUITABLE SURFACE");
@@ -1400,6 +1415,20 @@ function animate(now: number) {
           brake: Number(keys.has("ShiftLeft")),
           handbrake: keys.has("Space"),
         };
+        if (
+          modifiers?.instantHandbrake &&
+          player.input.handbrake &&
+          !player.knackered
+        ) {
+          if (
+            (player.state.groundedWheelCount ?? 0) !== 0 &&
+            player.state.velocity.lengthSq() > 0.0001
+          )
+            for (let id = 9000; id < 9005; id++) void audio.playSound(id);
+          instantHandbrake(player.state);
+          // Installed branch bypasses the ordinary brake-key assignment.
+          player.input.handbrake = false;
+        }
         updateRivals(dt);
         simulation.update(dt);
         explosions?.update(simulation.elapsed * 1000);

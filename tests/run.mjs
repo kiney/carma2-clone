@@ -13,6 +13,7 @@ import "./race-flags.test.mjs";
 import "./smash-missions.test.mjs";
 import "./handling.test.mjs";
 import "./powerups.test.mjs";
+import "./command-powerups.test.mjs";
 
 import "./mechanics.test.mjs";
 import "./damage-program.test.mjs";

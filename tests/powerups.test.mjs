@@ -252,6 +252,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     protection: 1,
     timerFrozen: false,
     underwaterAbility: false,
+    instantHandbrake: false,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -704,8 +705,8 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      27,
-      "New City warns once for each unsupported definition",
+      24,
+      "New City warns once for each unsupported definition after actions 26/28/36",
     );
     assert.equal(system.group.children.length, system.pickups.length);
     system.dispose();

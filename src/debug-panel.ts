@@ -66,7 +66,7 @@ export class DebugPanel {
           <button id="debug-restart" type="button">Restart race</button>
         </fieldset>
         <p id="debug-status" role="status">Load a race to use the debug tools.</p>
-        <small>Timer freezing only stops the race countdown. Powerups expire normally; F uses weapons/oil, Tab changes the selection. Granted credits and powerups remain when debug mode is turned off. Wasting persists until restart.</small>
+        <small>Timer freezing only stops the race countdown. Powerups expire normally; F uses the selected ability, Tab changes the selection. Granted credits and powerups remain when debug mode is turned off. Wasting persists until restart.</small>
       </section>`,
     );
     const get = <T extends HTMLElement>(id: string) =>
