@@ -257,6 +257,8 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     wallClimb: false,
     gravityMultiplier: 1,
     pinballFactor: 0,
+    opponentSpeedFactor: 1,
+    copSpeedFactor: 1,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -709,7 +711,7 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      23,
+      22,
       "New City warns once per unsupported definition after native motion powerup support",
     );
     assert.equal(system.group.children.length, system.pickups.length);

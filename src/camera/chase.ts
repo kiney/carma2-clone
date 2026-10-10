@@ -16,6 +16,8 @@ export interface ChaseCameraInput {
   orientation: Quaternion;
   /** World velocity in model units/second. FinishCars divides its length by1000. */
   modelVelocity: Vector3;
+  /** FinishCars values computed once per game frame, independently of camera. */
+  movement?: { speed: number; speedometer: number; direction: Vector3 };
   /** Native omega is local to the car, in radians/second. */
   angularVelocityLocal?: Vector3;
   rearWheelZ: number;
@@ -26,6 +28,8 @@ export interface ChaseCameraInput {
   cameraReset?: boolean;
   /** Optional native camera yaw, unsigned BRender angle. */
   yawBRenderAngle?: number;
+  /** Outer camera key state; SwingCamera separately tests whether yaw changed. */
+  manualMove?: boolean;
 }
 
 export interface ChaseCameraPose {
@@ -158,6 +162,11 @@ export class NativeChaseCamera {
       dtMs > 0xffff_ffff ||
       !finiteVector(worldCOM) ||
       !finiteVector(modelVelocity) ||
+      (input.movement &&
+        (!Number.isFinite(input.movement.speed) ||
+          input.movement.speed < 0 ||
+          !Number.isFinite(input.movement.speedometer) ||
+          !finiteVector(input.movement.direction))) ||
       ![
         orientation.x,
         orientation.y,
@@ -179,19 +188,26 @@ export class NativeChaseCamera {
       throw new Error("Invalid native chase camera input");
     if (!this.initialized) this.reset(worldCOM, orientation);
     const forward = new Vector3(0, 0, -1).applyQuaternion(orientation);
-    let speed = Math.hypot(modelVelocity.x, modelVelocity.z) / 1000;
-    if (this.previousSpeed < 0.0001 && speed > 0.0001) speed = 0.0001;
+    let speed =
+      input.movement?.speed ??
+      Math.hypot(modelVelocity.x, modelVelocity.z) / 1000;
+    if (!input.movement && this.previousSpeed < 0.0001 && speed > 0.0001)
+      speed = 0.0001;
     this.previousSpeed = speed;
-    const speedometer = forward.dot(modelVelocity) / 1000;
+    let speedometer =
+      input.movement?.speedometer ?? forward.dot(modelVelocity) / 1000;
     // FinishCars retains forward/reverse direction when below its speed floor.
-    if (speed > 0.0001) this.travel.copy(modelVelocity).normalize();
+    if (input.movement) this.travel.copy(input.movement.direction);
+    else if (speed > 0.0001) this.travel.copy(modelVelocity).normalize();
     else {
       const travelSign = this.travel.dot(forward) < 0 ? -1 : 1;
       this.travel.copy(forward).multiplyScalar(travelSign);
+      speedometer = (-travelSign * modelVelocity.z) / 1000;
     }
     if (input.yawBRenderAngle !== undefined)
       this.yaw = angle(input.yawBRenderAngle);
     const manualSwing = this.yaw !== this.previousYaw;
+    const manualMove = input.manualMove ?? manualSwing;
     if (Math.abs(speedometer) > 0.0006 && this.mode > 0) {
       this.mode = -1;
       this.reverse = false; // Ordinary live camera has standard replay mode0.
@@ -207,7 +223,7 @@ export class NativeChaseCamera {
           Math.atan2(input.rearWheelZ * input.steeringCurvature, 1),
         );
         const folded = this.yaw > HALF ? this.yaw - HALF : this.yaw;
-        if (manualSwing) {
+        if (manualMove) {
           const sideView = folded > 45 * 182 && folded < 135 * 182;
           if (sideView === this.wheelTracking) {
             this.yaw = angle(
@@ -236,7 +252,7 @@ export class NativeChaseCamera {
       this.rateAngle = 0;
       this.fastSwing = false;
       const displacement = worldCOM.clone().sub(this.position);
-      if (manualSwing) {
+      if (manualMove) {
         rotate(
           displacement,
           angle((this.reverse ? -1 : 1) * (this.yaw - this.previousYaw)),
@@ -246,7 +262,7 @@ export class NativeChaseCamera {
       direction = horizontal(displacement, this.view);
       const backwardBasis = forward.clone().negate();
       if (
-        manualSwing ||
+        manualMove ||
         backwardBasis.dot(direction) < backwardBasis.dot(this.view)
       )
         this.view.copy(direction);

@@ -2,6 +2,16 @@ import { Ray, Vector3 } from "three";
 import type { Surface } from "../world";
 import type { CameraWorldHit } from "./world-clearance";
 
+export function cameraSurfaceVisible(surface: Surface): boolean {
+  if (surface.enabled === false) return false;
+  let actor = surface.actor;
+  while (actor) {
+    if (!actor.visible) return false;
+    actor = actor.parent as typeof actor;
+  }
+  return true;
+}
+
 /** DRModelPick2D's finite camera ray. Physics-only edge modes do not change
  * visual ray eligibility; ordinary pling-material exclusion is independent. */
 export function cameraTriangleRay(
@@ -18,18 +28,8 @@ export function cameraTriangleRay(
   const point = new Vector3();
   let closest: CameraWorldHit | undefined;
   for (const surface of surfaces) {
-    if (surface.enabled === false) continue;
+    if (!cameraSurfaceVisible(surface)) continue;
     if (excludePlingMaterials && /^[!>?]/.test(surface.material)) continue;
-    let actor = surface.actor;
-    let hidden = false;
-    while (actor) {
-      if (!actor.visible) {
-        hidden = true;
-        break;
-      }
-      actor = actor.parent as typeof actor;
-    }
-    if (hidden) continue;
     const incidence = surface.normal.dot(delta);
     if (Math.abs(incidence) < 2 ** -22) continue;
     const twoSided = !!(surface.materialFlags & 0x1800);

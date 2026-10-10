@@ -43,6 +43,8 @@ export interface PowerupModifiers {
   timerFrozen: boolean;
   underwaterAbility: boolean;
   instantHandbrake: boolean;
+  opponentSpeedFactor: number;
+  copSpeedFactor: number;
   bouncePeriodMs: number;
   wallClimb: boolean;
   gravityMultiplier: number;
@@ -67,8 +69,8 @@ export interface PowerupEvent {
 }
 
 const implementedActions = new Set([
-  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28, 30,
-  34, 35, 36, 46, 47, 51,
+  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27,
+  28, 30, 34, 35, 36, 46, 47, 51,
 ]);
 
 export function isPowerupImplemented(definition: PowerupDefinition): boolean {
@@ -165,7 +167,23 @@ interface ActiveEffect {
   remaining: number;
   duration: number;
   expiresAtMs: number;
-  action: 5 | 6 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 27 | 28;
+  action:
+    | 5
+    | 6
+    | 8
+    | 9
+    | 10
+    | 14
+    | 15
+    | 16
+    | 17
+    | 18
+    | 19
+    | 20
+    | 21
+    | 22
+    | 27
+    | 28;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -191,6 +209,15 @@ export class PowerupSystem {
   private timerFrozen = false;
   private underwaterAbility = false;
   private instantHandbrake = false;
+  private opponentSpeedFactor = 1;
+  private copSpeedFactor = 1;
+  private opponentSpeedRevision = 0;
+  get opponentSpeedState() {
+    return {
+      revision: this.opponentSpeedRevision,
+      active: this.active.some((effect) => effect.action === 14),
+    };
+  }
   private vouchers = 0;
   private bounce?: BouncePowerup;
   private wallClimb = false;
@@ -317,8 +344,10 @@ export class PowerupSystem {
     onEvent?: (event: PowerupEvent) => void,
     gameTimeMs?: number,
   ): PowerupModifiers {
-    if (gameTimeMs !== undefined &&
-      (!Number.isFinite(gameTimeMs) || gameTimeMs < 0))
+    if (
+      gameTimeMs !== undefined &&
+      (!Number.isFinite(gameTimeMs) || gameTimeMs < 0)
+    )
       throw new Error("Invalid powerup game timestamp");
     if (Number.isFinite(dt) && dt > 0) {
       const nextTime = gameTimeMs ?? this.elapsedMs + dt * 1000;
@@ -360,7 +389,8 @@ export class PowerupSystem {
     for (const effect of this.active) {
       if (effect.duration > 0) {
         effect.remaining = (effect.expiresAtMs - this.elapsedMs) / 1000;
-        if (this.elapsedMs >= effect.expiresAtMs) this.resetEffect(effect.action);
+        if (this.elapsedMs >= effect.expiresAtMs)
+          this.resetEffect(effect.action);
       }
     }
     this.active = this.active.filter(
@@ -381,6 +411,8 @@ export class PowerupSystem {
       timerFrozen: this.timerFrozen,
       underwaterAbility: this.underwaterAbility,
       instantHandbrake: this.instantHandbrake,
+      opponentSpeedFactor: this.opponentSpeedFactor,
+      copSpeedFactor: this.copSpeedFactor,
       bouncePeriodMs: this.bounce?.periodMs ?? 0,
       wallClimb: this.wallClimb,
       gravityMultiplier: this.gravity.multiplier,
@@ -465,6 +497,13 @@ export class PowerupSystem {
         break;
       case 10:
         this.underwaterAbility = false;
+        break;
+      case 14:
+        this.opponentSpeedFactor = 1;
+        this.opponentSpeedRevision++;
+        break;
+      case 15:
+        this.copSpeedFactor = 1;
         break;
       case 22:
         this.damageMultiplier = 1;
@@ -580,6 +619,8 @@ export class PowerupSystem {
       case 6:
       case 8:
       case 10:
+      case 14:
+      case 15:
       case 16:
       case 17:
       case 18:
@@ -590,6 +631,18 @@ export class PowerupSystem {
         if (def.action === 6) this.freeRepairs = true;
         if (def.action === 8) this.timerFrozen = true;
         if (def.action === 10) this.underwaterAbility = true;
+        if (def.action === 14 || def.action === 15) {
+          const value = def.floatParams[0];
+          if (value === undefined || !Number.isFinite(value))
+            throw new Error("Missing opponent speed powerup parameter");
+          const factor = Math.fround(value);
+          if (!Number.isFinite(factor))
+            throw new Error("Invalid opponent speed powerup parameter");
+          if (def.action === 14) {
+            this.opponentSpeedFactor = factor;
+            this.opponentSpeedRevision++;
+          } else this.copSpeedFactor = factor;
+        }
         if (def.action === 18) this.wallClimb = true;
         if (def.action === 16) this.gravity.setPowerup(def.floatParams);
         if (def.action === 17) {

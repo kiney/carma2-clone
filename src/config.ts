@@ -26,7 +26,18 @@ export interface TrackConfig {
   mapTexture?: string;
   pathNodes: Vec3[];
   pathEdges: Array<[number, number]>;
+  /** C2 opponent navigation sections, including authored directional speeds. */
+  pathSections: TrackPathSection[];
   assetReferences: string[];
+}
+
+export interface TrackPathSection {
+  nodeIndices: [number, number];
+  minSpeed: [number, number];
+  maxSpeed: [number, number];
+  width: number;
+  type: number;
+  oneWay: boolean;
 }
 
 export interface CarWheelConfig {
@@ -320,6 +331,7 @@ export function parseTrackConfig(text: string): TrackConfig {
 
   const pathNodes: Vec3[] = [];
   const pathEdges: Array<[number, number]> = [];
+  const pathSections: TrackPathSection[] = [];
   const pathStart = lines.findIndex((line) =>
     /^\s*START OF OPPONENT PATHS\s*$/i.test(line),
   );
@@ -329,38 +341,91 @@ export function parseTrackConfig(text: string): TrackConfig {
       ? numericValues(nodeCountLine.line)[0]
       : NaN;
     if (
-      Number.isInteger(nodeCount) &&
-      nodeCount >= 0 &&
-      nodeCount < 100000 &&
-      nodeCountLine
-    ) {
-      let cursor = nodeCountLine.index + 1;
-      for (let i = 0; i < nodeCount; i++) {
-        const node = readVecAt(lines, cursor);
-        if (!node?.value) break;
-        pathNodes.push(node.value);
-        cursor = node.index + 1;
-      }
-      const edgeCountLine = firstDataLine(lines, cursor);
-      const edgeCount = edgeCountLine
-        ? numericValues(edgeCountLine.line)[0]
-        : NaN;
-      if (
-        Number.isInteger(edgeCount) &&
-        edgeCount >= 0 &&
-        edgeCount < 100000 &&
-        edgeCountLine
-      ) {
-        cursor = edgeCountLine.index + 1;
-        for (let i = 0; i < edgeCount; i++) {
-          const edgeLine = firstDataLine(lines, cursor);
-          const values = edgeLine ? numericValues(edgeLine.line) : [];
-          if (!edgeLine || values.length < 2) break;
-          pathEdges.push([values[0], values[1]]);
-          cursor = edgeLine.index + 1;
-        }
-      }
+      !nodeCountLine ||
+      numericValues(nodeCountLine.line).length !== 1 ||
+      !Number.isInteger(nodeCount) ||
+      nodeCount < 0 ||
+      nodeCount > 0x10000
+    )
+      throw new Error("Track opponent paths have an invalid node count");
+    let cursor = nodeCountLine.index + 1;
+    for (let i = 0; i < nodeCount; i++) {
+      const nodeLine = firstDataLine(lines, cursor);
+      const values = nodeLine ? numericValues(nodeLine.line) : [];
+      if (!nodeLine || values.length !== 3)
+        throw new Error(
+          `Track opponent path node ${i} is missing or malformed`,
+        );
+      const position = values.map(Math.fround);
+      if (position.some((value) => !Number.isFinite(value)))
+        throw new Error(`Track opponent path node ${i} exceeds Float32 range`);
+      pathNodes.push(position as Vec3);
+      cursor = nodeLine.index + 1;
     }
+
+    const sectionCountLine = firstDataLine(lines, cursor);
+    const sectionCount = sectionCountLine
+      ? numericValues(sectionCountLine.line)[0]
+      : NaN;
+    if (
+      !sectionCountLine ||
+      numericValues(sectionCountLine.line).length !== 1 ||
+      !Number.isInteger(sectionCount) ||
+      sectionCount < 0 ||
+      sectionCount >= 100000
+    )
+      throw new Error("Track opponent paths have an invalid section count");
+    cursor = sectionCountLine.index + 1;
+    const u8 = (value: number) => Math.trunc(value) & 0xff;
+    for (let i = 0; i < sectionCount; i++) {
+      const sectionLine = firstDataLine(lines, cursor);
+      const values = sectionLine
+        ? numericValues(sectionLine.line).map(Math.fround)
+        : [];
+      if (!sectionLine || values.length !== 8)
+        throw new Error(
+          `Track opponent path section ${i} is missing or malformed`,
+        );
+      if (values.some((value) => !Number.isFinite(value)))
+        throw new Error(
+          `Track opponent path section ${i} exceeds Float32 range`,
+        );
+      const [rawNode0, rawNode1, min0, max0, min1, max1, rawWidth, rawType] =
+        values;
+      const node0 = Math.trunc(rawNode0),
+        node1 = Math.trunc(rawNode1);
+      if (
+        rawNode0 < 0 ||
+        rawNode1 < 0 ||
+        rawNode0 > 0xffff ||
+        rawNode1 > 0xffff ||
+        node0 >= pathNodes.length ||
+        node1 >= pathNodes.length
+      )
+        throw new Error(
+          `Track opponent path section ${i} references an invalid node`,
+        );
+      const oneWay = rawType >= 1000;
+      const type = u8(oneWay ? Math.fround(rawType - 1000) : rawType);
+      const width = rawWidth;
+      const section: TrackPathSection = {
+        nodeIndices: [node0, node1],
+        minSpeed: [u8(min0), u8(min1)],
+        maxSpeed: [u8(max0), u8(max1)],
+        width,
+        type,
+        oneWay,
+      };
+      pathSections.push(section);
+      pathEdges.push(section.nodeIndices);
+      cursor = sectionLine.index + 1;
+    }
+    if (
+      !lines
+        .slice(cursor)
+        .some((line) => /^\s*END OF OPPONENT PATHS\s*$/i.test(line))
+    )
+      throw new Error("Track opponent path block is truncated");
   }
 
   const skyMarker = lines.findIndex((line) =>
@@ -448,6 +513,7 @@ export function parseTrackConfig(text: string): TrackConfig {
     ...(mapTexture ? { mapTexture } : {}),
     pathNodes,
     pathEdges,
+    pathSections,
     assetReferences: collectAssetReferences(text),
   };
 }

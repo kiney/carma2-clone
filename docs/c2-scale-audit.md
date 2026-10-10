@@ -81,3 +81,19 @@ No vehicle enlargement, camera change or collision fix was made during this audi
 The production Chromium regression loads DUNE with green Eagle, Buggy and Bigdump, plus NEW CITY with Eagle3. All five cars in every grid start with zero measured road/car penetration and four supported wheels. All four opponents in every case move and remain alive after four seconds of normal AI/physics. The original initial-penetration measurements above are retained as historical evidence.
 
 The pair fix corrects native local-bounds centers and independently verifies final integration and joint projection against authored solid hulls. DUNE head-on and oblique crashes still cause persistent local deformation/component damage, remain SAT-disjoint, and release under the actual reverse key. Numerical regressions include yaw/pitch, pre-existing overlaps, wall-adjacent crushed bodies, different world fractions and complete rotation arcs. Details and limits are in [physics evidence](c2-physics-re.md). `npm run test:spawn-pairs` reproduces the dedicated browser checks; screenshots/reports remain in ignored `artifacts/`.
+
+## Native-camera integration follow-up, 2026-10-11
+
+The camera mismatch table above records the historical baseline. The live chase
+now uses GENERAL's quantized 55.546875° FOV, doubled general/cockpit hithers,
+track Yon factor and original COM/zoom/reversal formulas. Eagle's original 0.2
+zoom gives about 1.027 units of proposed chase distance and a 0.34 height
+increment. No geometry scale correction was made.
+
+New City Chromium measurements at 1280×800 show Eagle sampled bounds about
+412×334 pixels with all 184 corners in frame, versus the historical 179×194.
+Bigdump exposed an async stale-COM reset bug; correcting that alone still left
+its rear filling the view at 0.2. A bounded startup framing extension now selects
+a fitting initial zoom for large cars, retaining native pose formulas and zoom
+controls. This extension is explicitly distinct from original behavior; see
+[camera evidence](c2-camera-re.md) for confidence and remaining query limitations.

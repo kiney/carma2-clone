@@ -253,3 +253,20 @@ test("two-sided nearby planes flip toward ray before measuring positive clearanc
   vector(result.position, [0, 0, 0.87]);
   vector(face.normal, [0, 0, 1]);
 });
+
+test("flagged noncar probes run before a missing world ray exits the camera pass", () => {
+  const calls = [];
+  const result = clearCameraFromWorld(v(0, 0, 1), v(), 0.06, {
+    ray: () => undefined,
+    faces: () => [],
+    noncars: (com, nearProbe, end, selected) => {
+      calls.push({ near: nearProbe.toArray(), end: end.toArray(), selected });
+      return { hit: undefined, collided: true };
+    },
+  });
+  assert.equal(result.collided, true);
+  assert.equal(calls.length, 1);
+  vector(new Vector3(...calls[0].near), [0, 0, 0.82]);
+  vector(new Vector3(...calls[0].end), [0, 0, 1.25]);
+  assert.equal(calls[0].selected, undefined);
+});

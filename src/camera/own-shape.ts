@@ -7,10 +7,11 @@ export interface CameraBodyShape {
   orientation: Quaternion;
 }
 
-interface ShapeRay {
+export interface ShapeRay {
   inside: boolean;
   point?: Vector3;
   fraction?: number;
+  localNormal?: Vector3;
 }
 
 /** Clip a finite local segment against authored convex half-spaces. Native
@@ -30,6 +31,7 @@ export function cameraShapeRay(
     let inside = true;
     let enter = 0;
     let exit = 1;
+    let entryNormal: Vector3 | undefined;
     let rejected = false;
     for (const face of hull.faces) {
       const offset = face.constant - face.normal.dot(from);
@@ -37,8 +39,13 @@ export function cameraShapeRay(
       if (offset < 0) inside = false;
       if (slope === 0) {
         if (offset < 0) rejected = true;
-      } else if (slope < 0) enter = Math.max(enter, offset / slope);
-      else exit = Math.min(exit, offset / slope);
+      } else if (slope < 0) {
+        const fraction = offset / slope;
+        if (fraction > enter) {
+          enter = fraction;
+          entryNormal = face.normal.clone().negate();
+        }
+      } else exit = Math.min(exit, offset / slope);
     }
     if (inside) return { inside: true };
     if (rejected || enter > exit || exit < 0 || enter > 1) continue;
@@ -47,6 +54,7 @@ export function cameraShapeRay(
         inside: false,
         fraction: enter,
         point: from.clone().addScaledVector(delta, enter),
+        localNormal: entryNormal,
       };
   }
   return nearest;

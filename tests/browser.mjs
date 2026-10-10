@@ -60,15 +60,33 @@ try {
   await page.waitForFunction(() => window.carma?.stats.ready, {
     timeout: 90000,
   });
+  await page.waitForFunction(
+    () =>
+      window.carma.stats.ready &&
+      window.carma.paused &&
+      window.carma.rivals.length === 5 &&
+      window.carma.pedestrians?.count > 0,
+    { timeout: 60000 },
+  );
+  const initial = await page.evaluate(() => ({
+    elapsed: window.carma.simulation.elapsed,
+    health: window.carma.vehicle.health,
+    damage: [...window.carma.damage.componentLevels],
+    rivals: window.carma.rivals.length,
+    pedestrians: window.carma.pedestrians.count,
+    paused: window.carma.paused,
+  }));
+  assert.equal(initial.paused, true, "async content should load while paused");
+  assert.equal(initial.elapsed, 0, "race must not advance during async load");
+  assert.equal(initial.health, 100, "player must be healthy before input");
+  assert.ok(
+    initial.damage.every((level) => level === 0),
+    `player must be undamaged before input: ${JSON.stringify(initial)}`,
+  );
   await page.click("#play");
   await page.waitForFunction(
     () => window.carma.stats.ready && !window.carma.paused,
     { timeout: 90000 },
-  );
-  await page.waitForFunction(
-    () =>
-      window.carma.rivals.length === 5 && window.carma.pedestrians?.count > 0,
-    { timeout: 60000 },
   );
   const before = await page.evaluate(() => ({
     x: window.carma.vehicle.position.x,
@@ -84,6 +102,47 @@ try {
     before,
     { timeout: 20000 },
   );
+  const steeringStart = await page.evaluate(() => ({
+    time: window.carma.simulation.elapsed,
+    heading: window.carma.vehicle.heading,
+  }));
+  await page.keyboard.down("a");
+  // Use actual fixed-step time: a software WebGL frame can take >50ms while
+  // the application's frame-dt cap advances less simulation than wall time.
+  await page.waitForFunction(
+    (time) => window.carma.simulation.elapsed >= time + 0.75,
+    steeringStart.time,
+    { timeout: 15000 },
+  );
+  await page.keyboard.up("a");
+  const driving = await page.evaluate(() => ({
+    position: window.carma.vehicle.position,
+    heading: window.carma.vehicle.heading,
+    speed: window.carma.vehicle.speed,
+    health: window.carma.vehicle.health,
+    audio: window.carma.audio.diagnostics,
+    pedestrians: window.carma.pedestrians.count,
+    rivals: window.carma.rivals.length,
+    ...window.carma.stats,
+  }));
+  assert.ok(
+    Math.hypot(driving.position.x - before.x, driving.position.z - before.z) >
+      1,
+    `keyboard throttle moves original car: ${JSON.stringify({ before, driving })}`,
+  );
+  const steeringChange = Math.atan2(
+    Math.sin(driving.heading - steeringStart.heading),
+    Math.cos(driving.heading - steeringStart.heading),
+  );
+  assert.ok(
+    steeringChange > 0.01,
+    `keyboard steering changes heading: ${JSON.stringify({ steeringStart, driving, steeringChange })}`,
+  );
+  assert.ok(driving.triangles > 1000, "original scene rendered");
+  assert.equal(driving.ready, true);
+  assert.deepEqual(driving.audio, [], "original audio loads");
+  // Probe steering before the long smoothing sample: software rendering can
+  // advance far enough during 60 RAFs for traffic impacts or leaving the road.
   const smoothing = await page.evaluate(async () => {
     const c = window.carma;
     const samples = [];
@@ -116,46 +175,7 @@ try {
       smoothing.interpolatedFrames > smoothing.repeatedPhysics * 0.8,
       `smooth fixed-tick rendering: ${JSON.stringify(smoothing)}`,
     );
-  const steeringStart = await page.evaluate(() => ({
-    time: window.carma.simulation.elapsed,
-    heading: window.carma.vehicle.heading,
-  }));
-  await page.keyboard.down("a");
-  // Use actual fixed-step time: a software WebGL frame can take >50ms while
-  // the application's frame-dt cap advances less simulation than wall time.
-  await page.waitForFunction(
-    (time) => window.carma.simulation.elapsed >= time + 0.75,
-    steeringStart.time,
-    { timeout: 15000 },
-  );
-  await page.keyboard.up("a");
   await page.keyboard.up("w");
-  const driving = await page.evaluate(() => ({
-    position: window.carma.vehicle.position,
-    heading: window.carma.vehicle.heading,
-    speed: window.carma.vehicle.speed,
-    health: window.carma.vehicle.health,
-    audio: window.carma.audio.diagnostics,
-    pedestrians: window.carma.pedestrians.count,
-    rivals: window.carma.rivals.length,
-    ...window.carma.stats,
-  }));
-  assert.ok(
-    Math.hypot(driving.position.x - before.x, driving.position.z - before.z) >
-      1,
-    `keyboard throttle moves original car: ${JSON.stringify({ before, driving })}`,
-  );
-  const steeringChange = Math.atan2(
-    Math.sin(driving.heading - steeringStart.heading),
-    Math.cos(driving.heading - steeringStart.heading),
-  );
-  assert.ok(
-    steeringChange > 0.01,
-    `keyboard steering changes heading: ${JSON.stringify({ steeringStart, driving, steeringChange })}`,
-  );
-  assert.ok(driving.triangles > 1000, "original scene rendered");
-  assert.equal(driving.ready, true);
-  assert.deepEqual(driving.audio, [], "original audio loads");
   await page.screenshot({ path: "artifacts/browser-beaver-city.png" });
   // Cross every actual gate through the runtime update loop, including four laps.
   const progression = await page.evaluate(async () => {

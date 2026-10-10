@@ -66,6 +66,8 @@ Choose a race and car, then select **Load Race**. The browser menus and HUD are 
 | Tab                   | Select a charged ability                    |
 | F                     | Use the selected ability                    |
 | C                     | Cycle chase, cockpit, and overhead cameras  |
+| + / −                 | Move the chase camera closer / farther      |
+| [ / ]                 | Orbit chase camera; hold both to reset yaw  |
 | M                     | Show or hide the minimap                    |
 | Escape                | Pause or return to the menu                 |
 | Enter                 | Skip bonus payout / restart after a race    |
@@ -87,6 +89,19 @@ and finish-payout presentation use game timestamps; timer/countdown subtraction
 uses the native frame period. See [timebase evidence](docs/c2-timebase-re.md);
 `npm run test:timebase` exercises real keyboard driving, active stalls and
 pause/resume in Chromium.
+
+## Camera
+
+The chase camera reads the original GENERAL projection and track far-distance
+factor, and uses reconstructed COM tracking, zoom, reversal and obstacle
+clearance. Vehicle geometry retains its original scale. A documented browser
+extension chooses a fitting initial zoom for large cars, within the native
+0.1–2 range; Eagle retains the original 0.2 default. Zoom can then be changed
+with + / −. See [camera evidence](docs/c2-camera-re.md) for verified formulas
+and remaining query-order limitations.
+
+`npm run test:camera` verifies original-car framing, projection, zoom controls,
+driving, obstacle contacts, camera modes and recovery in Chromium.
 
 ## Debug mode
 

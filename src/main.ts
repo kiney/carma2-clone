@@ -1,3 +1,18 @@
+import { NativeChaseCamera } from "./camera/chase";
+import { parseCameraSettings, type CameraSettings } from "./camera/settings";
+import { parseTrackCameraSettings } from "./camera/track-settings";
+import { cameraWorldQueries } from "./camera/world-queries";
+import { clearCameraFromWorld } from "./camera/world-clearance";
+import { clearCameraFromOwnShape } from "./camera/own-shape";
+import { selectInitialCameraZoom } from "./camera/startup-zoom";
+import { CameraVehicleTravel } from "./camera/vehicle-travel";
+import { applyCameraControls } from "./camera/controls";
+import {
+  NativeOpponentSpeedController,
+  approachOpponentCurvature,
+} from "./physics/opponent-speed";
+import { applyOpponentHotrod } from "./physics/opponent-hotrod";
+import { NONCAR_FLAGS } from "./physics/noncar-motion";
 import { parseDefaultGravityMultiplier } from "./physics/global-gravity";
 import { BrowserGameClock } from "./game-clock";
 import * as THREE from "three";
@@ -120,6 +135,12 @@ const camera = new THREE.PerspectiveCamera(
   0.035,
   1800,
 );
+const skyCamera = camera.clone();
+const nativeChase = new NativeChaseCamera();
+const cameraVehicleTravel = new CameraVehicleTravel();
+let cameraControlReset = false;
+let nativeCameraSettings: CameraSettings | undefined;
+let cameraNeedsReset = true;
 const missionVariables = new MissionVariables();
 const raceCatalogs = new Map<string, RaceCatalog>();
 const assets = new Assets();
@@ -140,9 +161,7 @@ let carConfig: CarConfig | undefined,
   loading = false,
   cameraMode = 0,
   mapVisible = true;
-let chaseDistance = 1.55,
-  chaseHeight = 0.8,
-  carTargetHeight = 0.18;
+let carTargetHeight = 0.18;
 let repairControl = createRepairControl();
 const gameClock = new BrowserGameClock();
 let lastTime = performance.now(),
@@ -172,7 +191,6 @@ let pedAwardCounter = new PedAwardCounter();
 let rivalsReady = false,
   pedestriansReady = false;
 const keys = new Set<string>(),
-  cameraGoal = new THREE.Vector3(),
   target = new THREE.Vector3(),
   previous = new THREE.Vector3();
 const trackSelect = el("track-select") as HTMLSelectElement,
@@ -180,6 +198,7 @@ const trackSelect = el("track-select") as HTMLSelectElement,
 const stats = {
   ready: false,
   frames: 0,
+  cameraUpdates: 0,
   fps: 0,
   drawCalls: 0,
   triangles: 0,
@@ -244,6 +263,9 @@ const debug = {
   },
   get camera() {
     return camera;
+  },
+  get cameraState() {
+    return { ...nativeChase.state, zoom: nativeChase.zoom };
   },
   get renderPosition() {
     return renderPosition;
@@ -419,6 +441,9 @@ interface Rival {
   previousNode: number;
   stuck: number;
   navigator: RoadNavigator;
+  speedController: NativeOpponentSpeedController;
+  frozen: boolean;
+  hotrodRevision: number;
   wasted: boolean;
   damage: DamageSystem;
   animation: CarAnimation;
@@ -468,6 +493,7 @@ const debugPanel = new DebugPanel(app, {
   recover: () => {
     if (!player || !simulation) return;
     simulation.recover(player);
+    cameraNeedsReset = true;
     pedestrians?.resetCar(player.state.position);
     powerups?.resetPath(player.state.position);
     message(
@@ -521,6 +547,26 @@ async function loadRace() {
     );
     missionVariables.clear();
     const generalText = await assets.text("data/GENERAL.TXT");
+    nativeCameraSettings = parseCameraSettings(generalText);
+    camera.fov = nativeCameraSettings.runtimeFovDegrees;
+    camera.far = Math.fround(
+      nativeCameraSettings.far * parseTrackCameraSettings(trackText),
+    );
+    if (
+      !(
+        camera.far >
+        Math.max(
+          nativeCameraSettings.hitherGeneral,
+          nativeCameraSettings.hitherCockpit,
+        )
+      )
+    )
+      throw new Error(
+        "Track camera Yon multiplier produces an invalid far plane",
+      );
+    camera.near = nativeCameraSettings.hitherGeneral;
+    camera.updateProjectionMatrix();
+    cameraNeedsReset = true;
     const defaultGravityMultiplier = parseDefaultGravityMultiplier(generalText);
     const loadedPowerups = new PowerupSystem(
       assets,
@@ -565,17 +611,9 @@ async function loadRace() {
     const newCarConfig = parseCarConfig(carText);
     await audio.setCar(carText);
     const loadedCar = await assets.scene(dirOf(currentCar), stemOf(currentCar));
-    // Frame each original car from its authored bounds. A fixed Eagle-sized
-    // camera put the viewer inside larger vehicles such as the dumper.
+    // Original visual bounds support optional views and the explicit startup
+    // framing extension; live chase uses native COM/shape equations.
     const cameraBounds = new THREE.Box3().setFromObject(loadedCar.group);
-    const cameraSize = cameraBounds.getSize(new THREE.Vector3());
-    chaseDistance = Math.max(
-      1.55,
-      cameraSize.z * 0.5 + 0.8,
-      cameraSize.y * 1.5,
-      cameraSize.x * 1.5,
-    );
-    chaseHeight = Math.max(0.8, cameraBounds.max.y + 0.35);
     carTargetHeight = Math.max(
       0.18,
       cameraBounds.getCenter(new THREE.Vector3()).y,
@@ -911,9 +949,29 @@ async function loadRace() {
         (track.skySettings?.horizonPixel ?? skyTexture.image.height / 2) /
         skyTexture.image.height;
       sky.position.y = (horizon - 0.5) * height;
+      sky.layers.set(1);
       sky.renderOrder = -10;
       scene.add(sky);
     }
+    if (nativeCameraSettings) {
+      const initialFraming = selectInitialCameraZoom(
+        cameraBounds,
+        player.properties.centerOfMass,
+        player.hulls,
+        { ...nativeCameraSettings, far: camera.far },
+        camera.aspect,
+      );
+      nativeChase.zoom = initialFraming.zoom;
+      if (!initialFraming.framed)
+        assets.warnings.push(
+          `${currentCar}: body exceeds the native camera zoom range at this viewport aspect.`,
+        );
+    }
+    // Async asset loading can render the preceding car; reset only after the
+    // newly selected body and its COM have been published.
+    cameraVehicleTravel.reset(player.state.orientation);
+    cameraControlReset = false;
+    cameraNeedsReset = true;
     camera.position.copy(start).add(new THREE.Vector3(0, 1, 2));
     camera.lookAt(start);
     stats.ready = true;
@@ -1054,6 +1112,9 @@ async function loadRivals(
         nodes.map((p) => new THREE.Vector3(...p)),
         track!.pathEdges,
       ),
+      speedController: new NativeOpponentSpeedController(),
+      frozen: false,
+      hotrodRevision: -1,
       wasted: false,
       damage: rivalDamage,
       id: candidates[i].id,
@@ -1138,16 +1199,37 @@ function motionAnimation(body: SimulatedCar) {
     componentDamage: Array.from(body.damage.componentLevels),
   };
 }
-function updateRivals(dt: number) {
+function updateRivals(dt: number, speedFactor = 1) {
   if (!track || !collision || !vehicle || !race) return;
-  for (const r of rivals) {
-    if (r.wasted) continue;
-    const controls = r.navigator.update(
-      r.state.position,
-      r.state.heading,
-      r.state.speed,
-      dt,
+  const special = rivals.find((rival) => rival.id === 29);
+  const speedState = powerups?.opponentSpeedState;
+  if (special && speedState && special.hotrodRevision !== speedState.revision) {
+    applyOpponentHotrod(
+      rivals,
+      powerups?.definitions[5]?.floatParams ?? [],
+      speedState.active,
     );
+    special.hotrodRevision = speedState.revision;
+  }
+  for (const r of rivals) {
+    if (r.wasted) {
+      r.state.accForce = r.state.brakeForce = 0;
+      continue;
+    }
+    const frozen = speedFactor === 0;
+    if (r.frozen && !frozen) {
+      r.speedController.reset();
+      r.navigator.reset(r.state.position, r.state.heading);
+    }
+    r.frozen = frozen;
+    const controls = frozen
+      ? { throttle: 0, steer: 0, brake: 1, handbrake: false }
+      : r.navigator.update(
+          r.state.position,
+          r.state.heading,
+          r.state.speed,
+          dt,
+        );
     if (controls.recoverTo) {
       const p = controls.recoverTo;
       const h = collision.height(p.x, p.z, p.y + 1);
@@ -1156,6 +1238,26 @@ function updateRivals(dt: number) {
       r.state.velocity.set(0, 0, 0);
       r.state.heading = controls.recoverHeading ?? r.state.heading;
       simulation?.reset(r.body);
+      r.speedController.reset();
+    }
+    const forces = r.speedController.update({
+      desiredSpeed: frozen ? 0 : r.navigator.desiredSpeed * 6.9,
+      velocity: r.state.velocity,
+      factor: speedFactor,
+      engineDamage: r.damage.componentLevels[0],
+      transmissionDamage: r.damage.componentLevels[1],
+      mass: r.body.motion.mass,
+      dtMs: dt * 1000,
+    });
+    r.state.accForce = forces.accForce;
+    r.state.brakeForce = forces.brakeForce;
+    if (!frozen) {
+      const targetCurvature = controls.steer * r.body.motion.maxCurve;
+      r.state.curvature = approachOpponentCurvature(
+        r.state.curvature,
+        targetCurvature,
+        dt * 1000,
+      );
     }
     r.body.input = {
       throttle: controls.throttle,
@@ -1227,6 +1329,7 @@ function recover() {
   );
   if (recovered) {
     simulation.recover(player);
+    cameraNeedsReset = true;
     if (voucher) powerups?.consumeRecoveryVoucher();
     pedestrians?.resetCar(vehicle.position);
     powerups?.resetPath(vehicle.position);
@@ -1304,7 +1407,10 @@ addEventListener("keydown", (event) => {
   }
   if (event.code === "KeyE" && player?.knackered)
     message("CAR WASTED · ENTER TO RESTART");
-  if (event.code === "KeyC") cameraMode = (cameraMode + 1) % 3;
+  if (event.code === "KeyC") {
+    cameraMode = (cameraMode + 1) % 3;
+    cameraNeedsReset = true;
+  }
   if (event.code === "KeyM") {
     mapVisible = !mapVisible;
     el("map").hidden = !mapVisible;
@@ -1497,7 +1603,8 @@ function animate(now: number) {
   const frameSeconds = (now - lastTime) / 1000;
   lastTime = now;
   const gameFrame = gameClock.sample(
-    performance.now(), stats.ready && !loading && !paused,
+    performance.now(),
+    stats.ready && !loading && !paused,
   );
   const dt = (gameFrame?.periodMs ?? 0) / 1000;
   if (gameFrame) {
@@ -1505,11 +1612,6 @@ function animate(now: number) {
     stats.framePeriodMs = gameFrame.periodMs;
     stats.gameTimeMs = gameFrame.endMs;
   }
-  const cameraDt = gameFrame
-    ? gameFrame.cameraPeriodMs / 1000
-    : paused
-      ? Math.min(frameSeconds, 1)
-      : 0;
   // Render FPS uses real elapsed time, independent of the gameplay dt cap.
   seconds += frameSeconds;
   frames++;
@@ -1523,7 +1625,11 @@ function animate(now: number) {
     if (gameFrame && !paused && race.status === "racing") {
       worldAnimation?.update(dt);
       let modifiers = powerups?.beginFrame(
-        dt, vehicle, race, onPowerupEvent, gameFrame.endMs,
+        dt,
+        vehicle,
+        race,
+        onPowerupEvent,
+        gameFrame.endMs,
       );
       previous.copy(vehicle.position);
       if (player && simulation) {
@@ -1578,9 +1684,10 @@ function animate(now: number) {
           // Installed branch bypasses the ordinary brake-key assignment.
           player.input.handbrake = false;
         }
-        updateRivals(dt);
+        updateRivals(dt, modifiers?.opponentSpeedFactor ?? 1);
         const physicsWindow = simulation.updateFrame(
-          gameFrame.startMs, gameFrame.periodMs,
+          gameFrame.startMs,
+          gameFrame.periodMs,
         );
         stats.physicsSkippedMs += physicsWindow.skippedMs;
         modifiers = powerups?.finishFrame();
@@ -1710,31 +1817,100 @@ function animate(now: number) {
       for (const body of simulation.mineBodies)
         if (body.actor.parent) renderPoses.apply(body, body.actor, renderAlpha);
     }
+    if (player && gameFrame)
+      cameraVehicleTravel.update(player.state.velocity, renderOrientation);
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(
       renderOrientation,
     );
     forward.y = 0;
     if (forward.lengthSq() > 1e-8) forward.normalize();
     target.copy(renderPosition).add(new THREE.Vector3(0, carTargetHeight, 0));
-    if (cameraMode === 0) {
-      cameraGoal
-        .copy(renderPosition)
-        .addScaledVector(
-          forward,
-          -chaseDistance - Math.min(Math.abs(vehicle.speed) * 0.06, 0.8),
-        )
-        .add(new THREE.Vector3(0, chaseHeight, 0));
-      const obstruction = collision.sweep(target, cameraGoal, 0.08);
-      if (obstruction)
-        cameraGoal.lerpVectors(
-          target,
-          cameraGoal,
-          Math.max(0.18, obstruction.fraction),
+    if (cameraMode === 0 && player && simulation && nativeCameraSettings) {
+      const com = player.properties.centerOfMass
+        .clone()
+        .applyQuaternion(renderOrientation)
+        .add(renderPosition);
+      // Native camera update mutates reversal/swing history even at dt=0.
+      // Advance once per gameplay frame; extra RAFs only display the pose.
+      if (gameFrame || cameraNeedsReset) {
+        const movement = cameraVehicleTravel.snapshot();
+        if (cameraNeedsReset) {
+          nativeChase.reset(com, renderOrientation, movement.direction);
+        }
+        const dtMs = gameFrame?.cameraPeriodMs ?? 0;
+        const cameraControls = applyCameraControls({
+          zoom: nativeChase.zoom,
+          yaw: nativeChase.state.yawBRenderAngle,
+          reset: cameraControlReset,
+          reverse: nativeChase.state.reverse,
+          dtMs,
+          closer: keys.has("Equal") || keys.has("NumpadAdd"),
+          farther: keys.has("Minus") || keys.has("NumpadSubtract"),
+          orbitLeft: keys.has("BracketLeft"),
+          orbitRight: keys.has("BracketRight"),
+        });
+        nativeChase.zoom = cameraControls.zoom;
+        cameraControlReset = cameraControls.reset;
+        const pose = nativeChase.update({
+          dtMs,
+          worldCOM: com,
+          orientation: renderOrientation,
+          modelVelocity: player.state.velocity,
+          movement,
+          angularVelocityLocal: player.state.angularVelocity
+            .clone()
+            .applyQuaternion(player.state.orientation.clone().invert()),
+          rearWheelZ: player.motion.wheelPositions[0].z,
+          steeringCurvature: player.state.curvature,
+          fovBRenderAngle: nativeCameraSettings.fovAngle16,
+          yawBRenderAngle: cameraControls.yaw,
+          manualMove: cameraControls.manualMove,
+          frameCollision: simulation.cameraContacts.bodies.has(player),
+          cameraReset: cameraNeedsReset || cameraControls.reset,
+        });
+        cameraNeedsReset = false;
+        camera.near = nativeCameraSettings.hitherGeneral;
+        const queries = cameraWorldQueries(collision, () =>
+          simulation!.noncars
+            .filter(
+              (body) => (body.motor.flags & NONCAR_FLAGS.blockCamera) !== 0,
+            )
+            .map((body) => ({
+              hulls: body.hulls,
+              position: body.actor.position,
+              orientation: body.actor.quaternion,
+            })),
         );
-      camera.position.lerp(cameraGoal, 1 - Math.exp(-cameraDt * 6));
-      target.addScaledVector(forward, 0.65);
+        const worldPose = clearCameraFromWorld(
+          pose.cameraPosition,
+          com,
+          camera.near,
+          queries,
+          new THREE.Vector3(0, 1, 0).applyQuaternion(renderOrientation).y < 0,
+        );
+        const ownPose = clearCameraFromOwnShape(
+          worldPose.position,
+          com,
+          {
+            hulls: player.hulls,
+            position: renderPosition,
+            orientation: renderOrientation,
+          },
+          camera.near,
+        );
+        nativeChase.resolvePosition(ownPose.position);
+        camera.position.copy(ownPose.position);
+        stats.cameraUpdates++;
+      }
+      target
+        .copy(camera.position)
+        .add(
+          nativeChase.aim(com, camera.position, nativeCameraSettings.fovAngle16)
+            .aimDirection,
+        );
       car.visible = true;
     } else if (cameraMode === 1) {
+      camera.near = nativeCameraSettings?.hitherCockpit ?? 0.02;
       camera.position
         .copy(renderPosition)
         .add(new THREE.Vector3(0, 0.18, 0))
@@ -1742,9 +1918,11 @@ function animate(now: number) {
       target.addScaledVector(forward, 3);
       car.visible = false;
     } else {
+      camera.near = nativeCameraSettings?.hitherGeneral ?? 0.06;
       camera.position.copy(renderPosition).add(new THREE.Vector3(0, 14, 0.1));
       car.visible = true;
     }
+    camera.updateProjectionMatrix();
     camera.lookAt(target);
     if (sky) {
       sky.position.x = camera.position.x;
@@ -1812,8 +1990,17 @@ function animate(now: number) {
       (simulation.elapsed + simulation.accumulator) * 1000,
     );
   try {
+    // Original sky is a background pass, independent of track Yon clipping.
+    skyCamera.copy(camera);
+    skyCamera.layers.set(1);
+    skyCamera.far = 1800;
+    skyCamera.updateProjectionMatrix();
+    renderer.autoClear = true;
+    renderer.render(scene, skyCamera);
+    renderer.autoClear = false;
     renderer.render(scene, camera);
   } finally {
+    renderer.autoClear = true;
     renderPoses.restore();
   }
   stats.frames++;

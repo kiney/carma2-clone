@@ -524,16 +524,17 @@ export function applyVehicleForces(
     downforce = 0;
   if (!(dt > 0 && Number.isFinite(dt)))
     throw new Error("Motion step must be positive and finite");
-  input = applyDamagedControls(s, input, dt, p.random);
-  steering(s, clamp(input.steer, -1, 1), dt, p, v, omega);
+  const humanControls = (s.driver ?? 8) >= 7;
+  if (humanControls) input = applyDamagedControls(s, input, dt, p.random);
+  if (humanControls) steering(s, clamp(input.steer, -1, 1), dt, p, v, omega);
   let throttle = clamp(input.throttle, 0, 1),
     brake = clamp(input.brake, 0, 1);
   const forwardSpeed = -v.z;
-  if (s.rpm === 0) s.gear = 0;
+  if (humanControls && s.rpm === 0) s.gear = 0;
   const reverse =
     s.gear < 0 ||
     (s.gear === 0 && brake > 0 && throttle === 0 && Math.abs(forwardSpeed) < 1);
-  if (reverse) [throttle, brake] = [brake, throttle];
+  if (humanControls && reverse) [throttle, brake] = [brake, throttle];
   const damage = s.componentDamage ?? [];
   const engineDamage = damage[0] ?? 0;
   let engineTorque =
@@ -544,16 +545,18 @@ export function applyVehicleForces(
       (s.engineFactor ?? 1) *
       (s.powerMultiplier ?? 1) *
       (engineDamage > 10 ? 1 - (engineDamage - 10) * 0.01 : 1);
-  if (throttle === 0) s.tractionControl = true;
-  if (brake === 0) s.brakeForce = 0;
-  else if (s.brakeForce === 0) s.brakeForce = p.initialBrake;
-  else
+  if (humanControls && throttle === 0) s.tractionControl = true;
+  if (humanControls && brake === 0) s.brakeForce = 0;
+  else if (humanControls && s.brakeForce === 0) s.brakeForce = p.initialBrake;
+  else if (humanControls)
     s.brakeForce = Math.min(
       p.initialBrake + p.brakeIncrease,
       s.brakeForce + dt * p.brakeIncrease,
     );
-  let accelerationForce = 0;
-  if (s.gear !== 0) {
+  // Driver<7 bypasses player Controls; the AI's forces remain in the same
+  // source fields through every PHIL step (installed416bfc/41a19e).
+  let accelerationForce = humanControls ? 0 : (s.accForce ?? 0);
+  if (humanControls && s.gear !== 0) {
     accelerationForce = (p.forceTorqueRatio * engineTorque) / s.gear;
     if (s.brakeForce !== 0) s.rpm = s.tractionRpm;
     else if (Math.abs(s.rpm - s.tractionRpm) > 1)
@@ -564,7 +567,8 @@ export function applyVehicleForces(
             1 / (p.speedRevsRatio * p.mass * s.gear)));
   }
   const steeringDamage = s.steeringDamageCurvature ?? 0;
-  s.curvature = clamp(s.curvature + steeringDamage, -p.maxCurve, p.maxCurve);
+  s.curvature += steeringDamage;
+  if (humanControls) s.curvature = clamp(s.curvature, -p.maxCurve, p.maxCurve);
   const rayLength = Math.max(...p.suspensionLength) + 0.5;
   const rayDirection = new Vector3(0, -1, 0).applyQuaternion(s.orientation);
   for (let i = 0; i < 4; i++) {
@@ -690,6 +694,7 @@ export function applyVehicleForces(
   // per-wheel oil values multiply native capacities before tyre allocation.
   const oil = ground.sampleOil?.(wheelPoints, wheelGrounded) ?? [1, 1, 1, 1];
   if (
+    humanControls &&
     input.steer === 0 &&
     (s.wheelLengths[2] < p.suspensionLength[1] ||
       s.wheelLengths[3] < p.suspensionLength[1])
@@ -954,7 +959,8 @@ export function applyVehicleForces(
     .multiplyScalar(dt * INV_S2)
     .applyQuaternion(s.orientation);
   s.angularVelocity.add(deltaOmega);
-  s.accForce = -rearDirection.z * (actual[0] + actual[1]);
+  // Installed41bc52 skips this feedback store for nonhuman drivers.
+  if (humanControls) s.accForce = -rearDirection.z * (actual[0] + actual[1]);
   let timer = context.stopTimer;
   // Native41bb03: the null-volume branch skips BOTH gravity divisions.
   const settlingForce =
@@ -992,57 +998,59 @@ export function applyVehicleForces(
     bodyOmega.z * Math.max(0, 1 - (omegaLength * drag * INV_S2) / p.inertia.z),
   );
   s.angularVelocity.copy(bodyOmega.applyQuaternion(s.orientation));
-  const speed = -s.velocity.clone().applyQuaternion(inv).z * S;
-  s.tractionRpm = s.gear !== 0 ? speed / p.speedRevsRatio / s.gear : 0;
-  if (s.tractionRpm < 0) {
-    s.tractionRpm = 0;
-    s.gear = 0;
+  if (humanControls) {
+    const speed = -s.velocity.clone().applyQuaternion(inv).z * S;
+    s.tractionRpm = s.gear !== 0 ? speed / p.speedRevsRatio / s.gear : 0;
+    if (s.tractionRpm < 0) {
+      s.tractionRpm = 0;
+      s.gear = 0;
+    }
+    let spinForce = engineTorque * p.forceTorqueRatio;
+    if (grounded) spinForce -= s.gear * (s.accForce ?? 0);
+    if (s.gear === 0 && s.rpm > 1000 && throttle > 0 && !input.handbrake) {
+      s.gear = reverse ? -1 : 1;
+      s.tractionRpm = speed / p.speedRevsRatio / s.gear;
+    } else if (s.gear < 2 && brake > 0 && Math.abs(speed) < 1 && s.rpm > 1000)
+      s.gear = -s.gear;
+    s.rpm = Math.max(0, s.rpm + (dt * 5000 * spinForce) / p.forceTorqueRatio);
+    if (
+      s.tractionControl !== false &&
+      spinForce > 0 &&
+      s.tractionRpm < s.rpm &&
+      s.gear !== 0 &&
+      s.tractionRpm > 1000
+    )
+      s.rpm = s.tractionRpm;
+    while (
+      s.tractionRpm > 6000 &&
+      s.gear > 0 &&
+      s.gear < p.maxGear &&
+      !s.justChangedGear
+    ) {
+      s.tractionRpm *= s.gear / (s.gear + 1);
+      s.gear++;
+    }
+    while (s.gear > 1 && s.tractionRpm < 3000 && !s.justChangedGear) {
+      s.tractionRpm *= s.gear / (s.gear - 1);
+      s.gear--;
+    }
+    if (
+      s.rpm < 200 &&
+      s.tractionRpm < 200 &&
+      s.gear < 2 &&
+      throttle === 0 &&
+      !s.justChangedGear
+    )
+      s.gear = 0;
+    if (
+      s.justChangedGear &&
+      s.rpm < 6000 &&
+      s.rpm > 200 &&
+      (s.gear < 2 || s.rpm >= 3000)
+    )
+      s.justChangedGear = false;
+    if (s.rpm >= 6000 && throttle > 0) s.justChangedGear = false;
   }
-  let spinForce = engineTorque * p.forceTorqueRatio;
-  if (grounded) spinForce -= s.gear * s.accForce;
-  if (s.gear === 0 && s.rpm > 1000 && throttle > 0 && !input.handbrake) {
-    s.gear = reverse ? -1 : 1;
-    s.tractionRpm = speed / p.speedRevsRatio / s.gear;
-  } else if (s.gear < 2 && brake > 0 && Math.abs(speed) < 1 && s.rpm > 1000)
-    s.gear = -s.gear;
-  s.rpm = Math.max(0, s.rpm + (dt * 5000 * spinForce) / p.forceTorqueRatio);
-  if (
-    s.tractionControl !== false &&
-    spinForce > 0 &&
-    s.tractionRpm < s.rpm &&
-    s.gear !== 0 &&
-    s.tractionRpm > 1000
-  )
-    s.rpm = s.tractionRpm;
-  while (
-    s.tractionRpm > 6000 &&
-    s.gear > 0 &&
-    s.gear < p.maxGear &&
-    !s.justChangedGear
-  ) {
-    s.tractionRpm *= s.gear / (s.gear + 1);
-    s.gear++;
-  }
-  while (s.gear > 1 && s.tractionRpm < 3000 && !s.justChangedGear) {
-    s.tractionRpm *= s.gear / (s.gear - 1);
-    s.gear--;
-  }
-  if (
-    s.rpm < 200 &&
-    s.tractionRpm < 200 &&
-    s.gear < 2 &&
-    throttle === 0 &&
-    !s.justChangedGear
-  )
-    s.gear = 0;
-  if (
-    s.justChangedGear &&
-    s.rpm < 6000 &&
-    s.rpm > 200 &&
-    (s.gear < 2 || s.rpm >= 3000)
-  )
-    s.justChangedGear = false;
-  if (s.rpm >= 6000 && throttle > 0) s.justChangedGear = false;
   s.curvature -= steeringDamage;
   return {
     wheelSpringLoads: loads,

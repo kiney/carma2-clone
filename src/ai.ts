@@ -46,6 +46,12 @@ export class RoadNavigator {
   private stuckTime = 0;
   private initialized = false;
   private aim = new Vector3();
+  private requestedSpeed = 0;
+
+  /** Model units/second; the native force controller converts to metres/second. */
+  get desiredSpeed(): number {
+    return this.requestedSpeed;
+  }
 
   constructor(
     nodes: Vector3[],
@@ -272,6 +278,7 @@ export class RoadNavigator {
     dt: number,
     target?: Vector3,
   ): RoadControls {
+    this.requestedSpeed = 0;
     if (
       !position.toArray().every(Number.isFinite) ||
       !Number.isFinite(heading) ||
@@ -362,6 +369,7 @@ export class RoadNavigator {
       speed > desiredSpeed + 0.35
         ? clamp((speed - desiredSpeed) * 0.7, 0, 1)
         : 0;
+    this.requestedSpeed = desiredSpeed;
     const throttle =
       brake > 0
         ? 0

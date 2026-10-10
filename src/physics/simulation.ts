@@ -274,7 +274,12 @@ export function createSimulatedCar(
     },
     motion,
   ) as SimulatedVehicleState;
-  Object.assign(state, { heading, speed: 0, health: 100 });
+  Object.assign(state, {
+    heading,
+    speed: 0,
+    health: 100,
+    driver: human ? 8 : 6,
+  });
   const initialHulls = mechanics.shapes.map((shape) =>
     shape.kind === "box"
       ? buildBoxHull(
@@ -2151,26 +2156,29 @@ export class VehicleSimulation {
         this.applyFreeBodyForces(car);
         car.state.rpm = 0;
         car.debug = undefined;
-      } else
+      } else {
+        if (car.knackered && !car.human)
+          car.state.accForce = car.state.brakeForce = 0;
         car.debug = applyVehicleForces(
           car.state,
           {
-            throttle: car.knackered ? 0 : Math.max(0, car.input.throttle),
-            steer: car.knackered && !car.human ? 0 : car.input.steer,
-            brake:
-              car.knackered && !car.human
-                ? 0
-                : Math.max(
-                    Number(car.input.brake),
-                    car.knackered ? 0 : -car.input.throttle,
-                  ),
-            handbrake: !!car.input.handbrake,
+            throttle:
+              car.knackered || !car.human ? 0 : Math.max(0, car.input.throttle),
+            steer: !car.human ? 0 : car.input.steer,
+            brake: !car.human
+              ? 0
+              : Math.max(
+                  Number(car.input.brake),
+                  car.knackered ? 0 : -car.input.throttle,
+                ),
+            handbrake: car.human && !!car.input.handbrake,
           },
           PHYSICS_STEP,
           car.motion,
           this.oilGround(car),
           this.motionContext,
         );
+      }
     }
     this.debris = this.debris.filter((body) => {
       if (body.splitRevision !== undefined) {

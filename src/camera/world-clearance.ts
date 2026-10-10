@@ -14,6 +14,13 @@ export interface CameraWorldQueries {
   ray(from: Vector3, delta: Vector3): CameraWorldHit | undefined;
   /** Native FindFacesInBox order, capped at six by the consumer. */
   faces(min: Vector3, max: Vector3): readonly CameraPlane[];
+  /** Optional verified positive-hit path for camera-blocking active noncars. */
+  noncars?(
+    worldCOM: Vector3,
+    nearProbe: Vector3,
+    extendedEnd: Vector3,
+    selected?: CameraWorldHit,
+  ): { hit?: CameraWorldHit; collided: boolean };
 }
 
 /** Ordinary CollideCamera2 world path, independently expressed from native
@@ -42,8 +49,26 @@ export function clearCameraFromWorld(
       throw new Error("Invalid camera world segment");
     delta.multiplyScalar(1.25);
     hit = queries.ray(worldCOM, delta);
+    if (hit && hit.fraction < 1) collided = true;
+    if (queries.noncars) {
+      const candidate =
+        hit && hit.fraction < 1
+          ? worldCOM.clone().addScaledVector(delta, hit.fraction)
+          : position.clone();
+      const probe = candidate.addScaledVector(
+        delta.clone().normalize(),
+        -clearance,
+      );
+      const result = queries.noncars(
+        worldCOM,
+        probe,
+        worldCOM.clone().add(delta),
+        hit,
+      );
+      collided ||= result.collided;
+      hit = result.hit;
+    }
     if (!hit || hit.fraction > 1) break;
-    if (hit.fraction < 1) collided = true;
     const normal = hit.normal.clone();
     let incidence = normal.dot(delta);
     if (incidence > 0) normal.negate();
