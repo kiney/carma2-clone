@@ -1,10 +1,17 @@
 import * as THREE from "three";
+import {
+  setBouncePowerup,
+  bouncePowerup,
+  type BouncePowerup,
+} from "./physics/bounce";
 import type { VehicleState, RaceState } from "./gameplay";
 import { awardRaceTime, awardRaceCredits } from "./gameplay";
 import {
   setTemporaryMotionPowerup,
   resetTemporaryMotionPowerup,
   type SuspensionPowerupValues,
+  setSuspensionPowerup,
+  resetSuspensionPowerup,
 } from "./physics/upgrades";
 
 /** One sequential record from DATA/POWERUP.TXT. Durations are source seconds. */
@@ -35,6 +42,7 @@ export interface PowerupModifiers {
   timerFrozen: boolean;
   underwaterAbility: boolean;
   instantHandbrake: boolean;
+  bouncePeriodMs: number;
 }
 
 export interface PowerupEvent {
@@ -55,8 +63,8 @@ export interface PowerupEvent {
 }
 
 const implementedActions = new Set([
-  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 26, 27, 28, 30, 34, 35, 36, 46, 47,
-  51,
+  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19, 20, 21, 22, 26, 27, 28, 30, 34, 35, 36,
+  46, 47, 51,
 ]);
 
 export function isPowerupImplemented(definition: PowerupDefinition): boolean {
@@ -152,7 +160,7 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  action: 5 | 6 | 8 | 9 | 10 | 21 | 22 | 27 | 28;
+  action: 5 | 6 | 8 | 9 | 10 | 19 | 20 | 21 | 22 | 27 | 28;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -179,6 +187,15 @@ export class PowerupSystem {
   private underwaterAbility = false;
   private instantHandbrake = false;
   private vouchers = 0;
+  private bounce?: BouncePowerup;
+  private elapsedMs = 0;
+  /** Called after physics, matching native DoPowerupPeriodics ordering. */
+  periodicBounce(state: {
+    velocity: THREE.Vector3;
+    groundedWheelCount?: number;
+  }): boolean {
+    return !!this.bounce && bouncePowerup(state, this.bounce, this.elapsedMs);
+  }
   get recoveryVouchers(): number {
     return this.vouchers;
   }
@@ -277,6 +294,7 @@ export class PowerupSystem {
     onEvent?: (event: PowerupEvent) => void,
   ): PowerupModifiers {
     if (Number.isFinite(dt) && dt > 0) {
+      this.elapsedMs += dt * 1000;
       for (const effect of this.active) {
         if (effect.duration > 0) {
           effect.remaining -= dt;
@@ -328,6 +346,7 @@ export class PowerupSystem {
       timerFrozen: this.timerFrozen,
       underwaterAbility: this.underwaterAbility,
       instantHandbrake: this.instantHandbrake,
+      bouncePeriodMs: this.bounce?.periodMs ?? 0,
     };
     if (this.suspension) modifiers.suspension = this.suspension;
     return modifiers;
@@ -417,6 +436,12 @@ export class PowerupSystem {
         break;
       case 28:
         this.instantHandbrake = false;
+        break;
+      case 19:
+        this.bounce = undefined;
+        break;
+      case 20:
+        this.suspension = resetSuspensionPowerup();
         break;
       case 9:
       case 21: {
@@ -588,13 +613,21 @@ export class PowerupSystem {
         break;
       }
       case 9:
+      case 19:
+      case 20:
       case 21: {
-        const suspension = setTemporaryMotionPowerup(
-          this.motionFactors,
-          def.action,
-          def.floatParams,
-        );
+        const suspension =
+          def.action === 19
+            ? undefined
+            : def.action === 20
+              ? setSuspensionPowerup(def.floatParams)
+              : setTemporaryMotionPowerup(
+                  this.motionFactors,
+                  def.action,
+                  def.floatParams,
+                );
         if (suspension) this.suspension = suspension;
+        if (def.action === 19) this.bounce = setBouncePowerup(def.floatParams);
         // Renewal replaces the previous timer, as for the scalar effects above.
         this.active = this.active.filter(
           (effect) => effect.action !== def.action,

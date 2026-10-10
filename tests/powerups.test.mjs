@@ -253,6 +253,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     timerFrozen: false,
     underwaterAbility: false,
     instantHandbrake: false,
+    bouncePeriodMs: 0,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -712,3 +713,78 @@ test(
     system.dispose();
   },
 );
+
+test("suspension pickups use native five-argument mapping, renewal and independent resets", async () => {
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([
+          { action: 20, duration: 1, floats: [2, 3, 0.1, -0.2, 4] },
+          { action: 9, duration: 3, floats: [2, 1.5, 5, 6, 0.4, 0.5, 7] },
+          { action: 51 },
+        ]),
+    },
+    new THREE.Group(),
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
+  system.grant(1, car, race);
+  system.grant(0, car, race);
+  let modifiers = system.update(0.6, car, race);
+  assert.deepEqual(modifiers.suspension, {
+    frontGiveMultiplier: 2,
+    rearGiveMultiplier: 3,
+    frontExtraLength: 0.1,
+    rearExtraLength: -0.2,
+    dampingMultiplier: 4,
+  });
+  assert.equal(modifiers.accelerationMultiplier, 2);
+  assert.equal(modifiers.lateralGripMultiplier, 1.5);
+  system.grant(0, car, race);
+  assert.equal(system.update(0.6, car, race).suspension.frontGiveMultiplier, 2);
+  modifiers = system.update(0.5, car, race);
+  assert.deepEqual(modifiers.suspension, {
+    frontGiveMultiplier: 1,
+    rearGiveMultiplier: 1,
+    frontExtraLength: 0,
+    rearExtraLength: 0,
+    dampingMultiplier: 1,
+  });
+  // Native setters overwrite shared suspension; expiry does not restore an
+  // older engine-powerup suspension or reset its independent scalar factors.
+  assert.equal(modifiers.accelerationMultiplier, 2);
+  system.grant(0, car, race);
+  system.grant(2, car, race);
+  modifiers = system.update(0, car, race);
+  assert.equal(modifiers.accelerationMultiplier, 1);
+  assert.equal(modifiers.suspension.frontGiveMultiplier, 1);
+});
+
+test("bounce pickups renew the native period and stop on removal without consuming charges", async () => {
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([{ action: 19, duration: 2, floats: [2, 6.9] }, { action: 51 }]),
+    },
+    new THREE.Group(),
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
+  const state = { velocity: new THREE.Vector3(), groundedWheelCount: 4 };
+  system.grant(0, car, race);
+  assert.equal(system.update(0.49, car, race).bouncePeriodMs, 500);
+  assert.equal(system.periodicBounce(state), false);
+  system.update(0.01, car, race);
+  assert.equal(system.periodicBounce(state), true);
+  assert.ok(Math.abs(state.velocity.y - 1) < 1e-7);
+  assert.equal(system.abilities.size, 0);
+  system.grant(0, car, race);
+  // Native renewal zeroes the last-bounce timestamp, not the game clock.
+  assert.equal(system.periodicBounce(state), true);
+  assert.equal(system.update(2.01, car, race).bouncePeriodMs, 0);
+  assert.equal(system.periodicBounce(state), false);
+  system.grant(0, car, race);
+  system.grant(1, car, race);
+  assert.equal(system.update(0, car, race).bouncePeriodMs, 0);
+  assert.equal(system.periodicBounce(state), false);
+});

@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "node server/dev.mjs --production",
     "test": "node --import tsx tests/run.mjs",
-    "test:browser": "npm run build && node tests/browser.mjs && node tests/browser-priority.mjs && node tests/browser-debug.mjs && node tests/browser-spawn-pairs.mjs && node tests/browser-event-audio.mjs && node tests/browser-race-flags.mjs && node tests/browser-smash-missions.mjs && node tests/browser-command-powerups.mjs && node tests/browser-race-awards.mjs && node tests/browser-populations.mjs && node tests/browser-engine-audio.mjs",
+    "test:browser": "npm run build && node tests/browser.mjs && node tests/browser-priority.mjs && node tests/browser-debug.mjs && node tests/browser-spawn-pairs.mjs && node tests/browser-event-audio.mjs && node tests/browser-race-flags.mjs && node tests/browser-smash-missions.mjs && node tests/browser-command-powerups.mjs && node tests/browser-race-awards.mjs && node tests/browser-populations.mjs && node tests/browser-engine-audio.mjs && node tests/browser-motion-powerups.mjs",
     "test:spawn-pairs": "npm run build && node tests/browser-spawn-pairs.mjs",
     "test:debug": "npm run build && node tests/browser-debug.mjs",
     "format": "prettier --write src server tests docs README.md index.html package.json tsconfig.json vite.config.js",
@@ -22,7 +22,8 @@
     "test:command-powerups": "npm run build && node tests/browser-command-powerups.mjs",
     "test:race-awards": "npm run build && node tests/browser-race-awards.mjs",
     "test:populations": "npm run build && node tests/browser-populations.mjs",
-    "test:engine-audio": "npm run build && node tests/browser-engine-audio.mjs"
+    "test:engine-audio": "npm run build && node tests/browser-engine-audio.mjs",
+    "test:motion-powerups": "npm run build && node tests/browser-motion-powerups.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

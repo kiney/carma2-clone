@@ -336,6 +336,37 @@ export interface SuspensionPowerupValues {
   frontExtraLength: number;
   rearExtraLength: number;
 }
+/** Installed action20 SetSuspension 0x4dcc90 forwards five parameters to
+ * AdjustSuspension 0x41fc80: front/rear give, front/rear extra length, damping.
+ */
+export function setSuspensionPowerup(
+  parameters: readonly number[],
+): SuspensionPowerupValues {
+  if (
+    parameters.length !== 5 ||
+    parameters.some((value) => !Number.isFinite(value))
+  )
+    throw new Error("Missing source suspension powerup parameters");
+  return {
+    frontGiveMultiplier: parameters[0],
+    rearGiveMultiplier: parameters[1],
+    frontExtraLength: parameters[2],
+    rearExtraLength: parameters[3],
+    dampingMultiplier: parameters[4],
+  };
+}
+
+/** Installed ResetSuspension 0x4de560 calls AdjustSuspension with defaults. */
+export function resetSuspensionPowerup(): SuspensionPowerupValues {
+  return {
+    frontGiveMultiplier: 1,
+    rearGiveMultiplier: 1,
+    frontExtraLength: 0,
+    rearExtraLength: 0,
+    dampingMultiplier: 1,
+  };
+}
+
 /** Local SetEngineFactor 0x4dc840 and SetTyreGrip 0x4dcce0 assign, rather
  * than multiply, temporary values. SetEngineFactor also adjusts suspension.
  */
@@ -356,13 +387,13 @@ export function setTemporaryMotionPowerup(
   }
   target.engineFactor = parameters[0];
   target.tyreGripFactor = parameters[1];
-  return {
-    frontGiveMultiplier: parameters[2],
-    rearGiveMultiplier: parameters[3],
-    dampingMultiplier: parameters[6],
-    frontExtraLength: parameters[4],
-    rearExtraLength: parameters[5],
-  };
+  return setSuspensionPowerup([
+    parameters[2],
+    parameters[3],
+    parameters[4],
+    parameters[5],
+    parameters[6],
+  ]);
 }
 /** Local engine removal 0x4de3d0 resets both factors and suspension defaults;
  * tyre-only removal resets grip only. No older active effect is reinstated.
@@ -374,11 +405,5 @@ export function resetTemporaryMotionPowerup(
   target.tyreGripFactor = 1;
   if (action === 21) return;
   target.engineFactor = 1;
-  return {
-    frontGiveMultiplier: 1,
-    rearGiveMultiplier: 1,
-    dampingMultiplier: 1,
-    frontExtraLength: 0,
-    rearExtraLength: 0,
-  };
+  return resetSuspensionPowerup();
 }

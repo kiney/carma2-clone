@@ -84,3 +84,6 @@ import "./event-audio.test.mjs";
 import "./earnings-attribution.test.mjs";
 import "./opponent-selection.test.mjs";
 import "./engine-noise.test.mjs";
+
+import "./suspension-powerups.test.mjs";
+import "./bounce-powerups.test.mjs";

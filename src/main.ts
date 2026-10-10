@@ -1502,6 +1502,7 @@ function animate(now: number) {
         player.state.engineFactor = modifiers?.accelerationMultiplier ?? 1;
         player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
         player.state.underwaterAbility = modifiers?.underwaterAbility ?? false;
+        player.state.bounceRate = modifiers?.bouncePeriodMs ?? 0;
         player.damage.damageContext.invulnerable =
           debugPanel.invulnerable || (modifiers?.invulnerable ?? false);
         player.damageMultiplier = modifiers?.damageMultiplier ?? 1;
@@ -1547,6 +1548,7 @@ function animate(now: number) {
         }
         updateRivals(dt);
         simulation.update(dt);
+        if (powerups?.periodicBounce(player.state)) void audio.playSound(9010);
         explosions?.update(simulation.elapsed * 1000);
         // Installed C2 RaceCompleted(reason6) lets the wasted body continue
         // simulating during its ten-second end countdown.
