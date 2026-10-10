@@ -1,3 +1,4 @@
+import { CameraContactFrame } from "../camera/contact-frame";
 import { applyWorldPinball } from "./pinball";
 import { planPhysicsFrameWindow } from "./frame-window";
 import { Box3, Group, Object3D, Quaternion, Triangle, Vector3 } from "three";
@@ -395,6 +396,7 @@ export class VehicleSimulation {
   pinballFactor = 0;
   onPinball?: (body: RigidBody) => void;
   lastImpacts: ContactImpact[] = [];
+  readonly cameraContacts = new CameraContactFrame();
   onBeforeStep?: () => void;
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
@@ -1061,8 +1063,13 @@ export class VehicleSimulation {
       framePeriodMs,
     );
     this.frameWindowActive = true;
+    this.cameraContacts.begin();
     this.elapsed = window.stepStartMs / 1000;
-    for (let i = 0; i < window.steps; i++) this.step();
+    for (let i = 0; i < window.steps; i++) {
+      this.step();
+      this.cameraContacts.step(this.lastImpacts);
+    }
+    this.cameraContacts.finish(window.lastPhysicsTickMs, window.frameEndMs);
     this.elapsed = window.lastPhysicsTickMs / 1000;
     this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
     return window;

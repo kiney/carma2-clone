@@ -51,6 +51,8 @@ export interface Contact {
 }
 
 export interface ContactImpact extends Contact {
+  /** True only after the geometry-changing pre-apply callback accepts the solve. */
+  solverAccepted?: boolean;
   normalImpulse: number;
   closingSpeed: number;
   tangentImpulse: Vector3; // World impulse applied to A.
@@ -522,7 +524,7 @@ export function resolveContacts(
     if (joint.quickHinge) projectQuickHingeVelocities(joint);
   const relative = new Vector3();
   const otherVelocity = new Vector3();
-  const impacts = contacts.map((contact) => {
+  const impacts: ContactImpact[] = contacts.map((contact) => {
     pointVelocity(
       contact.a.state,
       contact.a.properties,
@@ -600,6 +602,7 @@ export function resolveContacts(
     contacts.length,
   );
   if (beforeApply?.(impacts, jointImpacts) === false) return impacts;
+  for (const impact of impacts) impact.solverAccepted = impact.sourceType !== 9;
   const angularDelta = new Vector3();
   for (let i = 0; i < impacts.length; i++) {
     const contact = impacts[i];

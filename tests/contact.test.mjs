@@ -738,3 +738,17 @@ test("source friction remains a free body impulse after quick hinge normal coupl
   near(parent.state.velocity.z, 2);
   near(impact.tangentImpulse.z, -2);
 });
+
+test("camera acceptance marks zero impulse rows but excludes rejected solves and type9", () => {
+  const a = body(1, v(0, 1, 0));
+  const contact = { a, point: v(), normal: v(0, 1, 0) };
+  const accepted = resolveContacts([contact], 0.04, [], (impacts) => {
+    impacts[0].normalImpulse = 0;
+  });
+  assert.equal(accepted[0].normalImpulse, 0);
+  assert.equal(accepted[0].solverAccepted, true);
+  const rejected = resolveContacts([contact], 0.04, [], () => false);
+  assert.equal(rejected[0].solverAccepted, undefined);
+  const disabled = resolveContacts([{ ...contact, sourceType: 9 }]);
+  assert.equal(disabled[0].solverAccepted, false);
+});

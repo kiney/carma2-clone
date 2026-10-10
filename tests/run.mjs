@@ -98,3 +98,12 @@ import "./game-clock.test.mjs";
 import "./physics-frame-window.test.mjs";
 
 import "./powerup-phases.test.mjs";
+
+import "./camera-settings.test.mjs";
+import "./camera-chase.test.mjs";
+import "./camera-own-shape.test.mjs";
+import "./camera-contact-frame.test.mjs";
+import "./camera-track-settings.test.mjs";
+import "./camera-triangle-ray.test.mjs";
+import "./camera-world-clearance.test.mjs";
+import "./camera-triangle-box.test.mjs";
