@@ -10,7 +10,7 @@ instructions, independently implemented where indicated.
 | ------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 16 Gravity    | `0x4dcbb0 / 0x4de520`       | Global `0x74b348=arg0`; restore default `0x74b55c`. Not integrated yet.                                                 |
 | 17 Pinball    | `0x4dcbe0 / 0x4de530`       | Global `0x75f644=arg0`; reset zero. Not integrated yet.                                                                 |
-| 18 Wall-climb | `0x4dcc10 / 0x4de540`       | Car `+0x1c4=1/0`. Not integrated yet.                                                                                   |
+| 18 Wall-climb | `0x4dcc10 / 0x4de540`       | Car `+0x1c4=1/0`. Integrated with wheel-normal gravity and tyre inclination.                                            |
 | 19 Bounce     | `0x4dcc40 / 0x4de550`       | Car period `+0x4c0=1000/arg0`, amount `+0x4c4=arg1`, last-bounce `+0x1598=0`; removal clears period/amount. Integrated. |
 | 20 Suspension | `0x4dcc90 / 0x4de560`       | Calls AdjustSuspension `0x41fc80` with front/rear give, front/rear extra length and damping. Integrated.                |
 
@@ -43,15 +43,26 @@ uses original pickups through the normal grant path and actual vehicle physics.
 ## Remaining verified consumers
 
 Gravity multiplies ordinary car gravity at `0x41bcd7` and generic-body gravity
-at `0x4b6cc2/0x4b6d07/0x4b6d13`; fragments also consume it. Native settling
-at `0x41bb69` divides its force comparison by this factor. Changing only car
-acceleration would leave this action incomplete.
+at `0x4b6cc2/0x4b6d07/0x4b6d13`; fragments also consume it. The custom
+NonCarCalcForce path `0x418270–0x418863` contains no global gravity read: its
+`10/6.9` gravity and motor thrust must not be multiplied indiscriminately.
+GENERAL supplies the default gravity; both installed Stock/Advanced values are 1.
+
+Settling at `0x41bb03–97` has a separate branch. A null volume pointer compares
+raw force magnitude with mass, skipping both gravity divisors. A non-null
+volume compares `forceLength/effectiveVolumeGravity/globalGravity < mass`.
+Its effective volume value is raw authored gravity, without depth mixing;
+with a car driver>5 and underwater ability, use `1-(1-rawGravity)*.6`.
+The acceleration path uses depth mixing instead. Reusing the acceleration
+factor for settling would lose this distinction.
 
 Pinball at `0x41dbca` requires a nonzero factor, null other physics object
 (world contact), and grouped positive impulse weight strictly above `0.0002`.
-For native world impulse J, `dv=J*factor/mass*.2`, `q=dot(dv,dv)`; when `q>500`,
+Group up to four ordered rows with the same object pair and seed-normal dot
+strictly above `0.7071070075035095`. For summed browser/model normal impulse J,
+`dv=J*6.9*factor/mass*.20000000298023224`, `q=dot(dv,dv)`; when `q>500`,
 scale by `500/q`, then add dv to velocity. This is a squared-magnitude cap,
-not a conventional speed clamp. Original `q>1` plays 9011 (human 2D, others 3D).
+not a conventional speed clamp. The **post-cap** squared magnitude greater than 1 plays 9011 (human 2D, others 3D).
 Car-car collisions do not enter this branch.
 
 Wall-climb at `0x41958a` requires driver>5, the flag and a nonzero sum of accepted
@@ -63,4 +74,17 @@ use local Y, and add `-mass*10*direction` in place of ordinary gravity. Global
 gravity does not multiply this wall force. No support or exactly cancelling
 normals uses ordinary gravity. At `0x419bf8`, override the tyre downforce
 inclination cosine to 1, retaining material downforce and other tyre equations.
-These paths remain explicitly pending under PUP-05.
+Wall-climb now uses those existing local wheel normals, the original driver guard and tiny-vector fallback. Numerical conformance checks cover rotation, slope, zero/cancelling/no support and material downforce. The normal pickup/expiry path changes the flag without altering independent engine/grip state. Gravity and Pinball remain pending under PUP-05.
+
+## Wall-climb browser validation
+
+The production Chromium regression grants original action 18, verifies its
+normal expiry, and places the original Eagle3 wheel anchors against a real
+Newcity `tower2` collision face. All four contacts come from the real
+`WorldCollision.wheelRaycast`; no wheel normals or collision geometry are
+stubbed. Identical on/off fixture poses through `VehicleSimulation.update(.04)`
+produce the native support-force difference. The original wall/car screenshot
+is ignored under `artifacts/browser-motion-wall-original.png`. This proves
+original-geometry contact and the force branch, not unrestricted wall traversal.
+Normal driving and the suspension/Bounce regressions remain green, with no
+console, asset-request or WebGL errors.

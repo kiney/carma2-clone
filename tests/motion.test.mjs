@@ -197,6 +197,136 @@ function preload(s, p) {
   return s;
 }
 
+test("wall climbing replaces gravity with the unweighted local support direction", () => {
+  const p = createMotionParameters(mechanics());
+  const run = (normals, options = {}) => {
+    const s = preload(state(p), p);
+    Object.assign(s, options);
+    let wheel = 0;
+    const d = applyVehicleForces(
+      s,
+      neutral,
+      0.04,
+      p,
+      {
+        raycast() {
+          const normal = normals[wheel++];
+          return normal
+            ? {
+                distance: p.wheelPositions[0].y / S,
+                normal,
+                friction: 0,
+                rollingResistance: 0,
+                downforce: 0,
+              }
+            : null;
+        },
+      },
+      createMotionContext(),
+    );
+    return d.force
+      .clone()
+      .addScaledVector(
+        vector(0, 1),
+        -d.wheelSpringLoads.reduce((a, b) => a + b, 0),
+      );
+  };
+  const check = (actual, expected) => {
+    near(actual.x, expected.x);
+    near(actual.y, expected.y);
+    near(actual.z, expected.z);
+  };
+  const wall = Array.from({ length: 4 }, () => vector(1));
+  check(run(wall, { wallClimb: true, volumeGravityFactor: 0.25 }), vector(-20));
+  const slope = vector(0.6, 0.8);
+  check(
+    run([slope, slope, slope, slope], { wallClimb: true }),
+    vector(-12, -16),
+  );
+  // Unequal accepted normal vectors are summed before normalization.
+  check(
+    run([vector(1), vector(0, 1), null, null], { wallClimb: true }),
+    vector(-20 / Math.sqrt(2), -20 / Math.sqrt(2)),
+  );
+  const rotation = new Quaternion().setFromAxisAngle(
+    vector(0, 0, 1),
+    Math.PI / 2,
+  );
+  check(run(wall, { wallClimb: true, orientation: rotation }), vector(0, 20));
+  check(run(wall), vector(0, -20));
+  check(run(wall, { wallClimb: true, driver: 5 }), vector(0, -20));
+  check(run(wall, { wallClimb: true, driver: 6 }), vector(-20));
+  check(
+    run([null, null, null, null], {
+      wallClimb: true,
+      volumeGravityFactor: 0.25,
+    }),
+    vector(0, -5),
+  );
+  check(
+    run([vector(1), vector(-1), vector(1), vector(-1)], {
+      wallClimb: true,
+      volumeGravityFactor: 0.25,
+    }),
+    vector(0, -5),
+  );
+  check(
+    run([vector(), vector(), vector(), vector()], {
+      wallClimb: true,
+      volumeGravityFactor: 0.25,
+    }),
+    vector(0, -5),
+  );
+  // Nonzero sums at/below 2^-22 take local Y, even in a rotated car.
+  for (const magnitude of [2 ** -25, 2 ** -24]) {
+    const tiny = Array.from({ length: 4 }, () => vector(magnitude));
+    check(
+      run(tiny, {
+        wallClimb: true,
+        orientation: rotation,
+        volumeGravityFactor: 0.25,
+      }),
+      vector(0, -20),
+    );
+  }
+  check(
+    run(
+      Array.from({ length: 4 }, () => vector(2 ** -23)),
+      {
+        wallClimb: true,
+        orientation: rotation,
+      },
+    ),
+    vector(0, 20),
+  );
+});
+
+test("wall climbing overrides tyre inclination but retains material, speed and cap", () => {
+  const p = createMotionParameters(mechanics());
+  const run = (normal, speed, factor, wallClimb, driver = 8) => {
+    const s = preload(state(p, vector(0, 0, -speed / S)), p);
+    Object.assign(s, { wallClimb, driver });
+    const road = staticRoad(p, 0, factor);
+    return applyVehicleForces(
+      s,
+      neutral,
+      0.04,
+      p,
+      { raycast: () => ({ ...road.raycast(), normal }) },
+      createMotionContext(),
+    ).downforce;
+  };
+  const slope = vector(0.6, 0.8);
+  near(run(slope, 5, 0.5, false), (20 * 5 * 0.8 * 0.5) / 30);
+  near(run(slope, 5, 0.5, true), (20 * 5 * 0.5) / 30);
+  near(run(vector(1), 5, 0.5, false), 0);
+  near(run(vector(1), 5, 0.5, true), (20 * 5 * 0.5) / 30);
+  near(run(vector(1), 5, 0.5, true, 5), 0);
+  near(run(vector(1), 100, 2, true), 20);
+  near(run(vector(1), 5, 0, true), 0);
+  near(run(vector(1), 5, -1, true), 0);
+});
+
 test("original grouped axle parameters cross gives and normalize tyre angles by static wheel load", () => {
   const source = mechanics(2, 0.06, 0.08, 0.12),
     p = createMotionParameters(source);

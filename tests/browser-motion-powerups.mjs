@@ -357,6 +357,294 @@ try {
   });
   assert.deepEqual(afterExpiry, { period: 0, bounce: false });
 
+  // Verify the original action 18 grant/reset and place the car against a
+  // near-vertical solid face from the loaded Newcity collision mesh. The
+  // deterministic pose tests supported forces; it does not claim arbitrary
+  // authored walls are traversable.
+  await selectRace(selectedCars[0]);
+  const wallClimbDefinition = await page.evaluate(() => {
+    const d = window.carma.powerups.definitions[21];
+    if (!d) throw new Error("Original wall-climb powerup 21 is absent");
+    return {
+      action: d.action,
+      duration: d.duration,
+      params: d.floatParams,
+      integerParams: d.integerParams,
+    };
+  });
+  assert.deepEqual(wallClimbDefinition, {
+    action: 18,
+    duration: 30,
+    params: [],
+    integerParams: [],
+  });
+  await grant(21);
+  await page.evaluate(() => (window.carma.paused = false));
+  await page.waitForFunction(
+    () => window.carma.player.state.wallClimb === true,
+    null,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => (window.carma.paused = true));
+  const wallEvent = await page.evaluate(() =>
+    window.__motionPowerupEvents.findLast((e) => e.index === 21),
+  );
+  assert.deepEqual(wallEvent, { kind: "effect", action: 18, index: 21 });
+
+  const originalGeometryWall = await page.evaluate(() => {
+    const c = window.carma;
+    const sim = c.simulation;
+    const state = c.player.state;
+    const motion = c.player.motion;
+    const world = sim.world;
+    const originalCars = sim.cars;
+    const savedElapsed = sim.elapsed;
+    const savedAccumulator = sim.accumulator;
+    const vec = state.position.clone();
+    const up = vec.clone().set(0, 1, 0);
+    const down = vec.clone().set(0, -1, 0);
+    const scale = 6.9;
+    const wheelPositions = motion.wheelPositions;
+    const rayLength = Math.max(...motion.suspensionLength) + 0.5;
+    const surfaces = [...new Set([...world.cells.values()].flat())].filter(
+      (surface) =>
+        surface.enabled !== false &&
+        surface.collisionMode !== "edges" &&
+        !/^[!>?]/.test(surface.material) &&
+        Math.abs(surface.normal.y) < 0.12 &&
+        surface.normal.lengthSq() > 0.9 &&
+        (surface.a.y + surface.b.y + surface.c.y) / 3 >= 0,
+    );
+    const areaOf = (surface) =>
+      surface.b
+        .clone()
+        .sub(surface.a)
+        .cross(surface.c.clone().sub(surface.a))
+        .length() * 0.5;
+    surfaces.sort((a, b) => areaOf(b) - areaOf(a));
+    const candidates = surfaces.slice(0, 1200);
+    let best = null;
+    let probes = 0;
+    for (const surface of candidates) {
+      const center = surface.a
+        .clone()
+        .add(surface.b)
+        .add(surface.c)
+        .multiplyScalar(1 / 3);
+      for (const side of [1, -1]) {
+        probes++;
+        const normal = surface.normal.clone().normalize().multiplyScalar(side);
+        const orientation = state.orientation
+          .clone()
+          .setFromUnitVectors(up, normal);
+        const avgAnchor = vec.set(0, 0, 0);
+        for (const wheel of wheelPositions)
+          avgAnchor.add(wheel.clone().applyQuaternion(orientation));
+        avgAnchor.multiplyScalar(1 / (wheelPositions.length * scale));
+        const minSuspension = Math.min(...motion.suspensionLength);
+        // Use most of the authored travel so the vehicle body clears the
+        // collision face while each original wheel ray remains supported.
+        const gap = (minSuspension * 0.92) / scale;
+        const position = center
+          .clone()
+          .addScaledVector(normal, gap)
+          .sub(avgAnchor);
+        const direction = down.clone().applyQuaternion(orientation).normalize();
+        const contacts = [];
+        for (let i = 0; i < wheelPositions.length; i++) {
+          const axle = i >> 1;
+          const origin = wheelPositions[i]
+            .clone()
+            .multiplyScalar(1 / scale)
+            .applyQuaternion(orientation)
+            .add(position);
+          const hit = world.wheelRaycast(origin, direction, rayLength / scale);
+          if (
+            hit &&
+            hit.distance * scale <= motion.suspensionLength[axle] + 1e-6
+          )
+            contacts.push({
+              wheel: i,
+              distance: hit.distance,
+              normal: hit.normal.toArray(),
+              material: hit.surface.material,
+            });
+        }
+        if (contacts.length > (best?.contacts.length ?? 0))
+          best = { surface, center, normal, orientation, position, contacts };
+        if (contacts.length >= 3) break;
+      }
+      if (best?.contacts.length >= 3) break;
+    }
+    if (!best)
+      throw new Error(
+        `Original Newcity collision mesh has no searchable surfaces; cells=${world.cells.size}`,
+      );
+    if (best.contacts.length < 3)
+      throw new Error(
+        `Could not place original wheel rays on a near-vertical Newcity face: surfaces=${surfaces.length}, candidates=${candidates.length}, bestAccepted=${best.contacts.length}, probes=${probes}, sample=${JSON.stringify(best.contacts)}`,
+      );
+
+    // Keep a full pre-step snapshot so the on/off runs use identical poses,
+    // wheel state and velocities. The only changed input is wallClimb.
+    const saved = new Map();
+    for (const [key, value] of Object.entries(state)) {
+      if (value?.clone) saved.set(key, value.clone());
+      else if (Array.isArray(value)) saved.set(key, [...value]);
+      else saved.set(key, value);
+    }
+    const restoreState = () => {
+      for (const [key, value] of saved) {
+        const current = state[key];
+        if (current?.copy && value?.clone) current.copy(value);
+        else if (Array.isArray(current) && Array.isArray(value))
+          current.splice(0, current.length, ...value);
+        else state[key] = value;
+      }
+      sim.elapsed = savedElapsed;
+      sim.accumulator = savedAccumulator;
+    };
+    const installFixture = () => {
+      restoreState();
+      state.position.copy(best.position);
+      state.orientation.copy(best.orientation);
+      state.velocity.set(0, 0, 0);
+      state.angularVelocity.set(0, 0, 0);
+      state.wheelLengths = [
+        motion.suspensionLength[0],
+        motion.suspensionLength[0],
+        motion.suspensionLength[1],
+        motion.suspensionLength[1],
+      ];
+      state.rpm = 0;
+      state.tractionRpm = 0;
+      state.gear = 0;
+      sim.accumulator = 0;
+    };
+    const run = (wallClimb) => {
+      installFixture();
+      state.wallClimb = wallClimb;
+      sim.update(0.04);
+      return {
+        grounded: c.player.debug?.grounded,
+        force: c.player.debug?.force.toArray(),
+      };
+    };
+    sim.cars = [c.player];
+    try {
+      const on = run(true);
+      const off = run(false);
+      installFixture();
+      state.wallClimb = true;
+      sim.sync?.(c.player);
+      return {
+        mass: motion.mass,
+        on,
+        off,
+        contactCount: best.contacts.length,
+        contacts: best.contacts,
+        surface: {
+          material: best.surface.material,
+          normal: best.surface.normal.toArray(),
+          vertices: [
+            best.surface.a.toArray(),
+            best.surface.b.toArray(),
+            best.surface.c.toArray(),
+          ],
+        },
+        position: best.position.toArray(),
+        orientation: best.orientation.toArray(),
+        probes,
+      };
+    } finally {
+      restoreState();
+      sim.cars = originalCars;
+      sim.sync?.(c.player);
+    }
+  });
+  assert.ok(
+    originalGeometryWall.contactCount >= 3,
+    JSON.stringify(originalGeometryWall),
+  );
+  assert.ok(
+    originalGeometryWall.on.grounded >= 3,
+    JSON.stringify(originalGeometryWall),
+  );
+  assert.ok(
+    originalGeometryWall.off.grounded >= 3,
+    JSON.stringify(originalGeometryWall),
+  );
+  const forceDelta = originalGeometryWall.on.force.map(
+    (value, i) => value - originalGeometryWall.off.force[i],
+  );
+  assert.ok(
+    forceDelta.some((value) => Math.abs(value) > 1e-3),
+    JSON.stringify({ originalGeometryWall, forceDelta }),
+  );
+
+  // Render the deterministic pose against the same original Newcity face
+  // while the real action is active; this screenshot is visual evidence of
+  // the placement fixture, not a claim that arbitrary walls are traversable.
+  await page.click("#debug-close");
+  await page.evaluate(({ position, orientation, contacts }) => {
+    const c = window.carma;
+    c.player.state.position.fromArray(position);
+    c.player.state.orientation.fromArray(orientation);
+    c.player.state.wallClimb = true;
+    c.simulation.sync(c.player);
+    const up = c.player.state.position.clone().set(0, 1, 0);
+    const normal = c.player.state.position
+      .clone()
+      .fromArray(contacts[0].normal)
+      .normalize();
+    const camera = c.camera;
+    camera.position.copy(
+      c.player.state.position
+        .clone()
+        .addScaledVector(normal, 4)
+        .addScaledVector(up, 1),
+    );
+    camera.lookAt(c.player.state.position);
+    window.__wallCameraRestore = [camera.position.lerp, camera.lookAt];
+    camera.position.lerp = () => camera.position;
+    camera.lookAt = () => {};
+    c.paused = false;
+  }, originalGeometryWall);
+  await page.waitForTimeout(120);
+  await page.screenshot({ path: "artifacts/browser-motion-wall-original.png" });
+  await page.evaluate(() => {
+    window.carma.paused = true;
+    const [lerp, lookAt] = window.__wallCameraRestore;
+    window.carma.camera.position.lerp = lerp;
+    window.carma.camera.lookAt = lookAt;
+    delete window.__wallCameraRestore;
+  });
+
+  await page.evaluate(() => {
+    const c = window.carma;
+    c.powerups.update(31, c.vehicle, c.race);
+    c.paused = false;
+  });
+  await page.waitForFunction(
+    () => window.carma.player.state.wallClimb === false,
+    null,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => (window.carma.paused = true));
+  const wallClimbExpired = await page.evaluate(() => ({
+    state: window.carma.player.state.wallClimb,
+    event: window.__motionPowerupEvents.findLast((e) => e.index === 21),
+  }));
+  assert.equal(wallClimbExpired.state, false);
+  assert.deepEqual(wallClimbExpired.event, {
+    kind: "effect",
+    action: 18,
+    index: 21,
+  });
+
+  await page.evaluate(() => (window.carma.paused = false));
+  await page.waitForTimeout(500);
+
   const gl = await page.evaluate(
     () =>
       document.querySelector("#view").getContext("webgl2")?.getError() ?? null,
@@ -379,6 +667,10 @@ try {
       bounceDefinition,
       bounceHits,
       bounceSounds,
+      wallClimbDefinition,
+      originalGeometryWall,
+      forceDelta,
+      wallClimbExpired,
       webglError: gl,
     }),
   );

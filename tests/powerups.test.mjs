@@ -254,6 +254,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     underwaterAbility: false,
     instantHandbrake: false,
     bouncePeriodMs: 0,
+    wallClimb: false,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -787,4 +788,33 @@ test("bounce pickups renew the native period and stop on removal without consumi
   system.grant(1, car, race);
   assert.equal(system.update(0, car, race).bouncePeriodMs, 0);
   assert.equal(system.periodicBounce(state), false);
+});
+
+test("wall-climb pickup flag renews and clears without altering independent engine/grip state", async () => {
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([
+          { action: 18, duration: 1 },
+          { action: 9, duration: 4, floats: [2, 1.5, 1, 1, 0, 0, 1] },
+          { action: 51 },
+        ]),
+    },
+    new THREE.Group(),
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
+  assert.equal(system.update(0, car, race).wallClimb, false);
+  system.grant(1, car, race);
+  system.grant(0, car, race);
+  assert.equal(system.update(0.6, car, race).wallClimb, true);
+  system.grant(0, car, race);
+  assert.equal(system.update(0.6, car, race).wallClimb, true);
+  const modifiers = system.update(0.5, car, race);
+  assert.equal(modifiers.wallClimb, false);
+  assert.equal(modifiers.accelerationMultiplier, 2);
+  assert.equal(modifiers.lateralGripMultiplier, 1.5);
+  system.grant(0, car, race);
+  system.grant(2, car, race);
+  assert.equal(system.update(0, car, race).wallClimb, false);
 });

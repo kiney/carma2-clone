@@ -50,6 +50,10 @@ export interface MotionState extends RigidState {
   groundedWheelCount?: number;
   /** Source car+0x4c0; bouncing cars cannot enter the stationary clamp. */
   bounceRate?: number;
+  /** Source car+0x1c4; WheelForces applies this only to driver types above 5. */
+  wallClimb?: boolean;
+  /** Source driver type; ordinary player and opponent cars use 8 and 6. */
+  driver?: number;
   /** Original special-volume gravity/viscosity, evaluated before WheelForces. */
   volumeGravityFactor?: number;
   volumeDragFactor?: number;
@@ -654,13 +658,27 @@ export function applyVehicleForces(
       point: wheelSmashPoints[i],
     })),
   );
-  F.add(
-    new Vector3(
-      0,
-      -p.mass * 10 * (s.volumeGravityFactor ?? 1),
-      0,
-    ).applyQuaternion(inv),
-  );
+  const wallClimb = !!s.wallClimb && (s.driver ?? 8) > 5;
+  // HW41958a: test the raw local support sum before normalization. A tiny
+  // nonzero sum uses local Y; an exactly zero sum retains ordinary gravity.
+  if (
+    wallClimb &&
+    (normalSum.x !== 0 || normalSum.y !== 0 || normalSum.z !== 0)
+  ) {
+    const support = normalSum.clone();
+    const length = support.length();
+    if (length > EPS) support.divideScalar(length);
+    else support.set(0, 1, 0);
+    F.addScaledVector(support, -p.mass * 10);
+  } else {
+    F.add(
+      new Vector3(
+        0,
+        -p.mass * 10 * (s.volumeGravityFactor ?? 1),
+        0,
+      ).applyQuaternion(inv),
+    );
+  }
   // GetWheelOil0x4a72d0 tests authored wheel positions in metric coordinates;
   // per-wheel oil values multiply native capacities before tyre allocation.
   const oil = ground.sampleOil?.(wheelPoints, wheelGrounded) ?? [1, 1, 1, 1];
@@ -687,7 +705,11 @@ export function applyVehicleForces(
     const rearLever = zr - p.centerOfMass.z,
       frontLever = zf - p.centerOfMass.z;
     const ratio = frontLever / rearLever;
-    const incline = n.dot(new Vector3(0, 1, 0).applyQuaternion(inv));
+    // HW419bf8: wall climbing replaces inclination independently of the
+    // gravity branch; material factor, speed scaling and force cap remain.
+    const incline = wallClimb
+      ? 1
+      : n.dot(new Vector3(0, 1, 0).applyQuaternion(inv));
     const downFactor = hits[0]?.downforce ?? 1;
     if (incline * downFactor > 0 && p.downforceBalanceSpeed > 0) {
       downforce = Math.min(

@@ -1503,6 +1503,7 @@ function animate(now: number) {
         player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
         player.state.underwaterAbility = modifiers?.underwaterAbility ?? false;
         player.state.bounceRate = modifiers?.bouncePeriodMs ?? 0;
+        player.state.wallClimb = modifiers?.wallClimb ?? false;
         player.damage.damageContext.invulnerable =
           debugPanel.invulnerable || (modifiers?.invulnerable ?? false);
         player.damageMultiplier = modifiers?.damageMultiplier ?? 1;
