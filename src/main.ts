@@ -11,6 +11,7 @@ import type {
   TrackConfig,
   CarConfig,
   RaceCatalogEntry,
+  RaceCatalog,
   OpponentConfig,
 } from "./config";
 import {
@@ -50,6 +51,10 @@ import { NonCarRenderBatch } from "./noncar-render";
 import { WorldDestruction } from "./world-destruction";
 import { MissionVariables } from "./mission-variables";
 import { RacePayout } from "./race-payout";
+import {
+  resolveOpponentRequests,
+  selectOpponentIds,
+} from "./opponent-selection";
 import {
   parseRaceAwards,
   parsePedAwards,
@@ -114,7 +119,7 @@ const camera = new THREE.PerspectiveCamera(
   1800,
 );
 const missionVariables = new MissionVariables();
-const raceCatalogs = new Map<string, RaceCatalogEntry[]>();
+const raceCatalogs = new Map<string, RaceCatalog>();
 const assets = new Assets();
 const audio = new AudioSystem(assets);
 const wastedFeedback = new WastedFeedback(assets, audio);
@@ -306,10 +311,10 @@ async function init() {
       if (catalogPath)
         raceCatalogs.set(
           root,
-          parseRaceCatalog(await assets.text(catalogPath)).races,
+          parseRaceCatalog(await assets.text(catalogPath)),
         );
     }
-    races = raceCatalogs.get("data") ?? [];
+    races = raceCatalogs.get("data")?.races ?? [];
     const opponentPath = assets.resolve("data/OPPONENT.TXT");
     if (opponentPath)
       opponents = parseOpponents(await assets.text(opponentPath));
@@ -323,7 +328,7 @@ async function init() {
       if (!assets.resolve(`${dirOf(entry.path)}/${stemOf(entry.path)}.act`))
         continue;
       const raceEntry = (
-        raceCatalogs.get(entry.path.split("/")[0].toLowerCase()) ?? []
+        raceCatalogs.get(entry.path.split("/")[0].toLowerCase())?.races ?? []
       ).find(
         (r) =>
           r.raceFilename.toLowerCase() ===
@@ -500,7 +505,7 @@ async function loadRace() {
     const newTrack = parseTrackConfig(trackText);
     const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
     definition = (
-      raceCatalogs.get(currentTrack.split("/")[0].toLowerCase()) ?? []
+      raceCatalogs.get(currentTrack.split("/")[0].toLowerCase())?.races ?? []
     ).find(
       (r) =>
         r.raceFilename.toLowerCase() ===
@@ -918,7 +923,11 @@ async function loadRace() {
       .then(() => {
         if (loadGeneration === generation) rivalsReady = true;
       })
-      .catch((error) => console.warn("Opponent content:", error));
+      .catch((error) => {
+        console.warn("Opponent content:", error);
+        if (loadGeneration === generation)
+          message(`OPPONENT LOAD INCOMPLETE · ${String(error)}`, 15);
+      });
   } catch (error) {
     status(`Load failed: ${error instanceof Error ? error.message : error}`);
     console.error(error);
@@ -936,30 +945,33 @@ async function loadRivals(
   const gridOrigin = vehicle.position.clone();
   const gridHeading = vehicle.heading;
   const nodes = track.pathNodes;
-  if (!nodes.length) return;
-  const ids = definition?.explicitOpponents.length
-    ? definition.explicitOpponents
-    : opponents.map((_, id) => id);
-  const candidates = ids
-    .map((id) => ({
-      id,
-      path: opponents[id]
-        ? findConfig("CARS", opponents[id].carFilename)
-        : undefined,
-    }))
-    .filter(
-      (entry): entry is { id: number; path: string } =>
-        !!entry.path && entry.path.toLowerCase() !== currentCar.toLowerCase(),
-    );
-  const count = Math.min(
-    4,
-    Math.max(
-      0,
-      (definition?.numberOfOpponents ?? -1) < 0
-        ? 4
-        : (definition?.numberOfOpponents ?? 4),
-    ),
+  const catalog =
+    raceCatalogs.get(currentTrack.split("/")[0].toLowerCase()) ??
+    raceCatalogs.get("data");
+  if (!catalog)
+    throw new Error("Opponent loading requires the original race catalog");
+  const raceIndex = definition ? catalog.races.indexOf(definition) : 0;
+  const requests = resolveOpponentRequests(catalog, raceIndex);
+  const playerId = opponents.findIndex(
+    (opponent) =>
+      opponent.carFilename.replace(/\.txt$/i, "").toLowerCase() ===
+      stemOf(currentCar).toLowerCase(),
   );
+  const ids = selectOpponentIds(requests, opponents, playerId);
+  if (!ids.length) return;
+  if (!nodes.length)
+    throw new Error(
+      "Opponent navigation data is missing; race population is incomplete",
+    );
+  const candidates = ids.map((id) => {
+    const path = findConfig("CARS", opponents[id].carFilename);
+    if (!path)
+      throw new Error(
+        `Opponent ${id} car asset is missing: ${opponents[id].carFilename}`,
+      );
+    return { id, path };
+  });
+  const count = candidates.length;
   for (let i = 0; i < count && i < candidates.length; i++) {
     const configPath = candidates[i].path;
     const text = await assets.text(configPath);
@@ -996,11 +1008,10 @@ async function loadRivals(
       ...(simulation?.noncars ?? []),
     ]);
     if (!placement.placed) {
-      console.warn(
-        `Skipping opponent ${candidates[i].id}: no supported, collision-free start near the race grid.`,
-      );
       disposeGroup(model.group);
-      continue;
+      throw new Error(
+        `Opponent ${candidates[i].id} has no supported, collision-free start; race population is incomplete`,
+      );
     }
     const state = body.state;
     for (let n = 0; n < nodes.length; n++) {
@@ -1376,11 +1387,10 @@ function checkRaceObjective() {
         : undefined,
     opponentsReady: rivalsReady,
     pedestriansReady,
-    opponentsWastedIds: definition?.opponentsToKill.every((id) =>
-      rivals.some((r) => r.id === id),
-    )
-      ? new Set(rivals.filter((r) => r.damage.wasted).map((r) => r.id))
-      : undefined,
+    opponentInstances: rivals.map((r) => ({
+      id: r.id,
+      wasted: r.damage.wasted,
+    })),
   });
   if (victory.completed) {
     audio.raceEvents([{ type: "completed", lap: race.lap }], race.laps);
@@ -1451,6 +1461,7 @@ function onPowerupEvent(event: PowerupEvent) {
 
 function ensureRacePayout() {
   if (
+    loading ||
     !race ||
     race.status !== "completed" ||
     racePayout ||
@@ -1727,6 +1738,10 @@ function animate(now: number) {
     el("checkpoint").textContent = race.checkpoints.length
       ? `CHECKPOINT ${race.nextCheckpoint + 1}/${race.checkpoints.length}`
       : objectiveText(definition, {
+          opponentInstances: rivals.map((r) => ({
+            id: r.id,
+            wasted: r.damage.wasted,
+          })),
           opponentsTotal: rivals.length,
           opponentsWasted: rivals.filter((r) => r.wasted).length,
           pedestriansTotal: pedestrians?.count ?? 0,

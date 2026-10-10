@@ -67,7 +67,7 @@ try {
   );
   await page.waitForFunction(
     () =>
-      window.carma.rivals.length === 4 && window.carma.pedestrians?.count > 0,
+      window.carma.rivals.length === 5 && window.carma.pedestrians?.count > 0,
     { timeout: 60000 },
   );
   const before = await page.evaluate(() => ({

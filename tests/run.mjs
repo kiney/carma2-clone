@@ -82,3 +82,4 @@ import "./barrier-release.test.mjs";
 import "./event-audio.test.mjs";
 
 import "./earnings-attribution.test.mjs";
+import "./opponent-selection.test.mjs";

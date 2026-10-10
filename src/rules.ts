@@ -7,8 +7,8 @@ export interface RaceProgress {
   opponentsWasted: number;
   pedestriansTotal: number;
   pedestriansKilled: number;
-  /** When available, original opponent catalog IDs allow selected-target missions. */
-  opponentsWastedIds?: ReadonlySet<number>;
+  /** Separate instantiated cars: duplicate catalog IDs remain separate goals. */
+  opponentInstances?: readonly { id: number; wasted: boolean }[];
   /** Counts for original pedestrian group IDs, restricted to this population. */
   groupCounts?: ReadonlyMap<number, { total: number; killed: number }>;
   /** False while asynchronous population loading is still in progress. */
@@ -51,17 +51,17 @@ export function objectiveText(
     return "Finish laps · waste all opponents · hit all pedestrians";
   if (type === "checkpoints") return "Complete the checkpoint laps";
   if (type === "cars") {
-    const requested = definition?.numberOfOpponentsToKill ?? -1;
-    const total = progress
-      ? count(progress.opponentsTotal)
-      : count(definition?.numberOfOpponents ?? 0);
-    const target =
-      requested > 0
-        ? total > 0
-          ? Math.min(requested, total)
-          : requested
-        : total;
-    return `Waste opponents${target > 0 ? ` · ${count(progress?.opponentsWasted ?? 0)}/${target}` : ""}`;
+    const selected = new Set(definition?.opponentsToKill ?? []);
+    const targets = progress?.opponentInstances?.filter(
+      (car) => !selected.size || selected.has(car.id),
+    );
+    const total =
+      targets?.length ??
+      (selected.size ? 0 : count(progress?.opponentsTotal ?? 0));
+    const killed =
+      targets?.filter((car) => car.wasted).length ??
+      (selected.size ? 0 : count(progress?.opponentsWasted ?? 0));
+    return `Waste mission opponents · ${killed}/${total}`;
   }
   if (type === "peds") {
     const required = definition?.pedGroupsToKill ?? [];
@@ -123,25 +123,37 @@ export function applyRaceObjectives(
     const selected = [
       ...new Set((definition?.opponentsToKill ?? []).filter((id) => id >= 0)),
     ];
-    if (selected.length && progress.opponentsWastedIds) {
-      won = selected.every((id) => progress.opponentsWastedIds!.has(id));
-    } else {
-      const requested = definition?.numberOfOpponentsToKill ?? -1;
-      const target =
-        requested > 0
-          ? Math.min(count(requested), count(progress.opponentsTotal))
-          : count(progress.opponentsTotal);
-      won = target > 0 && count(progress.opponentsWasted) >= target;
+    if (selected.length && progress.opponentInstances) {
+      const targets = progress.opponentInstances.filter((car) =>
+        selected.includes(car.id),
+      );
+      won =
+        selected.every((id) => targets.some((car) => car.id === id)) &&
+        targets.length > 0 &&
+        targets.every((car) => car.wasted);
+    } else if (
+      (definition?.numberOfOpponentsToKill ?? -1) < 0 &&
+      !selected.length
+    ) {
+      won = allOpponents;
     }
     message = "OPPONENT OBJECTIVE COMPLETE";
   } else if (type === "peds" && progress.pedestriansReady !== false) {
     const required = [...new Set(definition?.pedGroupsToKill ?? [])];
     if (required.length && progress.groupCounts) {
-      won = required.every((id) => {
-        const group = progress.groupCounts!.get(id);
-        return !!group && allKilled(group.total, group.killed);
-      });
-    } else {
+      const total = required.reduce(
+        (sum, id) => sum + count(progress.groupCounts!.get(id)?.total ?? 0),
+        0,
+      );
+      const killed = required.reduce(
+        (sum, id) => sum + count(progress.groupCounts!.get(id)?.killed ?? 0),
+        0,
+      );
+      won = allKilled(total, killed);
+    } else if (
+      (definition?.numberOfPedGroupsToKill ?? -1) < 0 &&
+      !required.length
+    ) {
       won = allPedestrians;
     }
     message = "PEDESTRIAN OBJECTIVE COMPLETE";

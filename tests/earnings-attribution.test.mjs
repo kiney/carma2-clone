@@ -107,7 +107,7 @@ test("wasted-car attribution carries a human culprit through a static impact onl
   }
 });
 
-test("AI direct contact overwrites player attribution before a static-world waste", async (t) => {
+test("ordinary AI contacts preserve human attribution without refreshing its timestamp", async (t) => {
   const scenario = await targetAndPlayer(t);
   if (!scenario) return;
   const { target, player, simulation } = scenario;
@@ -116,15 +116,42 @@ test("AI direct contact overwrites player attribution before a static-world wast
   const spy = watchRealDamageAndForceWasted(target);
   simulation.applyImpactDamage([impact(target, player)]);
   assert.equal(target.lastAwardAttacker, player);
+  assert.equal(target.lastAwardImpactMs, 0);
+
   simulation.elapsed = 1;
   simulation.applyImpactDamage([impact(target, ai)]);
-  assert.equal(target.lastAwardAttacker, ai);
-  assert.equal(target.lastAwardImpactMs, 1000);
+  assert.equal(target.lastAwardAttacker, player);
+  assert.equal(
+    target.lastAwardImpactMs,
+    0,
+    "ordinary AI contact does not replace the saved human or refresh the 5s window",
+  );
 
   simulation.elapsed = 2;
   spy.wasteOnNextApply();
   simulation.applyImpactDamage([impact(target, undefined)]);
   assert.equal(target.damage.wasted, true);
+  assert.equal(
+    target.wastedByPlayer,
+    true,
+    "static-world continuation within 5s retains the earlier human culprit",
+  );
+});
+
+test("an AI contact that directly wastes a car is not player-attributed", async (t) => {
+  const target = await originalEagle(t, false);
+  if (!target) return;
+  const ai = await originalEagle(t, false);
+  if (!ai) return;
+  const simulation = new VehicleSimulation({}, new Group());
+  const spy = watchRealDamageAndForceWasted(target);
+
+  spy.wasteOnNextApply();
+  simulation.applyImpactDamage([impact(target, ai)]);
+
+  assert.equal(target.damage.wasted, true);
+  assert.equal(target.lastAwardAttacker, undefined);
+  assert.equal(target.lastAwardImpactMs, undefined);
   assert.equal(target.wastedByPlayer, false);
 });
 

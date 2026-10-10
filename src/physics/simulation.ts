@@ -1924,8 +1924,9 @@ export class VehicleSimulation {
               : undefined;
         let awardAttacker = directAttacker;
         // Installed null-other continuation440a6f has a strict5s window.
-        // Car-car sector/control attribution remains RAC-04; an AI source must
-        // overwrite previous human attribution, never inherit its reward.
+        // Car-car sector/control attribution remains RAC-04. Ordinary AI hits
+        // do not update saved human attribution (installed440dce). AI-owned
+        // free parts and mines have separate explicit ownership stores.
         if (
           !other &&
           car.lastAwardAttacker &&
@@ -1933,7 +1934,7 @@ export class VehicleSimulation {
           this.elapsed * 1000 - car.lastAwardImpactMs < 5000
         )
           awardAttacker = car.lastAwardAttacker;
-        if (awardAttacker) {
+        if (awardAttacker && (awardAttacker.human || piece)) {
           car.lastAwardAttacker = awardAttacker;
           car.lastAwardImpactMs = this.elapsed * 1000;
         }

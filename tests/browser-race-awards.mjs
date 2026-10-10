@@ -86,6 +86,9 @@ try {
       track: document.querySelector("#track-select").value,
       name: window.carma.raceDefinition?.name,
       raceType: window.carma.raceDefinition?.raceType,
+      smashVariable: window.carma.raceDefinition?.smashVariable,
+      smashTarget: window.carma.raceDefinition?.smashTarget,
+      pedGroupsToKill: window.carma.raceDefinition?.pedGroupsToKill,
       status: window.carma.race.status,
       timeLeft: window.carma.race.timeLeft,
       credits: window.carma.race.credits,
@@ -279,6 +282,101 @@ try {
   assert.equal(settled.payoutCredits, settled.credits);
   await page.screenshot({ path: "artifacts/browser-race-awards-payout.png" });
 
+  const hardcore = await loadByName("MISSION: HARD CORE");
+  assert.equal(hardcore.raceType, "smashAndPed");
+  assert.equal(hardcore.smashTarget, 19);
+  assert.ok(hardcore.pedGroupsToKill.includes(56));
+  await page.waitForFunction(
+    () => window.carma.pedestrians?.groupCounts?.has(56),
+    null,
+    { timeout: 90000 },
+  );
+  const finalSelectedPed = await page.evaluate(() => {
+    const c = window.carma;
+    const definition = c.raceDefinition;
+    const variable = definition.smashVariable;
+    const target = definition.smashTarget;
+    const system = c.pedestrians;
+    const candidate = system.states.find((state) => state.group === 56);
+    if (!candidate)
+      throw new Error("HARD CORE group 56 has no spawned pedestrian");
+    c.paused = true;
+    c.missionVariables.add(variable, target - 1);
+    const before = {
+      value: c.missionVariables.get(variable),
+      credits: c.race.credits,
+      timeLeft: c.race.timeLeft,
+      killed: system.groupCounts.get(56)?.killed ?? 0,
+      hits: system.hits,
+    };
+    const start = candidate.position.clone();
+    start.x -= 0.55;
+    const end = candidate.position.clone();
+    end.x += 0.55;
+    system.resetCar(start);
+    system.update(0, {
+      position: start,
+      yaw: 0,
+      speed: 0,
+      velocity: c.vehicle.velocity,
+    });
+    c.race.status = "racing";
+    system.update(0, {
+      position: end,
+      yaw: Math.PI / 2,
+      speed: 1,
+      velocity: c.vehicle.velocity,
+    });
+    return {
+      variable,
+      target,
+      value: c.missionVariables.get(variable),
+      status: c.race.status,
+      reason: c.race.completionReason,
+      creditsBefore: before.credits,
+      creditsAfter: c.race.credits,
+      timeBefore: before.timeLeft,
+      timeAfter: c.race.timeLeft,
+      groupKilledBefore: before.killed,
+      groupKilledAfter: system.groupCounts.get(56)?.killed ?? 0,
+      hitsBefore: before.hits,
+      hitsAfter: system.hits,
+    };
+  });
+  assert.equal(finalSelectedPed.value, finalSelectedPed.target);
+  assert.equal(finalSelectedPed.status, "completed");
+  assert.equal(finalSelectedPed.reason, 3);
+  assert.equal(finalSelectedPed.hitsAfter, finalSelectedPed.hitsBefore + 1);
+  assert.equal(
+    finalSelectedPed.groupKilledAfter,
+    finalSelectedPed.groupKilledBefore + 1,
+  );
+  assert.equal(
+    finalSelectedPed.creditsAfter,
+    finalSelectedPed.creditsBefore,
+    "the final selected pedestrian completes the mission before ordinary pedestrian credits",
+  );
+  assert.equal(
+    finalSelectedPed.timeAfter,
+    finalSelectedPed.timeBefore,
+    "the final selected pedestrian completes before ordinary time awards",
+  );
+  await page.waitForFunction(() => window.carma.racePayout, null, {
+    timeout: 10000,
+  });
+  const selectedPedPayout = await page.evaluate(() => ({
+    status: window.carma.race.status,
+    reason: window.carma.race.completionReason,
+    credits: window.carma.race.credits,
+    snapshot: window.carma.racePayout.snapshotCredits,
+  }));
+  assert.equal(selectedPedPayout.status, "completed");
+  assert.equal(selectedPedPayout.reason, 3);
+  assert.equal(selectedPedPayout.snapshot, finalSelectedPed.creditsBefore);
+  await page.screenshot({
+    path: "artifacts/browser-race-awards-final-selected-ped.png",
+  });
+
   const stock = await loadByName("NICE BEAVER");
   await page.waitForFunction(
     () =>
@@ -405,7 +503,7 @@ try {
 
   const carma = await loadByName("NICE BEAVER");
   assert.equal(carma.raceType, "carma");
-  await page.waitForFunction(() => window.carma.rivals.length, null, {
+  await page.waitForFunction(() => window.carma.rivals.length === 5, null, {
     timeout: 30000,
   });
   const finalOpponentWaste = await page.evaluate(async () => {
@@ -510,6 +608,9 @@ try {
     payoutStart,
     naturalAward,
     settled,
+    hardcore,
+    finalSelectedPed,
+    selectedPedPayout,
     pedestrianAwards,
     uncreditedWaste,
     rivalAwards,

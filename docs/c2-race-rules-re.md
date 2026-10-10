@@ -213,9 +213,7 @@ from damage scaling, refreshes accepted static-world continuations, and prevents
 a known AI attacker from inheriting earlier player credit. A zero initial
 timestamp alone never establishes ownership. Direct car-car selection still
 assumes the contacting other car is the attacker; native selection also uses
-pre-impact sectors, speed and control branches that remain unreconstructed.
-Its pointer-based fallback with a strict 750ms window is not implemented because
-the rec2 field names do not establish its semantics. Native mapping of ordinary
+pre-impact sectors, speed and control branches now mapped in [crash earnings evidence](c2-crash-earnings-re.md), awaiting integration. Its pointer-based strict750ms fallback is likewise mapped but not yet implemented. Native mapping of ordinary
 non-car callbacks to a null car argument also remains open. These limitations
 are explicit; any knackered car must not automatically earn player credit.
 
@@ -272,7 +270,7 @@ credit awards when completion sets the finish flag is consistent with the later
 payout snapshot. The global multiplier remains a separate TODO gap. Debug grants
 are administrative overrides.
 
-The integrated numerical conformance suite passes 647 tests. Actual Chromium validation (`tests/browser-race-awards.mjs`) passes original Eye of the Beaver completion, natural ten-second delay, completion sound8015 once, deferred credits and Enter full settlement. Stock pedestrian callbacks award300/+15 then600/+15; Advanced awards300/+10. An unattributed wreck pays nothing, while an attributed softness1.5 victim pays700/+120. The last Nice Beaver opponent completes with reason2 before its individual reward. Real keyboard driving, console/network and WebGL checks pass. Screenshots and reports remain ignored; MCP remains unavailable. These deterministic handler checks do not prove every collision classification.
+The integrated numerical conformance suite passes 653 tests. Actual Chromium validation (`tests/browser-race-awards.mjs`) passes original Eye of the Beaver completion, natural ten-second delay, completion sound8015 once, deferred credits and Enter full settlement. Stock pedestrian callbacks award300/+15 then600/+15; Advanced awards300/+10. An unattributed wreck pays nothing, while an attributed softness1.5 victim pays700/+120. The last Nice Beaver opponent completes with reason2 before its individual reward. Real keyboard driving, console/network and WebGL checks pass. Screenshots and reports remain ignored; MCP remains unavailable. These deterministic handler checks do not prove every collision classification.
 
 ### Final normal kill ordering
 
@@ -294,16 +292,16 @@ actual damage-wasted state rather than waiting for the rival HUD flag.
 
 This ordering is cause-specific: napalm cleanup scores at `0x4d545d` before
 accounting at `0x4d54c0`. It must not be generalized to every future special-kill
-callback. Chromium verifies final-goal opponent suppression; the final selected-pedestrian kill still needs a focused browser regression.
+callback. Chromium verifies final-goal opponent suppression and a real final group-56 Hard Core sweep.
 
-## Population/selection reconstruction pending integration (RAC-02)
+## Population and selection (RAC-02)
 
 Installed LoadRaces `0x48c502–0x48c53c` resolves a negative opponent count
 using `trunc(first + index/(catalogCount-1)*(last-first))`. The defaults are
 RACES headers, Stock 5→11 and Advanced 10→13 across 40 catalog entries, not
 GENERAL. Nice Beaver has five AI opponents; Boulder Dash explicitly has zero;
 Trucking Hell has one authored ID38; The Bruise Brothers has twelve separate
-ID51 instances. The current browser cap of four is not native.
+ID51 instances. The browser now loads the original resolved count instead of imposing a cap of four.
 
 SelectOpponents `0x5036b0` preserves explicit IDs and duplicate instances, even
 when their model matches the player's car. Random fillers use ChooseOpponent
@@ -324,4 +322,8 @@ OneLessPed `0x4ccf95` compares selected kills against that aggregate; it does
 not require every listed group to have a member. A zero selected population
 cannot auto-win at initialization because the comparison occurs on a selected
 death event. Preserve loading/failure guards while removing substitute totals.
-These are verified rules for the next implementation, not a completion claim.
+These rules are integrated in opponent-selection, main and rules. Numerical tests cover original catalogs, duplicate instances, player/random exclusions, selected-union goals and missing-population guards. Chromium checks five Nice Beaver opponents, one Trucking Hell ID38, and twelve separate Bruise Brothers ID51 instances with Eagle and Bugga player selections; no console/network/WebGL failures. Separate AI driving fidelity remains under AI entries.
+
+The Hard Core final selected-pedestrian regression now uses a real group-56 sweep with the mission counter at18/19: it completes reason3 without a pedestrian credit/time award and snapshots the new race credits. This also reproduced and fixed a race-load reentrancy defect: ensureRacePayout must not recreate the previous completed race payout while loadRace awaits original assets.
+
+Ordinary offline AI car contacts do not overwrite saved human attribution: installed driver guard0x440dce skips those stores. This is now corrected and tested separately from immediate AI-caused wasting (no player reward). AI mine/free-part ownership can overwrite through their separate explicit paths; do not generalize the car-car guard to those paths.

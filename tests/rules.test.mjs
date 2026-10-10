@@ -71,7 +71,7 @@ test("zero populations and partial asynchronous populations never win automatica
   );
 });
 
-test("car missions support selected opponent identities and bounded-population fallback totals", () => {
+test("selected car missions require every requested catalog identity to be present and wasted", () => {
   const selected = definition("cars", {
     numberOfOpponentsToKill: 2,
     opponentsToKill: [7, 12],
@@ -82,8 +82,14 @@ test("car missions support selected opponent identities and bounded-population f
       race,
       selected,
       progress({
+        opponentsTotal: 4,
         opponentsWasted: 4,
-        opponentsWastedIds: new Set([3, 7, 8, 9]),
+        opponentInstances: [
+          { id: 7, wasted: true },
+          { id: 8, wasted: true },
+          { id: 9, wasted: true },
+          { id: 10, wasted: true },
+        ],
       }),
     ).completed,
     false,
@@ -92,7 +98,12 @@ test("car missions support selected opponent identities and bounded-population f
     applyRaceObjectives(
       race,
       selected,
-      progress({ opponentsWasted: 2, opponentsWastedIds: new Set([7, 12]) }),
+      progress({
+        opponentInstances: [
+          { id: 7, wasted: true },
+          { id: 12, wasted: true },
+        ],
+      }),
     ).completed,
     true,
   );
@@ -100,9 +111,10 @@ test("car missions support selected opponent identities and bounded-population f
     applyRaceObjectives(
       createRace([]),
       selected,
-      progress({ opponentsWasted: 2 }),
+      progress({ opponentInstances: [{ id: 7, wasted: true }] }),
     ).completed,
-    true,
+    false,
+    "missing selected IDs cannot shrink the mission target",
   );
   assert.equal(
     applyRaceObjectives(
@@ -111,18 +123,50 @@ test("car missions support selected opponent identities and bounded-population f
       progress({ opponentsWasted: 3 }),
     ).completed,
     false,
+    "negative/all missions still require the full opponent population",
   );
   assert.equal(
     applyRaceObjectives(
       createRace([]),
-      definition("cars", { numberOfOpponentsToKill: 12 }),
+      definition("cars", { numberOfOpponentsToKill: -1 }),
       progress({ opponentsWasted: 4 }),
     ).completed,
     true,
   );
 });
 
-test("pedestrian missions require every specified group when group counts are available", () => {
+test("duplicate selected car IDs count every requested instance, not one unique catalog ID", () => {
+  const mission = definition("cars", {
+    numberOfOpponentsToKill: 12,
+    opponentsToKill: Array(12).fill(51),
+  });
+  const elevenWasted = Array.from({ length: 12 }, (_, index) => ({
+    id: 51,
+    wasted: index < 11,
+  }));
+  const race = createRace([]);
+  const partial = applyRaceObjectives(
+    race,
+    mission,
+    progress({ opponentInstances: elevenWasted }),
+  );
+  assert.equal(partial.completed, false);
+  assert.match(partial.objectiveText, /11\/12/);
+  const complete = applyRaceObjectives(
+    race,
+    mission,
+    progress({
+      opponentInstances: elevenWasted.map((opponent) => ({
+        ...opponent,
+        wasted: true,
+      })),
+    }),
+  );
+  assert.equal(complete.completed, true);
+  assert.match(complete.objectiveText, /12\/12/);
+});
+
+test("pedestrian mission groups use authoritative counts and allow an unpopulated selected group", () => {
   const mission = definition("peds", { pedGroupsToKill: [42, 60] });
   const race = createRace([]);
   const groups = new Map([
@@ -155,9 +199,25 @@ test("pedestrian missions require every specified group when group counts are av
     applyRaceObjectives(
       createRace([]),
       mission,
-      progress({ pedestriansKilled: 20 }),
+      progress({
+        pedestriansKilled: 20,
+        groupCounts: new Map([
+          [42, { total: 2, killed: 2 }],
+          [60, { total: 0, killed: 0 }],
+        ]),
+      }),
     ).completed,
     true,
+    "selected group with zero spawned members imposes no kill requirement",
+  );
+  assert.equal(
+    applyRaceObjectives(
+      createRace([]),
+      mission,
+      progress({ pedestriansKilled: 20 }),
+    ).completed,
+    false,
+    "aggregate pedestrian totals cannot replace missing group-count data",
   );
 });
 
