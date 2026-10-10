@@ -362,10 +362,14 @@ export function applyGenericVolumeForces(
   depth: number,
   dt: number,
   extraWaterTransitionDrag = false,
+  globalGravityMultiplier = 1,
 ) {
   if (!(dt > 0 && Number.isFinite(dt)))
     throw new Error("Invalid volume force timestep");
-  const gravity = volume ? volume.gravityMultiplier * depth : 1;
+  if (!Number.isFinite(globalGravityMultiplier))
+    throw new Error("Invalid global gravity");
+  const gravity =
+    (volume ? volume.gravityMultiplier * depth : 1) * globalGravityMultiplier;
   body.state.velocity.y -= (9.8 / 6.9) * gravity * dt;
   const viscosity = volume ? volume.viscosityMultiplier * depth : 1;
   const dragPass = () => {

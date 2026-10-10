@@ -8,8 +8,8 @@ instructions, independently implemented where indicated.
 
 | Action        | Installed setter / resetter | State and implementation                                                                                                |
 | ------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 16 Gravity    | `0x4dcbb0 / 0x4de520`       | Global `0x74b348=arg0`; restore default `0x74b55c`. Not integrated yet.                                                 |
-| 17 Pinball    | `0x4dcbe0 / 0x4de530`       | Global `0x75f644=arg0`; reset zero. Not integrated yet.                                                                 |
+| 16 Gravity    | `0x4dcbb0 / 0x4de520`       | Global `0x74b348=arg0`; restore default `0x74b55c`. Integrated across car and generic-body gravity.                                                 |
+| 17 Pinball    | `0x4dcbe0 / 0x4de530`       | Global `0x75f644=arg0`; reset zero. Integrated in ordered world-contact impulse groups.                                                                 |
 | 18 Wall-climb | `0x4dcc10 / 0x4de540`       | Car `+0x1c4=1/0`. Integrated with wheel-normal gravity and tyre inclination.                                            |
 | 19 Bounce     | `0x4dcc40 / 0x4de550`       | Car period `+0x4c0=1000/arg0`, amount `+0x4c4=arg1`, last-bounce `+0x1598=0`; removal clears period/amount. Integrated. |
 | 20 Suspension | `0x4dcc90 / 0x4de560`       | Calls AdjustSuspension `0x41fc80` with front/rear give, front/rear extra length and damping. Integrated.                |
@@ -40,7 +40,7 @@ renewal, removal, independent engine factors, unsigned bounce age, two versus
 three supported wheels and horizontal-momentum preservation. Browser validation
 uses original pickups through the normal grant path and actual vehicle physics.
 
-## Remaining verified consumers
+## Verified gravity and contact consumers
 
 Gravity multiplies ordinary car gravity at `0x41bcd7` and generic-body gravity
 at `0x4b6cc2/0x4b6d07/0x4b6d13`; fragments also consume it. The custom
@@ -74,7 +74,7 @@ use local Y, and add `-mass*10*direction` in place of ordinary gravity. Global
 gravity does not multiply this wall force. No support or exactly cancelling
 normals uses ordinary gravity. At `0x419bf8`, override the tyre downforce
 inclination cosine to 1, retaining material downforce and other tyre equations.
-Wall-climb now uses those existing local wheel normals, the original driver guard and tiny-vector fallback. Numerical conformance checks cover rotation, slope, zero/cancelling/no support and material downforce. The normal pickup/expiry path changes the flag without altering independent engine/grip state. Gravity and Pinball remain pending under PUP-05.
+Wall-climb now uses those existing local wheel normals, the original driver guard and tiny-vector fallback. Numerical conformance checks cover rotation, slope, zero/cancelling/no support and material downforce. The normal pickup/expiry path changes the flag without altering independent engine/grip state. Gravity and Pinball now use the verified consumers below.
 
 ## Wall-climb browser validation
 
@@ -88,3 +88,54 @@ is ignored under `artifacts/browser-motion-wall-original.png`. This proves
 original-geometry contact and the force branch, not unrestricted wall traversal.
 Normal driving and the suspension/Bounce regressions remain green, with no
 console, asset-request or WebGL errors.
+
+## Gravity and Pinball integration
+
+Action 16 assigns a native Float32 scalar; it does not multiply the current
+value. Removal restores the parsed GENERAL default, including a non-unit
+custom default. Action 17 likewise assigns its first Float32 parameter and
+removal restores zero. Renewal replaces the corresponding timeout. Both are
+global effects; normal pickup, debug grant, expiry and neutralization share
+the same state path.
+
+Ordinary car forces and generic free-body gravity (including mines and detached
+parts) consume the global multiplier. Wall-climb support gravity bypasses it.
+Custom NonCarCalcForce instead consumes raw authored volume gravity, without
+depth mixing or the global multiplier; its motor thrust remains unchanged.
+The separate settling calculation honors the native driver>5 underwater guard
+and distinguishes a null volume from a present volume with multiplier one.
+
+Pinball consumes raw grouped world-contact normal impulses after geometry
+mutation and damage processing, before normal solver impulses and friction.
+Disabled type9 rows and contacts with another physics object do not qualify.
+Resting contacts are eligible: the native branch has no closing-speed gate.
+Numerical tests cover seed-normal grouping, four-row limits, zero-weight
+slots, the strict impulse threshold, mass scaling, the squared-magnitude cap,
+post-cap audio eligibility and car-car exclusion.
+
+Original-data tests cover Eagle and Buggy forces, actual simulation propagation,
+GENERIC mine gravity and the custom noncar volume path. Regression fixtures
+separate depth-mixed acceleration from raw-volume settling and verify lower
+driver types do not gain the underwater settling adjustment. The normal sound
+9011 callback is integrated; spatial playback for other bodies remains the
+existing AUD-03 gap rather than a claim of native positional audio parity.
+
+## Integrated browser validation
+
+The final production bundle `index-DLXT3med.js` passed both
+`tests/browser-motion-powerups.mjs` and `tests/browser-priority.mjs`. Original
+Lunar/Jupiter pickups set gravity to Float32(.35)/5 for Eagle and a real
+F-key-launched mine, then expire to GENERAL's one. Airborne .04-second samples
+have no car contacts and preserve the separate car/generic gravity constants.
+Original Pinball index20 produces four real tower-wall contact rows, one
+9011 callback and an extra velocity approximately `[3.4796,0,-.000052]`; real
+two-car contacts produce no callback and expiry restores zero.
+
+The same run checks soft/hard suspension for Eagle/Buggy, a grounded Bounce
+impulse and sound, the original wall-climb contact fixture, ordinary keyboard
+driving, water/underwater exit, mines/repair, oil, lift, door smash, recovery,
+pedestrians and WASTED. Both harnesses report zero console errors, failed
+requests and WebGL errors; screenshots were inspected. Chrome DevTools MCP
+was unavailable in the runtime, so these checks use the established real
+Chromium/Playwright fallback, not a simulated renderer. The full automated
+suite passed 694 tests before the final additional Pinball boundary checks.

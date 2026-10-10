@@ -89,3 +89,8 @@ import "./suspension-powerups.test.mjs";
 import "./bounce-powerups.test.mjs";
 
 import "./frame-period.test.mjs";
+
+import "./global-gravity.test.mjs";
+import "./pinball.test.mjs";
+
+import "./gravity-simulation.test.mjs";

@@ -1,3 +1,4 @@
+import { parseDefaultGravityMultiplier } from "./physics/global-gravity";
 import * as THREE from "three";
 import { placeCarAtStart } from "./physics/spawn";
 import { Assets } from "./content";
@@ -512,11 +513,14 @@ async function loadRace() {
         currentTrack.split("/").pop()!.toLowerCase(),
     );
     missionVariables.clear();
+    const generalText = await assets.text("data/GENERAL.TXT");
+    const defaultGravityMultiplier = parseDefaultGravityMultiplier(generalText);
     const loadedPowerups = new PowerupSystem(
       assets,
       world.group,
       Math.random,
       definition?.powerupExclusions ?? [],
+      defaultGravityMultiplier,
     );
     loadedPowerups.onPickup = (definition) =>
       audio.powerupPickup(definition.index);
@@ -528,7 +532,6 @@ async function loadRace() {
         assets.resolve("data/PIXELMAP/PIX8/OIL.PIX");
       if (oilPath) await assets.pixelmaps(oilPath);
     }
-    const generalText = await assets.text("data/GENERAL.TXT");
     raceAwards = parseRaceAwards(generalText);
     pedAwards = parsePedAwards(
       await assets.text(
@@ -750,6 +753,8 @@ async function loadRace() {
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    simulation.gravityMultiplier = defaultGravityMultiplier;
+    simulation.onPinball = () => void audio.playSound(9011);
     simulation.onWorldGeometryChanged = () =>
       pedestrians?.invalidateWorldGeometry();
     simulation.specialVolumes = parseTrackSpecialVolumes(trackText);
@@ -1499,6 +1504,9 @@ function animate(now: number) {
       const modifiers = powerups?.update(dt, vehicle, race, onPowerupEvent);
       previous.copy(vehicle.position);
       if (player && simulation) {
+        simulation.gravityMultiplier =
+          modifiers?.gravityMultiplier ?? simulation.gravityMultiplier;
+        simulation.pinballFactor = modifiers?.pinballFactor ?? 0;
         player.state.engineFactor = modifiers?.accelerationMultiplier ?? 1;
         player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
         player.state.underwaterAbility = modifiers?.underwaterAbility ?? false;

@@ -528,6 +528,10 @@ try {
       return {
         grounded: c.player.debug?.grounded,
         force: c.player.debug?.force.toArray(),
+        volumeGravityFactor: state.volumeGravityFactor,
+        authoredVolumeGravity:
+          c.player.specialVolume?.volume?.gravityMultiplier ?? null,
+        globalGravityMultiplier: state.globalGravityMultiplier,
       };
     };
     sim.cars = [c.player];
@@ -642,6 +646,469 @@ try {
     index: 21,
   });
 
+  // Action 16 is global to cars and generic free bodies. Launch an original
+  // mine through its normal ability/key path so the free-body gravity check
+  // uses a real simulation body rather than a fabricated rigid body.
+  await selectRace(selectedCars[0]);
+  const openDebugPanel = async () => {
+    if (await page.locator("#debug-panel").evaluate((node) => node.hidden))
+      await page.click("#debug-button");
+    await page.waitForFunction(
+      () =>
+        !document.querySelector("#debug-panel").hidden &&
+        document.querySelector("#debug-enabled").checked,
+      null,
+      { timeout: 5000 },
+    );
+  };
+  await openDebugPanel();
+  const gravityDefinitions = await page.evaluate(() =>
+    [19, 45].map((index) => {
+      const definition = window.carma.powerups.definitions[index];
+      if (!definition)
+        throw new Error(`Original gravity powerup ${index} missing`);
+      return {
+        index,
+        action: definition.action,
+        duration: definition.duration,
+        params: definition.floatParams,
+      };
+    }),
+  );
+  assert.deepEqual(gravityDefinitions, [
+    { index: 19, action: 16, duration: 30, params: [0.35] },
+    { index: 45, action: 16, duration: 30, params: [5] },
+  ]);
+  const defaultGravity = await page.evaluate(
+    () => window.carma.simulation.gravityMultiplier,
+  );
+  assert.ok(Math.abs(defaultGravity - 1) < 1e-6, `${defaultGravity}`);
+
+  await grant(52);
+  const mineAbilityEvent = await page.evaluate(() =>
+    window.__motionPowerupEvents.findLast((event) => event.index === 52),
+  );
+  assert.deepEqual(
+    { kind: mineAbilityEvent.kind, action: mineAbilityEvent.action },
+    { kind: "ability", action: 34 },
+  );
+  await page.evaluate(() => (window.carma.paused = false));
+  await page.locator("#view").click({ position: { x: 640, y: 400 } });
+  await page.keyboard.press("f");
+  await page.waitForFunction(
+    () => window.carma.simulation.mineBodies.length > 0,
+    null,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => (window.carma.paused = true));
+  const launchedMine = await page.evaluate(() => {
+    const body = window.carma.simulation.mineBodies[0];
+    return {
+      kind: body.kind,
+      mass: body.properties.mass,
+      position: body.state.position.toArray(),
+    };
+  });
+  assert.ok(launchedMine.mass > 0, JSON.stringify(launchedMine));
+
+  const sampleGravityFall = async () =>
+    page.evaluate(() => {
+      const c = window.carma;
+      const sim = c.simulation;
+      const car = c.player;
+      const freeBody = sim.mineBodies[0];
+      if (!freeBody) throw new Error("Original mine body disappeared");
+      const savedCars = sim.cars;
+      const savedElapsed = sim.elapsed;
+      const savedAccumulator = sim.accumulator;
+      const savedSpecialVolume = freeBody.specialVolume;
+      const saveState = (state) =>
+        new Map(
+          Object.entries(state).map(([key, value]) => [
+            key,
+            value?.clone
+              ? value.clone()
+              : Array.isArray(value)
+                ? [...value]
+                : value,
+          ]),
+        );
+      const restoreState = (state, saved) => {
+        for (const [key, value] of saved) {
+          const current = state[key];
+          if (current?.copy && value?.clone) current.copy(value);
+          else if (Array.isArray(current) && Array.isArray(value))
+            current.splice(0, current.length, ...value);
+          else state[key] = value;
+        }
+      };
+      const savedCar = saveState(car.state);
+      const savedFreeBody = saveState(freeBody.state);
+      try {
+        car.state.position.y = 100;
+        car.state.velocity.set(0, 0, 0);
+        car.state.angularVelocity.set(0, 0, 0);
+        freeBody.state.position.y = 100;
+        freeBody.state.velocity.set(0, 0, 0);
+        freeBody.state.angularVelocity.set(0, 0, 0);
+        sim.accumulator = 0;
+        const beforeElapsed = sim.elapsed;
+        sim.update(0.04);
+        const elapsed = sim.elapsed - beforeElapsed;
+        return {
+          factor: sim.gravityMultiplier,
+          elapsed,
+          carAcceleration: car.state.velocity.y / elapsed,
+          carVelocityY: car.state.velocity.y,
+          carGrounded: car.debug?.grounded ?? 0,
+          carVolumeGravityFactor: car.state.volumeGravityFactor,
+          carAuthoredVolumeGravity:
+            car.specialVolume?.volume?.gravityMultiplier ?? null,
+          freeAcceleration: freeBody.state.velocity.y / elapsed,
+          freeVelocityY: freeBody.state.velocity.y,
+          freeMass: freeBody.properties.mass,
+          freeAuthoredVolumeGravity:
+            freeBody.specialVolume?.volume?.gravityMultiplier ?? null,
+        };
+      } finally {
+        restoreState(car.state, savedCar);
+        restoreState(freeBody.state, savedFreeBody);
+        freeBody.specialVolume = savedSpecialVolume;
+        sim.cars = savedCars;
+        sim.elapsed = savedElapsed;
+        sim.accumulator = savedAccumulator;
+      }
+    });
+  const applyGravityGrant = async (index, expected) => {
+    await grant(index);
+    await page.evaluate(() => (window.carma.paused = false));
+    await page.waitForFunction(
+      (factor) => {
+        const c = window.carma;
+        return (
+          Math.abs(c.simulation.gravityMultiplier - factor) < 1e-6 &&
+          Math.abs(c.player.state.globalGravityMultiplier - factor) < 1e-6
+        );
+      },
+      expected,
+      { timeout: 5000 },
+    );
+    await page.evaluate(() => (window.carma.paused = true));
+  };
+  await applyGravityGrant(19, 0.35);
+  const lunarFall = await sampleGravityFall();
+  await applyGravityGrant(45, 5);
+  const jupiterFall = await sampleGravityFall();
+  for (const sample of [lunarFall, jupiterFall]) {
+    assert.equal(sample.carGrounded, 0, JSON.stringify(sample));
+    assert.equal(sample.carVolumeGravityFactor, 1, JSON.stringify(sample));
+    assert.equal(sample.carAuthoredVolumeGravity, null, JSON.stringify(sample));
+    assert.equal(
+      sample.freeAuthoredVolumeGravity,
+      null,
+      JSON.stringify(sample),
+    );
+  }
+  assert.ok(
+    Math.abs(lunarFall.carAcceleration - (-(10 / 6.9) * 0.35)) < 0.02,
+    JSON.stringify(lunarFall),
+  );
+  assert.ok(
+    Math.abs(jupiterFall.carAcceleration - (-(10 / 6.9) * 5)) < 0.05,
+    JSON.stringify(jupiterFall),
+  );
+  assert.ok(
+    Math.abs(lunarFall.freeAcceleration - -(9.8 / 6.9) * 0.35) < 0.02,
+    JSON.stringify(lunarFall),
+  );
+  assert.ok(
+    Math.abs(jupiterFall.freeAcceleration - -(9.8 / 6.9) * 5) < 0.05,
+    JSON.stringify(jupiterFall),
+  );
+  assert.ok(jupiterFall.carVelocityY < lunarFall.carVelocityY);
+  assert.ok(jupiterFall.freeVelocityY < lunarFall.freeVelocityY);
+  await page.evaluate(() => {
+    const c = window.carma;
+    c.powerups.update(31, c.vehicle, c.race);
+    c.paused = false;
+  });
+  await page.waitForFunction(
+    (expected) =>
+      Math.abs(window.carma.simulation.gravityMultiplier - expected) < 1e-6,
+    defaultGravity,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => (window.carma.paused = true));
+  const gravityReset = await page.evaluate(() => ({
+    simulation: window.carma.simulation.gravityMultiplier,
+    player: window.carma.player.state.globalGravityMultiplier,
+    powerupEvent: window.__motionPowerupEvents.findLast(
+      (event) => event.index === 45,
+    ),
+  }));
+  assert.ok(Math.abs(gravityReset.simulation - defaultGravity) < 1e-6);
+  assert.ok(Math.abs(gravityReset.player - defaultGravity) < 1e-6);
+  assert.equal(gravityReset.powerupEvent.kind, "effect");
+
+  // Pinball is exercised by a real impact with the original Newcity tower
+  // surface. Instrument only the native callback/vector addition to verify
+  // that the real resolver supplied the extra impulse and sound threshold.
+  await selectRace(selectedCars[0]);
+  await openDebugPanel();
+  const pinballDefinition = await page.evaluate(() => {
+    const definition = window.carma.powerups.definitions[20];
+    return {
+      action: definition?.action,
+      duration: definition?.duration,
+      params: definition?.floatParams,
+    };
+  });
+  assert.deepEqual(pinballDefinition, {
+    action: 17,
+    duration: 30,
+    params: [3],
+  });
+  await grant(20);
+  await page.evaluate(() => (window.carma.paused = false));
+  await page.waitForFunction(
+    () => Math.abs(window.carma.simulation.pinballFactor - 3) < 1e-6,
+    null,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => (window.carma.paused = true));
+  const worldPinball = await page.evaluate((wall) => {
+    const c = window.carma;
+    const sim = c.simulation;
+    const car = c.player;
+    const originalCars = sim.cars;
+    const originalCallback = sim.onPinball;
+    const velocity = car.state.velocity;
+    const originalAdd = velocity.add;
+    const pinballDeltas = [];
+    const callbacks = [];
+    const vertices = wall.surface.vertices;
+    const center = car.state.position.clone().set(0, 0, 0);
+    for (const vertex of vertices)
+      center.add(car.state.position.clone().fromArray(vertex));
+    center.multiplyScalar(1 / vertices.length);
+    const normal = car.state.position
+      .clone()
+      .fromArray(wall.contacts[0].normal)
+      .normalize();
+    const forward = car.state.position.clone().set(0, 0, -1);
+    const orientation = car.state.orientation
+      .clone()
+      .setFromUnitVectors(forward, normal.clone().negate());
+    const stateSaved = new Map(
+      Object.entries(car.state).map(([key, value]) => [
+        key,
+        value?.clone
+          ? value.clone()
+          : Array.isArray(value)
+            ? [...value]
+            : value,
+      ]),
+    );
+    const restore = () => {
+      for (const [key, value] of stateSaved) {
+        const current = car.state[key];
+        if (current?.copy && value?.clone) current.copy(value);
+        else if (Array.isArray(current) && Array.isArray(value))
+          current.splice(0, current.length, ...value);
+        else car.state[key] = value;
+      }
+    };
+    sim.cars = [car];
+    sim.onPinball = (body) => {
+      callbacks.push({
+        sameCar: body === car,
+        velocity: body.state.velocity.toArray(),
+      });
+      originalCallback?.(body);
+    };
+    velocity.add = function (delta) {
+      pinballDeltas.push(delta.toArray());
+      return originalAdd.call(this, delta);
+    };
+    try {
+      restore();
+      car.state.position.copy(center).addScaledVector(normal, 4);
+      car.state.orientation.copy(orientation);
+      car.state.velocity.copy(normal).multiplyScalar(-35);
+      car.state.angularVelocity.set(0, 0, 0);
+      car.state.gear = 0;
+      if (car.state.input) {
+        car.state.input.throttle = 0;
+        car.state.input.steer = 0;
+        car.state.input.brake = 0;
+        car.state.input.handbrake = false;
+      }
+      sim.accumulator = 0;
+      let worldRows = [];
+      for (let i = 0; i < 16; i++) {
+        sim.update(0.04);
+        worldRows = sim.lastImpacts.filter(
+          (impact) => impact.a === car && !impact.b && impact.normalImpulse > 0,
+        );
+        if (worldRows.length && callbacks.length) break;
+      }
+      return {
+        factor: sim.pinballFactor,
+        callbacks,
+        pinballDeltas,
+        worldRows: worldRows.map((impact) => ({
+          normal: impact.normal.toArray(),
+          impulse: impact.normalImpulse,
+          sourceType: impact.sourceType,
+          hasSecondBody: !!impact.b,
+        })),
+        finalVelocity: car.state.velocity.toArray(),
+      };
+    } finally {
+      velocity.add = originalAdd;
+      sim.onPinball = originalCallback;
+      restore();
+      sim.cars = originalCars;
+      sim.accumulator = 0;
+      sim.sync(car);
+    }
+  }, originalGeometryWall);
+  assert.equal(worldPinball.factor, 3);
+  assert.ok(worldPinball.worldRows.length > 0, JSON.stringify(worldPinball));
+  assert.ok(
+    worldPinball.worldRows.every((impact) => !impact.hasSecondBody),
+    JSON.stringify(worldPinball),
+  );
+  assert.ok(worldPinball.callbacks.length > 0, JSON.stringify(worldPinball));
+  assert.ok(
+    worldPinball.callbacks.every((event) => event.sameCar),
+    JSON.stringify(worldPinball),
+  );
+  assert.ok(
+    worldPinball.pinballDeltas.some((delta) => Math.hypot(...delta) > 1),
+    JSON.stringify(worldPinball),
+  );
+
+  // Repeat with two actual car hulls, both out of world geometry. Pair rows
+  // must remain excluded from the world-only pinball callback.
+  await selectRace(selectedCars[0]);
+  await openDebugPanel();
+  await grant(20);
+  await page.evaluate(() => (window.carma.paused = false));
+  await page.waitForFunction(
+    () => Math.abs(window.carma.simulation.pinballFactor - 3) < 1e-6,
+    null,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => (window.carma.paused = true));
+  const carPairPinball = await page.evaluate(() => {
+    const c = window.carma;
+    const sim = c.simulation;
+    const player = c.player;
+    const other = sim.cars.find((car) => car !== player);
+    if (!other) throw new Error("Stock Newcity race has no second car body");
+    const originals = sim.cars;
+    const previousCallback = sim.onPinball;
+    let callbackCount = 0;
+    sim.onPinball = (body) => {
+      callbackCount++;
+      previousCallback?.(body);
+    };
+    const save = (state) =>
+      new Map(
+        Object.entries(state).map(([key, value]) => [
+          key,
+          value?.clone
+            ? value.clone()
+            : Array.isArray(value)
+              ? [...value]
+              : value,
+        ]),
+      );
+    const playerSaved = save(player.state);
+    const otherSaved = save(other.state);
+    const restore = (body, saved) => {
+      for (const [key, value] of saved) {
+        const current = body.state[key];
+        if (current?.copy && value?.clone) current.copy(value);
+        else if (Array.isArray(current) && Array.isArray(value))
+          current.splice(0, current.length, ...value);
+        else body.state[key] = value;
+      }
+    };
+    sim.cars = [player, other];
+    try {
+      player.state.position.set(-2, 100, 0);
+      player.state.orientation.identity();
+      player.state.velocity.set(8, 0, 0);
+      player.state.angularVelocity.set(0, 0, 0);
+      other.state.position.set(2, 100, 0);
+      other.state.orientation.identity();
+      other.state.velocity.set(-8, 0, 0);
+      other.state.angularVelocity.set(0, 0, 0);
+      if (player.state.input) {
+        player.state.input.throttle = 0;
+        player.state.input.steer = 0;
+        player.state.input.brake = 0;
+        player.state.input.handbrake = false;
+      }
+      sim.accumulator = 0;
+      let pairRows = [];
+      for (let i = 0; i < 12; i++) {
+        sim.update(0.04);
+        pairRows = sim.lastImpacts.filter(
+          (impact) =>
+            (impact.a === player && impact.b === other) ||
+            (impact.a === other && impact.b === player),
+        );
+        if (pairRows.length) break;
+      }
+      return {
+        factor: sim.pinballFactor,
+        pairRows: pairRows.map((impact) => ({
+          impulse: impact.normalImpulse,
+          sourceType: impact.sourceType,
+          hasSecondBody: !!impact.b,
+        })),
+        callbackCount,
+      };
+    } finally {
+      restore(player, playerSaved);
+      restore(other, otherSaved);
+      sim.cars = originals;
+      sim.onPinball = previousCallback;
+      sim.accumulator = 0;
+      sim.sync(player);
+      sim.sync(other);
+    }
+  });
+  assert.equal(carPairPinball.factor, 3);
+  assert.ok(carPairPinball.pairRows.length > 0, JSON.stringify(carPairPinball));
+  assert.ok(
+    carPairPinball.pairRows.every((impact) => impact.hasSecondBody),
+    JSON.stringify(carPairPinball),
+  );
+  assert.equal(carPairPinball.callbackCount, 0, JSON.stringify(carPairPinball));
+
+  await page.evaluate(() => {
+    const c = window.carma;
+    c.powerups.update(31, c.vehicle, c.race);
+    c.paused = false;
+  });
+  await page.waitForFunction(
+    () => window.carma.simulation.pinballFactor === 0,
+    null,
+    { timeout: 5000 },
+  );
+  await page.evaluate(() => {
+    window.carma.paused = true;
+    document.querySelector("#debug-close").click();
+  });
+  const pinballExpired = await page.evaluate(
+    () => window.carma.simulation.pinballFactor,
+  );
+  assert.equal(pinballExpired, 0);
+
   await page.evaluate(() => (window.carma.paused = false));
   await page.waitForTimeout(500);
 
@@ -671,6 +1138,16 @@ try {
       originalGeometryWall,
       forceDelta,
       wallClimbExpired,
+      gravityDefinitions,
+      defaultGravity,
+      launchedMine,
+      lunarFall,
+      jupiterFall,
+      gravityReset,
+      pinballDefinition,
+      worldPinball,
+      carPairPinball,
+      pinballExpired,
       webglError: gl,
     }),
   );

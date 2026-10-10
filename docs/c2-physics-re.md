@@ -219,3 +219,15 @@ Final fix validation: `npm test` passes 595 tests; `npm run test:browser` builds
 **Actual screenshot-location audit:** SNOW WAY OUT's `chevrnsnow` face14/15 near checkpoint4 is one-sided, with sloping normal approximately `(.44806,.75363,.48092)`. Across1930 non-deepening trajectories, no equivalent false-exit freeze was reproduced there. A rolled upper-side Eagle leaves the original barrier normally; Chromium confirms reverse movement and restored four-wheel support. A lower-side seeded trap behaves identically before/after: final guard fraction1, rear wheel loads/tyre forces0, only front-left support, and ordinary snow contacts. It is resting on the body with its driven rear axle unloaded, rather than movement being rejected by the guard. Do not claim this particular reported trap is cured. Preserve its source traction response and use R recovery; exact original-runtime comparison and other reported wedging configurations remain PHY-10.
 
 Follow-up validation: 609 automated tests pass. The four existing Chromium regression suites and the new actual-event audio suite pass against the production build. DevTools confirms original SNOW barrier exit, the retained unloaded-rear-axle trap and real R-key recovery (four supported wheels,250 credits charged), without fatal console/WebGL errors. Installed HW/SW hashes remain unchanged.
+
+### Custom noncar volume gravity correction
+
+Installed HW NonCarCalcForce `0x418270–0x418863`, specifically
+`0x4183c8–0x41840a`, applies `-dt*10*rawVolumeGravity/6.9` (or raw value one
+without a volume). This differs from depth-mixed car/generic-body gravity and
+contains no global gravity pickup read. The browser previously multiplied this
+raw value by immersion depth; that extra factor is removed. Deterministic
+actual-simulation tests exercise depth .1/.8 and global gravity 0/.2/4 with
+a redistributable noncar fixture. Motor thrust remains independent.
+See [motion powerup notes](c2-motion-powerups-re.md) for the separate driver
+guard and settling calculation. Evidence: verified from installed binary.

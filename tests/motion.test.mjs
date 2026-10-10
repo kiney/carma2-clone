@@ -73,6 +73,84 @@ function mechanics(mass = 2, comZ = 0, rearGive = 0.08, frontGive = 0.12) {
 }
 const neutral = { throttle: 0, steer: 0, brake: 0, handbrake: false };
 
+test("global car gravity scales raw force and momentum, while wall support bypasses it", () => {
+  const p = createMotionParameters(mechanics());
+  for (const factor of [0, 0.2, 4]) {
+    const s = state(p);
+    s.globalGravityMultiplier = factor;
+    const dt = 0.04;
+    const d = applyVehicleForces(
+      s,
+      neutral,
+      dt,
+      p,
+      { raycast: () => null },
+      createMotionContext(),
+    );
+    near(d.force.y, -p.mass * 10 * factor);
+    const beforeDrag = (-10 * factor * dt) / S;
+    const drag =
+      1 - (Math.abs(beforeDrag) * dt * 0.0005000000237487257 * S) / p.mass;
+    near(p.mass * s.velocity.y, p.mass * beforeDrag * drag);
+
+    const supported = preload(state(p), p);
+    supported.wallClimb = true;
+    supported.globalGravityMultiplier = factor;
+    const road = staticRoad(p, 0);
+    const wall = applyVehicleForces(
+      supported,
+      neutral,
+      dt,
+      p,
+      { raycast: () => ({ ...road.raycast(), normal: vector(1) }) },
+      createMotionContext(),
+    );
+    near(wall.force.x, -p.mass * 10);
+    near(
+      wall.force.y,
+      wall.wheelSpringLoads.reduce((a, b) => a + b, 0),
+    );
+  }
+});
+
+test("native settling distinguishes null volume from raw volume and global divisors", () => {
+  const p = createMotionParameters(mechanics());
+  const settles = (
+    settlingVolumeGravity,
+    globalGravityMultiplier = 1,
+    volumeGravityFactor = 0.95,
+  ) => {
+    const s = preload(state(p, vector(0.01)), p);
+    Object.assign(s, {
+      settlingVolumeGravity,
+      globalGravityMultiplier,
+      volumeGravityFactor,
+    });
+    const context = createMotionContext();
+    context.stopTimer = 0.6;
+    const d = applyVehicleForces(
+      s,
+      neutral,
+      0.04,
+      p,
+      staticRoad(p, 0),
+      context,
+    );
+    near(d.force.y, 20 - 20 * volumeGravityFactor * globalGravityMultiplier);
+    return s.velocity.lengthSq() === 0;
+  };
+  // All cases have residual force1. Null volume skips both divisions;
+  // raw .2 prevents sleep, whereas underwater's raw .52 permits it.
+  assert.equal(settles(undefined), true);
+  assert.equal(settles(0.2), false);
+  assert.equal(settles(1 - (1 - 0.2) * 0.6), true);
+  assert.equal(settles(0.2, 4, 0.95 / 4), true);
+  assert.equal(settles(undefined, 0.2, 0.95 / 0.2), true);
+  // Equal acceleration factors can have different raw settling divisors;
+  // depth-mixed .95 must never replace the authored raw .2.
+  assert.equal(settles(0.95), true);
+});
+
 test("original volume gravity and viscosity reach the actual WheelForces velocity update", () => {
   const p = createMotionParameters(mechanics());
   const s = state(p, vector(4));

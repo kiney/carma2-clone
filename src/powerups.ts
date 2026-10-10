@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GlobalGravityState } from "./physics/global-gravity";
 import {
   setBouncePowerup,
   bouncePowerup,
@@ -44,6 +45,8 @@ export interface PowerupModifiers {
   instantHandbrake: boolean;
   bouncePeriodMs: number;
   wallClimb: boolean;
+  gravityMultiplier: number;
+  pinballFactor: number;
 }
 
 export interface PowerupEvent {
@@ -64,8 +67,8 @@ export interface PowerupEvent {
 }
 
 const implementedActions = new Set([
-  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 19, 20, 21, 22, 26, 27, 28, 30, 34, 35,
-  36, 46, 47, 51,
+  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28, 30,
+  34, 35, 36, 46, 47, 51,
 ]);
 
 export function isPowerupImplemented(definition: PowerupDefinition): boolean {
@@ -161,7 +164,7 @@ interface ActiveEffect {
   index: number;
   remaining: number;
   duration: number;
-  action: 5 | 6 | 8 | 9 | 10 | 18 | 19 | 20 | 21 | 22 | 27 | 28;
+  action: 5 | 6 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 27 | 28;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -190,6 +193,8 @@ export class PowerupSystem {
   private vouchers = 0;
   private bounce?: BouncePowerup;
   private wallClimb = false;
+  private readonly gravity: GlobalGravityState;
+  private pinballFactor = 0;
   private elapsedMs = 0;
   /** Called after physics, matching native DoPowerupPeriodics ordering. */
   periodicBounce(state: {
@@ -225,7 +230,9 @@ export class PowerupSystem {
     private readonly sourceWorldGroup: THREE.Group,
     private readonly random: () => number = Math.random,
     exclusions: readonly number[] = [],
+    defaultGravityMultiplier = 1,
   ) {
+    this.gravity = new GlobalGravityState(defaultGravityMultiplier);
     this.exclusions = new Set(exclusions);
     this.group.name = "Original powerups";
   }
@@ -350,6 +357,8 @@ export class PowerupSystem {
       instantHandbrake: this.instantHandbrake,
       bouncePeriodMs: this.bounce?.periodMs ?? 0,
       wallClimb: this.wallClimb,
+      gravityMultiplier: this.gravity.multiplier,
+      pinballFactor: this.pinballFactor,
     };
     if (this.suspension) modifiers.suspension = this.suspension;
     return modifiers;
@@ -439,6 +448,12 @@ export class PowerupSystem {
         break;
       case 28:
         this.instantHandbrake = false;
+        break;
+      case 16:
+        this.gravity.reset();
+        break;
+      case 17:
+        this.pinballFactor = 0;
         break;
       case 18:
         this.wallClimb = false;
@@ -539,6 +554,8 @@ export class PowerupSystem {
       case 6:
       case 8:
       case 10:
+      case 16:
+      case 17:
       case 18:
       case 22:
       case 27:
@@ -548,6 +565,13 @@ export class PowerupSystem {
         if (def.action === 8) this.timerFrozen = true;
         if (def.action === 10) this.underwaterAbility = true;
         if (def.action === 18) this.wallClimb = true;
+        if (def.action === 16) this.gravity.setPowerup(def.floatParams);
+        if (def.action === 17) {
+          const value = Math.fround(def.floatParams[0]);
+          if (!Number.isFinite(value))
+            throw new Error("Invalid Pinball powerup factor");
+          this.pinballFactor = value;
+        }
         if (def.action === 22) this.damageMultiplier = def.floatParams[0] ?? 1;
         if (def.action === 27) this.protection = def.floatParams[0] ?? 1;
         if (def.action === 28) this.instantHandbrake = true;

@@ -255,6 +255,8 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     instantHandbrake: false,
     bouncePeriodMs: 0,
     wallClimb: false,
+    gravityMultiplier: 1,
+    pinballFactor: 0,
     suspension: {
       frontGiveMultiplier: 1,
       rearGiveMultiplier: 1,
@@ -707,8 +709,8 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      24,
-      "New City warns once for each unsupported definition after actions 26/28/36",
+      23,
+      "New City warns once per unsupported definition after native motion powerup support",
     );
     assert.equal(system.group.children.length, system.pickups.length);
     system.dispose();
@@ -817,4 +819,40 @@ test("wall-climb pickup flag renews and clears without altering independent engi
   system.grant(0, car, race);
   system.grant(2, car, race);
   assert.equal(system.update(0, car, race).wallClimb, false);
+});
+
+test("gravity and Pinball pickups assign independent globals and restore authored defaults", async () => {
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([
+          { action: 16, duration: 1, floats: [0.2] },
+          { action: 16, duration: 1, floats: [4] },
+          { action: 17, duration: 3, floats: [2] },
+          { action: 51 },
+        ]),
+    },
+    new THREE.Group(),
+    Math.random,
+    [],
+    0.75,
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
+  assert.equal(system.update(0, car, race).gravityMultiplier, 0.75);
+  system.grant(0, car, race);
+  system.grant(2, car, race);
+  let modifiers = system.update(0.6, car, race);
+  assert.equal(modifiers.gravityMultiplier, Math.fround(0.2));
+  assert.equal(modifiers.pinballFactor, 2);
+  system.grant(1, car, race);
+  assert.equal(system.update(0.6, car, race).gravityMultiplier, 4);
+  modifiers = system.update(0.5, car, race);
+  assert.equal(modifiers.gravityMultiplier, 0.75);
+  assert.equal(modifiers.pinballFactor, 2);
+  system.grant(0, car, race);
+  system.grant(3, car, race);
+  modifiers = system.update(0, car, race);
+  assert.equal(modifiers.gravityMultiplier, 0.75);
+  assert.equal(modifiers.pinballFactor, 0);
 });

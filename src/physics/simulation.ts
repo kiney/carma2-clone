@@ -1,3 +1,4 @@
+import { applyWorldPinball } from "./pinball";
 import { Box3, Group, Object3D, Quaternion, Triangle, Vector3 } from "three";
 import {
   parseCarMechanics,
@@ -388,6 +389,9 @@ export class VehicleSimulation {
   onMineEvent?: (event: MineEvent<SimulatedCar>) => void;
   accumulator = 0;
   elapsed = 0;
+  gravityMultiplier = 1;
+  pinballFactor = 0;
+  onPinball?: (body: RigidBody) => void;
   lastImpacts: ContactImpact[] = [];
   onBeforeStep?: () => void;
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
@@ -1020,6 +1024,7 @@ export class VehicleSimulation {
       PHYSICS_STEP,
       (isWater && environment.depth === 1 && !wasFull) ||
         (!isWater && wasWater),
+      this.gravityMultiplier,
     );
   }
   /** Full powerup repair439460 also resets suspension, including an unbent
@@ -1753,6 +1758,8 @@ export class VehicleSimulation {
       return false;
     }
     this.applyImpactDamage(impacts);
+    for (const group of applyWorldPinball(impacts, this.pinballFactor))
+      if (group.sound) this.onPinball?.(group.body);
   }
   private processWorldSmash(
     impacts: ContactImpact[],
@@ -2094,6 +2101,13 @@ export class VehicleSimulation {
         car.state.underwaterAbility,
       );
       car.state.volumeGravityFactor = factors.gravity;
+      car.state.globalGravityMultiplier = this.gravityMultiplier;
+      car.state.settlingVolumeGravity = environment.volume
+        ? car.state.underwaterAbility &&
+          (car.state.driver ?? (car.human ? 8 : 6)) > 5
+          ? 1 - (1 - environment.volume.gravityMultiplier) * 0.6
+          : environment.volume.gravityMultiplier
+        : undefined;
       car.state.volumeDragFactor = factors.drag;
       const materialIndex =
         environment.volume === environment.automatic && environment.automatic
@@ -2167,9 +2181,9 @@ export class VehicleSimulation {
         nowMs: this.elapsed * 1000,
         previousVelocity: body.previousVelocity,
         collisionFlags: body.collisionFlags,
-        gravityScale: environment.volume
-          ? environment.volume.gravityMultiplier * environment.depth
-          : 1,
+        // Native NonCarCalcForce uses raw volume gravity, without depth or
+        // the global pickup multiplier; motor thrust remains independent.
+        gravityScale: environment.volume?.gravityMultiplier ?? 1,
       });
       body.properties.immovable = body.motor.sleeping;
       body.collisionFlags = 0;

@@ -52,6 +52,10 @@ export interface MotionState extends RigidState {
   bounceRate?: number;
   /** Source car+0x1c4; WheelForces applies this only to driver types above 5. */
   wallClimb?: boolean;
+  /** Installed global gravity74b348; wall support gravity intentionally bypasses it. */
+  globalGravityMultiplier?: number;
+  /** Raw native volume settling divisor; undefined means no volume pointer. */
+  settlingVolumeGravity?: number;
   /** Source driver type; ordinary player and opponent cars use 8 and 6. */
   driver?: number;
   /** Original special-volume gravity/viscosity, evaluated before WheelForces. */
@@ -674,7 +678,10 @@ export function applyVehicleForces(
     F.add(
       new Vector3(
         0,
-        -p.mass * 10 * (s.volumeGravityFactor ?? 1),
+        -p.mass *
+          10 *
+          (s.volumeGravityFactor ?? 1) *
+          (s.globalGravityMultiplier ?? 1),
         0,
       ).applyQuaternion(inv),
     );
@@ -949,13 +956,18 @@ export function applyVehicleForces(
   s.angularVelocity.add(deltaOmega);
   s.accForce = -rearDirection.z * (actual[0] + actual[1]);
   let timer = context.stopTimer;
+  // Native41bb03: the null-volume branch skips BOTH gravity divisions.
+  const settlingForce =
+    s.settlingVolumeGravity === undefined
+      ? F.length()
+      : F.length() / s.settlingVolumeGravity / (s.globalGravityMultiplier ?? 1);
   if (
     s.velocity.lengthSq() < 0.10000000149011612 &&
     (throttle === 0 || s.gear === 0) &&
     brake === 0 &&
     (s.bounceRate ?? 0) === 0 &&
     s.angularVelocity.length() < 0.05 &&
-    (F.length() < p.mass || (input.handbrake && grounded > 2))
+    (settlingForce < p.mass || (input.handbrake && grounded > 2))
   ) {
     if (timer === 100) timer = 0;
     if (timer > 0.5) {
