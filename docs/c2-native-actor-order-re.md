@@ -159,9 +159,11 @@ nonzero return can stop siblings; powerup branches require their own host provid
 No production-complete migration/non-car provider is supplied by this module.
 
 Prepared face order remains `src/native-face-order.ts`'s separate CRT permutation.
-Unknown Windows material heap pointer order still prevents an exact multi-key
-prepared prefix. Names, raw DAT material indices and render first appearance are
-not valid replacements. See `docs/c2-prepared-face-order-re.md` and
+The [owned resource arena](c2-native-resource-arena-re.md) now supplies actual
+live host MAT byte addresses for multi-key preparation. Its declared allocator
+policy runs the recovered comparator but does not claim a particular Windows
+heap's finite prefix. Names, raw DAT material indices and render first appearance
+remain invalid replacements. See `docs/c2-prepared-face-order-re.md` and
 `docs/c2-prepared-face-re.md` for the independent face and emission requirements.
 
 ## Validation

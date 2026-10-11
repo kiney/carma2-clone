@@ -81,9 +81,44 @@ const settings = {
     growth: [0.00001, 0.00007],
     initialSize: 0.001,
     fullSize: [0.05, 0.15],
+    friction: [0.2, 1],
+    smearDistance: [1, 1],
+    smearMaterial: "GIBSMEAR.MAT",
     pixelmap: "gibslick",
   },
 };
+function syntheticPedSettings(
+  slickRows = [
+    "GIBSLICK",
+    "300,0.00001,0.00007",
+    "0.001,0.05,0.15",
+    "0.2,1",
+    "1,1",
+    "GIBSMEAR.MAT",
+  ],
+) {
+  return [
+    "// IMPACT GIBLETS :",
+    "0",
+    "sphereclumped",
+    "0.1",
+    "impact",
+    "0,0",
+    "1",
+    "1",
+    "1",
+    "0",
+    "1",
+    "0.5,1.5",
+    "0",
+    ...["SMALL", "MED", "LARGE"].flatMap((name) => [
+      `// ${name} BLOOD CLOUD SPEC`,
+      "0",
+    ]),
+    "// GIB SLICK!",
+    ...slickRows,
+  ].join("\n");
+}
 function runtime() {
   const textures = new Map(
     [...Array(5)].map((_, i) => [
@@ -124,6 +159,99 @@ test("installed blood cloud thresholds are strict; force selects authored quanti
   );
   assert.equal(pedGibletCount(0.0499, settings.sizes[1]), 0);
   assert.equal(pedGibletCount(0.05, settings.sizes[1]), 1);
+});
+test("pedestrian GIBSLICK parser retains exact authored config tuples", () => {
+  const parsed = parsePedBloodSettings(syntheticPedSettings());
+  assert.equal(parsed.slick.pixelmap, "GIBSLICK");
+  assert.equal(parsed.slick.delayMs, 300);
+  assert.deepEqual(parsed.slick.growth, [0.00001, 0.00007]);
+  assert.equal(parsed.slick.initialSize, 0.001);
+  assert.deepEqual(parsed.slick.fullSize, [0.05, 0.15]);
+  assert.deepEqual(parsed.slick.friction, [0.2, 1]);
+  assert.deepEqual(parsed.slick.smearDistance, [1, 1]);
+  assert.equal(parsed.slick.smearMaterial, "GIBSMEAR.MAT");
+});
+test("pedestrian slick parser keeps identifiers data-driven and honors optional smear fields", () => {
+  const alternate = parsePedBloodSettings(
+    syntheticPedSettings([
+      "ALT_SLICK",
+      "300,0.00001,0.00007",
+      "0.001,0.05,0.15",
+      "0,0",
+    ]),
+  );
+  assert.equal(alternate.slick.pixelmap, "ALT_SLICK");
+  assert.deepEqual(alternate.slick.friction, [0, 0]);
+  assert.equal(alternate.slick.smearDistance, null);
+  assert.equal(alternate.slick.smearMaterial, null);
+});
+test("pedestrian GIBSLICK parser rejects malformed, truncated, and out-of-range tuples", () => {
+  const cases = [
+    [
+      [
+        "GIBSLICK",
+        "300,0.00001",
+        "0.001,0.05,0.15",
+        "0.2,1",
+        "1,1",
+        "GIBSMEAR.MAT",
+      ],
+      /delay\/growth/,
+    ],
+    [
+      ["GIBSLICK", "300,0.00001,0.00007", "0.001,0.05,0.15", "0.2,1", "1,1"],
+      /Truncated pedestrian slick smear material/,
+    ],
+    [
+      [
+        "GIBSLICK",
+        "300,,0.00007",
+        "0.001,0.05,0.15",
+        "0.2,1",
+        "1,1",
+        "GIBSMEAR.MAT",
+      ],
+      /delay\/growth/,
+    ],
+    [
+      [
+        "GIBSLICK",
+        "300,0.00007,0.00001",
+        "0.001,0.05,0.15",
+        "0.2,1",
+        "1,1",
+        "GIBSMEAR.MAT",
+      ],
+      /Invalid pedestrian blood settings/,
+    ],
+    [
+      [
+        "GIBSLICK",
+        "300,0.00001,0.00007",
+        "0.001,0.05,0.15",
+        "1,0.2",
+        "1,1",
+        "GIBSMEAR.MAT",
+      ],
+      /Invalid pedestrian blood settings/,
+    ],
+    [
+      [
+        "GIBSLICK",
+        "300,0.00001,0.00007",
+        "0.001,0.05,0.15",
+        "0.2,1",
+        "1,1",
+        "../GIBSMEAR.MAT",
+      ],
+      /Invalid pedestrian blood settings/,
+    ],
+  ];
+  for (const [rows, message] of cases)
+    assert.throws(
+      () => parsePedBloodSettings(syntheticPedSettings(rows)),
+      message,
+    );
 });
 test("blood runtime renders source textures/chunks, expires clouds and giblets, and supports reset", () => {
   const effects = runtime(),
@@ -265,6 +393,13 @@ test(
       parsed.clouds[0][0].frames.map((f) => f.pixelmap),
       ["bigbl01", "bigbl02", "bigbl03", "bigbl04", "bigbl05"],
     );
+    assert.deepEqual(parsed.slick.friction, [0.2, 1]);
+    assert.deepEqual(parsed.slick.smearDistance, [1, 1]);
+    assert.equal(parsed.slick.smearMaterial, "GIBSMEAR.MAT");
+    const advanced = parsePedBloodSettings(
+      await assets.text("adv_data/PEDS/settings.txt"),
+    );
+    assert.deepEqual(advanced.slick, parsed.slick);
     const effects = await PedBloodRuntime.create(
       assets,
       parsed,

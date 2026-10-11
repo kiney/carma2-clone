@@ -28,6 +28,9 @@ export interface PedBloodSettings {
     growth: [number, number];
     initialSize: number;
     fullSize: [number, number];
+    friction: [number, number];
+    smearDistance: [number, number] | null;
+    smearMaterial: string | null;
     pixelmap: string;
   };
 }
@@ -115,8 +118,39 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
   const slickRows = clean(
     text.slice(slickMarker.index + slickMarker[0].length),
   );
-  const [delayMs, ...growth] = slickRows[1].split(",").map(Number),
-    [initialSize, ...fullSize] = slickRows[2].split(",").map(Number);
+  const slickRow = (index: number, count: number, label: string) => {
+    const line = slickRows[index];
+    if (line === undefined)
+      throw new Error(`Truncated pedestrian slick ${label}`);
+    const tokens = line.split(",").map((token) => token.trim());
+    if (
+      tokens.length !== count ||
+      tokens.some(
+        (token) => !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(token),
+      )
+    )
+      throw new Error(`Invalid pedestrian slick ${label}`);
+    const values = tokens.map(Number);
+    if (values.some((value) => !Number.isFinite(Math.fround(value))))
+      throw new Error(`Invalid pedestrian slick ${label}`);
+    return values;
+  };
+  if (slickRows.length < 4)
+    throw new Error("Truncated pedestrian slick settings");
+  const pixelmap = slickRows[0];
+  if (!/^[\w.-]+$/i.test(pixelmap))
+    throw new Error("Invalid pedestrian slick pixelmap");
+  const [delayMs, ...growth] = slickRow(1, 3, "delay/growth"),
+    [initialSize, ...fullSize] = slickRow(2, 3, "initial/full size"),
+    friction = slickRow(3, 2, "friction") as [number, number],
+    smearDistance =
+      friction[1] !== 0
+        ? (slickRow(4, 2, "smear distance") as [number, number])
+        : null,
+    smearMaterial = friction[1] !== 0 ? slickRows[5] : null;
+  if (friction[1] !== 0 && smearMaterial === undefined)
+    throw new Error("Truncated pedestrian slick smear material");
+  const orderedPair = (pair: number[]) => pair[0] <= pair[1];
   if (
     [
       radius,
@@ -129,8 +163,15 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
       ...growth,
       initialSize,
       ...fullSize,
+      ...friction,
+      ...(smearDistance ?? []),
     ].some((v) => !Number.isFinite(v) || v < 0) ||
-    lifetimeMs[1] < lifetimeMs[0]
+    lifetimeMs[1] < lifetimeMs[0] ||
+    !orderedPair(growth) ||
+    !orderedPair(fullSize) ||
+    !orderedPair(friction) ||
+    (smearDistance !== null && !orderedPair(smearDistance)) ||
+    (smearMaterial !== null && !/^[\w.-]+\.mat$/i.test(smearMaterial))
   )
     throw new Error("Invalid pedestrian blood settings");
   return {
@@ -147,7 +188,10 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
       growth: growth as [number, number],
       initialSize,
       fullSize: fullSize as [number, number],
-      pixelmap: slickRows[0],
+      friction,
+      smearDistance,
+      smearMaterial,
+      pixelmap,
     },
   };
 }

@@ -50,6 +50,7 @@ function input(overrides = {}) {
     immortal: false,
     volumeGravity: null,
     goreLevel: 0,
+    replay: false,
     mutantSpeed: 0,
     ...overrides,
   };
@@ -288,6 +289,35 @@ test("reaction membership is exactly90/91/92/97/113; dead replaces with94 and no
   assert.equal(s.moveId, 94);
   assert.ok(!r.effects.some((e) => e.kind === "head-sequence"));
 });
+
+test("head-start effect retains offscreen sequence writes and carries actual renderSlot independently of MODEL pose", () => {
+  for (const slot of [-1, 0, 15]) {
+    const s = state({ moveId: 90 });
+    const r = mutateNativePedHalt(
+      s,
+      input({ head: { boneIndex: -1, modelState: -1, renderSlot: slot } }),
+      providers(),
+    );
+    const effect = r.effects.find((e) => e.kind === "head-sequence");
+    assert.ok(effect);
+    assert.equal(effect.headBone, -1);
+    assert.equal(effect.renderSlot, slot);
+    assert.equal(s.cache.headSequence.address, 0x65d050);
+    assert.equal(s.cache.headSequence.startTimeMs, 123);
+  }
+  const s = completion({ moveId: 97 });
+  const result = completeNativePedMove(
+    s,
+    completionInput({
+      head: { boneIndex: -1, modelState: -1, renderSlot: -1 },
+    }),
+  );
+  assert.equal(
+    result.effects.find((e) => e.kind === "head-sequence").renderSlot,
+    -1,
+  );
+  assert.equal(s.cache.headSequence.index, 0);
+});
 test("accepted upright/lying order, signed serial wrap, root basis preserves rigid origin", () => {
   const s = state({ impactSerial: 32767, moveId: 90 });
   s.rigidPose.set([4, 5, 6], 9);
@@ -525,4 +555,40 @@ test("four original FORM moments/lying axes remain authored across source halt c
       name,
     );
   }
+});
+
+test("replay dead acceptance skips the corpse-slick chance without consuming shared CRT or reactivating the body", () => {
+  const dead = state({ hitPoints: 0, cache: { retryCount: 2 }, flags: 0 });
+  const p = providers();
+  p.nextCrtInteger = () => {
+    throw new Error("replay must not draw slick chance");
+  };
+  const result = mutateNativePedHalt(
+    dead,
+    input({ replay: true, goreLevel: 2 }),
+    p,
+  );
+  assert.equal(result.returnValue, 1);
+  assert.equal(result.randomDraws, 0);
+  assert.equal(dead.flags & 0x10, 0);
+  assert.ok(!result.effects.some((e) => e.kind === "corpse-slick"));
+  assert.ok(result.effects.some((e) => e.kind === "freeze-move"));
+  assert.ok(
+    result.effects.some(
+      (e) => e.kind === "status-physical-level" && e.level === 5,
+    ),
+  );
+  assert.ok(result.effects.some((e) => e.kind === "clear-volume"));
+  assert.throws(
+    () => decideNativePedHalt(state(), input({ replay: undefined })),
+    /explicit replay/,
+  );
+  assert.throws(
+    () =>
+      decideNativePedHalt(
+        state(),
+        input({ head: { boneIndex: 1, modelState: 0, renderSlot: 128 } }),
+      ),
+    /head render slot/,
+  );
 });

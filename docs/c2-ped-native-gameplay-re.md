@@ -196,11 +196,11 @@ independent gameplay caches and prepared dead models; original tests skip when
 installation data is absent. Numerical fixtures are redistributable synthetic
 inputs. Browser population integration and completion of PED-03 are not claimed.
 
-The final focused run passed18 gameplay subtests and50 adjacent contact-tail,
-sever-contact, halt, active-move and runtime subtests. TypeScript and formatting
-checks passed. The added scan-order regression preserves a later action/move
-chosen by the actual object-scan outlet after halt starts running; committing
-an earlier kernel snapshot must not erase that selection.
+The scan-order regression preserves a later action/move chosen by the actual
+object-scan outlet after halt starts running; committing an earlier kernel
+snapshot must not erase that selection. Focused gameplay, contact, recovery,
+head, volume, shared-slick and Stillify tests are part of `npm test`. The reviewed
+integration passed all2,432 tests and the production build on2026-10-11.
 
 ### Signed animation browser validation
 
@@ -210,7 +210,28 @@ Eagle contact commits persistent HP0, death/count/scoring and dead-model state
 in both installations. The separate controlled sever fixture admits an actual
 independent head PHIL body; this is not a keyboard-sever claim. No JavaScript,
 HTTP/request or WebGL errors were observed. Native moved/halt callbacks retain
-the BON clock and derive O from the current authored frame. Active out-of-scope
-corpse release remains incomplete: Stock stayed active after one halt attempt;
-Advanced retained `source-recovery-effect-owner`. No missing recovery effect was
-acknowledged with a no-op, and no future timestamp was injected to force release.
+the BON clock and derive O from the current authored frame. Ordinary contacted corpses now quiet into PHILstate1, receive passive
+V/Stillify/head processing and release their actual render/body allocation when
+the controlled native camera origin passes the authored distance gate. Real RAF
+and application timestamps continue; no future event time or manually cleared
+scope bit forces release. Both Stock and Advanced cases retain no unsupported
+outlet diagnostics. This controlled camera input is separate from main chase
+camera ownership.
+
+`createNativePedRecoveryEffects` and its pure preflight connect actual shared
+`OilRuntime`/registered slick materials, narrow face-cache release and explicit
+status recording. The halt kernel owns chance and once-bit order; allocation
+owns the next size/growth CRT draws. Stock queued an original GIBSLICK corpse
+spill into the existing32-slot pool after the300ms delay. Advanced legitimately
+failed the source chance in that run. Tests verify retained MODEL bounds and
+stable/reused ACT lifetime, source friction/settings and nonreactivating status
+recording. See [slick settings](c2-ped-slick-settings-re.md),
+[slick resources](c2-ped-slick-materials-re.md),
+[passive Stillify](c2-ped-passive-stillify-re.md) and
+[water reset](c2-ped-quiet-volume-re.md).
+
+The normal population still uses `PedestrianSystem`. Its native bounded process
+cache, actual grounding collector, living recovery and articulated/gib/replay
+effect owners remain separate integration work. No missing effect is accepted
+through a blanket no-op; explicitly disabled recording means no replay recorder
+is active, rather than a physical-status change.

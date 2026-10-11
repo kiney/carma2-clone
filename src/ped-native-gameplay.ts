@@ -10,7 +10,10 @@ import type {
   NativePedContactDispatch,
   NativePedContactResult,
 } from "./physics/ped-body";
-import { nativePedRootPose } from "./physics/ped-body";
+import {
+  nativePedRootPose,
+  resetNativePedWaterPlane,
+} from "./physics/ped-body";
 import type {
   PedContactSettings,
   PedContactState,
@@ -30,6 +33,7 @@ import {
   type NativePedHaltCache,
   type NativePedHaltEffect,
   type NativePedHaltInput,
+  type NativePedHaltDecision,
   type NativePedHaltSharedState,
   type NativePedHaltState,
 } from "./physics/ped-halt";
@@ -37,6 +41,18 @@ import type { PedVector } from "./ped-form";
 import type { NativePedInstanceResult } from "./ped-native-instance";
 import { createNativePedRecoveryMoveCallback } from "./ped-recovery-move";
 import type { NativePedMovePlan } from "./ped-move-fsm";
+import {
+  advanceNativePedHeadSequence,
+  startNativePedHeadSequence,
+  clearNativePedHeadSequence,
+  nativePedScareHeadSequence,
+  nativePedCalmHeadSequence,
+  type NativePedHeadSequence,
+  type NativePedHeadSequenceState,
+  type NativePedHeadSequenceResult,
+  type NativePedHeadModelRequest,
+} from "./ped-head-sequence";
+import type { NativePedInstanceBone } from "./ped-native-instance";
 
 const f = Math.fround;
 type OutletResult = void | readonly string[];
@@ -85,6 +101,24 @@ export interface NativePedGameplayOptions<Owner extends object> {
   readGlobals: () => NativePedGameplayGlobals;
   /** Actual shared CRT rand() output, including effects invoked by these outlets. */
   nextCrtInteger: () => number;
+  /** Actual AR outlet or explicitly disabled recording. Missing is unresolved,
+   * even when ordinary ACT/model selection is available. The recorder owns any
+   * original pointer/resource serialization; a render name is not that pointer. */
+  headModelRecording?:
+    | "disabled"
+    | {
+        record: (
+          context: NativePedRuntimeCallback<Owner>,
+          packet: {
+            headBone: number;
+            oldModel: NativePedInstanceBone["model"];
+            requestedPose: number;
+            oldModelSet: 0 | 1;
+            targetModelSet: 0 | 1;
+            timeMs: number;
+          },
+        ) => OutletResult;
+      };
   onNoise?: (event: NativePedGameplayNoise<Owner>) => OutletResult;
   /** Installed4cdc60. Mutates this cache before passive Damage/score. */
   attributeContact?: (
@@ -160,7 +194,14 @@ export interface NativePedGameplayOptions<Owner extends object> {
   readHaltInput?: (
     context: NativePedRuntimeCallback<Owner>,
     state: NativePedGameplayState,
-  ) => NativePedHaltInput;
+  ) => Omit<NativePedHaltInput, "replay">;
+  /** Resolve actual recovery owners before any halt mutation or CRT draw. */
+  preflightRecoveryEffects?: (
+    context: NativePedRuntimeCallback<Owner>,
+    state: NativePedHaltState,
+    input: NativePedHaltInput,
+    decision: NativePedHaltDecision,
+  ) => OutletResult;
   /** Executes actual cache/direction/proximity/slick/head sequence/status effects in order. */
   onRecoveryEffect?: (
     context: NativePedRuntimeCallback<Owner>,
@@ -244,10 +285,59 @@ export class NativePedGameplay<Owner extends object = object> {
         });
       },
       onHeadSequenceCleared: (c) => {
-        const cache = this.state(c.owner).cache;
-        if (cache) cache.headSequence = undefined;
+        clearNativePedHeadSequence(this.headState(c.owner));
+      },
+      beforeSaveRoot: (ctx) => {
+        const missing = this.stillifyPassiveCorpse(ctx);
+        if (missing.length) diagnostic(ctx, this.state(ctx.owner), missing);
+        return {
+          status: missing.length ? "provider-required" : "complete",
+          requiredProviders: missing,
+          processedFrames: 0,
+          completedMove: false,
+        };
+      },
+      afterPose: (ctx) => {
+        const result = this.advanceHeadSequence(ctx.owner, ctx.timeMs);
+        return {
+          status: result.status,
+          requiredProviders: result.requiredProviders,
+          processedFrames: 0,
+          completedMove: false,
+        };
       },
     };
+  }
+  /** Munge4d4c0f..4d4c90: character+1e is the signed animation period,
+   * not the collision impact serial. This calls SetCharacterMoveAR directly,
+   * so the gameplay SetPedMove FSM/speed-factor planner must not run. */
+  private stillifyPassiveCorpse(
+    ctx: NativePedRuntimeCallback<Owner>,
+  ): string[] {
+    const s = this.state(ctx.owner);
+    if (
+      ctx.instance.physicsActive ||
+      ctx.character.hitPoints > 0 ||
+      s.action !== 6 ||
+      ctx.instance.moveId === 113
+    )
+      return [];
+    const mutantSpeed = f(this.options.readGlobals().mutantSpeed);
+    if (!Number.isFinite(mutantSpeed))
+      throw new Error("Invalid native pedestrian mutant speed");
+    const period = (ctx.instance.clock.periodMs << 16) >> 16;
+    if ((mutantSpeed !== 0) !== (period === 0)) return [];
+    //4d1a20 has a distinct replay mutation/recording owner. Ordinary calls
+    // cannot fabricate its permission/global pointer state.
+    if (this.options.readGlobals().replay)
+      return ["source-replay-Stillify-move-owner"];
+    const result = this.recoveryMove(ctx, {
+      id: -1,
+      speed: mutantSpeed === 0 ? 0 : f(-mutantSpeed),
+      completion: false,
+      retainRoot: false,
+    });
+    return [...result.requiredProviders];
   }
   bindRuntime(runtime: NativePedRuntime<Owner>): void {
     if (this.runtime && this.runtime !== runtime)
@@ -289,6 +379,160 @@ export class NativePedGameplay<Owner extends object = object> {
     const state = this.records.get(owner);
     if (!state) throw new Error("Native gameplay owner not enrolled");
     return state;
+  }
+  /** Accessors bind directly to the existing process-cache fields. No second
+   * per-character animation cache can diverge from halt/completion writes. */
+  private headState(owner: Owner): NativePedHeadSequenceState | null {
+    const cache = this.state(owner).cache;
+    if (!cache) return null;
+    // New zero-initialized host cache storage. Reused storage retains the two
+    // scalar fields when its sequence pointer is cleared by the source owner.
+    cache.headSequence ??= { address: null, startTimeMs: 0, index: 0 };
+    return {
+      get sequence() {
+        const address = cache.headSequence!.address;
+        if (address === null) return null;
+        if (address === 0x65d050) return nativePedScareHeadSequence;
+        if (address === 0x65d054) return nativePedCalmHeadSequence;
+        throw new Error("Unrecovered native head sequence pointer");
+      },
+      set sequence(value) {
+        cache.headSequence!.address = value?.address ?? null;
+      },
+      get index() {
+        return cache.headSequence!.index;
+      },
+      set index(value) {
+        cache.headSequence!.index = value;
+      },
+      get lastChangeTimeMs() {
+        return cache.headSequence!.startTimeMs;
+      },
+      set lastChangeTimeMs(value) {
+        cache.headSequence!.startTimeMs = value;
+      },
+    };
+  }
+  private headInput(owner: Owner, timeMs: number) {
+    const c = this.host().character(owner);
+    return {
+      hitPoints: c.hitPoints,
+      renderSlot: this.host().allocation(owner)?.renderSlot ?? -1,
+      headBone: this.host().headBone(owner),
+      timeMs,
+    };
+  }
+  private headModels(owner: Owner, request: NativePedHeadModelRequest) {
+    const c = this.host().character(owner),
+      recording = this.options.headModelRecording;
+    const missing = (names: string[]) => ({
+      status: "provider-required" as const,
+      requiredProviders: names,
+      processedFrames: 0,
+      completedMove: false,
+    });
+    if (!c.instance || !c.body) return missing(["native-head-ACT-body-owner"]);
+    if (recording === undefined)
+      return missing(["native-head-model-AR-recording-owner"]);
+    const instance = c.instance,
+      ctx = {
+        character: c,
+        owner,
+        instance,
+        body: c.body,
+        timeMs: request.timeMs,
+        framePeriodMs: 0,
+      };
+    if (recording !== "disabled") {
+      const oldModel =
+        request.kind === "bone-model"
+          ? instance.bones[request.headBone]?.model
+          : null;
+      if (oldModel === undefined)
+        throw new Error("Invalid native FORM head bone");
+      const pending: string[] = [];
+      this.outlet(
+        ctx,
+        recording.record(ctx, {
+          headBone: request.headBone,
+          oldModel,
+          requestedPose: request.kind === "all-models" ? -1 : request.poseIndex,
+          oldModelSet: instance.modelSet,
+          targetModelSet: request.modelSet,
+          timeMs: request.timeMs,
+        }),
+        pending,
+      );
+      if (pending.length) return missing([...new Set(pending)]);
+    }
+    if (request.kind === "bone-model")
+      return this.host().selectModel(
+        owner,
+        request.headBone,
+        request.poseIndex,
+        request.modelSet,
+      );
+    const pending: string[] = [];
+    for (let index = 0; index < instance.bones.length; index++)
+      pending.push(
+        ...this.host().selectModel(
+          owner,
+          index,
+          request.poseIndex,
+          request.modelSet,
+        ).requiredProviders,
+      );
+    //40b530 loops ascending, ignoring ordinary individual known-NULL returns0.
+    return pending.length
+      ? missing([...new Set(pending)])
+      : {
+          status: "complete" as const,
+          requiredProviders: [],
+          processedFrames: 0,
+          completedMove: false,
+        };
+  }
+  private headResult(owner: Owner, result: NativePedHeadSequenceResult) {
+    const c = this.host().character(owner),
+      s = this.state(owner);
+    for (const key of result.requiredProviders) {
+      s.diagnostics.add(key);
+      c.diagnostics.add(key);
+      c.body?.diagnostics.add(key);
+    }
+    return result;
+  }
+  /** Actual caller must select the source move first. This starts the first
+   * head MODEL immediately without advancing BON or changing physics. */
+  startHeadSequence(
+    owner: Owner,
+    sequence: NativePedHeadSequence,
+    timeMs: number,
+  ) {
+    return this.headResult(
+      owner,
+      startNativePedHeadSequence(
+        this.headState(owner),
+        sequence,
+        this.headInput(owner, timeMs),
+        { setModels: (request) => this.headModels(owner, request) },
+      ),
+    );
+  }
+  /** Once after successful processed outer pose; start effects use the separate
+   * entry above. Source replay skips timed advancement but not start itself. */
+  advanceHeadSequence(owner: Owner, timeMs: number) {
+    return this.headResult(
+      owner,
+      advanceNativePedHeadSequence(
+        this.headState(owner),
+        {
+          ...this.headInput(owner, timeMs),
+          replay: this.options.readGlobals().replay,
+        },
+        { setModels: (request) => this.headModels(owner, request) },
+      ),
+    );
   }
   /** Shared source SetPedMove entry for outer grounding/AI owners. Reuses the
    * same authored FSM, speed factors and active/inactive transition providers
@@ -851,8 +1095,17 @@ export class NativePedGameplay<Owner extends object = object> {
     else if (e.kind === "position") ctx.character.position = [...e.position];
     else if (e.kind === "action") s.action = e.action;
     else if (e.kind === "sync-root-basis") ctx.body.rigidFlags |= e.rigidFlag;
-    else if (e.kind === "clear-volume") ctx.body.specialVolume = undefined;
+    // Historical event name: native4fec00 invalidates only the water plane.
+    else if (e.kind === "clear-volume") resetNativePedWaterPlane(ctx.body);
     else if (e.kind !== "settling" && e.kind !== "kill") {
+      if (e.kind === "head-sequence")
+        missing.push(
+          ...this.startHeadSequence(
+            ctx.owner,
+            nativePedScareHeadSequence,
+            e.timeMs,
+          ).requiredProviders,
+        );
       if (this.options.onRecoveryEffect)
         this.outlet(ctx, this.options.onRecoveryEffect(ctx, e, s), missing);
       else missing.push(`source-recovery-${e.kind}-owner`);
@@ -865,7 +1118,19 @@ export class NativePedGameplay<Owner extends object = object> {
         returnValue: null,
         requiredProviders: ["source-halt-input-owner"],
       };
-    const input = this.options.readHaltInput(ctx, s),
+    const provided = this.options.readHaltInput(ctx, s);
+    const renderSlot = this.host().allocation(ctx.owner)?.renderSlot ?? -1;
+    const input: NativePedHaltInput = {
+        ...provided,
+        // Source availability is signed character+4, not a MODEL pose index.
+        head: {
+          boneIndex: this.host().headBone(ctx.owner),
+          renderSlot,
+          modelState: renderSlot,
+        },
+        // Gameplay owns the actual global replay state, not an effect adapter.
+        replay: this.options.readGlobals().replay,
+      },
       state = this.haltState(ctx),
       decision = decideNativePedHalt(state, input);
     if (decision.kind === "unsupported")
@@ -874,6 +1139,12 @@ export class NativePedGameplay<Owner extends object = object> {
         requiredProviders: decision.requiredProviders,
       };
     const missing: string[] = [];
+    if (this.options.preflightRecoveryEffects)
+      this.outlet(
+        ctx,
+        this.options.preflightRecoveryEffects(ctx, state, input, decision),
+        missing,
+      );
     if (!this.options.onRecoveryEffect)
       missing.push("source-recovery-effect-owner");
     const retainedReaction = [90, 91, 92, 97, 113].includes(state.moveId);
@@ -994,8 +1265,8 @@ export class NativePedGameplay<Owner extends object = object> {
         valiumTimeMs: g.valiumTimeMs,
         head: {
           boneIndex: ctx.instance.template.form.headBone,
-          modelState:
-            ctx.instance.bones[ctx.instance.template.form.headBone].poseIndex,
+          renderSlot: this.host().allocation(ctx.owner)?.renderSlot ?? -1,
+          modelState: this.host().allocation(ctx.owner)?.renderSlot ?? -1,
         },
       },
       (e) => {

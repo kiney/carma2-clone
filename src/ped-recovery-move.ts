@@ -15,6 +15,7 @@ import {
   type NativePedMoveCallbackState,
 } from "./physics/ped-active-move";
 import { nativePedRootPose } from "./physics/ped-body";
+import { nativeIntegerLow32 } from "./ai/integer";
 
 export interface NativePedRecoveryMoveRequest {
   id: number;
@@ -191,17 +192,13 @@ export function setNativePedRecoveryMove(
   const speed = f(input.speed);
   if (!Number.isFinite(speed))
     throw new Error("Invalid native recovery move speed");
-  const converted = Math.trunc(
+  //40a190..1b3 zero-extends the authored DWORD, computes at native CRT
+  //53-bit precision, __ftol truncates signed64 and only AX is stored. A
+  //negative stored WORD is ordinary source data, not a replay-only failure.
+  const converted = nativeIntegerLow32(
     speed >= 0 ? speed : -next.asset.form.periodMs * speed,
   );
-  if (
-    !Number.isFinite(converted) ||
-    converted < -0x80000000 ||
-    converted > 0x7fffffff
-  )
-    throw new Error("Native pedestrian period conversion outside signed32");
   const period = (converted << 16) >> 16;
-  if (period < 0) return result(null, ["native-reverse-replay-provider"]);
   const changed =
     id >= 0 && (moveId !== instance.moveId || !!(id & 0x40000000));
   if (changed && !input.retainRoot)

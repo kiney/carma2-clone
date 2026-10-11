@@ -119,6 +119,16 @@ export interface NativePedRuntimeHooks<Owner extends object> {
   beforePose?: (
     context: NativePedRuntimeCallback<Owner>,
   ) => NativePedInstanceResult | void;
+  /** After BON/passive Object V, before ped.pos/root record stores. Stillify
+   * observes the preceding ped.pos while the current ACT/root is available. */
+  beforeSaveRoot?: (
+    context: NativePedRuntimeCallback<Owner>,
+  ) => NativePedInstanceResult | void;
+  /** Processed outer visit after BON, passive V/matrix and ped.pos stores.
+   * Head animation belongs here, never in PHIL moved/halt substeps. */
+  afterPose?: (
+    context: NativePedRuntimeCallback<Owner>,
+  ) => NativePedInstanceResult | void;
   contactProvider?: (
     context: NativePedRuntimeCallback<Owner>,
     dispatch: NativePedContactDispatch,
@@ -194,6 +204,10 @@ export interface NativePedRuntimeFrameVisit<Owner extends object> {
     NativePedRuntimeBody<Owner>
   >;
   pose: NativePedInstanceResult | null;
+  /** Failure retains completed BON and passive Object V stores. */
+  beforeSaveRoot?: NativePedInstanceResult;
+  /** Does not undo an already completed BON advance on a missing outlet. */
+  afterPose?: NativePedInstanceResult;
 }
 const identity = () => new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
 const f = Math.fround;
@@ -556,6 +570,11 @@ export class NativePedRuntime<Owner extends object = object> {
   allocation(owner: Owner): NativePedRuntimeAllocation<Owner> | null {
     return this.bodyPool.allocation(owner);
   }
+  /** Read the enrolled personality's actual signed FORM head index, including−1. */
+  headBone(owner: Owner): number {
+    return this.personalities.get(this.character(owner).personality)!.assets
+      .form.headBone;
+  }
   /** Explicit source root-position owner. An active PHIL pose must be changed
    * by its physical provider, never overwritten with a walking/render pose. */
   setRootPose(
@@ -687,6 +706,8 @@ export class NativePedRuntime<Owner extends object = object> {
     return visits.map((pool) => {
       const c = this.character(pool.character.owner);
       let pose: NativePedInstanceResult | null = null;
+      let beforeSaveRoot: NativePedInstanceResult | void = undefined;
+      let afterPose: NativePedInstanceResult | void = undefined;
       if (c.body) c.body.pedestrianFlags = c.flags;
       if (pool.status === "processed" && c.instance && c.body) {
         this.copyMasks(c);
@@ -718,16 +739,48 @@ export class NativePedRuntime<Owner extends object = object> {
         if (pose.status === "complete") {
           if (!c.instance.physicsActive) {
             this.simulation.phil.setPassiveMatrix(c.body, c.instance.rootPose);
+            // Munge4d4bee..4d4c0c copies character+d8 raw world V into
+            // the retained simple Object+68 before passive Stillify/head work.
+            c.body.state.velocity.fromArray(c.instance.nativeCharacterVelocity);
             c.body.characterVelocity.fromArray(
               c.instance.nativeCharacterVelocity,
             );
           }
+          const posedInstance = c.instance,
+            posedBody = c.body;
+          beforeSaveRoot = this.hooks.beforeSaveRoot?.(this.context(c));
+          if (beforeSaveRoot) {
+            this.recordResult(c, beforeSaveRoot);
+            if (beforeSaveRoot.status !== "complete")
+              return { pool, pose, beforeSaveRoot };
+          }
+          // A source callback can release/vanish an admitted owner. Its BON
+          // and preceding Object V writes remain committed to that resource.
+          if (
+            !c.instance ||
+            !c.body ||
+            c.instance !== posedInstance ||
+            c.body !== posedBody ||
+            c.flags & 0x80
+          )
+            return {
+              pool,
+              pose,
+              ...(beforeSaveRoot ? { beforeSaveRoot } : {}),
+            };
           this.saveRoot(c);
+          afterPose = this.hooks.afterPose?.(this.context(c));
+          if (afterPose) this.recordResult(c, afterPose);
         }
       }
       for (const provider of pool.requiredProviders)
         c.diagnostics.add(provider);
-      return { pool, pose };
+      return {
+        pool,
+        pose,
+        ...(beforeSaveRoot ? { beforeSaveRoot } : {}),
+        ...(afterPose ? { afterPose } : {}),
+      };
     });
   }
   private selectMove(
@@ -816,9 +869,11 @@ export class NativePedRuntime<Owner extends object = object> {
       poseIndex,
       modelSet,
     );
-    if (result.status === "complete" && result.nativeModelReturn === 1) {
-      c.modelPoses[index] = c.instance.bones[index].poseIndex;
-      c.modelSet = modelSet;
+    if (result.status === "complete") {
+      //40b4b4 stores the set byte before a known-NULL model returns0.
+      c.modelSet = c.instance.modelSet;
+      if (result.nativeModelReturn === 1)
+        c.modelPoses[index] = c.instance.bones[index].poseIndex;
     }
     this.recordResult(c, result);
     return result;
@@ -833,7 +888,7 @@ export class NativePedRuntime<Owner extends object = object> {
       return;
     }
     const indices =
-      effect.kind === "dead-model-all"
+      effect.kind === "dead-model-all" || effect.index < 0
         ? c.modelPoses.map((_p, i) => i)
         : [effect.index];
     for (const index of indices) this.selectModel(owner, index, effect.pose, 1);

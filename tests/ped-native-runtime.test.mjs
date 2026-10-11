@@ -870,3 +870,102 @@ for (const tree of ["data", "adv_data"])
     for (const resource of dead) resource.dispose();
     registry.dispose();
   });
+
+test("post-pose outer hook observes saved root/passive V and active retained root exactly once; unresolved tail preserves BON", () => {
+  const calls = [];
+  const { runtime, simulation } = host({
+    hooks: {
+      afterPose: (ctx) => {
+        assert.deepEqual(
+          ctx.character.position,
+          [...ctx.instance.rootPose].slice(9),
+        );
+        assert.deepEqual(
+          [...ctx.character.rootPose],
+          [...ctx.instance.rootPose],
+        );
+        assert.deepEqual(
+          [...nativePedRootPose(ctx.body)],
+          [...ctx.instance.rootPose],
+        );
+        if (!ctx.instance.physicsActive)
+          assert.deepEqual(
+            ctx.body.characterVelocity.toArray(),
+            ctx.instance.nativeCharacterVelocity,
+          );
+        calls.push([
+          ctx.timeMs,
+          ctx.instance.clock.lastTimeMs,
+          ctx.instance.physicsActive,
+        ]);
+        return {
+          status: "provider-required",
+          requiredProviders: ["actual-post-pose-owner"],
+          processedFrames: 0,
+          completedMove: false,
+        };
+      },
+    },
+  });
+  const c = enroll(runtime, {});
+  const first = runtime.prepareFrame(frame(100))[0];
+  assert.equal(first.pose.status, "complete");
+  assert.equal(first.afterPose.status, "provider-required");
+  const second = runtime.prepareFrame(frame(140))[0];
+  assert.equal(second.pose.status, "complete");
+  assert.equal(c.instance.clock.lastTimeMs, 140);
+  assert.equal(c.instance.clock.fraction, f(0.4));
+  assert.deepEqual(calls, [
+    [100, 100, false],
+    [140, 140, false],
+  ]);
+  runtime.activate(c.owner);
+  const root = [...nativePedRootPose(c.body)];
+  c.body.state.velocity.set(0.2, -0.1, 0.3);
+  runtime.prepareFrame(frame(160));
+  assert.deepEqual([...c.instance.rootPose], root);
+  assert.deepEqual(calls[2], [160, 160, true]);
+  assert.equal(simulation.phil.getState(c.body), 2);
+  runtime.updateState(c.owner, { flags: 0x80 });
+  // Active resource release legitimately needs source halt; retain an explicit
+  // unresolved release rather than inventing an accepted callback in this test.
+  runtime.prepareFrame(frame(200));
+  assert.equal(calls.length, 3);
+});
+
+test("post-pose hook is skipped after pre-pose failure and retains source MODEL set on knownNULL return0", () => {
+  let calls = 0,
+    blocked = true;
+  const { runtime } = host({
+    hooks: {
+      beforePose: () =>
+        blocked
+          ? {
+              status: "provider-required",
+              requiredProviders: ["actual-ground-owner"],
+              processedFrames: 0,
+              completedMove: false,
+            }
+          : undefined,
+      afterPose: () => {
+        calls++;
+      },
+    },
+  });
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  assert.equal(calls, 0);
+  blocked = false;
+  runtime.prepareFrame(frame(120));
+  assert.equal(calls, 1);
+  const model = c.instance.bones[1].model;
+  // Actual set1 provider with a known-NULL pose is distinct from absent set1.
+  c.instance.bones[1].modelSets[1] = [model, null, null, null];
+  const result = runtime.selectModel(c.owner, 1, 1, 1);
+  assert.equal(result.status, "complete");
+  assert.equal(result.nativeModelReturn, 0);
+  assert.equal(c.instance.bones[1].model, model);
+  assert.equal(c.instance.bones[1].poseIndex, 0);
+  assert.equal(c.modelSet, 1);
+  assert.equal(c.instance.modelSet, 1);
+});

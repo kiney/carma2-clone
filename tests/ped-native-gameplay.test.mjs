@@ -10,7 +10,15 @@ import {
   Vector3,
 } from "three";
 import { NativePedGameplay } from "../src/ped-native-gameplay.ts";
+import {
+  createNativePedRecoveryEffects,
+  preflightNativePedRecoveryEffects,
+} from "../src/ped-recovery-effects.ts";
 import { NativePedRuntime } from "../src/ped-native-runtime.ts";
+import {
+  nativePedScareHeadSequence as scare,
+  nativePedCalmHeadSequence as calm,
+} from "../src/ped-head-sequence.ts";
 import { VehicleSimulation } from "../src/physics/simulation.ts";
 import { activePedContact } from "../src/physics/ped-contact.ts";
 import { advanceNativePedPose } from "../src/ped-native-instance.ts";
@@ -159,6 +167,7 @@ function create(assets = fixture(), overrides = {}, g = globals(), modelSet1) {
   const values = overrides.values ?? [];
   delete overrides.values;
   const options = {
+    headModelRecording: "disabled",
     // Each scenario represents a fresh process; do not leak the persistent
     // native retry scalar into other test modules sharing this Node process.
     sharedHalt: { retryScalar: 8 },
@@ -983,6 +992,66 @@ test("accepted dead halt freezes current animation without selecting a new move 
   assert.equal(effects.filter((e) => e === "corpse-slick").length, 1);
 });
 
+test("actual gameplay halt preflight retains active PHIL and source state when corpse pool is unavailable", () => {
+  const h = create(fixture(), {}, globals({ goreLevel: 1 }));
+  const host = {
+    readAllocation: (owner) => h.runtime.allocation(owner),
+    readOil: () => null,
+    readSlick: () => null,
+    readMaterials: () => null,
+    statusRecording: "disabled",
+  };
+  h.gameplay.options.onRecoveryEffect = createNativePedRecoveryEffects(host);
+  h.gameplay.options.preflightRecoveryEffects = (ctx, state, input, decision) =>
+    preflightNativePedRecoveryEffects(host, ctx, state, input, decision);
+  h.gameplay.options.readHaltInput = (ctx) => ({
+    actorRootPose: identity,
+    characterOrientation: identity,
+    worldFaceNormals: [[0, 1, 0]],
+    mass: ctx.body.properties.mass,
+    inertia: [1, 3, 2],
+    bounds: ctx.body.profile.bounds,
+    lyingAxes: [-1, 1],
+    head: { boneIndex: 1, modelState: 0 },
+    collisionFlag: false,
+    nowMs: 100,
+    immortal: false,
+    volumeGravity: null,
+    goreLevel: 1,
+    mutantSpeed: 0,
+  });
+  h.runtime.activate(h.c.owner);
+  h.runtime.updateState(h.c.owner, { hitPoints: 0 });
+  h.c.body.doNothing = true;
+  const before = {
+    flags: h.c.flags,
+    impactCount: h.c.impactCount,
+    move: h.c.moveId,
+    action: h.state.action,
+    cache: structuredClone(h.state.cache),
+  };
+  h.simulation.finishPedFrame(40);
+  assert.equal(h.draws(), 0);
+  assert.equal(h.simulation.phil.getState(h.c.body), 2);
+  assert.equal(h.c.instance.physicsActive, true);
+  assert.deepEqual(
+    {
+      flags: h.c.flags,
+      impactCount: h.c.impactCount,
+      move: h.c.moveId,
+      action: h.state.action,
+      cache: structuredClone(h.state.cache),
+    },
+    before,
+  );
+  for (const missing of [
+    "source-shared-oil-runtime-owner",
+    "source-registered-ped-slick-settings",
+    "source-registered-ped-slick-materials",
+  ])
+    assert.ok(h.c.diagnostics.has(missing), missing);
+});
+
 test("source object scan action selected after StartPedRunning survives halt snapshot commit", () => {
   const h = create(fixture(), {
     onRecoveryEffect: (ctx, e, state) => {
@@ -1022,3 +1091,248 @@ test("source object scan action selected after StartPedRunning survives halt sna
   assert.equal(h.state.action, 2);
   assert.equal(h.c.moveId, 90);
 });
+
+test("processed post-pose head timer has strict125 boundary, one step per visit, replay gate and calm pointer-only end", () => {
+  const h = create();
+  const instance = h.c.instance,
+    body = h.c.body,
+    actors = instance.bones.map((b) => b.actor);
+  const clock = { ...instance.clock },
+    root = [...instance.rootPose];
+  const started = h.gameplay.startHeadSequence(h.c.owner, scare, 100);
+  assert.equal(started.status, "complete");
+  assert.equal(instance.bones[1].poseIndex, 1);
+  assert.deepEqual(instance.clock, clock);
+  assert.deepEqual([...instance.rootPose], root);
+  h.runtime.prepareFrame(frame(225));
+  assert.equal(h.state.cache.headSequence.index, 0);
+  h.runtime.prepareFrame(frame(226));
+  assert.equal(h.state.cache.headSequence.index, 1);
+  assert.equal(instance.bones[1].poseIndex, 2);
+  assert.equal(h.state.cache.headSequence.startTimeMs, 226);
+  h.g.replay = true;
+  h.runtime.prepareFrame(frame(1000));
+  assert.equal(h.state.cache.headSequence.index, 1);
+  h.g.replay = false;
+  h.runtime.prepareFrame(frame(1001));
+  assert.equal(h.state.cache.headSequence.index, 2); // no six-step catchup
+  assert.equal(instance.bones[1].poseIndex, 1);
+  h.runtime.prepareFrame(frame(1127));
+  assert.equal(h.state.cache.headSequence.index, 1);
+  h.gameplay.startHeadSequence(h.c.owner, calm, 1127);
+  assert.equal(instance.bones[1].poseIndex, 0);
+  h.runtime.prepareFrame(frame(1253));
+  assert.deepEqual(h.state.cache.headSequence, {
+    address: null,
+    startTimeMs: 1127,
+    index: 1,
+  });
+  assert.equal(instance.bones[1].poseIndex, 0);
+  assert.equal(h.c.body, body);
+  assert.deepEqual(
+    instance.bones.map((b) => b.actor),
+    actors,
+  );
+  assert.equal(h.draws(), 0);
+});
+
+test("missing AR recording reports an explicit gap after source stores and never rolls back successful BON", () => {
+  const h = create(fixture(), { headModelRecording: undefined });
+  const original = h.c.instance.bones[1].model;
+  const result = h.gameplay.startHeadSequence(h.c.owner, scare, 100);
+  assert.equal(result.status, "provider-required");
+  assert.equal(result.committed, true);
+  assert.deepEqual(result.requiredProviders, [
+    "native-head-model-AR-recording-owner",
+  ]);
+  assert.equal(h.state.cache.headSequence.address, 0x65d050);
+  assert.equal(h.c.instance.bones[1].model, original);
+  const visit = h.runtime.prepareFrame(frame(226))[0];
+  assert.equal(visit.pose.status, "complete");
+  assert.equal(visit.afterPose.status, "provider-required");
+  assert.equal(h.c.instance.clock.lastTimeMs, 226);
+  assert.equal(h.state.cache.headSequence.index, 1);
+  assert.equal(h.state.cache.headSequence.startTimeMs, 226);
+});
+
+test("AR head recording precedes actual MODEL change with committed sequence fields and old set, including knownNULL return0", () => {
+  const packets = [],
+    assets = fixture();
+  const dead = assets.bones.map((b) => b.variants.map((v) => v.actor.clone()));
+  dead[1][2] = null;
+  let h;
+  h = create(
+    assets,
+    {
+      headModelRecording: {
+        record: (ctx, packet) => {
+          packets.push({
+            ...packet,
+            index: h.state.cache.headSequence.index,
+            timestamp: h.state.cache.headSequence.startTimeMs,
+          });
+          assert.equal(ctx.instance.bones[1].model, packet.oldModel);
+          assert.equal(ctx.instance.modelSet, packet.oldModelSet);
+        },
+      },
+    },
+    globals(),
+    dead,
+  );
+  h.runtime.selectModel(h.c.owner, 1, 0, 1);
+  h.gameplay.startHeadSequence(h.c.owner, scare, 100);
+  assert.equal(packets[0].oldModelSet, 1);
+  assert.equal(packets[0].targetModelSet, 0);
+  assert.equal(packets[0].requestedPose, 1);
+  assert.equal(packets[0].index, 0);
+  h.runtime.updateState(h.c.owner, { hitPoints: 0 });
+  const retained = h.c.instance.bones[1].model;
+  const out = h.gameplay.advanceHeadSequence(h.c.owner, 226);
+  assert.equal(out.status, "complete");
+  assert.equal(out.modelResult.nativeModelReturn, 0);
+  assert.equal(h.c.instance.bones[1].model, retained);
+  assert.equal(h.c.instance.bones[1].poseIndex, 1);
+  assert.equal(h.c.modelPoses[1], 1);
+  assert.equal(h.c.modelSet, 1);
+  assert.equal(h.c.instance.modelSet, 1);
+  assert.equal(packets[1].oldModelSet, 0);
+  assert.equal(packets[1].targetModelSet, 1);
+  assert.equal(packets[1].index, 1);
+  assert.equal(packets[1].timestamp, 226);
+  const state = h.state.cache.headSequence;
+  h.runtime.applyKillModelEffect(h.c.owner, { kind: "clear-head-sequence" });
+  assert.equal(h.state.cache.headSequence, state);
+  assert.deepEqual(state, { address: null, startTimeMs: 226, index: 1 });
+});
+
+test("negative FORM head uses one all-model AR packet then ascending stable ACT changes and never indexes bone−1", () => {
+  const assets = fixture();
+  assets.form.headBone = -1;
+  const packets = [],
+    calls = [];
+  const h = create(assets, {
+    headModelRecording: {
+      record: (_ctx, packet) => {
+        packets.push(packet);
+      },
+    },
+    onRecoveryEffect: () => {},
+  });
+  const selected = h.runtime.selectModel.bind(h.runtime);
+  h.runtime.selectModel = (owner, index, pose, set) => {
+    calls.push(index);
+    return selected(owner, index, pose, set);
+  };
+  const actors = h.c.instance.bones.map((b) => b.actor);
+  h.gameplay.startHeadSequence(h.c.owner, scare, 100);
+  assert.deepEqual(calls, [0, 1, 2]);
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0].headBone, -1);
+  assert.equal(packets[0].oldModel, null);
+  assert.equal(packets[0].requestedPose, -1);
+  assert.ok(h.c.instance.bones.every((b) => b.poseIndex === 1));
+  h.runtime.setMove(h.c.owner, 97, [0, 0, 1], [0, 1, 0], 100, {
+    completionRequested: true,
+  });
+  h.runtime.prepareFrame(frame(100));
+  h.runtime.prepareFrame(frame(400));
+  assert.equal(h.c.moveId, 93);
+  assert.equal(packets.at(-1).headBone, -1);
+  assert.deepEqual(
+    h.c.instance.bones.map((b) => b.actor),
+    actors,
+  );
+  h.runtime.applyKillModelEffect(h.c.owner, {
+    kind: "dead-model-head",
+    index: -1,
+    pose: 2,
+    modelSet: 1,
+  });
+  assert.ok(h.c.instance.bones.every((b) => b.poseIndex === 2));
+});
+
+test("head starts retain real process cache offscreen, absence stays absent, and render release preserves sequence", () => {
+  const h = create(fixture(), { headModelRecording: undefined });
+  h.runtime.updateState(h.c.owner, { flags: 0x80 });
+  h.runtime.prepareFrame(frame(200));
+  assert.equal(h.c.instance, null);
+  const out = h.gameplay.startHeadSequence(h.c.owner, scare, 201);
+  assert.equal(out.status, "complete"); // no AR operation without a render slot
+  assert.deepEqual(h.state.cache.headSequence, {
+    address: 0x65d050,
+    index: 0,
+    startTimeMs: 201,
+  });
+  h.runtime.prepareFrame(frame(500));
+  assert.equal(h.state.cache.headSequence.index, 0); // unprocessed, no timed update
+  h.state.cache = null;
+  assert.equal(
+    h.gameplay.startHeadSequence(h.c.owner, calm, 501).reason,
+    "cache-unavailable",
+  );
+  assert.equal(h.state.cache, null);
+});
+
+for (const tree of ["data", "adv_data"])
+  test(`original ${tree} human/dog processed head models preserve actual ACT/PHIL identity and BON phase`, async (t) => {
+    let store;
+    try {
+      store = await createAssetStore(process.env.CARMA2_ROOT ?? "carma2_orig");
+    } catch (error) {
+      if (
+        error?.code === "ENOENT" ||
+        /Original installation/.test(String(error))
+      )
+        return t.skip("Original installation unavailable");
+      throw error;
+    }
+    const assets = new Assets();
+    assets.manifest = store.manifest;
+    assets.lookup = new Map(
+      store.manifest.map((x) => [x.path.toLowerCase(), x.path]),
+    );
+    assets.bytes = async (p) => new Uint8Array(await store.read(p));
+    for (const name of ["Blokebl", "Bandsman", "twolf"]) {
+      const native = await loadNativePedAssets(
+        assets,
+        `PEDS/PEEPS/${name}`,
+        name,
+        tree,
+      );
+      const h = create(native),
+        c = h.c,
+        instance = c.instance,
+        head = native.form.headBone;
+      const actors = instance.bones.map((b) => b.actor),
+        body = c.body,
+        clock = { ...instance.clock };
+      const oldModel = instance.bones[head].model;
+      const start = h.gameplay.startHeadSequence(c.owner, scare, 100);
+      assert.equal(start.status, "complete");
+      assert.deepEqual(instance.clock, clock);
+      const hasPose1 = instance.bones[head].modelSets[0][1] != null;
+      assert.equal(start.modelResult.nativeModelReturn, hasPose1 ? 1 : 0);
+      assert.equal(instance.bones[head].poseIndex, hasPose1 ? 1 : 0);
+      assert.equal(
+        instance.bones[head].model,
+        instance.bones[head].modelSets[0][1] ?? oldModel,
+      );
+      h.runtime.prepareFrame(frame(226));
+      assert.equal(h.state.cache.headSequence.index, 1);
+      assert.equal(
+        instance.bones[head].poseIndex,
+        instance.bones[head].modelSets[0][2] ? 2 : hasPose1 ? 1 : 0,
+      );
+      assert.equal(c.body, body);
+      assert.equal(h.simulation.phil.getState(body), 1);
+      assert.deepEqual(
+        instance.bones.map((b) => b.actor),
+        actors,
+      );
+      assert.equal(h.draws(), 0);
+      h.runtime.updateState(c.owner, { flags: 0x80 });
+      h.runtime.prepareFrame(frame(300));
+      assert.equal(h.simulation.phil.count, 0);
+      assert.equal(h.state.cache.headSequence.address, 0x65d050);
+    }
+  });

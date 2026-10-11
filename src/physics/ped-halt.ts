@@ -17,7 +17,12 @@ export interface NativePedHaltCache {
   retryCount: number;
   runSpeed?: number;
   runFactor?: number;
-  headSequence?: { address: 0x65d050; startTimeMs: number; index: 0 };
+  /** Process-cache +1c/+78/+1a. NULL pointer retains timestamp/index. */
+  headSequence?: {
+    address: 0x65d050 | 0x65d054 | null;
+    startTimeMs: number;
+    index: number;
+  };
 }
 export interface NativePedHaltState {
   hitPoints: number;
@@ -44,13 +49,21 @@ export interface NativePedHaltInput {
   inertia: PedVector;
   bounds: PedBounds;
   lyingAxes: readonly [number, number];
-  head: { boneIndex: number; modelState: number };
+  head: {
+    boneIndex: number;
+    /** Actual signed character+4 slot; negative skips ACT selection only. */
+    renderSlot?: number;
+    /** Legacy input alias for renderSlot; never the current MODEL pose index. */
+    modelState: number;
+  };
   collisionFlag: boolean;
   nowMs: number;
   immortal: boolean;
   /** Explicit source corpse branch providers; null means no special volume. */
   volumeGravity: number | null;
   goreLevel: number;
+  /** Source replay gate precedes corpse-slick random consumption. */
+  replay: boolean;
   mutantSpeed: number;
   unsupportedBranches?: readonly string[];
 }
@@ -74,6 +87,7 @@ export interface NativePedHaltDecision {
 }
 export type NativePedHaltEffect =
   | { kind: "position"; position: PedVector }
+  /** PipeSinglePedStatus event; never a request to reactivate the rigid body. */
   | { kind: "status-physical-level"; level: 5 }
   | {
       kind: "move";
@@ -90,6 +104,7 @@ export type NativePedHaltEffect =
       firstState: 1;
       headBone: number;
       modelState: number;
+      renderSlot?: number;
       timeMs: number;
     }
   | { kind: "action"; action: number }
@@ -160,8 +175,12 @@ function validate(state: NativePedHaltState, input: NativePedHaltInput): void {
   if (state.cache) integer(state.cache.retryCount, 0, 255, "halt retry count");
   integer(input.nowMs, 0, 0xffffffff, "time");
   integer(input.goreLevel, 0, 0x7fffffff, "gore level");
+  if (typeof input.replay !== "boolean")
+    throw new Error("Native pedestrian halt requires explicit replay state");
   integer(input.head.boneIndex, -128, 127, "head bone");
   integer(input.head.modelState, -128, 127, "head model state");
+  if (input.head.renderSlot !== undefined)
+    integer(input.head.renderSlot, -128, 127, "head render slot");
   input.lyingAxes.forEach((n) => integer(n, -3, 3, "lying axis"));
   const I = vector(input.inertia);
   if (!(scalar(input.mass) > 0) || I.some((n) => n <= 0))
@@ -316,15 +335,15 @@ function replaceReaction(
       startTimeMs: input.nowMs,
       index: 0,
     };
-    if (input.head.modelState >= 0)
-      emit(effects, providers, {
-        kind: "head-sequence",
-        address: 0x65d050,
-        firstState: 1,
-        headBone: input.head.boneIndex,
-        modelState: input.head.modelState,
-        timeMs: input.nowMs,
-      });
+    emit(effects, providers, {
+      kind: "head-sequence",
+      address: 0x65d050,
+      firstState: 1,
+      headBone: input.head.boneIndex,
+      modelState: input.head.modelState,
+      renderSlot: input.head.renderSlot ?? input.head.modelState,
+      timeMs: input.nowMs,
+    });
   }
 }
 function sync(
@@ -490,8 +509,10 @@ export function mutateNativePedHalt(
     });
     //4d150d kill tail skips corpse-slick. Ordinary4d185e tail draws75 before
     //bit0x10/gore tests even when no slick is ultimately emitted.
+    //4d18f1 skips the entire chance in replay, preserving the shared CRT stream.
     if (
       decision.kind !== "kill-required" &&
+      !input.replay &&
       (input.volumeGravity === null || scalar(input.volumeGravity) >= 1)
     ) {
       const slick = nativePedPercentageChance(75, providers.nextCrtInteger);
@@ -588,17 +609,16 @@ export function completeNativePedMove(
         startTimeMs: input.nowMs,
         index: 0,
       };
-      if (input.head.modelState >= 0) {
-        emit(effects, providers, {
-          kind: "head-sequence",
-          address: 0x65d050,
-          firstState: 1,
-          headBone: input.head.boneIndex,
-          modelState: input.head.modelState,
-          timeMs: input.nowMs,
-        });
-        required.push("head-sequence-model-provider");
-      }
+      emit(effects, providers, {
+        kind: "head-sequence",
+        address: 0x65d050,
+        firstState: 1,
+        headBone: input.head.boneIndex,
+        modelState: input.head.modelState,
+        renderSlot: input.head.renderSlot ?? input.head.modelState,
+        timeMs: input.nowMs,
+      });
+      required.push("head-sequence-model-provider");
     }
   } else if (state.moveId === 113)
     required.push("source-move113-forced-reaction-provider");

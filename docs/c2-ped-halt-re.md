@@ -263,3 +263,23 @@ Confidence: **high** for binary addresses, finite ordinary halt comparisons,
 retry scalar/state, move selection/completion, stock frame/default data, HP and
 gore defaults. **High** for the forced-cache requirement and listed ray gates;
 **incomplete** for a full face-cache implementation and excluded branches.
+
+## Status, replay and face-list ownership follow-up
+
+Installed `4d1257..4d1285` calls `PipeSinglePedStatus4c8840` with literal
+physical-level5 before advancing the impact serial. This is a recording event,
+not `SetCharacterPhysicsLevelAR4cc610`/core409570. Activating a rigid body
+from this event would wrongly undo an accepted intact-simple halt. The emitted
+`status-physical-level` remains an explicit piping outlet.
+
+The corpse-slick tail's `4d18f1` replay branch precedes its75-percent draw.
+The halt kernel now requires explicit replay state; the gameplay owner supplies
+it from its actual globals. Replay retains the freeze/basis/filter/volume tail
+but consumes no slick RNG, sets no slick latch and queues no blood plane.
+The ordinary non-replay draw still occurs before gore/already-spilled checks.
+
+Move completion `4cbfa3..4cbfa9` releases only the borrowed face-list owner
+and process `+b0`; `NativePedGrounding.releaseFaceCache` preserves process
+state/normal and pool order/records. Full process release and invalidation are
+different operations. The head sequence at65d050 and actual recovery-effect
+owners are still separate work, not fulfilled merely by emitted events.

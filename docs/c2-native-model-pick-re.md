@@ -128,7 +128,9 @@ Track preparation's bit80 branch is supported. The non80 branch still needs
 actual prepared edge identifiers, group/face indices and prepared map storage;
 it is not replaced by copied raw flags or guessed boundary edges. Complete
 multi-material order requires actual unsigned MAT pointer keys or independently
-verified allocation ordinals. A material name or render first-seen order is not
+verified allocation ordinals. The [owned resource arena](c2-native-resource-arena-re.md)
+can now provide live byte addresses under an explicit host allocator policy;
+this is separate from original Windows load-episode captures. A material name or render first-seen order is not
 such evidence. One real material identity plus NULL has proven ordering; missing
 multi-key ordering remains an explicit preparation dependency.
 

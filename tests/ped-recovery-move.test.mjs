@@ -346,11 +346,8 @@ test("unsupported providers and invalid inputs do not partially select a move", 
     "complete",
   );
   assert.equal(instance.clock.periodMs, 0);
-  assert.equal(
-    request(instance, -1, { speed: 32768 }).status,
-    "provider-required",
-  );
-  assert.equal(instance.clock.periodMs, 0);
+  assert.equal(request(instance, -1, { speed: 32768 }).status, "complete");
+  assert.equal(instance.clock.periodMs, -32768);
   assert.throws(() => request(instance, 94, { speed: NaN }), /speed/);
   assert.throws(() => request(instance, 94, { rootPose: [1, 2] }), /native12/);
   assert.throws(

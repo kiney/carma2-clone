@@ -4,6 +4,7 @@ import { buildBoxHull } from "./box-hull";
 import type { RigidBody, Contact, ContactImpact } from "./contact";
 import type { CollisionHull } from "./geometry";
 import type { BodyVolumeState } from "./simulation";
+import { NO_WATER_DISTANCE } from "./volumes";
 import type {
   PedContactForm,
   PedContactSettings,
@@ -399,6 +400,17 @@ export function nativePedRootPose(body: NativePedBody): Float32Array {
   ]);
 }
 
+/** Installed4fec00 writes only Object+250. Selected/automatic volume pointers,
+ * immersion depth and plane normal remain cached. Its optional tail records a
+ * replay splash pipe chunk; it does not stop a runtime sound or smoke effect. */
+export function resetNativePedWaterPlane(body: NativePedBody): void {
+  if (
+    body.specialVolume &&
+    body.specialVolume.waterDistance !== NO_WATER_DISTANCE
+  )
+    body.specialVolume.waterDistance = NO_WATER_DISTANCE;
+}
+
 export function acceptNativePedHalt(body: NativePedBody): void {
   body.headerState = 1;
   body.doNothing = true;
@@ -409,6 +421,6 @@ export function acceptNativePedHalt(body: NativePedBody): void {
   body.rigidFlags = (body.rigidFlags | 0x78) >>> 0;
   body.filterA = 0x10000;
   body.filterB = 0x50000;
-  body.specialVolume = undefined;
+  resetNativePedWaterPlane(body);
   body.characterVelocity.copy(body.state.velocity);
 }

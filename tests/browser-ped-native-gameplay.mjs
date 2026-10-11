@@ -136,6 +136,10 @@ try {
           otherModule,
           attributionModule,
           pedBodyModule,
+          headModule,
+          bloodModule,
+          slickMaterialsModule,
+          recoveryModule,
         ] = await Promise.all([
           import("/src/ped-native-assets.ts"),
           import("/src/ped-native-runtime.ts"),
@@ -148,6 +152,10 @@ try {
           import("/src/physics/ped-other.ts"),
           import("/src/ped-contact-attribution.ts"),
           import("/src/physics/ped-body.ts"),
+          import("/src/ped-head-sequence.ts"),
+          import("/src/ped-blood.ts"),
+          import("/src/ped-slick-materials.ts"),
+          import("/src/ped-recovery-effects.ts"),
         ]);
         const assets = await assetsModule.loadNativePedAssets(
           c.assets,
@@ -161,6 +169,34 @@ try {
         const settings = settingsModule.parsePedContactSettings(
           await c.assets.text(`${dataRoot}/PEDS/settings.txt`),
         );
+        const bloodSettings = bloodModule.parsePedBloodSettings(
+          await c.assets.text(`${dataRoot}/PEDS/settings.txt`),
+        );
+        // Controlled source renderer globals for registration, not a claim that
+        // the full race Glorify/fog adaptation owner has been integrated.
+        const slickRegistry =
+          new slickMaterialsModule.NativePedSlickMaterialRegistry(c.assets, {
+            dataRoot,
+            pixelmapDirectory: "PIX16",
+            textureQuality: {
+              interpolation: false,
+              antialiasing: false,
+              perspective: true,
+              exceptionFlags: () => null,
+            },
+          });
+        const slickRegistration = await slickRegistry.prepare();
+        if (slickRegistration.status !== "complete")
+          throw new Error(slickRegistration.requiredProviders.join(", "));
+        for (const name of [
+          bloodSettings.slick.pixelmap,
+          bloodSettings.slick.smearMaterial,
+        ]) {
+          if (!name) continue;
+          const registered = slickRegistry.loadTemporaryMaterial(name);
+          if (registered.status !== "complete")
+            throw new Error(registered.requiredProviders.join(", "));
+        }
         const moveTable = fsmModule.readNativePedMoveFSM(
           await c.assets.bytes("carma2_HW.exe"),
         );
@@ -190,10 +226,43 @@ try {
           valiumTimeMs: 0,
           replay: false,
         };
+        const recoveryHost = {
+          readAllocation: (owner) => runtime.allocation(owner),
+          readOil: () => c.simulation.oil,
+          readSlick: () => bloodSettings.slick,
+          readMaterials: () => slickRegistry.materials,
+          statusRecording: "disabled",
+          onSlickResult: (owner, result) => {
+            events.push({
+              kind: "corpse-slick",
+              owner: owner.label,
+              status: result.status,
+              requiredProviders: result.requiredProviders,
+              queuedAt: result.spill?.queuedAt ?? null,
+              spillTime: result.spill?.spillTime ?? null,
+              poolSlot: result.spill
+                ? c.simulation.oil.spills.indexOf(result.spill)
+                : null,
+            });
+          },
+        };
         const gameplay = new gameplayModule.NativePedGameplay({
           settings,
           readGlobals: () => globals,
           nextCrtInteger: () => rng.nextInteger(),
+          // This harness exercises live MODEL selection with replay recording
+          // explicitly disabled; it does not claim a native replay serializer.
+          headModelRecording: "disabled",
+          onRecoveryEffect:
+            recoveryModule.createNativePedRecoveryEffects(recoveryHost),
+          preflightRecoveryEffects: (ctx, state, input, decision) =>
+            recoveryModule.preflightNativePedRecoveryEffects(
+              recoveryHost,
+              ctx,
+              state,
+              input,
+              decision,
+            ),
           planMove: fsmModule.createNativePedMovePlanner(moveTable, () => ({
             drunk: false,
             dancing: false,
@@ -271,6 +340,8 @@ try {
             const head = form.headBone;
             const volumeGravity =
               body.specialVolume?.volume?.gravityMultiplier ?? null;
+            const renderSlot =
+              runtime.allocation(context.owner)?.renderSlot ?? -1;
             const input = {
               actorRootPose: pedBodyModule.nativePedRootPose(body),
               characterOrientation: context.instance.characterOrientation,
@@ -286,7 +357,8 @@ try {
               lyingAxes: form.lyingAxes,
               head: {
                 boneIndex: head,
-                modelState: context.instance.bones[head].poseIndex,
+                modelState: renderSlot,
+                renderSlot,
               },
               collisionFlag: body.collisionFlags !== 0,
               nowMs: context.timeMs,
@@ -474,7 +546,17 @@ try {
           timeMs,
           flags: 0x40,
         });
-        gameplay.enroll(releaseOwner, { action: 0, cache: null });
+        const releaseState = gameplay.enroll(releaseOwner, {
+          action: 0,
+          cache: {
+            retryCount: 0,
+            flags: 0,
+            stumpCounters: new Uint8Array(assets.form.bones.length),
+            directionInterpolationMs: 50,
+            killer: null,
+            napalmDeadlineMs: 0,
+          },
+        });
         const initialVisits = prepare();
         const allocation = runtime.allocation(owner);
         if (!allocation?.body)
@@ -483,6 +565,76 @@ try {
           );
         window.__pedNativeGroup = character.instance.group;
         const controlAllocated = !!runtime.allocation(releaseOwner)?.body;
+        if (!controlAllocated)
+          throw new Error(
+            "Head sequence control lacks actual render/body allocation",
+          );
+        const headStateBefore = {
+          clock: { ...releaseCharacter.instance.clock },
+          root: Array.from(releaseCharacter.instance.rootPose),
+          velocity: releaseCharacter.body.state.velocity.toArray(),
+          randomState: rng.state,
+        };
+        const startHead = gameplay.startHeadSequence(
+          releaseOwner,
+          headModule.nativePedScareHeadSequence,
+          timeMs,
+        );
+        const headSamples = [
+          {
+            offsetMs: 0,
+            pose: releaseCharacter.instance.bones[assets.form.headBone]
+              .poseIndex,
+            status: startHead.status,
+          },
+        ];
+        for (const offsetMs of [125, 126, 251, 252, 378]) {
+          const result = gameplay.advanceHeadSequence(
+            releaseOwner,
+            (timeMs + offsetMs) >>> 0,
+          );
+          headSamples.push({
+            offsetMs,
+            pose: releaseCharacter.instance.bones[assets.form.headBone]
+              .poseIndex,
+            status: result.status,
+          });
+        }
+        globals.replay = true;
+        const replayHead = gameplay.advanceHeadSequence(
+          releaseOwner,
+          (timeMs + 504) >>> 0,
+        );
+        globals.replay = false;
+        const calmHead = gameplay.startHeadSequence(
+          releaseOwner,
+          headModule.nativePedCalmHeadSequence,
+          (timeMs + 500) >>> 0,
+        );
+        const endHead = gameplay.advanceHeadSequence(
+          releaseOwner,
+          (timeMs + 626) >>> 0,
+        );
+        const headSequence = {
+          method:
+            "controlled source timestamps on an allocated original personality; MODEL-only calls, replay recording explicitly disabled",
+          samples: headSamples,
+          replay: { status: replayHead.status, reason: replayHead.reason },
+          calm: {
+            status: calmHead.status,
+            endStatus: endHead.status,
+            state: { ...releaseState.cache.headSequence },
+            pose: releaseCharacter.instance.bones[assets.form.headBone]
+              .poseIndex,
+          },
+          before: headStateBefore,
+          after: {
+            clock: { ...releaseCharacter.instance.clock },
+            root: Array.from(releaseCharacter.instance.rootPose),
+            velocity: releaseCharacter.body.state.velocity.toArray(),
+            randomState: rng.state,
+          },
+        };
         runtime.updateState(releaseOwner, {
           flags: releaseCharacter.flags | 0x80,
         });
@@ -515,6 +667,31 @@ try {
         requestAnimationFrame(frameTick);
         window.__pedNativeSnapshot = () => ({
           events: [...events],
+          slickMaterials: {
+            registration: slickRegistration.status,
+            identities: slickRegistration.resources.map(
+              (resource) => resource.identifier,
+            ),
+            temporaryEntries: slickRegistry.temporaryMaterials.length,
+            renderingScope:
+              "verified initial registration; final race Glorify/fog adaptation remains separate",
+          },
+          slickSpills: c.simulation.oil.spills
+            .filter(
+              (spill) =>
+                spill?.source?.identity === character.instance?.bones[0]?.actor,
+            )
+            .map((spill) => ({
+              queuedAt: spill.queuedAt,
+              spillTime: spill.spillTime,
+              pending: spill.pending,
+              visible: spill.mesh.visible,
+              fullSize: spill.fullSize,
+              growRate: spill.growRate,
+              currentSize: spill.currentSize,
+              friction: [...spill.friction],
+              material: spill.mesh.children[0]?.material?.name ?? null,
+            })),
           gameTimeMs: c.stats.gameTimeMs,
           runtimeTimeMs: runtime.currentTimeMs,
           nativeClock: character.instance
@@ -564,6 +741,7 @@ try {
         window.__pedNativeRelease = () => {
           releaseEventStart = events.length;
           const before = {
+            cameraOrigin: [...cameraOrigin],
             gameTimeMs: c.stats.gameTimeMs,
             runtimeTimeMs: runtime.currentTimeMs,
             nativeClock: character.instance
@@ -576,14 +754,25 @@ try {
               : null,
             velocity: character.body?.state.velocity.toArray() ?? null,
           };
-          character.flags &= ~1;
+          // PrepareFrame recomputes scope flags. Exercise the actual native
+          // distance gate using a controlled camera input, not a transient bit.
+          cameraOrigin.splice(
+            0,
+            3,
+            Math.fround(
+              character.position[0] + frameSettings.processDistance + 1,
+            ),
+            character.position[1],
+            character.position[2],
+          );
           c.paused = false;
           running = true;
           requestAnimationFrame(frameTick);
           return {
             before,
             trigger:
-              "ordinary out-of-scope flag cleared; RAF continues with live application timestamps",
+              "controlled native camera origin beyond authored process distance; RAF continues with live application timestamps",
+            cameraOrigin: [...cameraOrigin],
           };
         };
         window.__pedNativeReleaseStatus = () => {
@@ -741,6 +930,7 @@ try {
           playerVelocity: player.state.velocity.toArray(),
           bodyState: allocation.body.headerState,
           initialVisits: initialVisits.map((visit) => visit.pool.status),
+          headSequence,
           inactiveRelease: {
             allocated: controlAllocated,
             released: controlReleased,
@@ -1090,7 +1280,8 @@ try {
       .waitForFunction(
         () => window.__pedNativeReleaseStatus?.()?.released,
         null,
-        { timeout: 2500, polling: "raf" },
+        // Source recent-event grace is7500ms; keep actual RAF/PD timestamps.
+        { timeout: 10000, polling: "raf" },
       )
       .catch(() => {});
     const releaseStatus = await page.evaluate(
@@ -1130,11 +1321,14 @@ try {
       controlledNativeSever:
         !!controlledSever?.headRemoved && controlledSever.detachedBodies > 0,
       inactiveHeaderRelease: !!report.cases.at(-1).inactiveRelease.released,
-      activeCorpseRelease: !!release?.released,
+      activeCorpseQuieted:
+        snapshot?.character.body?.philState === 1 &&
+        snapshot.nativeClock?.periodMs === 0,
+      corpseAllocationReleased: !!release?.afterLiveFrames?.released,
       coverageComplete: false,
       uncovered: [
         "authored halt/recovery face-cache continuation",
-        "active corpse PHIL release",
+        "ordinary native population ownership",
       ],
       closeupCamera: closeup?.diagnostic?.status ?? "unavailable",
     };
@@ -1162,6 +1356,67 @@ try {
     JSON.stringify(report, null, 2),
   );
   for (const scenario of report.cases) {
+    assert.equal(scenario.after.slickMaterials.registration, "complete");
+    assert.deepEqual(scenario.after.slickMaterials.identities, [
+      "GIBSLICK",
+      "GIBSMEAR.MAT",
+    ]);
+    assert.equal(
+      scenario.coverage.activeCorpseQuieted,
+      true,
+      `${scenario.dataRoot}: actual contacted corpse quiets to passive PHIL with stopped animation`,
+    );
+    assert.equal(
+      scenario.coverage.corpseAllocationReleased,
+      true,
+      `${scenario.dataRoot}: actual source camera distance releases retained corpse allocation`,
+    );
+    assert.deepEqual(
+      scenario.unsupported,
+      [],
+      `${scenario.dataRoot}: ordinary corpse has actual effect owners`,
+    );
+    const slickEvents = scenario.after.events.filter(
+      (event) =>
+        event.kind === "corpse-slick" && event.owner === scenario.ownerKey,
+    );
+    assert.ok(
+      slickEvents.length <= 1,
+      `${scenario.dataRoot}: once-only corpse effect`,
+    );
+    for (const event of slickEvents) {
+      assert.equal(event.status, "queued");
+      assert.deepEqual(event.requiredProviders, []);
+      assert.equal(event.spillTime - event.queuedAt, 300);
+      assert.ok(event.poolSlot >= 0 && event.poolSlot < 32);
+    }
+    for (const spill of scenario.after.slickSpills) {
+      assert.equal(spill.material, "GIBSLICK");
+      assert.deepEqual(spill.friction, [Math.fround(0.2), 1]);
+      assert.ok(
+        spill.fullSize >= Math.fround(0.05) &&
+          spill.fullSize <= Math.fround(0.15),
+      );
+    }
+    assert.deepEqual(
+      scenario.headSequence.samples.map((sample) => sample.pose),
+      [1, 1, 2, 2, 1, 2],
+      `${scenario.dataRoot}: installed scare table loops with strict 125ms gate`,
+    );
+    assert.ok(
+      scenario.headSequence.samples.every(
+        (sample) => sample.status === "complete",
+      ),
+    );
+    assert.equal(scenario.headSequence.replay.reason, "replay");
+    assert.equal(scenario.headSequence.calm.pose, 0);
+    assert.equal(scenario.headSequence.calm.state.address, null);
+    assert.equal(scenario.headSequence.calm.endStatus, "complete");
+    assert.deepEqual(
+      scenario.headSequence.after,
+      scenario.headSequence.before,
+      `${scenario.dataRoot}: head MODEL changes retain BON, physical pose/velocity and shared CRT`,
+    );
     assert.ok(
       scenario.inactiveRelease?.released,
       `${scenario.dataRoot}: normal inactive body removal`,
