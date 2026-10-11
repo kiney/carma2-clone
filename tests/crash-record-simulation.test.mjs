@@ -39,12 +39,30 @@ function impact(a, b, point, impulse = 10) {
     a,
     b,
     point: point.clone(),
-    pointB: point.clone(),
+    pointB: b ? frontPoint(b) : point.clone(),
     normal: new Vector3(1, 0, 0),
     normalImpulse: impulse,
     closingSpeed: 2,
     tangentImpulse: new Vector3(),
   };
+}
+
+function frontPoint(car) {
+  const bounds = car.shapeVertices
+    .flatMap((shape) => shape)
+    .reduce((box, point) => box.expandByPoint(point), new Box3());
+  return new Vector3(
+    (bounds.min.x + bounds.max.x) / 2,
+    (bounds.min.y + bounds.max.y) / 2,
+    bounds.min.z,
+  );
+}
+
+function frame(car, speed, velocity, { gear = 0, accelerator = false } = {}) {
+  car.crashRecord.cachedSpeed = Math.fround(speed);
+  car.crashRecord.beginFrame(false, velocity);
+  car.state.gear = gear;
+  car.crashAccelerationKey = accelerator;
 }
 
 async function simWith(t, ...cars) {
@@ -86,7 +104,7 @@ test("outer frame snapshots crash state once across five 40ms substeps", async (
   assert.deepEqual(car.crashRecord.localVelocity.toArray(), [-12, 4, 5]);
   assert.equal(
     car.crashRecord.cachedSpeed,
-    Math.fround(Math.sqrt(50) * Math.fround(.001)),
+    Math.fround(Math.sqrt(50) * Math.fround(0.001)),
   );
 });
 
@@ -107,30 +125,36 @@ test("first car contact face survives accepted-damage accumulator cleanup", asyn
   const attacker = await eagle(t, true);
   if (!target || !attacker) return;
   const simulation = await simWith(t, target, attacker);
-  target.crashRecord.beginFrame(false, new Vector3());
-  const accepted = target.damage.applyImpact.bind(target.damage);
-  let accepts = 0;
-  target.damage.applyImpact = (...args) => {
-    const result = accepted(...args);
-    if (++accepts === 1) target.crashRecord.clearAcceptedDamage();
-    return result;
+  simulation.crashClock = () => 1000;
+  frame(target, 0.001, new Vector3(0, 0, 1));
+  frame(attacker, 0.01, new Vector3(0, 0, -10), {
+    gear: 1,
+    accelerator: true,
+  });
+  let acceptedPair = false;
+  simulation.onCrashAttribution = (source, victim) => {
+    if (source === attacker && victim === target) acceptedPair = true;
   };
-  const bounds = target.shapeVertices
-    .flatMap((shape) => shape)
-    .reduce(
-      (box, p) => box.expandByPoint(p),
-      // World-space bounds are transformed by applyImpactDamage; Eagle starts identity.
-      new Box3(),
-    );
-  const first = new Vector3(bounds.max.x, 0, 0);
-  const second = new Vector3(bounds.min.x, 0, 0);
-  simulation.applyImpactDamage([impact(target, attacker, first)]);
+  simulation.applyImpactDamage([impact(target, attacker, frontPoint(target))]);
+  assert.equal(acceptedPair, true);
   const firstFace = target.crashRecord.firstContactFace;
-  assert.notEqual(firstFace, 7);
+  assert.equal(firstFace, 4);
   assert.equal(target.crashRecord.accumulator, 0);
-  simulation.applyImpactDamage([impact(target, attacker, second)]);
+  simulation.applyImpactDamage([impact(target, attacker, rearPoint(target))]);
   assert.equal(target.crashRecord.firstContactFace, firstFace);
+  assert.equal(target.crashRecord.accumulator, 0);
 });
+
+function rearPoint(car) {
+  const bounds = car.shapeVertices
+    .flatMap((shape) => shape)
+    .reduce((box, point) => box.expandByPoint(point), new Box3());
+  return new Vector3(
+    (bounds.min.x + bounds.max.x) / 2,
+    (bounds.min.y + bounds.max.y) / 2,
+    bounds.max.z,
+  );
+}
 
 test("crash accumulation uses pre-protection scaled damage while immunity bypasses it", async (t) => {
   const target = await eagle(t, true);
@@ -138,10 +162,8 @@ test("crash accumulation uses pre-protection scaled damage while immunity bypass
   const immune = await eagle(t, true);
   if (!target || !attacker || !immune) return;
   const simulation = await simWith(t, target, attacker, immune);
+  simulation.crashClock = () => 1000;
   target.protection = 8;
-  simulation.applyImpactDamage([
-    impact(target, attacker, new Vector3(1, 0, 0)),
-  ]);
   const expected = scaleImpactVectors(new Vector3(10, 0, 0), {
     human: target.human,
     hitCar: true,
@@ -156,13 +178,25 @@ test("crash accumulation uses pre-protection scaled damage while immunity bypass
     protection: target.protection,
     sinceLastAttributedImpactMs: 0,
   }).accumulatedDamage;
+  let targetPreProtection;
+  simulation.onImpactPair = (a, b) => {
+    if (a === target || b === target)
+      targetPreProtection = target.crashRecord.accumulator;
+  };
+  simulation.applyImpactDamage([impact(target, attacker, frontPoint(target))]);
+  assert.equal(targetPreProtection, Math.fround(expected.x * expected.x));
   assert.equal(
     target.crashRecord.accumulator,
-    Math.fround(expected.x * expected.x),
+    0,
+    "accepted pair cleans up after callback",
   );
   immune.damage.damageContext.invulnerable = true;
-  simulation.applyImpactDamage([
-    impact(immune, attacker, new Vector3(1, 0, 0)),
-  ]);
+  let immuneFace = 7;
+  simulation.onImpactPair = (a, b) => {
+    if (a === immune || b === immune)
+      immuneFace = immune.crashRecord.firstContactFace;
+  };
+  simulation.applyImpactDamage([impact(immune, attacker, frontPoint(immune))]);
+  assert.equal(immuneFace, 4, "contact is recorded even when damage is immune");
   assert.equal(immune.crashRecord.accumulator, 0);
 });

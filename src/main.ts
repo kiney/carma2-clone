@@ -1681,6 +1681,7 @@ function animate(now: number) {
           brake: Number(keys.has("ShiftLeft")),
           handbrake: keys.has("Space"),
         };
+        player.crashAccelerationKey = keys.has("KeyW") || keys.has("ArrowUp");
         if (
           modifiers?.instantHandbrake &&
           player.input.handbrake &&

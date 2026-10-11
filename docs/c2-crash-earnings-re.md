@@ -1,9 +1,11 @@
-# Crash earnings: verified selection and pending integration
+# Crash earnings: verified selection and live integration
 
 Evidence: read-only installed HW, hashes in the physics notes; rec2 is a symbol
-map. Installed `DoCrashEarnings` is0x440550. The browser currently implements
-base waste awards and static-world attribution, while exact pair selection below
-is pending RAC-04. No claim of full car-car attribution conformance is made.
+map. Installed `DoCrashEarnings` is0x440550. The browser implements base waste awards and the offline pair selector below
+in the ordered damage dispatcher. Native row grouping and non-car ownership
+are integrated. Remaining primitive/vector precision, AI reaction binding and
+secondary reward branches are still RAC-04/AI-01 work;
+this does not establish complete crash-earnings conformance.
 
 ## Snapshot and contact records
 
@@ -34,11 +36,25 @@ model-origin coordinates; adding COM again would be wrong. A's DamageSystems
 runs0x41d3f1, then B's0x41d421, then pair selection0x41d438. Both records must
 exist before selecting a pair.
 
-The live damage dispatcher now groups unordered body pairs in first-contact
-order, preserving the first row's A/B orientation and folding reversed rows
-with their original signs. It applies both receiver groups before its
-`onImpactPair` callback and before the next pair. This prepares the original
-selection ordering; the current reward attribution is still provisional.
+The live dispatcher uses the installed greedy grouping at0x41cc11–41d24e:
+first unconsumed row, matching unordered body pair, maximum four rows. Same
+orientation requires a normal dot product strictly greater than F32(.707107);
+reversed orientation requires strictly less than its negative. Same-orientation
+products add X+Y then Z; reversed products add Z+X then Y, without intermediate
+Float32 stores. Each lambda and each running lambda sum is stored as Float32.
+Only groups strictly above F32(.02) invoke damage/earnings (0x41d39c–3ab).
+Closing speed is not an eligibility gate. Zero-lambda rows still occupy slots;
+browser invalidated type9 solves are excluded. The native solver also tags zero
+lambda as9, but leaves those primitives in the callback list. This is an explicit
+adapter distinction. Native solver primitive generation and weighted-vector
+store precision are not yet completely reproduced; the browser retains its
+.005 per-axis contact-point deduplication.
+
+The first row retains A/B orientation; reversed rows keep their receiver signs.
+Both receivers are damaged before `onImpactPair`, native selection and the next
+group. Accepted selection clears accumulators immediately rather than deferring
+cleanup to the end of all pairs. Numerical tests cover four-row partitioning,
+orthogonal normals, reversed pairs, zero closing speed and the strict threshold.
 
 Damage accumulation is `sum(dot(D,D))` after local scaling and factor0.2 but
 before human protection and crush factors. Invulnerable receivers skip it.
@@ -61,8 +77,9 @@ The squared damage magnitude has its own Float32 store before accumulation:
 `m=F32((liveDx*F32(liveDx)+liveDy*F32(liveDy))+liveDz*F32(liveDz))`, then
 `accumulator=F32(old+m)` (`0x41e0bd–0x41e0ff`). Protection/crush do not enter
 that sum; immunity bypasses it. `scaleImpactVectors.accumulatedDamage` now
-exposes the earlier vector. This snapshot integration does not yet replace the
-existing pair attribution or implement accepted-pair accumulator cleanup.
+exposes the earlier vector. The live selector now runs after both receivers, clears accepted-pair
+accumulators through getter-backed views, and sets wasting ownership from the
+selected victim/attacker rather than any directly touching human car.
 Accepted pair cleanup resets accumulators0x441115/123. A separate component
 routine0x441310 adds0.5; its semantics still need interpretation.
 
@@ -111,8 +128,8 @@ mines and free parts have separate explicit ownership stores and can overwrite.
 Final reward requires new wasting, local-human attacker and no prior award;
 final-goal completion occurs before ordinary EarnCredits/AddTime. Front/front
 speeds>0.001 and direction dot<-0.7 set a separate head-on multiplier0x4411e1,
-which does not change pair selection. Damage/rolling award branches and native
-non-car normalization remain additional RAC-04 work.
+which does not change pair selection. Damage/rolling award branches remain
+additional RAC-04 work.
 
 ## Regular opponent crash reactions
 
@@ -146,3 +163,42 @@ the race catalog index/count and skill, not the race's authored navigation speed
 `threshold=trunc(70-I32(10*skill-3*rank)*F32(nastinessMultiplier))`.
 The multiplier global begins at1. Tests cover threshold equality, sticky flags,
 shared catalog writes, pursuit target matching and unsigned deadline wrap.
+
+## Live clock and ownership bridge
+
+Installed `PDGetTotalTime` at0x51ca50 reads the raw performance counter
+(QPC call0x51ca64); rec2 platform/win32 describes the counter delta and
+timeGetTime fallback. It is distinct from pause-adjusted `GetTotalTime`.
+The browser bridge uses an injectable UInt32 platform clock backed by
+`performance.now()`, without subtracting pause or race epoch. Tests advance
+that clock independently from the physics cursor.
+
+World-AI scaling uses signed `I32(nowPD-history.lastMs)>5000`, while null-other
+selection rejects at equality5000. The scaling timestamp and last-attacker
+history are the same native car field0x13e4. Raw human touching only updates
+a separate repair timer0x1548; it must not refresh attribution before damage.
+The former unconditional touching-human update has been removed.
+
+Gear and acceleration intent are current fields, not RecordLastDamage
+snapshots:0x135c,0x12d0 bit0x40000 and0x12dc. Browser keyboard input explicitly
+supplies W/Up intent independently of synthesized throttle/reverse; there is
+currently no joystick adapter. Mine ownership writes the same history clock;
+mine lifecycle timing remains a separate subsystem.
+
+The native owner pointer0xc8 is independent of attachment/repair ownership.
+DamageCar0x41ded0 updates both object slots at0x41deea–41df16 before driver,
+distance or immunity gates: replace a slot if null or its body's driver>5.
+Thus cars keep the latest counterpart, while a noncar keeps its first owner,
+even when that owner is another noncar. Qualifying noncar/noncar groups also
+perform these writes before their driver<=5 damage return. Activated world
+props are driver4 (0x42001c), initialized with null owner (0x42015b).
+Static world geometry supplies null OTHER (0x41d5c3) and updates neither slot.
+
+Free parts/splits are drivers2/3 with their original car owner initialized
+(0x42f2e5); driver1 semi-detached parts are excluded from earnings normalization.
+After both receiver damage calls,0x44061b–44069a normalizes drivers2/3/4: a
+nonnull owner with driver>5, different from the receiving car, sets its last
+attacker and raw PD timestamp. This store precedes the selector's knackered
+and magnitude rejection. The body then supplies null OTHER to ordinary
+selection. A WeakMap implements these slots without changing attachment state,
+repair ownership or debris dynamics; mine ownership remains its separate path.

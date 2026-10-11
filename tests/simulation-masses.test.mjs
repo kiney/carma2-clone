@@ -301,10 +301,11 @@ for (const name of ["EAGLE3", "buggy", "bigdump"]) {
       const raw = sim.lastImpacts
         .filter(
           (i) =>
-            i.sourceType !== 9 && i.closingSpeed > 0.01 && i.normalImpulse > 0,
+            i.sourceType !== 9 && i.normalImpulse > 0,
         )
         .reduce(
-          (sum, i) => sum.addScaledVector(i.normal, i.normalImpulse),
+          // The native force-row lambda operand is Float32 before grouping.
+          (sum, i) => sum.addScaledVector(i.normal, Math.fround(i.normalImpulse)),
           new Vector3(),
         );
       nearVector(calls[0].damage, raw.clone().multiplyScalar(0.2));

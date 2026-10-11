@@ -100,6 +100,10 @@ import "./crash-record-simulation.test.mjs";
 import "./ai-crash-reactions.test.mjs";
 import "./crash-attribution-reactions.test.mjs";
 import "./impact-pair-order.test.mjs";
+import "./live-crash-attribution.test.mjs";
+import "./impact-groups.test.mjs";
+import "./impact-groups-simulation.test.mjs";
+import "./native-noncar-attribution.test.mjs";
 import "./opponent-selection.test.mjs";
 import "./engine-noise.test.mjs";
 

@@ -108,6 +108,15 @@ import {
 } from "./volumes";
 import { scaleImpactVectors } from "./impact";
 import { NativeCrashRecord } from "./crash-record";
+import {
+  groupNativeImpactRows,
+  NATIVE_IMPACT_MINIMUM_LAMBDA,
+} from "./impact-groups";
+import {
+  selectNativeCrashAttribution,
+  type NativeCrashCar,
+  type NativeCrashHistory,
+} from "./crash-attribution";
 import { detachedChildCenterOfMass } from "./detached-com";
 import {
   skillValue,
@@ -173,6 +182,9 @@ export interface SimulatedCar extends RigidBody {
   lastAwardImpactMs?: number;
   /** Native outer-frame snapshot, first contact and pre-protection damage. */
   crashRecord: NativeCrashRecord;
+  crashHistory: NativeCrashHistory;
+  /** Actual accelerator-key bit, independent of synthesized throttle/braking. */
+  crashAccelerationKey: boolean;
   armorLevel: number;
   offenseLevel: number;
   armorFactor?: number;
@@ -344,6 +356,13 @@ export function createSimulatedCar(
     recoveryHistory: new SafeCarHistory(state),
     lastAttributedImpactMs: 0,
     crashRecord: new NativeCrashRecord(),
+    crashHistory: {
+      lastAttacker: null,
+      lastMs: 0,
+      previousAttacker: null,
+      previousMs: 0,
+    },
+    crashAccelerationKey: false,
     armorLevel: human ? 1 : 0,
     offenseLevel: human ? 1 : 0,
     damageMultiplier: 1,
@@ -415,6 +434,13 @@ export class VehicleSimulation {
     a: Readonly<SimulatedCar> | undefined,
     b: Readonly<SimulatedCar> | undefined,
   ) => void;
+  /** Native selected roles, while victim accumulation is still available. */
+  onCrashAttribution?: (attacker: SimulatedCar, victim: SimulatedCar) => void;
+  /** PDGetTotalTime is the raw platform clock, not pause-adjusted GetTotalTime. */
+  crashClock: () => number = () => Math.floor(performance.now()) >>> 0;
+  private readonly crashCars = new Map<string, SimulatedCar>();
+  /** Native car-spec owner slot0xc8; separate from attachment/repair ownership. */
+  private readonly crashOwnerSlots = new WeakMap<RigidBody, RigidBody>();
   onWasted?: (car: SimulatedCar) => void;
   onWorldGeometryChanged?: () => void;
   settings?: UpgradeSettings;
@@ -442,6 +468,7 @@ export class VehicleSimulation {
   ) {}
   add(car: SimulatedCar) {
     car.damage.configureDetachmentScheduling(this.detachmentScheduling);
+    this.crashCars.set(car.group.uuid, car);
     this.cars.push(car);
     this.sync(car);
   }
@@ -700,11 +727,13 @@ export class VehicleSimulation {
           !!car.damage.damageContext.invulnerable,
         );
       if (event.creditOwner && event.creditOwner !== car) {
+        this.crashCars.set(event.creditOwner.group.uuid, event.creditOwner);
+        car.crashHistory.lastAttacker = event.creditOwner.group.uuid;
+        car.crashHistory.lastMs = this.crashClock();
         car.lastAwardAttacker = event.creditOwner;
-        car.lastAwardImpactMs = this.elapsed * 1000;
+        car.lastAwardImpactMs = car.crashHistory.lastMs;
       }
-      if (event.creditOwner?.human && !car.human)
-        car.lastAttributedImpactMs = this.elapsed * 1000;
+      car.lastAttributedImpactMs = car.crashHistory.lastMs;
       if (!wasWasted && car.damage.wasted)
         car.wastedByPlayer = !!event.creditOwner?.human;
       car.state.health = 100 - Math.max(...car.damage.componentLevels);
@@ -1986,106 +2015,68 @@ export class VehicleSimulation {
       receivers: Receiver[];
     };
     const pairs: Pair[] = [];
-    const byBody = new Map<RigidBody, Map<RigidBody | undefined, Pair>>();
-    for (const impact of impacts) {
-      if (
-        impact.sourceType === 9 ||
-        impact.closingSpeed <= 0.01 ||
-        impact.normalImpulse <= 0
-      )
-        continue;
-      let pair =
-        byBody.get(impact.a)?.get(impact.b) ??
-        (impact.b ? byBody.get(impact.b)?.get(impact.a) : undefined);
-      if (!pair) {
-        pair = { a: impact.a, b: impact.b, receivers: [] };
-        pairs.push(pair);
-        let others = byBody.get(impact.a);
-        if (!others) byBody.set(impact.a, (others = new Map()));
-        others.set(impact.b, pair);
-      }
-      for (const [body, other, sign] of [
-        [impact.a, impact.b, 1],
-        [impact.b, impact.a, -1],
-      ] as const) {
-        if (!body || !("damage" in body)) continue;
-        const car = body as SimulatedCar;
-        let receiver = pair.receivers.find((entry) => entry.car === car);
-        if (!receiver) {
-          receiver = {
-            car,
-            other,
-            impact: {
-              contacts: [],
-              impulse: new Vector3(),
-              severity: 0,
-              mean: new Vector3(),
-              weight: 0,
-            },
-          };
-          pair.receivers.push(receiver);
-        }
-        const group = receiver.impact;
-        const point = (
-          sign === 1 ? impact.point : (impact.pointB ?? impact.point)
-        )
-          .clone()
-          .sub(car.state.position)
-          .applyQuaternion(car.state.orientation.clone().invert());
-        if (
-          group.contacts.length < 4 &&
-          !group.contacts.some(
-            (p) =>
-              Math.abs(p.x - point.x) < 0.005 &&
-              Math.abs(p.y - point.y) < 0.005 &&
-              Math.abs(p.z - point.z) < 0.005,
+    for (const nativeGroup of groupNativeImpactRows(impacts)) {
+      if (nativeGroup.totalLambda <= NATIVE_IMPACT_MINIMUM_LAMBDA) continue;
+      const pair: Pair = {
+        a: nativeGroup.a,
+        b: nativeGroup.b,
+        receivers: [],
+      };
+      pairs.push(pair);
+      for (const impact of nativeGroup.rows) {
+        for (const [body, other, sign] of [
+          [impact.a, impact.b, 1],
+          [impact.b, impact.a, -1],
+        ] as const) {
+          if (!body || !("damage" in body)) continue;
+          const car = body as SimulatedCar;
+          let receiver = pair.receivers.find((entry) => entry.car === car);
+          if (!receiver) {
+            receiver = {
+              car,
+              other,
+              impact: {
+                contacts: [],
+                impulse: new Vector3(),
+                severity: 0,
+                mean: new Vector3(),
+                weight: 0,
+              },
+            };
+            pair.receivers.push(receiver);
+          }
+          const group = receiver.impact;
+          const point = (
+            sign === 1 ? impact.point : (impact.pointB ?? impact.point)
           )
-        )
-          group.contacts.push(point);
-        group.mean.addScaledVector(point, impact.normalImpulse);
-        group.weight += impact.normalImpulse;
-        group.impulse.addScaledVector(
-          impact.normal,
-          impact.normalImpulse * sign,
-        );
-        group.severity = Math.max(group.severity, impact.closingSpeed);
+            .clone()
+            .sub(car.state.position)
+            .applyQuaternion(car.state.orientation.clone().invert());
+          if (
+            group.contacts.length < 4 &&
+            !group.contacts.some(
+              (p) =>
+                Math.abs(p.x - point.x) < 0.005 &&
+                Math.abs(p.y - point.y) < 0.005 &&
+                Math.abs(p.z - point.z) < 0.005,
+            )
+          )
+            group.contacts.push(point);
+          const lambda = Math.fround(impact.normalImpulse);
+          group.mean.addScaledVector(point, lambda);
+          group.weight = Math.fround(group.weight + lambda);
+          group.impulse.addScaledVector(impact.normal, lambda * sign);
+          group.severity = Math.max(group.severity, impact.closingSpeed);
+        }
       }
     }
     for (const pair of pairs) {
+      this.recordCrashOwners(pair.a, pair.b);
+      const newlyWasted = new Set<SimulatedCar>();
       for (const { car, other, impact } of pair.receivers) {
+        this.crashCars.set(car.group.uuid, car);
         const otherCar =
           other && "damage" in other ? (other as SimulatedCar) : undefined;
-        const piece =
-          other && "owner" in other ? (other as DetachedBody) : undefined;
-        // Source440550 follows saved ownership for free drivers2/3/4 only;
-        // semi-detached driver1 and self-owned pieces do not attribute hits.
-        const humanSource =
-          otherCar?.human ||
-          (piece && !piece.joint && piece.owner !== car && piece.owner.human);
-        const directAttacker =
-          otherCar && otherCar !== car
-            ? otherCar
-            : piece && !piece.joint && piece.owner !== car
-              ? piece.owner
-              : undefined;
-        let awardAttacker = directAttacker;
-        // Installed null-other continuation440a6f has a strict5s window.
-        // Car-car sector/control attribution remains RAC-04. Ordinary AI hits
-        // do not update saved human attribution (installed440dce). AI-owned
-        // free parts and mines have separate explicit ownership stores.
-        if (
-          !other &&
-          car.lastAwardAttacker &&
-          car.lastAwardImpactMs !== undefined &&
-          this.elapsed * 1000 - car.lastAwardImpactMs < 5000
-        )
-          awardAttacker = car.lastAwardAttacker;
-        if (awardAttacker && (awardAttacker.human || piece)) {
-          car.lastAwardAttacker = awardAttacker;
-          car.lastAwardImpactMs = this.elapsed * 1000;
-        }
-        if (humanSource && !car.human)
-          car.lastAttributedImpactMs = this.elapsed * 1000;
         const vectors = scaleImpactVectors(
           impact.impulse
             .clone()
@@ -2098,7 +2089,7 @@ export class VehicleSimulation {
             receiverSoftness: car.damage.carSoftness,
             attackerSoftness: otherCar?.damage.carSoftness ?? 0.7,
             sinceLastAttributedImpactMs:
-              this.elapsed * 1000 - car.lastAttributedImpactMs,
+              (this.crashClock() - car.crashHistory.lastMs) | 0,
             armorLevel: car.armorLevel,
             offenseLevel: otherCar?.offenseLevel ?? 0,
             armorFactor: car.armorFactor,
@@ -2120,7 +2111,7 @@ export class VehicleSimulation {
           vectors.accumulatedDamage,
           !!car.damage.damageContext.invulnerable,
         );
-        if (otherCar && !car.damage.damageContext.invulnerable) {
+        if (otherCar) {
           const bounds = new Box3();
           for (const shape of car.shapeVertices)
             for (const vertex of shape) bounds.expandByPoint(vertex);
@@ -2142,8 +2133,10 @@ export class VehicleSimulation {
           vectors.crush,
           impact.mean.divideScalar(impact.weight),
         );
-        if (!wasWasted && car.damage.wasted)
-          car.wastedByPlayer = !!awardAttacker?.human;
+        if (!wasWasted && car.damage.wasted) {
+          newlyWasted.add(car);
+          car.wastedByPlayer = false;
+        }
         this.onImpact?.(car, impact.severity);
       }
       if (pair.receivers.length)
@@ -2151,9 +2144,112 @@ export class VehicleSimulation {
           "damage" in pair.a ? (pair.a as SimulatedCar) : undefined,
           pair.b && "damage" in pair.b ? (pair.b as SimulatedCar) : undefined,
         );
+      this.attributeCrashPair(pair.a, pair.b, newlyWasted);
     }
     for (const car of this.cars)
       if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
+  }
+  private nativeCrashView(car: SimulatedCar): NativeCrashCar {
+    this.crashCars.set(car.group.uuid, car);
+    return {
+      identity: car.group.uuid,
+      driver: car.human ? 8 : 6,
+      frameKnackered: car.crashRecord.frameKnackered,
+      get accumulatorF32() {
+        return car.crashRecord.accumulator;
+      },
+      set accumulatorF32(value) {
+        car.crashRecord.accumulator = value;
+      },
+      firstContactFace: car.crashRecord.firstContactFace,
+      normalizedContactZ: car.crashRecord.normalizedContactZ,
+      preSpeedF32: car.crashRecord.preSpeed,
+      localVelocityF32: car.crashRecord.localVelocity,
+      gear: car.state.gear,
+      accelKey: car.crashAccelerationKey,
+      joystick: 0,
+      history: car.crashHistory,
+    };
+  }
+  private nativeCrashDriver(body: RigidBody): number | undefined {
+    if ("damage" in body) return (body as SimulatedCar).human ? 8 : 6;
+    if ("owner" in body) {
+      const part = body as DetachedBody;
+      return part.joint ? 1 : part.part === -1 ? 3 : 2;
+    }
+    if ("kind" in body && body.kind === "noncar") return 4;
+    // Mines have a separate explicit ownership path; do not reinterpret them.
+    return undefined;
+  }
+  private crashOwner(body: RigidBody): RigidBody | undefined {
+    if (!this.crashOwnerSlots.has(body) && "owner" in body)
+      this.crashOwnerSlots.set(body, (body as DetachedBody).owner);
+    return this.crashOwnerSlots.get(body);
+  }
+  private recordCrashOwners(a: RigidBody, b: RigidBody | undefined): void {
+    if (!b) return;
+    const driverA = this.nativeCrashDriver(a);
+    const driverB = this.nativeCrashDriver(b);
+    if (driverA === undefined || driverB === undefined) return;
+    // DamageCar41deea executes before driver/immunity gates, even for two props.
+    // Both calls apply this rule, idempotently. Cars replace the slot; noncars
+    // retain the first owner, including a noncar owner that cannot earn credits.
+    if (!this.crashOwner(b) || driverB > 5) this.crashOwnerSlots.set(b, a);
+    if (!this.crashOwner(a) || driverA > 5) this.crashOwnerSlots.set(a, b);
+  }
+  private attributeCrashPair(
+    first: RigidBody,
+    second: RigidBody | undefined,
+    newlyWasted: ReadonlySet<SimulatedCar>,
+  ): void {
+    const a = "damage" in first ? (first as SimulatedCar) : undefined;
+    const b =
+      second && "damage" in second ? (second as SimulatedCar) : undefined;
+    if (!a && !b) return;
+    const receiver = a ?? b!;
+    const other = a ? second : first;
+    const now = this.crashClock();
+    if (!Number.isInteger(now) || now < 0 || now > 0xffffffff)
+      throw new Error("Invalid native crash platform timestamp");
+    // Source440550 normalizes drivers2/3/4 after both damage calls. Initialized
+    // free-part owners and first-hit world-prop owners remain sticky. Driver1
+    // semi-detached parts and self/noncar owners cannot create attribution.
+    const driver = other ? this.nativeCrashDriver(other) : undefined;
+    if (other && driver !== undefined && driver >= 2 && driver <= 4) {
+      const owner = this.crashOwner(other);
+      if (owner && "damage" in owner && owner !== receiver) {
+        const source = owner as SimulatedCar;
+        this.crashCars.set(source.group.uuid, source);
+        receiver.crashHistory.lastAttacker = source.group.uuid;
+        receiver.crashHistory.lastMs = now;
+      }
+    }
+    selectNativeCrashAttribution(
+      this.nativeCrashView(receiver),
+      a && b ? this.nativeCrashView(b) : null,
+      now,
+      (id) => {
+        const car = typeof id === "string" ? this.crashCars.get(id) : undefined;
+        return car ? this.nativeCrashView(car) : null;
+      },
+      (attacker, victim) => {
+        const source = this.crashCars.get(String(attacker.identity))!;
+        const target = this.crashCars.get(String(victim.identity))!;
+        if (newlyWasted.has(target)) target.wastedByPlayer = source.human;
+        this.onCrashAttribution?.(source, target);
+      },
+    );
+    for (const car of [a, b]) {
+      if (!car) continue;
+      const history = car.crashHistory;
+      car.lastAwardAttacker =
+        history.lastAttacker === null
+          ? undefined
+          : this.crashCars.get(String(history.lastAttacker));
+      car.lastAwardImpactMs =
+        history.lastAttacker === null ? undefined : history.lastMs;
+      car.lastAttributedImpactMs = history.lastMs;
+    }
   }
   private processNonCarContacts(
     impacts: ContactImpact[],
