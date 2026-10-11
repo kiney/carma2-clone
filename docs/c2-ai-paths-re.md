@@ -274,3 +274,40 @@ installed undefined-local boundary instead of asserting an invented constant.
 DIE is a no-op. The outer native objective/mode adapter still must connect this
 coordinator to live cars; the existing RoadNavigator has not been declared
 source-faithful or replaced merely by adding this component.
+
+### Regular-rival decision priority
+
+Installed `ChooseNewObjective4acc10` now has an independent state adapter in
+`src/ai/decision.ts`. Ordered branches are detected freewheel/knackered,
+strict500ms out-of-world check, new knackered/stolen transition, thaw/freeze,
+scary bang,20s RunAway suppression of later reactions, big-bang hitter,
+player we hit, raised grudge, fresh sighting, then forced selection. First-frame
+suppresses reactive branches only. Freeze saves **current pursuit AND target
+is current player**, correcting rec2's OR. The scary probability is
+trunc((pursue?100:60)−50*nastiness), only when distance<10 and strength<5.
+
+General grudge increment is trunc(10+40*nastiness); hit/sighting updates cap
+max(20,grudge)+increment at100 then store unsigned byte. Raised-grudge handling
+requires grudge>20 and uses grudge+increment without the minimum20. Last-hitter
+and last-we-hit predicates require nonnull local-human driver8 and avoid an
+identical existing pursuit target. The latter selects current player, whereas
+big-bang selects the actual hitter. During an existing pursuit of current player,
+grudge/sighting branches are skipped. Sighting acknowledges before probability;
+population<skill+3 grants trunc(grudge−20+30*nastiness), otherwise0. The head-on
+bonus adds50 independently of that population gate. A failed probability falls
+through rather than clearing acknowledgement.
+
+`0x575190` performs FISTP QWORD and returns its low DWORD, not an Int32 saturating
+cast. Signed64 invalid conversion has low DWORD0. The adapter retains exact
+Float32-times-integer products and offsets until conversion (including low bits
+lost by ordinary JavaScript doubles at large finite inputs). Forced distance
+fallback at `0x4ad550–0x4ad55f` likewise converts the stored distance, then
+subtracts15 with signed32 wrap. Boundary tests cover2^31,2^32 and signed64
+limits, byte grudge, strict/wrapped deadlines and RNG consumption.
+
+The adapter returns transition requests; synchronous old-DIE/new-START,
+objective deadline RNG, population accounting, real impact flags, cached
+head-on directions, visibility, repair and physical/nonphysical movement remain
+outer-runtime responsibilities. It does not manufacture those observations or
+claim to replace the live RoadNavigator yet. The installed special car+0x80
+flag0x300 objective9 branch is outside this regular-rival adapter's scope.

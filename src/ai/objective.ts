@@ -1,3 +1,5 @@
+import { nativeIntegerLow32 } from "./integer";
+
 export type NativeRegularObjective =
   | "complete-race"
   | "get-near-player"
@@ -59,7 +61,7 @@ export function chooseForcedRegularObjective(
   if (forcedType === 1) return "complete-race";
   if (forcedType === 2) return "get-near-player";
   if (forcedType === 3) return "pursue";
-  return nativePercentageChance(Math.trunc(distance) - 15, random)
+  return nativePercentageChance((nativeIntegerLow32(distance) - 15) | 0, random)
     ? "get-near-player"
     : "complete-race";
 }

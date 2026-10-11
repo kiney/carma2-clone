@@ -2149,6 +2149,9 @@ export class VehicleSimulation {
   }
   step() {
     this.onBeforeStep?.();
+    // Native skid threshold compares against gProgram_state.current_car,
+    // rather than driver type. Keep the shared force context tied to this world.
+    this.motionContext.currentCar = this.cars.find((car) => car.human)?.state;
     this.elapsed += PHYSICS_STEP;
     this.prepareMovingWorld();
     this.destruction?.update(this.elapsed * 1000);

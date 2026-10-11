@@ -100,3 +100,12 @@ test("native objective helpers reject malformed inputs without corrupting timers
   assert.throws(() => nativePercentageChance(100, () => NaN));
   assert.throws(() => chooseForcedRegularObjective(true, false, 0, Infinity));
 });
+
+test("forced distance chance consumes signed low DWORD and wraps subtraction", () => {
+  const choose = (distance) =>
+    chooseForcedRegularObjective(true, false, 0, distance, () => 0);
+  assert.equal(choose(2 ** 31), "get-near-player"); //−2^31−15 wraps positive.
+  assert.equal(choose(2 ** 32), "complete-race"); //low0−15 is negative.
+  assert.equal(choose(2 ** 32 + 512), "get-near-player");
+  assert.equal(choose(2 ** 63), "complete-race"); //indefinite low0.
+});

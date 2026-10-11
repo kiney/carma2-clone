@@ -112,3 +112,39 @@ completed. Smoke should remain an independent timed wheel effect because its
 source gate is contact-height plus surface type and wheel velocity. Spark
 effects should wait for the producer trigger evidence. No visual or gameplay
 parity is claimed by this data-only audit.
+
+### Resolved force-driven skid requests
+
+All eight WheelForces marker calls now map to final tyre demand/capacity inputs.
+For each axle D=hypot(longitudinal,lateral)/2 and capacities C0/C1 are the
+post-material/grip/oil/traction values. Inputs and reduction R are Float32.
+Both-over requires D>C0 AND D>C1; its live ratio is
+((D+D−C0)−C1)/f32(C0+C1). At ratio>=20 for the current local car, or>=60 for
+other cars, each wheel independently requires capacity>double0.1. The ratio
+spill to Float32 does not replace its live value in the threshold comparison.
+The current-car pointer is verified at0x75914c (gProgram_state base0x7590a0,
+current_car offset0xac), not merely driver8.
+
+In a single-over branch, the initial allocation is f32(R*Cfirst), followed by
+live residual=(D−allocation)+D and its Float32 spill. Only if live residual is
+strictly above Csecond and Csecond>double0.1 does it compute
+(storedResidual−Csecond)/Csecond. That ratio also stays live for the threshold.
+Only the second wheel can request a mark; the initially over-capacity wheel
+does not. For ordinary nonnegative capacities/reduction the single-over ratio
+cannot reach20, but the original branches and stores are retained rather than
+replacing them with axle-wide saturation. Equality with a capacity is not
+initial saturation, whereas equality with the ratio threshold requests a mark.
+
+Rear both calls0x41ad35/0x41ad55 map wheels0/1; rear left/right cascades
+0x41ae4e/0x41af15 map1/0. Front both0x41b1ca/0x41b1eb map2/3; front
+right/left cascades0x41b2eb/0x41b3b6 map2/3. Stack+0x28 demand,+0x24/+0x18
+capacities,+0x20 stored sum,+0x10 spilled ratio establish these meanings.
+
+`src/physics/tyre-skid.ts` implements the recovered request equations, including
+ULP boundary fixtures. WheelForces emits per-wheel MotionDebug.skidRequests;
+VehicleSimulation binds explicit local-current-car identity in the shared
+motion context. Tyre force allocation and velocity integration are unchanged.
+These requests still need native contact/material filtering, accumulation of
+new_skidding across a game frame, oil's independent request, and the persistent
+SkidMark/smoke renderer. DMG-03 therefore remains partial; an axle saturation
+flag or these request diagnostics alone do not complete visible surface effects.

@@ -4,6 +4,7 @@ import type { RigidState } from "./contact";
 import type { SuspensionPowerupValues } from "./upgrades";
 import type { SurfaceModifier } from "./surfaces";
 import type { RigidBody } from "./contact";
+import { nativeTyreSkidRequests } from "./tyre-skid";
 
 /** Local HW binary 0x418870, 0x415320, 0x417600 and 0x41fc80.
  * Independently expressed equations; positions are model units, forces use S=6.9.
@@ -68,6 +69,8 @@ export interface MotionState extends RigidState {
  * active-car order; cars whose WheelForces is skipped do not advance it. */
 export interface MotionContext {
   stopTimer: number;
+  /** Installed gProgram_state.current_car; only this object gets the 20 gate. */
+  currentCar?: MotionState;
 }
 export function createMotionContext(): MotionContext {
   return { stopTimer: 0 };
@@ -159,6 +162,8 @@ export interface MotionDebug {
   wheelSpringLoads: [number, number, number, number];
   wheelCapacities: [number, number, number, number];
   wheelTyreForces: [number, number, number, number];
+  /** Force-driven mark requests before native contact/material filtering; not traction flags. */
+  skidRequests: [boolean, boolean, boolean, boolean];
   axleForces: [Vector3, Vector3];
   grounded: number;
   force: Vector3;
@@ -514,6 +519,12 @@ export function applyVehicleForces(
   const loads: MotionDebug["wheelSpringLoads"] = [0, 0, 0, 0];
   const caps: MotionDebug["wheelCapacities"] = [0, 0, 0, 0];
   const actual: MotionDebug["wheelTyreForces"] = [0, 0, 0, 0];
+  const skidRequests: MotionDebug["skidRequests"] = [
+    false,
+    false,
+    false,
+    false,
+  ];
   const hits: Array<MotionGroundHit | null> = [];
   const wheelPoints: Array<Vector3 | null> = [];
   const wheelSmashPoints: Array<Vector3 | undefined> = [];
@@ -895,6 +906,15 @@ export function applyVehicleForces(
       caps[1],
       p.slipMultiplier,
     );
+    const rearSkid = nativeTyreSkidRequests(
+      rearDemand,
+      caps[0],
+      caps[1],
+      p.slipMultiplier,
+      context.currentCar === s,
+    );
+    skidRequests[0] = rearSkid[0];
+    skidRequests[1] = rearSkid[1];
     actual[0] = rearAllocation[0];
     actual[1] = rearAllocation[1];
     if (rearAllocation[2]) s.slipping |= 2;
@@ -933,6 +953,15 @@ export function applyVehicleForces(
       caps[3],
       p.slipMultiplier,
     );
+    const frontSkid = nativeTyreSkidRequests(
+      frontDemand,
+      caps[2],
+      caps[3],
+      p.slipMultiplier,
+      context.currentCar === s,
+    );
+    skidRequests[2] = frontSkid[0];
+    skidRequests[3] = frontSkid[1];
     actual[2] = frontAllocation[0];
     actual[3] = frontAllocation[1];
     if (frontAllocation[2]) s.slipping |= 1;
@@ -1058,6 +1087,7 @@ export function applyVehicleForces(
     dynamicWheelSupport: hits.some((hit, i) => wheelGrounded[i] && !!hit?.body),
     wheelCapacities: caps,
     wheelTyreForces: actual,
+    skidRequests,
     axleForces: [
       rearDirection.clone().multiplyScalar(actual[0] + actual[1]),
       frontDirection.clone().multiplyScalar(actual[2] + actual[3]),
