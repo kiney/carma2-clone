@@ -9,6 +9,13 @@ no original code or assets are reproduced here. rec2 provides names and
 structure offsets. Its `common/car.c` labels `CheckForDeAttachmentOfNonCars`
 as `0x4203c0`; the installed function starts at **`0x4203e0`**.
 
+`src/physics/noncar-reclaim.ts` independently implements the pure pass with
+fifteen numerical/original-model tests. Its host must supply authoritative ec,
+driver, model bounds and retained query caches, and apply ordered ownership
+changes. Free unjointed props now have a native quiet provider in the real
+simulation; jointed/car/part hierarchies and collection-time static repull still
+block full production reclaim integration. See [wake and repull](c2-noncar-wake-pull-re.md).
+
 This pass releases physical participation while retaining the ACT. It has no
 random draw, fragment lifetime, visual expiry or distance-from-camera gate.
 

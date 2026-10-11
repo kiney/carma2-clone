@@ -16,7 +16,15 @@ This is an executable branch map for **ordinary contact severing of a rendered
 simple humanoid**. It accompanies [contact damage](c2-ped-contact-re.md),
 [simple body construction](c2-ped-simple-body-re.md),
 [halt](c2-ped-halt-re.md) and [body runtime](c2-ped-body-runtime-re.md).
-It adds no runtime implementation. A no-bone-selected native result is complete
+`src/physics/ped-sever.ts` now implements the ordinary humanoid/brittle
+selection, reservation, registration, mask and common-tail contract. Twenty-four
+numerical/data tests cover its source equations and failure ordering; three
+contact-tail tests cover the upstream callback seam. `ped-contact.ts` accepts
+an optional complete damage-tail owner before applying HP. Original displayed
+pedestrians are not connected to these model/body providers yet. Exploding,
+nonhumanoid and articulated outlets remain explicit provider requirements.
+
+A no-bone-selected native result is complete
 and must proceed to HP handling. A missing implementation/provider is a
 different result and must remain explicit.
 

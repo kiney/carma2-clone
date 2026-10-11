@@ -35,6 +35,17 @@ export interface PedContactOther {
   mass: number;
   velocity: PedContactVector;
 }
+export interface PedCommonDamageTailInput {
+  damage: number;
+  form: PedContactForm;
+  state: PedContactState;
+  aliveMove: number;
+  deadMove: number;
+}
+export interface PedCommonDamageTailResult {
+  health: ReturnType<typeof resolvePedContactDamage> | null;
+  unresolved: string[];
+}
 export interface PedContactInputs {
   settings: PedContactSettings;
   form: PedContactForm;
@@ -42,6 +53,9 @@ export interface PedContactInputs {
   other: PedContactOther | null;
   /** Original special type32 mass global +0x703d14. Unknown provider stays explicit. */
   specialMass?: number;
+  /** Source owner executes severing and the common HP/kill tail once, BEFORE
+   * caller continuation. Absence retains explicit unresolved severing. */
+  damageTail?: (input: PedCommonDamageTailInput) => PedCommonDamageTailResult;
 }
 export interface PassivePedContactPacket extends PedContactInputs {
   characterVelocity: PedContactVector;
@@ -201,7 +215,45 @@ export function resolvePedContactDamage(
     reactionAction: 5,
   };
 }
-function diagnostics(input: PedContactInputs, damage: number) {
+function commonDamageTail(
+  input: PedContactInputs,
+  damage: number,
+  aliveMove: number,
+  deadMove: number,
+) {
+  const supplied = input.damageTail?.({
+    damage,
+    form: input.form,
+    state: input.state,
+    aliveMove,
+    deadMove,
+  });
+  if (supplied?.health && supplied.health.damage !== damage)
+    throw new RangeError(
+      "Native pedestrian common tail changed normalized damage",
+    );
+  return {
+    // A preview only when an upstream provider is unresolved: the simulation
+    // must not apply it, and the owner must not repeat a tail already invoked.
+    health:
+      supplied?.health ??
+      resolvePedContactDamage(
+        damage,
+        input.form,
+        input.state,
+        aliveMove,
+        deadMove,
+      ),
+    handled: !!supplied?.health,
+    unresolved: [
+      ...(supplied?.unresolved ?? []),
+      ...(supplied && !supplied.health
+        ? ["source-common-HP-tail-not-complete"]
+        : []),
+    ],
+  };
+}
+function diagnostics(input: PedContactInputs, damage: number, handled = false) {
   const unresolved: string[] = [];
   if (
     input.other?.type === 32 &&
@@ -210,6 +262,7 @@ function diagnostics(input: PedContactInputs, damage: number) {
   )
     unresolved.push("special-type32-mass");
   if (
+    !handled &&
     input.other &&
     !input.state.immortal &&
     input.state.goreLevel >= 2 &&
@@ -256,13 +309,8 @@ export function passivePedContact(packet: PassivePedContactPacket) {
   );
   const damage = normalisePedContactDamage(rawDamage, packet.form, state),
     deadImpactMove = momentumSquared < 10 ? 91 : 92,
-    health = resolvePedContactDamage(
-      damage,
-      packet.form,
-      state,
-      90,
-      deadImpactMove,
-    );
+    common = commonDamageTail(packet, damage, 90, deadImpactMove),
+    health = common.health;
   return {
     eligible: true as const,
     momentumSquared,
@@ -278,7 +326,10 @@ export function passivePedContact(packet: PassivePedContactPacket) {
     clearDirectionInterpolation: true,
     collisionFilterA: packet.pedRigidType === 5 ? 0x40000 : 0x20000,
     collisionFilterB: 0x40000,
-    unresolved: diagnostics(packet, damage),
+    unresolved: [
+      ...diagnostics(packet, damage, common.handled),
+      ...common.unresolved,
+    ],
   };
 }
 
@@ -341,13 +392,8 @@ export function activePedContact(packet: ActivePedContactPacket) {
     packet.form,
     packet.state,
   );
-  const health = resolvePedContactDamage(
-    damage,
-    packet.form,
-    packet.state,
-    -1,
-    94,
-  );
+  const common = commonDamageTail(packet, damage, -1, 94),
+    health = common.health;
   let flags = packet.state.flags;
   let pinned = false;
   if (effectiveLambda >= 0.01) {
@@ -367,6 +413,9 @@ export function activePedContact(packet: ActivePedContactPacket) {
     pinned,
     reactionMoveId: pinned ? 96 : health.reactionMoveId,
     worldForce: force,
-    unresolved: diagnostics(packet, damage),
+    unresolved: [
+      ...diagnostics(packet, damage, common.handled),
+      ...common.unresolved,
+    ],
   };
 }

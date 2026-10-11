@@ -18,6 +18,15 @@ import {
   collectNativeCollisionFlags,
 } from "./quiet-state";
 import { settleNativePedBody } from "./ped-settling";
+import {
+  support as supportsNativeNonCarQuiet,
+  createState as createNativeNonCarQuiet,
+  prepare as prepareNativeNonCarQuiet,
+  finish as finishNativeNonCarQuiet,
+  sleep as sleepNativeNonCarQuiet,
+  wake as wakeNativeNonCarQuiet,
+  type State as NativeNonCarQuietState,
+} from "./noncar-quiet";
 import { applyWorldPinball } from "./pinball";
 import { nativeCrashSmokeReturn } from "./crash-smoke";
 import { planPhysicsFrameWindow } from "./frame-window";
@@ -520,6 +529,83 @@ export class VehicleSimulation {
   /** Applies ec to the complete generic ring; true confirms that ownership. */
   nativeQuietRingSleep?: (members: readonly RigidBody[]) => boolean;
   private pedContactRings = new Map<RigidBody, Set<RigidBody>>();
+  private noncarQuiet = new Map<NonCarBody, NativeNonCarQuietState>();
+  /** Actual PHIL-like ec for supported simple free props, independent of the
+   * motor's pause/sleep state. Unsupported joint/hierarchy owners return null. */
+  nativeNonCarQuietState(
+    body: NonCarBody,
+  ): Readonly<NativeNonCarQuietState> | null {
+    return this.noncarQuiet.get(body) ?? null;
+  }
+  private genericQuietState(body: RigidBody): number {
+    if ("kind" in body && body.kind === "noncar")
+      return this.noncarQuiet.get(body as NonCarBody)?.quietState ?? 0;
+    return this.nativeQuietRingState?.(body) ?? 0;
+  }
+  private sleepGenericQuietRing(members: readonly RigidBody[]): boolean {
+    if (
+      !members.every(
+        (body) =>
+          isNativePedBody(body) ||
+          ("kind" in body &&
+            body.kind === "noncar" &&
+            this.noncarQuiet.has(body as NonCarBody)),
+      )
+    )
+      return this.nativeQuietRingSleep?.(members) ?? false;
+    for (const body of members)
+      if ("kind" in body && body.kind === "noncar")
+        sleepNativeNonCarQuiet(
+          body as NonCarBody,
+          this.noncarQuiet.get(body as NonCarBody)!,
+        );
+    return true;
+  }
+  private finishNonCarQuietLeaves(): void {
+    const flags = collectNativeCollisionFlags(
+      this.lastImpacts
+        .filter((row) => row.solverAccepted)
+        .map((row) => ({
+          a: row.a,
+          b: row.b ?? null,
+          sourceType: row.sourceType ?? (row.b ? 5 : 1),
+          lambda: row.normalImpulse,
+        })),
+    ).flags;
+    for (const [body, state] of this.noncarQuiet) {
+      body.collisionFlags = flags.get(body) ?? 0;
+      state.localVelocity
+        .copy(body.state.velocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      finishNativeNonCarQuiet(
+        body,
+        state,
+        (this.pedContactRings.get(body)?.size ?? 1) === 1,
+      );
+    }
+  }
+  private finishNonCarQuietRings(): void {
+    for (const [body, state] of this.noncarQuiet) {
+      if (state.doNothing) continue;
+      const ring = this.pedContactRings.get(body) ?? new Set<RigidBody>([body]);
+      const states = [...ring].map((member) =>
+        isNativePedBody(member)
+          ? member.quietState
+          : this.genericQuietState(member),
+      );
+      if (
+        !canSleepNativeQuietGroup(states) ||
+        !this.sleepGenericQuietRing([...ring])
+      )
+        continue;
+      for (const member of ring)
+        if (isNativePedBody(member)) {
+          member.doNothing = true;
+          member.properties.immovable = true;
+          member.quietState = 0;
+        }
+    }
+  }
   movingWorld: MovingWorldBody[] = [];
   grooves?: WorldGrooveRuntime;
   private worldGrooveFrameActive = false;
@@ -1869,6 +1955,22 @@ export class VehicleSimulation {
         [contact.a, contact.b],
         [contact.b, contact.a],
       ] as const) {
+        // Installed4bda6d invokes4bde80 after actual pair geometry, BEFORE
+        // lambdas. Two ordinary ec1 bodies and world-only rows do not wake
+        // one another. Jointed hierarchies need their separate native owner.
+        if (body && other && "kind" in body && body.kind === "noncar") {
+          const noncar = body as NonCarBody;
+          const quietState = this.noncarQuiet.get(noncar);
+          const passiveOther =
+            isNativePedBody(other) && other.phaseMarker === 2;
+          if (
+            quietState?.doNothing &&
+            (!other.properties.immovable || passiveOther)
+          ) {
+            wakeNativeNonCarQuiet(noncar, quietState);
+            this.invalidateWorldFaceCache(noncar);
+          }
+        }
         if (!body || !isNativePedBody(body)) continue;
         if (body.headerState === 1) {
           activateNativePedBody(body, body.characterVelocity);
@@ -2011,17 +2113,26 @@ export class VehicleSimulation {
         states = [...ring].map((member) =>
           isNativePedBody(member)
             ? member.quietState
-            : (this.nativeQuietRingState?.(member) ?? 0),
+            : this.genericQuietState(member),
         );
       if (
         [...ring].some((member) => !isNativePedBody(member)) &&
-        !this.nativeQuietRingState
+        !this.nativeQuietRingState &&
+        [...ring].some(
+          (member) =>
+            !isNativePedBody(member) &&
+            !(
+              "kind" in member &&
+              member.kind === "noncar" &&
+              this.noncarQuiet.has(member as NonCarBody)
+            ),
+        )
       )
         body.diagnostics.add("mixed-contact-ring-quiet-provider-unavailable");
       if (!canSleepNativeQuietGroup(states)) continue;
       if (
         [...ring].some((member) => !isNativePedBody(member)) &&
-        !this.nativeQuietRingSleep?.([...ring])
+        !this.sleepGenericQuietRing([...ring])
       ) {
         body.diagnostics.add("mixed-contact-ring-sleep-provider-unavailable");
         continue;
@@ -3771,11 +3882,31 @@ export class VehicleSimulation {
       return true;
     });
     for (const body of this.noncars) {
-      if (this.disabledWorldActor(body) || this.attachedToInactiveCar(body))
+      if (this.disabledWorldActor(body) || this.attachedToInactiveCar(body)) {
+        this.noncarQuiet.delete(body);
         continue;
+      }
       finalizeNonCarRelease(body);
+      const supportedQuiet =
+        supportsNativeNonCarQuiet(body).supported &&
+        !!body.actor.userData.noncarPulled;
+      let quietState = this.noncarQuiet.get(body);
+      if (!supportedQuiet && quietState) {
+        this.noncarQuiet.delete(body);
+        quietState = undefined;
+      } else if (supportedQuiet && !quietState) {
+        quietState = createNativeNonCarQuiet(body);
+        this.noncarQuiet.set(body, quietState);
+      }
+      if (quietState?.doNothing) {
+        prepareNativeNonCarQuiet(body, quietState, new Vector3());
+        body.properties.immovable = true;
+        body.collisionFlags = 0;
+        continue;
+      }
       if (body.motor.sleeping && body.motor.pauseUntilMs === 0) continue;
       const environment = this.updateSpecialVolume(body);
+      const beforeForces = body.state.velocity.clone();
       applyNonCarMotionForces(body.mechanics, body, body.motor, {
         nowMs: this.elapsed * 1000,
         previousVelocity: body.previousVelocity,
@@ -3785,6 +3916,12 @@ export class VehicleSimulation {
         gravityScale: environment.volume?.gravityMultiplier ?? 1,
       });
       body.properties.immovable = body.motor.sleeping;
+      if (quietState)
+        prepareNativeNonCarQuiet(
+          body,
+          quietState,
+          body.state.velocity.clone().sub(beforeForces),
+        );
       body.collisionFlags = 0;
     }
     for (const body of this.mineBodies)
@@ -3893,7 +4030,9 @@ export class VehicleSimulation {
       resolveRestarts();
       guardResults.clear();
     }
+    this.finishNonCarQuietLeaves();
     this.finishPedQuiet();
+    this.finishNonCarQuietRings();
     const committing = this.allBodies();
     const worldFractions = new Map(
       committing.map((body) => [
@@ -4292,6 +4431,7 @@ export class VehicleSimulation {
     this.debris = [];
     for (const body of this.noncars) this.world.removeDynamic(body);
     this.noncars = [];
+    this.noncarQuiet.clear();
     for (const body of this.movingWorld) this.world.removeDynamic(body);
     this.movingWorld = [];
     this.cars = [];

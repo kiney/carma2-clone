@@ -133,8 +133,11 @@ group expiry and material replacement. These ghost contacts are controlled
 fixtures, separately labelled from driven crashes. `npm run test:noncar-debris`
 checks authored Stock/Advanced city pump and Carrier gun debris: original
 mechanics, collision hulls, physical motion, fire columns and race cleanup.
-Native slot admission/reclaim and positive-material preparation order still
-have documented integration gaps.
+`npm run test:noncar-quiet` additionally checks original free props reaching
+source contact-ring sleep and waking through physical car contacts; its report
+retains incomplete city velocity-exchange coverage. Slot admission/reclaim,
+jointed hierarchy quiet state and positive-material preparation order still
+have documented integration gaps. See [wake and repull evidence](docs/c2-noncar-wake-pull-re.md).
 
 ## Asset and license notes
 

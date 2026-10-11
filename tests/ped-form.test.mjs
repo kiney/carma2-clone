@@ -63,6 +63,10 @@ test("root remap uses original components; bounds are reordered and COM is autho
   assert.deepEqual(p.centreOfMass, [f(0.4), 0, -0]);
   assert.equal(p.radius, 3);
   assert.deepEqual(p.modelsByBone.get("child"), ["HEAD.DAT", null]);
+  assert.deepEqual(p.attachmentsByBone.get("child"), {
+    child: [0, 0, 0],
+    parent: [1, 0, -0],
+  });
   assert.deepEqual(remapPedVector([2, 4, 6], [4, 2, 0]), [-4, 6, 2]);
   const reordered = personalityText.replace(
     "root\nBODY.ACT\nchild\nHEAD.DAT,NULL\n0,0,0\n0,1,0",
@@ -76,6 +80,24 @@ test("root remap uses original components; bounds are reordered and COM is autho
     ).bounds,
     p.bounds,
   );
+});
+test("personality anchors independently use child and FORM-parent remaps", () => {
+  const remaps = parsePedRemap(
+    remapText.replace(
+      "END OF BONES",
+      "NEXT BONE\nchild\n-Y\n-X\n-Z\n+X\n+Y\n+Z\nEND OF BONES",
+    ),
+  );
+  const profile = parsePedPersonalitySimpleBody(
+    personalityText.replace("0,0,0\n0,1,0", "0.014,0.007,0\n0.014,0.007,0"),
+    parsePedForm(formText),
+    remaps,
+  );
+  assert.deepEqual(profile.attachmentsByBone.get("child"), {
+    child: [-f(0.007), -f(0.014), -0],
+    parent: [f(0.007), f(0.014), -0],
+  });
+  assert.equal(profile.attachmentsByBone.has("root"), false);
 });
 test("native inertia uses .025 and retains author COM independent of geometric centre", () => {
   assert.deepEqual(
@@ -397,7 +419,17 @@ test("original humanoid and quadruped personalities provide independent remapped
     );
     assert.equal(profile.mass, mass);
     assert.ok(profile.inertia.every((n) => n > 0));
+    assert.equal(
+      profile.attachmentsByBone.size,
+      parsePedForm(decodeText(bytes)).bones.length - 1,
+    );
     if (formFile === "BIPED1") {
+      const decimal = person === "Blokebl" ? [0.014, 0.007] : [0.012, 0.009];
+      const bone2 = parsePedForm(decodeText(bytes)).bones[2].name;
+      assert.deepEqual(profile.attachmentsByBone.get(bone2), {
+        child: [-f(decimal[1]), -f(decimal[0]), -0],
+        parent: [f(decimal[1]), f(decimal[0]), -0],
+      });
       assert.deepEqual(profile.bounds, {
         min: [f(-0.15), f(-0.065), f(-0.03)],
         max: [f(0.135), f(0.065), f(0.03)],

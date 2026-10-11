@@ -42,6 +42,12 @@ export interface PedBoneRemap {
   powerup: PedVector;
 }
 export type PedRemap = ReadonlyMap<string, PedBoneRemap>;
+export interface PedBoneAttachment {
+  /** Personality +20, independently remapped through this FORM bone. */
+  child: PedVector;
+  /** Personality +2c, independently remapped through its FORM parent. */
+  parent: PedVector;
+}
 export interface PedSimpleBodyProfile {
   formName: string;
   defaultMovesName: string;
@@ -53,6 +59,8 @@ export interface PedSimpleBodyProfile {
   radius: number;
   inertia: PedVector;
   modelsByBone: ReadonlyMap<string, readonly (string | null)[]>;
+  /** Native joint anchors, indexed by exact FORM name; root has no entry. */
+  attachmentsByBone: ReadonlyMap<string, PedBoneAttachment>;
   /** Default records followed by personality overrides; missing IDs stay absent. */
   movement: ReadonlyMap<number, PedPersonalityMove>;
 }
@@ -334,6 +342,7 @@ export function parsePedPersonalitySimpleBody(
   if (form.remapFilename && !remap)
     throw new Error("PED: required remap missing");
   const modelsByBone = new Map<string, readonly (string | null)[]>();
+  const attachmentsByBone = new Map<string, PedBoneAttachment>();
   let at = bs + 1;
   for (let i = 0; i < form.bones.length; i++) {
     const boneName = rows[at++];
@@ -352,8 +361,15 @@ export function parsePedPersonalitySimpleBody(
       models.map((s) => (s.toUpperCase() === "NULL" ? null : s)),
     );
     if (bone.parent !== null && bone.parent >= 0) {
-      vector(rows[at++]);
-      vector(rows[at++]);
+      const parent = form.bones[bone.parent];
+      if (!parent)
+        throw new Error("PED: personality attachment parent missing");
+      const childRemap = remap?.get(bone.name)?.general ?? null;
+      const parentRemap = remap?.get(parent.name)?.general ?? null;
+      attachmentsByBone.set(bone.name, {
+        child: remapPedVector(vector(rows[at++]), childRemap),
+        parent: remapPedVector(vector(rows[at++]), parentRemap),
+      });
     }
     if (bone.parent === null)
       throw new Error("PED: zero-mass personality bone attachment unresolved");
@@ -387,6 +403,7 @@ export function parsePedPersonalitySimpleBody(
     radius: Math.max(...bounds.min.map(Math.abs), ...bounds.max.map(Math.abs)),
     inertia: nativePedBoxInertia(form.mass, bounds),
     modelsByBone,
+    attachmentsByBone,
     movement,
   };
 }
