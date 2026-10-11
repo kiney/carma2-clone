@@ -228,19 +228,20 @@ try {
     c.vehicle.velocity.set(3, -2, 4);
     c.vehicle.angularVelocity.set(0.25, -0.5, 0.75);
     c.vehicle.rpm = 1200;
-    const originalUpdate = c.simulation.update.bind(c.simulation);
+    // Capture the live frame boundary after input, before integration.
+    const originalUpdateFrame = c.simulation.updateFrame.bind(c.simulation);
     let captured;
-    c.simulation.update = function (...args) {
+    c.simulation.updateFrame = function () {
       captured = {
         velocity: c.vehicle.velocity.toArray(),
         angularVelocity: c.vehicle.angularVelocity.toArray(),
         rpm: c.vehicle.rpm,
         handbrake: c.player.input.handbrake,
       };
-      this.update = originalUpdate;
+      this.updateFrame = originalUpdateFrame;
       c.paused = true;
       window.__commandPowerupFrame = captured;
-      return undefined;
+      return { skippedMs: 0 };
     };
     c.paused = false;
   });

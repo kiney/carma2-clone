@@ -223,5 +223,81 @@ test("installed stock and Advanced command powerup definitions retain their auth
       ],
       [36, -3, [12]],
     );
+    for (const index of [52, 53, 54, 96]) {
+      assert.equal(definitions[index].initialValue < 0, true);
+      assert.equal(definitions[index].groupInclusion, 0);
+      assert.equal(definitions[index].flags, 0);
+      assert.equal(definitions[index].fizzleType, -1);
+    }
   }
+});
+
+test("native command rejection retains charges and selection, while successful calls need no cooldown", async () => {
+  const system = await synthetic([
+    { action: 34, initialValue: -2 },
+    { action: 35, initialValue: -1 },
+  ]);
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  system.grant(1, car, race);
+  system.grant(0, car, race);
+  let calls = 0;
+  assert.equal(
+    system.activateAbility(race, () => {
+      calls++;
+      return -1;
+    }),
+    false,
+  );
+  assert.equal(calls, 1);
+  assert.equal(system.abilities.get(0).charges, 2);
+  assert.equal(system.selectedAbility, 0);
+  assert.equal(
+    system.activateAbility(race, () => 0),
+    true,
+  );
+  assert.equal(system.abilities.get(0).charges, 1);
+  assert.equal(
+    system.activateAbility(race, () => 0),
+    true,
+  );
+  assert.equal(system.abilities.has(0), false);
+  assert.equal(system.selectedAbility, 1);
+  assert.equal(
+    system.activateAbility(race, () => -7),
+    false,
+  );
+  assert.equal(system.abilities.get(1).charges, 1);
+  assert.equal(system.selectedAbility, 1);
+  assert.equal(
+    system.activateAbility(race, () => {}),
+    true,
+    "native oil allocator failure still returns a nonnegative handler result",
+  );
+  assert.equal(system.selectedAbility, null);
+});
+
+test("native command guards reject closed awards, invalid selections and empty inventory before handler dispatch", async () => {
+  const system = await synthetic([
+    { action: 36, initialValue: -3, floats: [12] },
+  ]);
+  const car = createVehicle(new THREE.Vector3());
+  const race = createRace([]);
+  system.grant(0, car, race);
+  let calls = 0;
+  const handler = () => {
+    calls++;
+    return 0;
+  };
+  race.awardsClosed = true;
+  assert.equal(system.activateAbility(race, handler), false);
+  race.awardsClosed = false;
+  for (const selection of [null, -1, 99, 0.5]) {
+    system.selectedAbility = selection;
+    assert.equal(system.activateAbility(race, handler), false);
+  }
+  system.selectedAbility = 0;
+  system.abilities.get(0).charges = 0;
+  assert.equal(system.activateAbility(race, handler), false);
+  assert.equal(calls, 0);
 });

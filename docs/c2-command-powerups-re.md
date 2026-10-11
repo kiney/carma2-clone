@@ -44,8 +44,55 @@ The existing Actions 34/35 inventory now accumulates repeated grants using
 this verified shared path: five initial oil charges, one use, another pickup
 leaves nine. The focused debug browser test checks a bulk grant followed by
 another mine grant and one activation against twice the authored charge count
-minus one. PUP-15 remains partial until the other cooldown/fizzle rules are
-validated; this change does not implement the three PUP-06 handlers.
+minus one. The installed eligibility and fizzle audit below resolves the
+remaining PUP-15 command inventory question; this path has no elapsed cooldown.
+
+## Command eligibility and handler failure
+
+**Verified from the installed HW binary**, SHA-256
+`698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c`,
+PE32 image base `0x400000`, entry RVA `0x177eb0`, timestamp
+1998-10-18 20:13:36: `GotPowerupX` is `0x4d8f30`. rec2 was consulted
+as a symbol map; its GPL-3.0 license was inspected, and no code was copied.
+The native eligibility implementation is a stub there and its address differs
+from this installed revision.
+
+Invalid indices and dummy records return failure at `0x4d8f41`–`0x4d8f74`.
+The surrounding keyboard caller blocks countdown, finished races and knackered
+cars before dispatch. The browser also observes `awardsClosed`: a finished
+award path may retain a racing status while the wasted body still simulates.
+Only a nonnegative got-handler return consumes a negative initial-value charge
+(`0x4d9153`–`0x4d915b`, caller `0x4db36a`–`0x4db373`). The browser event
+handler can return a negative numeric native result to reject use, preserving
+both the charge and selected inventory item. Existing void handlers are
+successful, matching the supported source commands.
+
+An allocator refusing placement is **not** such a negative got-handler return.
+The installed action34 handler is `0x4dd500`; every exit, including its pool
+failure and network-client paths, returns the definition index via
+`0x4dd87d`–`0x4dd8a2`. Action35 at `0x4dde40` calls the oil allocator
+and then independently returns its definition index at `0x4ddea3`–`0x4ddebc`.
+Action36 likewise returns its index. Thus full mine pools and unsuitable oil
+surfaces still consume one charge. No grounding or elapsed cooldown guard is
+present in these handlers or the keyboard dispatcher. Separate input edges
+may consume consecutive charges without advancing the simulation clock.
+
+The preconditions at `0x4d8f85`–`0x4d8fda` and race exclusion list at
+`0x4d8fdc`–`0x4d8ff8` substitute definition0 at `0x4d8ffc`; they do not
+return a failed activation. Gates include available AI for flag64, multiplayer
+inappropriateness flag2, single-player index97, and option getters for
+indices91, 52/96 and 4/57. The option getter for command indices52/96
+(`0x4d6dc0`) reads `0x65c340`, whose installed default is1. All Stock and
+Advanced commands52/53/54/96 have flags0, inclusion mask0 and fizzle type−1,
+so normal browser configuration needs no additional command gate.
+
+The active inclusion-mask loop (`0x4d9042`–`0x4d9103`) calls the lose
+handler and clears other active overlapping groups; it does not reject the
+new command. These original command definitions have no overlapping mask.
+`fizzle_type` selects icon transition graphics (`DrawSinglePowerupIcon` and
+`PrintPowerupIconIn3D`); it is not an activation probability or cooldown.
+Icon transition artwork, original network play and configurable native
+content options remain separate platform/compatibility limitations.
 
 ## Runtime validation
 
@@ -66,3 +113,10 @@ warnings decrease from 27 to 24 as these three actions become supported.
 
 Chrome DevTools MCP is unavailable in this session. Tests use the existing
 actual Chromium/Playwright harness; generated artifacts are ignored.
+
+The eligibility update was validated again in the production Chromium command
+and debug harnesses, with no captured console errors, failed requests or WebGL
+errors. The command harness now intercepts the actual `updateFrame` boundary
+when checking instant handbrake before integration; its obsolete `update` hook
+previously timed out after the timebase migration. Debug grants, repeated input
+edges, voucher recovery, jump velocity and ordinary driving remain checked.

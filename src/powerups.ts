@@ -443,18 +443,34 @@ export class PowerupSystem {
    * one even when an oil allocator refuses unsuitable placement. */
   activateAbility(
     race: RaceState,
-    onEvent?: (event: PowerupEvent) => void,
+    onEvent?: (event: PowerupEvent) => void | number,
     knackered = false,
   ): boolean {
-    if (race.status !== "racing" || knackered || this.selectedAbility === null)
+    if (
+      race.status !== "racing" ||
+      race.awardsClosed ||
+      knackered ||
+      this.selectedAbility === null
+    )
       return false;
     const ability = this.abilities.get(this.selectedAbility);
-    if (!ability || ability.charges <= 0) return false;
-    onEvent?.({
+    if (
+      !ability ||
+      !Number.isSafeInteger(this.selectedAbility) ||
+      this.definitions[this.selectedAbility] !== ability.definition ||
+      ability.charges <= 0
+    )
+      return false;
+    const result = onEvent?.({
       kind: "ability-use",
       name: ability.definition.message,
       definition: ability.definition,
     });
+    // GotPowerupX 0x4d9159 rejects a negative got-handler result;
+    // MungeKeyboardPowerup 0x4db36a then leaves inventory unchanged.
+    // Oil/mine allocator failure is different: their native handlers still
+    // return the definition index, so existing void handlers remain successful.
+    if (typeof result === "number" && result < 0) return false;
     ability.charges--;
     if (!ability.charges) {
       this.abilities.delete(ability.definition.index);
