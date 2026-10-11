@@ -69,6 +69,25 @@ test("two original cars enter, submerge and recover using finite water faces and
     );
     const bounds = hullsBounds(car.hulls);
     car.state.position.y = -(bounds.min.y + bounds.max.y) * 0.5;
+    // Installed TestAutoSpecialVolume projects bb2, including the suspension
+    // setter's rear/front extension; centering bb1 is therefore not half wet.
+    const wheelMinY = Math.min(
+      bounds.min.y,
+      Math.fround(
+        (Math.fround(car.motion.wheelPositions[0].y) -
+          Math.fround(car.motion.suspensionLength[0])) *
+          Math.fround(1 / 6.9),
+      ),
+      Math.fround(
+        (Math.fround(car.motion.wheelPositions[2].y) -
+          Math.fround(car.motion.suspensionLength[1])) *
+          Math.fround(1 / 6.9),
+      ),
+    );
+    const expectedDepth = Math.fround(
+      -(car.state.position.y + wheelMinY) / (bounds.max.y - wheelMinY),
+    );
+    const expectedGravity = 1 - 0.8 * expectedDepth;
     car.state.velocity.x = 4;
     const { scene, world } = pond();
     assert.equal(
@@ -81,11 +100,11 @@ test("two original cars enter, submerge and recover using finite water faces and
     simulation.defaultWaterVolume = defaultWater();
     simulation.add(car);
     simulation.step();
-    near(car.specialVolume.depth, 0.5);
+    near(car.specialVolume.depth, expectedDepth);
     assert.equal(car.specialVolume.volume, simulation.defaultWaterVolume);
-    near(car.state.volumeGravityFactor, 0.6);
-    near(car.state.volumeDragFactor, 25);
-    near(car.debug.force.y, -car.properties.mass * 10 * 0.6);
+    near(car.state.volumeGravityFactor, expectedGravity);
+    near(car.state.volumeDragFactor, 50 * expectedDepth);
+    near(car.debug.force.y, -car.properties.mass * 10 * expectedGravity);
     assert.equal(
       car.debug.grounded,
       0,

@@ -85,20 +85,18 @@ export function clearCameraFromOwnShape(
   const clearance = cameraNear * 3;
   const position = cameraPosition.clone();
   const inverse = shape.orientation.clone().invert();
-  // A finite authored shape bounds the number of native inside advances.
-  const localCOM = worldCOM
-    .clone()
-    .sub(shape.position)
-    .applyQuaternion(inverse);
-  let radius = 0;
+  // Validate authored storage, but do not use its vertex radius as a ray
+  // bound. Installed461810 tests the retained planes, including planes without
+  // a closed auxiliary polygon after crush; it never clips to vertex bounds.
   for (const hull of shape.hulls)
     for (const vertex of hull.vertices) {
       if (!vertex.toArray().every(Number.isFinite))
         throw new Error("Invalid camera body vertex");
-      radius = Math.max(radius, vertex.distanceTo(localCOM));
     }
-  const limit = Math.ceil((2 * radius) / clearance) + 3;
-  for (let iteration = 0; iteration < limit; iteration++) {
+  let limit: number | undefined;
+  for (let iteration = 0; ; iteration++) {
+    if (limit !== undefined && iteration >= limit)
+      throw new Error("Camera own-shape clearance exceeded plane exit");
     const outward = position.clone().sub(worldCOM);
     if (outward.lengthSq() === 0)
       throw new Error("Camera clearance ray starts at the centre of mass");
@@ -111,8 +109,31 @@ export function clearCameraFromOwnShape(
       .applyQuaternion(inverse);
     const hit = cameraShapeRay(from, to, shape.hulls);
     if (!hit) return { position, iterations: iteration };
-    if (hit.inside) position.add(outward);
-    else {
+    if (hit.inside) {
+      if (limit === undefined) {
+        const direction = outward
+          .clone()
+          .divideScalar(clearance)
+          .applyQuaternion(inverse);
+        let exitDistance = Infinity;
+        for (const face of shape.hulls[0].faces) {
+          if (![...face.normal.toArray(), face.constant].every(Number.isFinite))
+            throw new Error("Invalid camera body plane");
+          const slope = face.normal.dot(direction);
+          if (slope > 0)
+            exitDistance = Math.min(
+              exitDistance,
+              (face.constant - face.normal.dot(from)) / slope,
+            );
+        }
+        if (!Number.isFinite(exitDistance))
+          throw new Error("Camera own-shape clearance ray has no finite exit");
+        // Strict start-inside includes the boundary. One further step can
+        // reach outside, and its inward probe can then hit that boundary.
+        limit = Math.floor(Math.max(0, exitDistance) / clearance) + 3;
+      }
+      position.add(outward);
+    } else {
       position
         .copy(hit.point!)
         .applyQuaternion(shape.orientation)
@@ -121,5 +142,4 @@ export function clearCameraFromOwnShape(
       return { position, iterations: iteration + 1 };
     }
   }
-  throw new Error("Camera own-shape clearance exceeded authored bounds");
 }

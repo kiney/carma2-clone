@@ -536,9 +536,10 @@ export class WorldDestruction {
     this.ownedTextures.clear();
     this.decals.clear();
   }
-  /** Fixed source tick clock; noncar delays belong to WorldActivationRuntime. */
+  /** Native predicted game time may regress after its stall correction.
+   * Noncar deadlines belong to WorldActivationRuntime, not a monotonic guard. */
   update(timeMs: number): void {
-    if (!Number.isFinite(timeMs) || timeMs < this.timeMs)
+    if (!Number.isFinite(timeMs) || timeMs < 0)
       throw new Error("Invalid destruction time");
     this.timeMs = timeMs;
   }

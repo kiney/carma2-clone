@@ -66,6 +66,18 @@ import {
 } from "./powerups";
 import { DebugPanel } from "./debug-panel";
 import { SmokeSystem, type SmokeRigid } from "./smoke";
+import { SkidMarkSystem } from "./skidmarks";
+import { SkidMaterialLibrary } from "./skid-materials";
+import { SparkSystem } from "./sparks";
+import { CarSparkAllocator } from "./car-sparks";
+import { ShrapnelSystem } from "./shrapnel";
+import { nativeAbstractShrapnel } from "./smash-abstract";
+import {
+  SimpleMaterialLibrary,
+  parseCarShrapnelMaterials,
+} from "./shrapnel-materials";
+import { createModelGeometry } from "./render-geometry";
+import { nativePointVisible } from "./world-visibility";
 import { parseDustShades } from "./dust-shades";
 import { CarAnimation, TextureAnimation } from "./animation";
 import { applyRaceObjectives, isSupportedRace, objectiveText } from "./rules";
@@ -218,6 +230,16 @@ let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
 let shards: ShardRuntime | undefined;
 let smoke: SmokeSystem | undefined;
+let skidmarks: SkidMarkSystem | undefined;
+let skidMaterials: SkidMaterialLibrary | undefined;
+let sparks: SparkSystem | undefined;
+let carSparks: CarSparkAllocator | undefined;
+let shrapnel: ShrapnelSystem | undefined;
+const simpleMaterials = new SimpleMaterialLibrary();
+const carShrapnelMaterials = new WeakMap<
+  THREE.Object3D,
+  readonly THREE.Material[]
+>();
 const renderPosition = new THREE.Vector3(),
   renderOrientation = new THREE.Quaternion();
 let racePayout: RacePayout | undefined;
@@ -289,6 +311,18 @@ const debug = {
   },
   get smoke() {
     return smoke;
+  },
+  get skidmarks() {
+    return skidmarks;
+  },
+  get sparks() {
+    return sparks;
+  },
+  get carSparks() {
+    return carSparks;
+  },
+  get shrapnel() {
+    return shrapnel;
   },
   get cunningStunts() {
     return cunningStunts;
@@ -463,6 +497,7 @@ async function init() {
     }
     await audio.init();
     await assets.common(status);
+    await initializeShrapnel();
     await wastedFeedback.init();
     await loadRace();
     setPaused(true);
@@ -471,6 +506,53 @@ async function init() {
     console.error(error);
   }
 }
+function registerShrapnelMaterials(
+  actor: THREE.Object3D,
+  names: readonly string[],
+  driver: number,
+) {
+  const materials = names.map((name) =>
+    simpleMaterials.resolve(name, driver > 5 ? 2 : 1),
+  );
+  if (materials.some((material) => !material)) {
+    assets.warnings.push(
+      `Native shrapnel materials unavailable for ${actor.name}: cache capacity reached`,
+    );
+    // Preserve authored material indices; an absent provider is diagnosed by
+    // the consumer instead of filtering/reordering the original array.
+    return;
+  }
+  carShrapnelMaterials.set(actor, materials as THREE.Material[]);
+}
+
+async function initializeShrapnel() {
+  if (shrapnel) return;
+  const geometries = [];
+  for (const stem of ["FRAG4", "FRAG5"]) {
+    const path = assets.resolve(`data/MODELS/${stem}.DAT`);
+    if (!path)
+      throw new Error(`Original shrapnel model unavailable: ${stem}.DAT`);
+    const models = parseDat(await assets.bytes(path));
+    const model =
+      models.find((model) => model.name.toUpperCase() === `${stem}.DAT`) ??
+      models[0];
+    if (!model) throw new Error(`Empty original shrapnel model: ${path}`);
+    geometries.push(createModelGeometry(model));
+  }
+  shrapnel = new ShrapnelSystem({
+    models: [geometries[0], geometries[1]],
+    blackMaterial: simpleMaterials.resolve("M14.MAT", 4),
+    carMaterials: (actor) => {
+      // Detached/split wrappers have no copied palette; source reads the
+      // supplied owner directly rather than following its original-car link.
+      return carShrapnelMaterials.get(actor) ?? [];
+    },
+    timeSyncMs: () => simulation?.mechanicsTimeSync ?? 1,
+  });
+  for (const geometry of geometries) geometry.dispose();
+  scene.add(shrapnel.group);
+}
+
 function disposeGroup(group: THREE.Object3D) {
   const geos = new Set<THREE.BufferGeometry>(),
     mats = new Set<THREE.Material>(),
@@ -738,7 +820,12 @@ async function loadRace() {
         textures: world.textures,
         materials: world.materials,
         random: sharedNativeRandom.random,
-        onConnotations: dispatchSmashConnotations,
+        onConnotations: (data, contact, suppressed) =>
+          dispatchSmashConnotations(data, contact, suppressed, () => {
+            for (const spec of data.shrapnel)
+              if (spec.kind === "abstract")
+                spawnAbstractShrapnel(spec, contact, world.materials);
+          }),
       },
     );
     await loadedDestruction.preload(async (name) => {
@@ -768,6 +855,30 @@ async function loadRace() {
     explosions?.dispose();
     shards?.dispose();
     smoke?.dispose();
+    skidmarks?.dispose();
+    skidMaterials?.dispose();
+    shrapnel?.clear();
+    if (sparks) sparks.clear();
+    else
+      sparks = new SparkSystem({
+        shrapnelOutlet: (request) => shrapnel?.spawnFromSpark(request),
+      });
+    if (!carSparks)
+      carSparks = new CarSparkAllocator({
+        allocateNative: sparks.allocateNative,
+        shrapnelOutlet: (request) => shrapnel?.spawnFromSpark(request),
+        timeSyncMs: () => simulation?.mechanicsTimeSync ?? 1,
+      });
+    scene.add(sparks.group);
+    skidMaterials = new SkidMaterialLibrary();
+    await skidMaterials.load(assets, [
+      ...parseSurfaceModifiers(trackText).map(
+        (modifier) => modifier.skidMaterial,
+      ),
+      "OILSMEAR.MAT",
+    ]);
+    skidmarks = new SkidMarkSystem({ resolveMaterial: skidMaterials.resolve });
+    scene.add(skidmarks.group);
     smoke = new SmokeSystem(assets, {
       camera,
       random: sharedNativeRandom.random,
@@ -902,6 +1013,53 @@ async function loadRace() {
         });
       }
     };
+    simulation.onWheelMarks = (body) => {
+      if (!skidmarks || !body.debug) return;
+      for (let wheel = 0; wheel < 4; wheel++) {
+        const hit = body.debug.wheelContacts?.[wheel];
+        const surface = hit?.surface;
+        const position = body.motion.wheelPositions[wheel].clone();
+        position.x -= wheel & 1 ? 0.1725 : -0.1725;
+        position.y -= body.state.wheelLengths[wheel];
+        position
+          .multiplyScalar(1 / 6.9)
+          .applyQuaternion(body.state.orientation)
+          .add(body.state.position);
+        const normal = hit?.normal.clone() ?? new THREE.Vector3(0, 1, 0);
+        const planePoint = surface?.a ?? hit?.point;
+        if (planePoint)
+          position.addScaledVector(
+            normal,
+            normal.dot(planePoint) - normal.dot(position),
+          );
+        const beforeOil = simulation?.oil?.wheelOilRemaining(body, wheel) ?? 0;
+        const result = skidmarks.singlePhysicsWheelSample({
+          car: body.group,
+          wheel,
+          requested: body.debug.skidRequests[wheel],
+          position,
+          normal,
+          skidMaterial: body.debug.wheelSurfaceModifiers?.[wheel]?.skidMaterial,
+          contact: {
+            present: !!hit,
+            pixelmapType: surface?.pixelmapType,
+            materialName: surface?.material,
+          },
+          suspensionDistance: body.state.wheelLengths[wheel],
+          suspensionHeight: body.motion.suspensionLength[wheel >> 1],
+          oilRemaining: beforeOil,
+          oilMaterial: "OILSMEAR.MAT",
+        });
+        if (result.oilRemaining < beforeOil)
+          simulation?.oil?.consumeOilMark(
+            body,
+            wheel,
+            beforeOil - result.oilRemaining,
+          );
+      }
+    };
+    simulation.onWorldSparks = (source) => sparks?.spawnWorld(source);
+    simulation.onCarSparks = (source) => carSparks?.spawn(source);
     simulation.onOpponentRepulsed = (source, target) => {
       const com = (body: SimulatedCar) =>
         body.properties.centerOfMass
@@ -1003,8 +1161,20 @@ async function loadRace() {
       message(`${multiplier > 1 ? "CRASH BONUS" : "DAMAGE"} · +${credits} CR`);
     };
     bindWamEffects(player, loadedCar.materials);
+    registerShrapnelMaterials(
+      player.group,
+      parseCarShrapnelMaterials(carText),
+      player.state.driver ?? 8,
+    );
     simulation.add(player);
-    for (const body of noncarBodies) simulation.addNonCar(body);
+    for (const body of noncarBodies) {
+      registerShrapnelMaterials(
+        body.actor,
+        body.mechanics.shrapnelMaterials,
+        5,
+      );
+      simulation.addNonCar(body);
+    }
     noncarRenderBatch = new NonCarRenderBatch(noncarBodies, scene);
     simulation.onRepair = (body, cost, finished) => {
       if (body.human && finished) repairControl.autoRepair = false;
@@ -1280,6 +1450,33 @@ function dispatchSmashConnotations(
   checkSmashObjective();
 }
 
+function spawnAbstractShrapnel(
+  spec: SmashConnotations["shrapnel"][number],
+  contact: WorldSmashContact,
+  materials: ReadonlyMap<string, THREE.Material>,
+) {
+  const original = (spec.materials ?? []).map((name) =>
+    materials.get(name.replace(/\.mat$/i, "").toLowerCase()),
+  );
+  if (
+    !contact.point ||
+    !original.length ||
+    original.some((material) => !material)
+  ) {
+    const warning = `Abstract shrapnel source/material unavailable: ${(spec.materials ?? []).join(", ")}`;
+    if (!assets.warnings.includes(warning)) assets.warnings.push(warning);
+    return;
+  }
+  shrapnel?.spawn(
+    nativeAbstractShrapnel({
+      position: contact.point,
+      startingVelocity: contact.smashStartingVelocity,
+      effectMagnitude: contact.effectMagnitude ?? contact.normalImpulse,
+      materials: original as THREE.Material[],
+    }),
+  );
+}
+
 function dispatchFollowupSmash(
   activeSimulation: VehicleSimulation,
   destruction: WorldDestruction,
@@ -1325,6 +1522,7 @@ function dispatchFollowupSmash(
   if (revision !== destruction.geometryRevision) {
     activeSimulation.world.rebuildStatic();
     activeSimulation.world.invalidateDynamic();
+    activeSimulation.invalidateWorldFaceCache();
     activeSimulation.onWorldGeometryChanged?.();
   }
 }
@@ -1381,7 +1579,9 @@ function bindWamEffects(
     );
     dispatchSmashConnotations(event.connotations, contact, false, () => {
       for (const spec of event.connotations.shrapnel)
-        if (spec.kind === "shards")
+        if (spec.kind === "abstract")
+          spawnAbstractShrapnel(spec, contact, materials);
+        else if (spec.kind === "shards")
           shards?.spawn(spec, {
             geometry: event.mesh.geometry,
             matrixWorld: meshTransform,
@@ -1559,6 +1759,11 @@ async function loadRivals(
       state.powerMultiplier =
         player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
     bindWamEffects(body, model.materials);
+    registerShrapnelMaterials(
+      body.group,
+      parseCarShrapnelMaterials(text),
+      body.state.driver ?? 6,
+    );
     simulation?.add(body);
     fleet.add(body, candidates[i].id, personalities[i]);
     model.group.position.copy(state.position);
@@ -2255,6 +2460,29 @@ function ensureRacePayout() {
   });
 }
 
+/** Installed PointOutOfSight4e5aa0. This browser has one render camera;
+ * optional source rearview/extra render cameras are not currently enabled. */
+function worldGrooveVisible(
+  actor: THREE.Object3D,
+  definition: { nature: "constant" | "distance" },
+) {
+  camera.updateWorldMatrix(true, false);
+  const matrix = camera.matrixWorld.elements;
+  return nativePointVisible(
+    actor.getWorldPosition(new THREE.Vector3()),
+    definition.nature === "distance"
+      ? Math.fround(camera.far * camera.far)
+      : 36,
+    {
+      camera: {
+        position: new THREE.Vector3(matrix[12], matrix[13], matrix[14]),
+        backwards: new THREE.Vector3(matrix[8], matrix[9], matrix[10]),
+        yon: camera.far,
+      },
+    },
+  );
+}
+
 function animate(now: number) {
   requestAnimationFrame(animate);
   const frameSeconds = (now - lastTime) / 1000;
@@ -2278,9 +2506,9 @@ function animate(now: number) {
     seconds = frames = 0;
   }
   debugPanel.refresh();
+  let grooveFrameStarted = false;
   if (vehicle && car && race && collision) {
     if (gameFrame && !paused && race.status === "racing") {
-      worldAnimation?.update(dt);
       let modifiers = powerups?.beginFrame(
         dt,
         vehicle,
@@ -2343,6 +2571,8 @@ function animate(now: number) {
           player.input.handbrake = false;
         }
         updateRivals(dt, modifiers?.opponentSpeedFactor ?? 1);
+        simulation.beginWorldGrooveFrame({ isVisible: worldGrooveVisible });
+        grooveFrameStarted = true;
         const physicsWindow = simulation.updateFrame(
           gameFrame.startMs,
           gameFrame.periodMs,
@@ -2359,9 +2589,6 @@ function animate(now: number) {
         const drunkVoice = powerups?.drinkDriving.periodic(stats.gameTimeMs);
         if (drunkVoice)
           void audio.playSound(drunkVoice.id, 1, drunkVoice.playbackRate);
-        explosions?.update(simulation.elapsed * 1000);
-        simulation.flushSmashEffects();
-        shards?.update(stats.gameTimeMs);
         // Installed C2 RaceCompleted(reason6) lets the wasted body continue
         // simulating during its ten-second end countdown.
         if (
@@ -2438,10 +2665,6 @@ function animate(now: number) {
             : undefined,
         },
       );
-      smoke?.update(
-        Math.trunc(stats.gameTimeMs) >>> 0,
-        Math.trunc(gameFrame.periodMs) >>> 0,
-      );
       checkRaceObjective();
       const animationInput = {
         ...(player ? motionAnimation(player) : {}),
@@ -2490,8 +2713,8 @@ function animate(now: number) {
         );
       for (const body of simulation.debris)
         renderPoses.apply(body, body.actor, renderAlpha);
-      for (const body of simulation.movingWorld)
-        renderPoses.apply(body, body.actor, renderAlpha);
+      // Native GROOVE owns its outer-frame graphical pose. Interpolating the
+      // helper body's previous physics transform here would overwrite it.
       for (const body of simulation.noncars)
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.mineBodies)
@@ -2639,6 +2862,24 @@ function animate(now: number) {
     }
     camera.updateProjectionMatrix();
     camera.lookAt(target);
+    if (grooveFrameStarted && simulation && gameFrame) {
+      worldAnimation?.update(dt);
+      simulation.finishWorldGrooveFrame(stats.gameTimeMs >>> 0, {
+        isVisible: worldGrooveVisible,
+      });
+      // MungeShrapnel first advances the persistent smoke/flame columns,
+      // before fragments and the final authored smash queue are processed.
+      smoke?.updateColumns(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);
+      shrapnel?.update(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);
+      simulation.flushSmashEffects();
+      explosions?.update(simulation.elapsed * 1000);
+      shards?.update(stats.gameTimeMs);
+      skidmarks?.update();
+      // Native world render invokes sparks before smoke. Both advance once per
+      // graphical game frame after physics and the final authored effects flush.
+      sparks?.update(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);
+      smoke?.updatePuffs(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);
+    }
     if (sky) {
       sky.position.x = camera.position.x;
       sky.position.z = camera.position.z;

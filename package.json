@@ -34,7 +34,9 @@
     "test:smash-followup": "npm run build && node tests/browser-smash-followup.mjs",
     "test:smash-gameplay": "npm run build && node tests/browser-smash-gameplay.mjs",
     "test:combat-powerups": "npm run build && node tests/browser-combat-powerups.mjs",
-    "test:native-rewards": "npm run build && node tests/browser-native-rewards.mjs"
+    "test:native-rewards": "npm run build && node tests/browser-native-rewards.mjs",
+    "test:skidmarks": "npm run build && node tests/browser-skidmarks.mjs",
+    "test:crash-effects": "npm run build && node tests/browser-crash-effects.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

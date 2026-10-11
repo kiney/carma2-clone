@@ -647,6 +647,13 @@ export class SmokeSystem {
   }
 
   update(timeMs: number, framePeriodMs: number): void {
+    this.updateColumns(timeMs, framePeriodMs);
+    this.updatePuffs(timeMs, framePeriodMs);
+  }
+
+  /** MungeSmokeColumn runs inside MungeShrapnel, before fragment advancement
+   * and the final smash flush. Puff rendering has its separate later phase. */
+  updateColumns(timeMs: number, framePeriodMs: number): void {
     uint(timeMs, "time");
     const dt = uint(framePeriodMs, "frame period");
     if (this.disposed || dt === 0) return;
@@ -746,6 +753,14 @@ export class SmokeSystem {
         timeSyncMs: 1,
       });
     }
+  }
+
+  /** RenderSmoke runs after RenderSparks. Producers between these phases can
+   * add puffs without advancing their columns a second time this frame. */
+  updatePuffs(timeMs: number, framePeriodMs: number): void {
+    uint(timeMs, "time");
+    const dt = uint(framePeriodMs, "frame period");
+    if (this.disposed || dt === 0) return;
     this.drawGlow(timeMs);
     // Native RenderSmoke also saves a CRT sample and reseeds to that sample on
     // exit, rather than restoring the preceding full 32-bit CRT state.

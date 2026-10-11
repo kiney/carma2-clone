@@ -110,6 +110,53 @@ test("crushed hull bounds change the resulting camera clearance", () => {
   assert.ok(Math.abs(crushed.position.z - 0.38) < 1e-12);
 });
 
+test("native plane clearance is independent of the stored vertex radius", () => {
+  const hull = box();
+  // ShapeRayCast461810 receives the plane table, not a vertex-radius bound.
+  // Deliberately separate these inputs to verify that source contract; this
+  // synthetic table is not claimed to reproduce the intermittent crash hull.
+  const exit = hull.faces.find((face) => face.normal.z === 1);
+  exit.constant = 3.6;
+  exit.indices = []; // Native plane tests do not require an auxiliary cycle.
+  const result = clearCameraFromOwnShape(
+    new Vector3(0, 0, 0.1),
+    new Vector3(),
+    shape([hull]),
+    0.06,
+  );
+  assert.equal(result.iterations, 21);
+  assert.ok(Math.abs(result.position.z - 3.78) < 1e-12);
+  assert.ok(result.position.z > Math.max(...hull.vertices.map((p) => p.z)));
+});
+
+test("an inside ray without a finite plane exit remains an explicit topology error", () => {
+  const hull = box();
+  hull.faces = hull.faces.filter((face) => face.normal.z !== 1);
+  assert.throws(
+    () =>
+      clearCameraFromOwnShape(
+        new Vector3(0, 0, 0.1),
+        new Vector3(),
+        shape([hull]),
+        0.06,
+      ),
+    /no finite exit/,
+  );
+});
+
+test("an exactly reached plane remains inside before the native boundary probe", () => {
+  const hull = box();
+  hull.faces.find((face) => face.normal.z === 1).constant = 0.5;
+  const result = clearCameraFromOwnShape(
+    new Vector3(0, 0, 0.25),
+    new Vector3(),
+    shape([hull]),
+    1 / 12,
+  );
+  assert.equal(result.iterations, 3);
+  assert.equal(result.position.z, 0.75);
+});
+
 test("own-shape camera clearance rejects invalid near planes and zero COM rays", () => {
   for (const near of [0, -0.1, NaN, Infinity])
     assert.throws(
@@ -184,6 +231,85 @@ test("installed Eagle and Bigdump mechanics hulls support own-shape clearance", 
       `${name} cleared hull`,
     );
   }
+});
+
+test("original Buggy structural crush retains numerical own-shape clearance with dangling plane cycles", async (t) => {
+  const { originalCar } = await import("./support/original-car.mjs");
+  let data;
+  try {
+    data = await originalCar("buggy");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      t.skip("Local original Buggy data absent");
+      return;
+    }
+    throw error;
+  }
+  const { DamageSystem } = await import("../src/damage.ts");
+  const { createSimulatedCar } = await import("../src/physics/simulation.ts");
+  const { buildHull } = await import("../src/physics/geometry.ts");
+  const damage = new DamageSystem(data.assets, data.group, data.text);
+  await damage.init();
+  damage.damageContext.random = () => 0;
+  const car = createSimulatedCar(
+    data.group,
+    data.text,
+    damage,
+    new Vector3(),
+    0,
+    true,
+  );
+  const authored = car.shapeVertices.flat().map((point) => point.clone());
+  const contact = new Vector3(
+    Math.min(...authored.map((p) => p.x)) * 0.4,
+    0.1,
+    Math.max(...authored.map((p) => p.z)) * 0.8,
+  );
+  damage.applyImpact(
+    [contact],
+    new Vector3(0, 0, -5),
+    false,
+    true,
+    10000,
+    new Vector3(0, 0, -5),
+  );
+  assert.ok(damage.structuralBend);
+  assert.ok(
+    car.shapeVertices
+      .flat()
+      .some((point, i) => point.distanceTo(authored[i]) > 0.01),
+  );
+  const hull = buildHull(car.shapeVertices[0]);
+  assert.equal(hull.faces.length, 18);
+  assert.deepEqual(
+    hull.faces.flatMap((face, index) =>
+      face.indices.length < 3 ? [index] : [],
+    ),
+    [13, 14],
+  );
+  const com = car.properties.centerOfMass.clone();
+  const direction = new Vector3(0.1, 0.02, 0).normalize();
+  // Independent stored-halfspace intersection on this ray determines the
+  // final positive boundary probe plus three near planes.
+  const exit = Math.min(
+    ...hull.faces.flatMap((face) => {
+      const slope = face.normal.dot(direction);
+      return slope > 0 ? [(face.constant - face.normal.dot(com)) / slope] : [];
+    }),
+  );
+  assert.ok(Math.abs(exit - 0.22948045565119007) < 1e-12);
+  const result = clearCameraFromOwnShape(
+    com.clone().add(new Vector3(0.1, 0.02, 0)),
+    com,
+    shape([hull]),
+    0.06,
+  );
+  assert.equal(result.iterations, 2);
+  assert.ok(
+    result.position.distanceTo(
+      com.clone().addScaledVector(direction, exit + 0.18),
+    ) < 1e-12,
+  );
 });
 
 test("camera clearance rejects malformed transforms and nonfinite authored vertices", () => {

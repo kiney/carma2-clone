@@ -320,6 +320,9 @@ export class OilRuntime {
   }
 
   /** Native SkidMark subtracts model-space travel distance from wheel oil. */
+  wheelOilRemaining(car: RigidBody, wheel: number): number {
+    return this.wheelTrails.get(car)?.[wheel]?.remaining ?? 0;
+  }
   consumeOilMark(car: RigidBody, wheel: number, distance: number): number {
     if (
       !Number.isInteger(wheel) ||

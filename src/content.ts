@@ -78,6 +78,7 @@ export class Assets {
       // internal identifier; native lookup then uses the filename.
       const identifier = map.name || path.split("/").pop()!;
       texture.name = identifier;
+      texture.userData.c2PixelmapType = map.format;
       target.set(key(identifier), texture);
     }
     return maps;

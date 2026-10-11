@@ -39,13 +39,32 @@ import {
 } from "../damage";
 import { NativeSmashQueue } from "../smash-queue";
 import type { WorldDestruction } from "../world-destruction";
-import type { WorldGrooveRuntime } from "../world-groove";
+import type {
+  WorldGrooveRuntime,
+  WorldGrooveEvaluationOptions,
+} from "../world-groove";
+import { cameraTriangleInBox } from "../camera/triangle-box";
+import type { WorldSparkSource } from "../sparks";
+import { nativeWorldSparkSource } from "./world-sparks";
+import type { CarSparkSource } from "../car-sparks";
+import { nativeCarSparkSource } from "./car-spark-source";
+import {
+  NativeWorldFaceCache,
+  nativeWheelExtendedBounds,
+  type NativeWorldFaceState,
+  type NativeWorldFaceQuery,
+} from "./world-face-cache";
+import { intersectWheelFace } from "./wheel-ray";
+import { pointVelocity } from "./contact";
+import { DEFAULT_SURFACE } from "./surfaces";
 import { WorldActivationRuntime } from "../world-activation";
 import {
   prepareMovingWorldPose,
+  captureMovingWorldPose,
   commitMovingWorldPose,
   sweepHullMovingTriangle,
   type MovingWorldBody,
+  type MovingWorldPose,
 } from "./moving-world";
 import {
   MineRuntime,
@@ -185,6 +204,8 @@ export interface BodyVolumeState {
   automatic: SpecialVolume | null;
   depth: number;
   waterDistance: number;
+  /** Source +244: retained when a refresh has no acceptable water plane. */
+  waterNormal?: Vector3;
 }
 export interface SimulatedCar extends RigidBody {
   state: SimulatedVehicleState;
@@ -458,6 +479,11 @@ export class VehicleSimulation {
   noncars: NonCarBody[] = [];
   movingWorld: MovingWorldBody[] = [];
   grooves?: WorldGrooveRuntime;
+  private worldGrooveFrameActive = false;
+  private worldGrooveOptions: WorldGrooveEvaluationOptions = {};
+  private collectedMovingWorldPoses = new WeakMap<Surface, MovingWorldPose>();
+  readonly worldFaceCache = new NativeWorldFaceCache<Surface>();
+  private worldFaceStates = new Map<RigidBody, NativeWorldFaceState>();
   readonly mines = new MineRuntime<SimulatedCar>({
     random: sharedNativeRandom.random,
   });
@@ -466,6 +492,8 @@ export class VehicleSimulation {
   onMineEvent?: (event: MineEvent<SimulatedCar>) => void;
   accumulator = 0;
   elapsed = 0;
+  /** Installed mechanics interpolation debt: current frame end minus tick. */
+  mechanicsTimeSync = 1;
   private frameWindowActive = false;
   private inactiveCars = new WeakSet<SimulatedCar>();
   gravityMultiplier = 1;
@@ -477,8 +505,12 @@ export class VehicleSimulation {
   onBeforeStep?: () => void;
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
+  onWorldSparks?: (source: WorldSparkSource) => void;
+  onCarSparks?: (source: CarSparkSource) => void;
   onOpponentRepulsed?: (source: SimulatedCar, target: SimulatedCar) => void;
   onFinishCars?: (framePeriodMs: number) => void;
+  /** Native end-of-force-step tyre mark consumer, distinct from FinishCars smoke. */
+  onWheelMarks?: (car: SimulatedCar) => void;
   /** First-seen body order, after both receivers' damage and before the next pair. */
   onImpactPair?: (
     a: Readonly<SimulatedCar> | undefined,
@@ -686,6 +718,7 @@ export class VehicleSimulation {
     car.overlapDetected = false;
     car.worldOverlapDetected = false;
     this.contactSurfaces.delete(car);
+    this.invalidateWorldFaceCache(car);
     this.lastImpacts = this.lastImpacts.filter(
       (impact) => impact.a !== car && impact.b !== car,
     );
@@ -731,8 +764,36 @@ export class VehicleSimulation {
     this.movingWorld.push(body);
     this.world.addDynamic(body, body.actor, true, true);
   }
+  /** Production brackets the entire outer gameplay frame, not each 40ms tick.
+   * Camera culling belongs to the supplied native visibility provider. */
+  beginWorldGrooveFrame(options: WorldGrooveEvaluationOptions = {}): void {
+    this.worldGrooveFrameActive = true;
+    this.worldGrooveOptions = options;
+    this.grooves?.beginFrame();
+  }
+  finishWorldGrooveFrame(
+    timeMs: number,
+    options: WorldGrooveEvaluationOptions = this.worldGrooveOptions,
+  ): void {
+    this.grooves?.finishFrame(timeMs, options);
+    this.prepareMovingWorldPoses();
+    this.world.refreshDynamic?.();
+    this.worldGrooveFrameActive = false;
+  }
   private prepareMovingWorld() {
-    this.grooves?.update(this.elapsed * 1000);
+    // Direct step()/legacy tool callers have no outer-frame owner. Preserve
+    // their historical immediate physics-clock poses explicitly; production
+    // uses begin/finishWorldGrooveFrame and never advances GROOVE per tick.
+    if (!this.worldGrooveFrameActive && this.grooves) {
+      this.grooves.update(this.elapsed * 1000);
+      // Standalone legacy tools advance ACT geometry every tick without the
+      // native outer-frame StopGroovidelic owner. Their cached world-space
+      // faces must be recollected; production retains the native ring.
+      this.invalidateWorldFaceCache();
+    }
+    this.prepareMovingWorldPoses();
+  }
+  private prepareMovingWorldPoses() {
     for (const body of this.movingWorld) {
       body.actor.updateWorldMatrix(true, true);
       const position = new Vector3(),
@@ -741,20 +802,174 @@ export class VehicleSimulation {
       prepareMovingWorldPose(body, position, orientation, PHYSICS_STEP);
     }
   }
+  /** Discontinuous placement/world topology changes invalidate retained faces.
+   * Normal pose motion uses GetFacesNearObject's containment and ring lifetime. */
+  invalidateWorldFaceCache(body?: RigidBody): void {
+    if (body) {
+      const state = this.worldFaceStates.get(body);
+      if (state) this.worldFaceCache.invalidate(state);
+    } else
+      for (const state of this.worldFaceStates.values())
+        this.worldFaceCache.invalidate(state);
+  }
+  private facesNearBody(
+    body: RigidBody,
+    hulls: CollisionHull[],
+    candidate = false,
+  ): Surface[] {
+    let state = this.worldFaceStates.get(body);
+    if (!state) {
+      state = this.worldFaceCache.createState();
+      this.worldFaceStates.set(body, state);
+    }
+    const shapeBounds = hullsBounds(hulls);
+    const bounds =
+      "motion" in body
+        ? nativeWheelExtendedBounds(
+            shapeBounds,
+            (body as SimulatedCar).motion.wheelPositions,
+            (body as SimulatedCar).motion.suspensionLength,
+          )
+        : shapeBounds;
+    const matrix = (predicted: boolean) =>
+      new Matrix4().compose(
+        predicted
+          ? (body.state.predictedPosition ?? body.state.position)
+          : body.state.position,
+        predicted
+          ? (body.state.predictedOrientation ?? body.state.orientation)
+          : body.state.orientation,
+        new Vector3(1, 1, 1),
+      );
+    let refreshed = false;
+    let lastWaterSlot: number | undefined;
+    const emittedSlots = new Map<number, Surface>();
+    const faces = this.worldFaceCache.get(
+      state,
+      {
+        bounds,
+        matrix: matrix(candidate),
+        committedMatrix: matrix(false),
+      },
+      (query, maximum, gatherModels) => {
+        refreshed = true;
+        // Native gPling_face is cleared ONCE before both possible collection
+        // passes. It points into the shared ring, so a wrap can overwrite its
+        // slot even when that second pass emits no new ! material.
+        const offset =
+          maximum === this.worldFaceCache.capacity
+            ? 0
+            : this.worldFaceCache.count;
+        const emitted = this.collectWorldFaces(query, maximum, gatherModels);
+        for (let i = 0; i < emitted.length; i++) {
+          emittedSlots.set(offset + i, emitted[i]);
+          if (emitted[i].material.startsWith("!")) lastWaterSlot = offset + i;
+        }
+        return emitted;
+      },
+    );
+    if (refreshed) {
+      const volume = this.initializeSpecialVolume(body as SimulationBody);
+      const face =
+        lastWaterSlot === undefined
+          ? undefined
+          : emittedSlots.get(lastWaterSlot);
+      // The callback receives the pointed-to face directly. A ring-overwrite
+      // alias can now point to another material; do not re-filter its name.
+      const plane = face
+        ? detectWaterPlane([{ ...face, material: "!" }])
+        : null;
+      volume.waterDistance = plane?.distance ?? NO_WATER_DISTANCE;
+      if (plane) volume.waterNormal = plane.normal;
+    }
+    return faces;
+  }
+  /** Finite ModelPickBox emission precedes eligibility/material filtering.
+   * querySurfaces supplies prepared triangle order; original packed column /
+   * model-group traversal order is still a separate world-loader limitation. */
+  private collectWorldFaces(
+    query: NativeWorldFaceQuery,
+    maximum: number,
+    gatherModels: boolean,
+  ): Surface[] {
+    if (!gatherModels || maximum === 0) return [];
+    const worldBounds = query.bounds.clone().applyMatrix4(query.matrix);
+    const inverse = query.matrix.clone().invert();
+    const collected: Surface[] = [];
+    for (const surface of this.world.querySurfaces(
+      worldBounds.min,
+      worldBounds.max,
+      true,
+    )) {
+      if (
+        !cameraTriangleInBox(
+          [surface.a, surface.b, surface.c].map((point) =>
+            point.clone().applyMatrix4(inverse),
+          ),
+          query.bounds.min,
+          query.bounds.max,
+        )
+      )
+        continue;
+      collected.push(surface);
+      if (
+        surface.owner &&
+        "kind" in surface.owner &&
+        surface.owner.kind === "moving-world"
+      )
+        this.collectedMovingWorldPoses.set(
+          surface,
+          captureMovingWorldPose(surface.owner as MovingWorldBody),
+        );
+      if (collected.length === maximum) break;
+    }
+    this.stopGroovesForCollectedFaces(collected);
+    return collected;
+  }
+  /** ActorBoxPick calls once per model that emitted at least one face. */
+  private stopGroovesForCollectedFaces(surfaces: readonly Surface[]): void {
+    if (!this.worldGrooveFrameActive || !this.grooves) return;
+    const models = new Set<Object3D>();
+    let evaluated = false;
+    for (const surface of surfaces) {
+      if (!surface.actor || models.has(surface.actor)) continue;
+      models.add(surface.actor);
+      for (
+        let actor: Object3D | null = surface.actor;
+        actor;
+        actor = actor.parent
+      ) {
+        if (this.grooves.actors.has(actor)) {
+          evaluated =
+            this.grooves.stopActor(actor, this.worldGrooveOptions) || evaluated;
+          break;
+        }
+      }
+    }
+    if (evaluated) {
+      // WorldCollision replaces its dynamic arrays. Surfaces already returned
+      // above retain their vertices and captured CCD pose for this query.
+      this.prepareMovingWorldPoses();
+      this.world.refreshDynamic?.();
+    }
+  }
   private movingSurfaceContact(
     body: RigidBody,
     hull: CollisionHull,
     surface: Surface,
   ): HullContact | null {
     const owner = surface.owner as MovingWorldBody;
-    const inverse = owner.state.predictedOrientation.clone().invert();
+    const collectedPose = this.collectedMovingWorldPoses.get(surface);
+    const target = collectedPose ?? owner.state;
+    const inverse = target.predictedOrientation.clone().invert();
     const local = (point: Vector3) =>
-      point.clone().sub(owner.state.predictedPosition).applyQuaternion(inverse);
+      point.clone().sub(target.predictedPosition).applyQuaternion(inverse);
     return sweepHullMovingTriangle(body, hull, {
       a: local(surface.a),
       b: local(surface.b),
       c: local(surface.c),
       owner,
+      collectedPose,
       sourceSurface: surface,
       edgeOnly: surface.collisionMode === "edges",
       materialIdentifier: surface.material,
@@ -1025,6 +1240,7 @@ export class VehicleSimulation {
     const forward = new Vector3(0, 0, -1).applyQuaternion(orientation);
     car.state.heading = Math.atan2(-forward.x, -forward.z);
     this.contactSurfaces.delete(car);
+    this.invalidateWorldFaceCache(car);
     this.oilWheelPrevious.delete(car);
     this.sync(car);
   }
@@ -1069,6 +1285,7 @@ export class VehicleSimulation {
     car.state.predictedPosition = undefined;
     car.state.predictedOrientation = undefined;
     car.specialVolume = undefined;
+    this.invalidateWorldFaceCache(car);
     this.oilWheelPrevious.delete(car);
     this.sync(car);
   }
@@ -1205,7 +1422,8 @@ export class VehicleSimulation {
   private oilGround(car: SimulatedCar) {
     return {
       raycast: this.world.raycast.bind(this.world),
-      wheelRaycast: this.world.wheelRaycast?.bind(this.world),
+      wheelRaycast: (origin: Vector3, direction: Vector3, distance: number) =>
+        this.cachedWheelRaycast(car, origin, direction, distance),
       worldWheelContact: (
         wheels: readonly {
           hit: import("./motion").MotionGroundHit | null | undefined;
@@ -1254,11 +1472,12 @@ export class VehicleSimulation {
             this.startingCarSmashVelocity(car),
           ),
           impacteeTransform: car.group.matrixWorld,
-          timeMs: this.elapsed * 1000,
+          timeMs: this.smashClock(),
         });
         this.flushSmashEffectsBarrier();
         if (result.changes.some((change) => change.requiresRebuild)) {
           this.world.rebuildStatic();
+          this.invalidateWorldFaceCache();
           this.world.invalidateDynamic();
           this.onWorldGeometryChanged?.();
         }
@@ -1300,6 +1519,9 @@ export class VehicleSimulation {
       ) => {
         if (!this.oil) return [1, 1, 1, 1];
         const factors = this.oil.wheelFactors(car, points);
+        // Production consumes distance only when native SkidMark accepts a
+        // section. Standalone tools without a renderer retain their old adapter.
+        if (this.onWheelMarks) return factors;
         const previous = this.oilWheelPrevious.get(car) ?? [
           null,
           null,
@@ -1324,10 +1546,65 @@ export class VehicleSimulation {
       },
     };
   }
+  private cachedWheelRaycast(
+    car: SimulatedCar,
+    origin: Vector3,
+    direction: Vector3,
+    maxDistance: number,
+  ) {
+    const faces = this.facesNearBody(car, car.hulls);
+    const segment = direction.clone().normalize().multiplyScalar(maxDistance);
+    let best: import("./motion").MotionGroundHit | null = null;
+    let bestDistance = Infinity;
+    for (const surface of faces) {
+      // Installed MultiRayCheckSingleFace45f5d0: normal gPling_materials
+      // excludes !, >, ?. Collection still retains these faces for callbacks.
+      if (
+        surface.enabled === false ||
+        /^[!>?]/.test(surface.material) ||
+        surface.collisionMode === "edges" ||
+        surface.collisionMode === "passthrough"
+      )
+        continue;
+      const hit = intersectWheelFace(origin, segment, surface);
+      const distance = hit ? hit.fraction * maxDistance : Infinity;
+      if (!hit || distance >= bestDistance) continue;
+      bestDistance = distance;
+      best = {
+        distance,
+        normal: hit.normal,
+        point: hit.point,
+        surface,
+        body: surface.owner,
+        velocity: surface.owner
+          ? pointVelocity(
+              surface.owner.state,
+              surface.owner.properties,
+              hit.point,
+            )
+          : undefined,
+        friction: surface.modifier.tyreFriction,
+        rollingResistance: 0,
+        downforce: surface.modifier.downforce,
+        bumpiness: surface.modifier.bumpiness,
+      };
+    }
+    // Native WheelForces has a separate drivable physics-object pass. Keep
+    // that existing finite dynamic query, without admitting static faces that
+    // did not survive the shared ring's finite collection/capacity.
+    const dynamic = this.world.wheelRaycast?.(origin, direction, maxDistance);
+    if (
+      dynamic?.body &&
+      !("kind" in dynamic.body && dynamic.body.kind === "moving-world") &&
+      dynamic.distance < bestDistance
+    )
+      return dynamic;
+    return best;
+  }
   /** Installed callback414930 updates the plane from the finite candidate
    * faces. No face sets the sentinel, but intentionally retains full-depth
    * automatic water; MungeSpecialVolume4ff1a0 clears partial-depth exits. */
-  private updateSpecialVolume(body: SimulationBody): BodyVolumeState {
+  private initializeSpecialVolume(body: SimulationBody): BodyVolumeState {
     const defaultWater =
       this.specialVolumes?.defaultWater ?? this.defaultWaterVolume;
     let state = body.specialVolume;
@@ -1350,14 +1627,25 @@ export class VehicleSimulation {
         waterDistance: NO_WATER_DISTANCE,
       };
     }
-    const localBounds = hullsBounds(body.hulls);
-    const worldBounds = hullsBounds(
-      transformHulls(body, body.hulls),
-    ).expandByScalar(0.005);
-    const plane = detectWaterPlane(
-      this.world.querySurfaces(worldBounds.min, worldBounds.max, true),
-    );
-    state.waterDistance = plane?.distance ?? NO_WATER_DISTANCE;
+    return state;
+  }
+  private updateSpecialVolume(body: SimulationBody): BodyVolumeState {
+    const defaultWater =
+      this.specialVolumes?.defaultWater ?? this.defaultWaterVolume;
+    const state = this.initializeSpecialVolume(body);
+    const shapeBounds = hullsBounds(body.hulls);
+    const localBounds =
+      "motion" in body
+        ? nativeWheelExtendedBounds(
+            shapeBounds,
+            body.motion.wheelPositions,
+            body.motion.suspensionLength,
+          )
+        : shapeBounds;
+    const plane =
+      state.waterDistance !== NO_WATER_DISTANCE && state.waterNormal
+        ? { normal: state.waterNormal, distance: state.waterDistance }
+        : null;
     if (plane) {
       const projected = projectWaterDepth(
         localBounds,
@@ -1420,6 +1708,7 @@ export class VehicleSimulation {
       this.accumulator + Math.max(0, dt),
       PHYSICS_STEP * 5,
     );
+    this.mechanicsTimeSync = Math.round(this.accumulator * 1000);
     this.collectingOrdinaryCrush = true;
     try {
       while (this.accumulator >= PHYSICS_STEP) {
@@ -1433,6 +1722,7 @@ export class VehicleSimulation {
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
     this.flushSmashEffects();
+    this.mechanicsTimeSync = 1;
   }
   /** Native absolute race-relative window; elapsed remains the physics tick.
    * A skipped interval advances timed physics state without inventing forces.
@@ -1450,6 +1740,7 @@ export class VehicleSimulation {
     this.spamCrushQueue.initialize();
     this.cameraContacts.begin();
     this.elapsed = window.stepStartMs / 1000;
+    this.mechanicsTimeSync = window.frameEndMs - window.stepStartMs;
     this.collectingOrdinaryCrush = true;
     try {
       for (let i = 0; i < window.steps; i++) {
@@ -1483,6 +1774,7 @@ export class VehicleSimulation {
         );
     }
     if (!this.deferFinalSmashFlush) this.flushSmashEffects();
+    this.mechanicsTimeSync = 1;
     return window;
   }
   private beginSmashEffects(): void {
@@ -1515,6 +1807,7 @@ export class VehicleSimulation {
     );
     if (revision !== this.destruction?.geometryRevision) {
       this.world.rebuildStatic();
+      this.invalidateWorldFaceCache();
       this.world.invalidateDynamic();
       this.onWorldGeometryChanged?.();
     }
@@ -1632,13 +1925,14 @@ export class VehicleSimulation {
       .clone()
       .applyQuaternion(body.state.orientation)
       .add(body.state.position);
+    const nearby = this.facesNearBody(body, hulls, true).filter(
+      (surface) =>
+        surface.enabled !== false &&
+        !/^[!>]/.test(surface.material) &&
+        surface.collisionMode !== "passthrough",
+    );
+    surfaces.push(...nearby);
     for (let i = 0; i < old.length; i++) {
-      const bounds = hullBounds(old[i])
-        .union(hullBounds(next[i]))
-        .expandByScalar(0.005);
-      const nearby = this.world.querySurfaces(bounds.min, bounds.max);
-      for (const surface of nearby)
-        if (!surfaces.includes(surface)) surfaces.push(surface);
       const staticNearby = nearby.filter((surface) => !surface.owner);
       const recovery = carBody.worldRecovery
         ? recoverWorldContacts(
@@ -2373,7 +2667,7 @@ export class VehicleSimulation {
           normalImpulse: impact.normalImpulse,
           kind: "body",
           point: target.point,
-          timeMs: this.elapsed * 1000,
+          timeMs: this.smashClock(),
           bodyActor,
           impacteeVelocity: target.body.state.velocity,
           smashStartingVelocity:
@@ -2388,6 +2682,7 @@ export class VehicleSimulation {
         const rebuild = result.changes.some((change) => change.requiresRebuild);
         if (rebuild) {
           this.world.rebuildStatic();
+          this.invalidateWorldFaceCache();
           this.world.invalidateDynamic();
           this.onWorldGeometryChanged?.();
         }
@@ -2437,6 +2732,10 @@ export class VehicleSimulation {
       a: RigidBody;
       b: RigidBody | undefined;
       receivers: Receiver[];
+      firstSurface?: Surface;
+      totalLambda: number;
+      sparkPoint: Vector3;
+      sparkForce: Vector3;
     };
     const pairs: Pair[] = [];
     for (const nativeGroup of groupNativeImpactRows(impacts)) {
@@ -2445,9 +2744,28 @@ export class VehicleSimulation {
         a: nativeGroup.a,
         b: nativeGroup.b,
         receivers: [],
+        firstSurface: nativeGroup.rows[0]?.sourceSurface,
+        totalLambda: nativeGroup.totalLambda,
+        sparkPoint: new Vector3(),
+        sparkForce: new Vector3(),
       };
       pairs.push(pair);
       for (const impact of nativeGroup.rows) {
+        // Native type-one props and detached wrappers also participate in
+        // sparks. Accumulate their primary packet before damage eligibility.
+        const primarySign = impact.a === pair.a ? 1 : -1;
+        const primaryPoint = (
+          primarySign === 1 ? impact.point : (impact.pointB ?? impact.point)
+        )
+          .clone()
+          .sub(pair.a.state.position)
+          .applyQuaternion(pair.a.state.orientation.clone().invert());
+        const primaryLambda = Math.fround(impact.normalImpulse);
+        pair.sparkPoint.addScaledVector(primaryPoint, primaryLambda);
+        pair.sparkForce.addScaledVector(
+          impact.normal,
+          primaryLambda * primarySign,
+        );
         for (const [body, other, sign] of [
           [impact.a, impact.b, 1],
           [impact.b, impact.a, -1],
@@ -2497,6 +2815,49 @@ export class VehicleSimulation {
     for (const pair of pairs) {
       this.recordCrashOwners(pair.a, pair.b);
       const newlyWasted = new Set<SimulatedCar>();
+      const sparkInputs: Parameters<typeof nativeWorldSparkSource>[0][] = [];
+      let carSparkInput: Parameters<typeof nativeCarSparkSource>[0] | undefined;
+      const primary = this.nativeSparkParticipant(pair.a);
+      const secondary = pair.b
+        ? this.nativeSparkParticipant(pair.b)
+        : undefined;
+      if (primary) {
+        const localPoint = pair.sparkPoint
+          .clone()
+          .divideScalar(pair.totalLambda);
+        if (pair.b && secondary) {
+          carSparkInput = {
+            primary,
+            secondary,
+            primaryState: pair.a.state,
+            secondaryState: pair.b.state,
+            totalLambda: pair.totalLambda,
+            localPoint,
+            worldForce: pair.sparkForce.clone(),
+            timeSyncMs: this.mechanicsTimeSync,
+          };
+        }
+        if (!pair.b && pair.firstSurface) {
+          // Installed 41d77b clamps this consumer to modifiers0..9, unlike
+          // general surface/tyre consumers that also accept10 and11.
+          const rawIndex = pair.firstSurface.material.charCodeAt(0) - 47;
+          const index = rawIndex >= 0 && rawIndex <= 9 ? rawIndex : 0;
+          sparkInputs.push({
+            car: primary.actor,
+            state: pair.a.state,
+            driver: primary.driver,
+            carFlags: primary.sparky ? 0x200000 : 0,
+            totalLambda: pair.totalLambda,
+            hasSecondary: false,
+            hasFace: true,
+            localPoint,
+            worldForce: pair.sparkForce.clone(),
+            sparkiness: (this.world.modifier?.(index) ?? DEFAULT_SURFACE)
+              .sparkiness,
+            timeSyncMs: this.mechanicsTimeSync,
+          });
+        }
+      }
       for (const { car, other, impact } of pair.receivers) {
         this.crashCars.set(car.group.uuid, car);
         const otherCar =
@@ -2577,6 +2938,14 @@ export class VehicleSimulation {
         );
       this.attributeCrashPair(pair.a, pair.b, newlyWasted);
       for (const car of newlyWasted) this.finishWastage(car);
+      for (const input of sparkInputs) {
+        const source = nativeWorldSparkSource(input);
+        if (source) this.onWorldSparks?.(source);
+      }
+      if (carSparkInput) {
+        const source = nativeCarSparkSource(carSparkInput);
+        if (source) this.onCarSparks?.(source);
+      }
     }
     for (const car of this.cars)
       if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
@@ -2612,6 +2981,23 @@ export class VehicleSimulation {
     if ("kind" in body && body.kind === "noncar") return 4;
     // Mines have a separate explicit ownership path; do not reinterpret them.
     return undefined;
+  }
+  private nativeSparkParticipant(body: RigidBody) {
+    const driver = this.nativeCrashDriver(body);
+    if (driver === undefined) return undefined;
+    if ("damage" in body) {
+      const car = body as SimulatedCar;
+      return {
+        actor: car.group,
+        driver: car.state.driver ?? driver,
+        sparky: false,
+      };
+    }
+    if ("owner" in body)
+      // Independent zero-filled wrappers do not inherit driver/flags/palette.
+      return { actor: (body as DetachedBody).actor, driver, sparky: false };
+    const prop = body as NonCarBody;
+    return { actor: prop.actor, driver, sparky: prop.mechanics.sparky };
   }
   private crashOwner(body: RigidBody): RigidBody | undefined {
     if (!this.crashOwnerSlots.has(body) && "owner" in body)
@@ -2815,7 +3201,9 @@ export class VehicleSimulation {
     this.motionContext.currentCar = this.cars.find((car) => car.human)?.state;
     this.elapsed += PHYSICS_STEP;
     this.prepareMovingWorld();
-    this.destruction?.update(this.elapsed * 1000);
+    // Destruction/queued connotations share GetTotalTime's gameplay clock.
+    // Physics elapsed can be fractional or ahead of the rendered frame.
+    this.destruction?.update(this.smashClock());
     if (!this.collectingOrdinaryCrush)
       this.worldActivations.update(this.smashClock());
     this.mines.process(this.elapsed * 1000, (event) =>
@@ -2856,6 +3244,10 @@ export class VehicleSimulation {
       car.state.steeringDamageCurvature = car.damage.steeringDamageCurvature;
       car.state.wheelEnabled = car.damage.splitRuntime?.wheelMask;
       car.state.componentDamage = Array.from(car.damage.componentLevels);
+      // Car force preparation refreshes faces BEFORE TestAutoSpecialVolume.
+      // Generic PHIL objects retain their existing force-before-collision
+      // phase; their last plane changes only when collision collection runs.
+      this.facesNearBody(car, car.hulls);
       const environment = this.updateSpecialVolume(car);
       const factors = volumeMotionFactors(
         environment.volume,
@@ -2905,6 +3297,7 @@ export class VehicleSimulation {
           this.oilGround(car),
           this.motionContext,
         );
+        this.onWheelMarks?.(car);
       }
     }
     this.debris = this.debris.filter((body) => {
@@ -3266,6 +3659,11 @@ export class VehicleSimulation {
     }
     this.world.refreshDynamic?.();
     for (const body of this.movingWorld) commitMovingWorldPose(body);
+    // PHILDoPhysics consumes the current debt, then subtracts40. Its final
+    // outer-frame exit restores1; direct standalone steps have that same exit.
+    this.mechanicsTimeSync = this.collectingOrdinaryCrush
+      ? this.mechanicsTimeSync - PHYSICS_STEP * 1000
+      : 1;
   }
   private detachParts(car: SimulatedCar) {
     for (let index = 0; index < car.damage.runtimeParts.length; index++) {

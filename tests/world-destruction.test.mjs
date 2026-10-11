@@ -474,7 +474,13 @@ test("nochange connotations deduplicate a source tick and synchronously enqueue 
   );
   runtime.update(300);
   assert.equal(fired.length, 2);
-  assert.throws(() => runtime.update(299), /time/);
+  runtime.update(299); // Native prediction correction can regress the clock.
+  assert.equal(
+    fired.length,
+    2,
+    "clock correction does not replay connotations",
+  );
+  assert.throws(() => runtime.update(-1), /time/);
 });
 
 test("last duplicate trigger binding wins and crossed-level effect flags follow native queue", () => {

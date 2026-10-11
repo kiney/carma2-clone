@@ -75,6 +75,18 @@ integration; they are not needed for mode-2 napalm.
 
 Verified `MungeSmokeColumn` update order:
 
+Installed `MungeShrapnel` (`0x4f9520`) calls `MungeSmokeColumn` at
+`0x4f952d`, before fragment advancement. The outer main loop invokes this
+at `0x49375d`, before its final smash flush. `RenderSmoke` runs later,
+after `RenderSparks`, during the world render pass. The runtime exposes
+`updateColumns(timeMs, periodMs)` for that early producer phase and
+`updatePuffs(timeMs, periodMs)` for the late puff/glow render phase.
+`update` composes both consecutively for standalone tools. Production must
+call each phase once: a final-flush source cannot age a new column until
+the next early phase, while its new puff participates in the current render.
+Splitting preserves the original shared CRT reseed behavior at puff/glow
+render and allows intervening fragment/smash/spark RNG consumers.
+
 1. If remaining lifetime is less than `dtMs`, clear the active bit and
    remove the flame parent for colour 0. Equality performs one last update
    with remaining lifetime zero; expiration occurs on the following update.

@@ -321,7 +321,7 @@ export function projectWaterDepth(
   const depth =
     !submerged || plane.distance >= maximum - 0.001
       ? 1
-      : (plane.distance - minimum) / (maximum - minimum);
+      : Math.fround((plane.distance - minimum) / (maximum - minimum));
   return { depth, submerged, minimum, maximum };
 }
 /** MungeSpecialVolume 0x4ff1a0 gives auto water precedence over neutral gravity. */
@@ -403,9 +403,11 @@ export interface WaterSurface {
   normal: Vector3;
   material: string;
 }
+export const NATIVE_WATER_NORMAL_Y_MINIMUM = Math.fround(0.9);
 /** Installed HW water update0x414930 consumes the last collected '!' face,
- * accepts abs(normal.y)>0.9, points the normal up, and uses n dot vertex0.
- * The caller supplies original broad-phase triangle candidates including water.
+ * accepts abs(normal.y)>Float32(.9), points the normal up, and stores n dot
+ * vertex0 as Float32. The caller supplies finite emitted faces, in order;
+ * rejected last faces never cause a search for an earlier valid plane.
  */
 export function detectWaterPlane(
   surfaces: readonly WaterSurface[],
@@ -413,8 +415,16 @@ export function detectWaterPlane(
   let last: WaterSurface | undefined;
   for (const surface of surfaces)
     if (surface.material.startsWith("!")) last = surface;
-  if (!last || Math.abs(last.normal.y) <= 0.9) return null;
+  if (!last) return null;
   const normal = last.normal.clone();
+  normal.set(
+    Math.fround(normal.x),
+    Math.fround(normal.y),
+    Math.fround(normal.z),
+  );
+  if (Math.abs(normal.y) <= NATIVE_WATER_NORMAL_Y_MINIMUM) return null;
   if (normal.y < 0) normal.negate();
-  return { normal, distance: normal.dot(last.a) };
+  const point = last.a.clone();
+  point.set(Math.fround(point.x), Math.fround(point.y), Math.fround(point.z));
+  return { normal, distance: Math.fround(normal.dot(point)) };
 }

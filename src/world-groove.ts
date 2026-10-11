@@ -41,7 +41,7 @@ function words(line: string): string[] {
     .filter(Boolean);
 }
 function vec(line: string): THREE.Vector3 {
-  const n = words(line).map(Number);
+  const n = words(line).map((value) => Math.fround(Number(value)));
   if (n.length !== 3 || n.some((v) => !Number.isFinite(v)))
     throw new Error("Expected three finite coordinates");
   return new THREE.Vector3(...n);
@@ -52,8 +52,8 @@ function scalar(line: string): number {
   return n;
 }
 function period(line: string): number {
-  const rate = scalar(line);
-  return rate === 0 ? 0 : 1000 / rate;
+  const rate = Math.fround(scalar(line));
+  return rate === 0 ? 0 : Math.fround(1000 / rate);
 }
 function mode(line: string): WorldGrooveMode {
   const m = clean(line).toLowerCase();
@@ -130,7 +130,8 @@ export function parseWorldGrooves(text: string): ParsedWorldGrooves {
           pivot = vec(take()),
           axisName = known(take(), ["x", "y", "z"]);
         if (!axisName) throw new Error("Unsupported spin/rock axis");
-        const amplitude = objectName === "rock" ? scalar(take()) : 360;
+        const amplitude =
+          objectName === "rock" ? Math.fround(scalar(take())) : 360;
         object = {
           type: objectName,
           mode: objectMode,
@@ -164,12 +165,48 @@ function wave(
   timeMs: number,
   amplitude: number,
 ): number {
-  if (!(periodMs > 0)) return 0;
-  const phase = (((timeMs % periodMs) + periodMs) % periodMs) / periodMs;
+  if (periodMs === 0) return 0;
+  const phase = (timeMs % periodMs) / periodMs;
   if (mode === "continuous") return amplitude * phase;
   if (mode === "linear")
     return amplitude * (phase < 0.5 ? 4 * phase - 1 : 3 - 4 * phase);
-  return amplitude * Math.sin(phase * Math.PI * 2);
+  // Installed Path/ObjectGrooveBastard quantize through BrDegreeToAngle
+  // before the harmonic sine, rather than evaluating a smooth JS phase.
+  return amplitude * Math.sin(nativeGrooveRadians(phase * 360));
+}
+
+function nativeGrooveRadians(degrees: number): number {
+  return (Math.trunc(degrees * (65536 / 360)) & 0xffff) * (Math.PI / 32768);
+}
+
+export interface WorldGrooveEvaluationOptions {
+  actionReplay?: boolean;
+  replayPaused?: boolean;
+  /** Native PointOutOfSight also considers rearview/extra-render cameras and
+   * nature-dependent range. The owner supplies those live camera tests. In
+   * its absence the compatibility evaluator deliberately remains uncullled. */
+  isVisible?: (actor: THREE.Object3D, definition: WorldGroove) => boolean;
+}
+
+export type WorldGrooveInterrupt = 0 | 1 | 2;
+
+export interface WorldGrooveBinding {
+  definition: WorldGroove;
+  actor: THREE.Object3D;
+  sourceParent: THREE.Object3D | null;
+  sourceRoot: THREE.Object3D;
+  sourceParentWorld: THREE.Matrix4;
+  basePosition: THREE.Vector3;
+  baseQuaternion: THREE.Quaternion;
+  baseScale: THREE.Vector3;
+  objectPosition: THREE.Vector3;
+  currentAngle: number;
+  pathInterrupt: WorldGrooveInterrupt;
+  pathResumption: number;
+  objectInterrupt: WorldGrooveInterrupt;
+  objectResumption: number;
+  doneThisFrame: boolean;
+  blockFlags: number;
 }
 
 /** Applies authored world actor poses at simulation timestamps. Actors are
@@ -177,15 +214,8 @@ function wave(
 export class WorldGrooveRuntime {
   readonly actors = new Set<THREE.Object3D>();
   readonly diagnostics: WorldGrooveDiagnostic[];
-  readonly grooves: Array<{
-    definition: WorldGroove;
-    actor: THREE.Object3D;
-    sourceParent: THREE.Object3D | null;
-    sourceRoot: THREE.Object3D;
-    sourceParentWorld: THREE.Matrix4;
-    basePosition: THREE.Vector3;
-    baseQuaternion: THREE.Quaternion;
-  }> = [];
+  readonly grooves: WorldGrooveBinding[] = [];
+  private grooveTimes: [number, number] = [0, 0];
   constructor(root: THREE.Object3D, text: string) {
     const parsed = parseWorldGrooves(text);
     this.diagnostics = parsed.diagnostics;
@@ -216,78 +246,165 @@ export class WorldGrooveRuntime {
           sourceParent?.matrixWorld.clone() ?? new THREE.Matrix4(),
         basePosition: actor.position.clone(),
         baseQuaternion: actor.quaternion.clone(),
+        baseScale: actor.scale.clone(),
+        objectPosition: actor.position.clone(),
+        currentAngle: 0,
+        pathInterrupt: 0,
+        pathResumption: 0,
+        objectInterrupt: 0,
+        objectResumption: 0,
+        doneThisFrame: false,
+        blockFlags: 0,
       });
     }
   }
-  update(nowMs: number): void {
+  get previousTimes(): readonly [number, number] {
+    return [...this.grooveTimes];
+  }
+  beginFrame(): void {
+    for (const entry of this.grooves) entry.doneThisFrame = false;
+  }
+  finishFrame(nowMs: number, options: WorldGrooveEvaluationOptions = {}): void {
+    if (!Number.isFinite(nowMs)) return;
+    const time = nowMs >>> 0;
+    this.grooveTimes = [time, this.grooveTimes[0]];
+    for (const entry of this.grooves)
+      if (!entry.doneThisFrame) this.evaluate(entry, time, false, options);
+  }
+  /** Installed 0x47b040 selects only the first exact actor match, requires
+   * both statuses clear, and samples history[1]. rec2's all-actor/array-index
+   * reconstruction is incorrect for the installed HW executable. */
+  stopActor(
+    actor: THREE.Object3D,
+    options: WorldGrooveEvaluationOptions = {},
+  ): boolean {
+    const entry = this.grooves.find((g) => g.actor === actor);
+    if (!entry || entry.pathInterrupt || entry.objectInterrupt) return false;
+    this.evaluate(entry, this.grooveTimes[1], true, options);
+    return true;
+  }
+  disableActor(actor: THREE.Object3D, bits = 3): void {
+    const entry = this.grooves.find((g) => g.actor === actor);
+    if (entry) entry.blockFlags |= bits;
+  }
+  enableActor(actor: THREE.Object3D, bits = 3): void {
+    const entry = this.grooves.find((g) => g.actor === actor);
+    if (entry) entry.blockFlags &= ~bits;
+  }
+  /** Compatibility entry point: immediate poses, without owning frame history.
+   * Native frame owners use beginFrame/finishFrame instead. */
+  update(nowMs: number, options: WorldGrooveEvaluationOptions = {}): void {
     if (!Number.isFinite(nowMs)) return;
     for (const entry of this.grooves) {
-      const { definition: g, actor } = entry;
-      actor.position.copy(entry.basePosition);
-      if (g.path) {
-        actor.position.copy(
-          g.path.centre.lengthSq() === 0 ? entry.basePosition : g.path.centre,
-        );
-        actor.position.add(
-          new THREE.Vector3(
-            wave(g.path.mode, g.path.periodMs, nowMs, g.path.delta.x),
-            wave(g.path.mode, g.path.periodMs, nowMs, g.path.delta.y),
-            wave(g.path.mode, g.path.periodMs, nowMs, g.path.delta.z),
-          ),
-        );
-      }
-      actor.quaternion.copy(entry.baseQuaternion);
-      if (g.object) {
-        const radians = THREE.MathUtils.degToRad(
-          wave(g.object.mode, g.object.periodMs, nowMs, g.object.maxAngle),
-        );
-        const axis = new THREE.Vector3(
-          Number(g.object.axis === "x"),
-          Number(g.object.axis === "y"),
-          Number(g.object.axis === "z"),
-        );
-        const pivot = g.object.centre;
-        const q = new THREE.Quaternion().setFromAxisAngle(axis, radians);
-        // GrooveThisDelic resets the source actor matrix to identity before
-        // applying ObjectGrooveBastard's post-rotation.
-        actor.quaternion.copy(q);
-        actor.position.sub(pivot).applyQuaternion(q).add(pivot);
-      }
-      // GROOVE values are authored in the actor's source-parent coordinates.
-      // batchStaticWorld may reparent retained actors to an identity root, so
-      // convert through the live source-parent and current-parent world poses.
-      const sourceParent = entry.sourceParent;
-      if (
-        sourceParent &&
-        (sourceParent === entry.sourceRoot || sourceParent.parent)
-      )
-        sourceParent.updateWorldMatrix(true, false);
-      const sourceWorld =
-        sourceParent &&
-        (sourceParent === entry.sourceRoot || sourceParent.parent)
-          ? sourceParent.matrixWorld
-          : entry.sourceParentWorld;
-      const worldPosition = actor.position.clone().applyMatrix4(sourceWorld);
-      const sourceRotation = new THREE.Quaternion(),
-        sourceScale = new THREE.Vector3();
-      sourceWorld.decompose(new THREE.Vector3(), sourceRotation, sourceScale);
-      const worldRotation = sourceRotation.multiply(actor.quaternion);
-      if (actor.parent) {
-        actor.parent.updateWorldMatrix(true, false);
-        const parentInverse = actor.parent.matrixWorld.clone().invert();
-        actor.position.copy(worldPosition.applyMatrix4(parentInverse));
-        const parentRotation = new THREE.Quaternion();
-        actor.parent.matrixWorld.decompose(
-          new THREE.Vector3(),
-          parentRotation,
-          new THREE.Vector3(),
-        );
-        actor.quaternion.copy(parentRotation.invert().multiply(worldRotation));
-      } else {
-        actor.position.copy(worldPosition);
-        actor.quaternion.copy(worldRotation);
-      }
-      actor.updateMatrix();
+      this.evaluate(entry, nowMs >>> 0, false, options);
     }
+  }
+  private sourceWorld(entry: WorldGrooveBinding): THREE.Matrix4 {
+    const parent = entry.sourceParent;
+    if (parent && (parent === entry.sourceRoot || parent.parent)) {
+      parent.updateWorldMatrix(true, false);
+      return parent.matrixWorld;
+    }
+    return entry.sourceParentWorld;
+  }
+  private evaluate(
+    entry: WorldGrooveBinding,
+    nowMs: number,
+    interrupt: boolean,
+    options: WorldGrooveEvaluationOptions,
+  ): void {
+    const { definition: g, actor } = entry;
+    // 0x478c07 precedes the visibility return: even culled stop callbacks
+    // suppress the ordinary groove pass for this frame.
+    entry.doneThisFrame = true;
+    if (options.isVisible && !options.isVisible(actor, g)) return;
+    actor.updateWorldMatrix(true, false);
+    const sourceWorld = this.sourceWorld(entry);
+    const sourcePose = sourceWorld.clone().invert().multiply(actor.matrixWorld);
+    const position = new THREE.Vector3(),
+      rotation = new THREE.Quaternion();
+    sourcePose.decompose(position, rotation, new THREE.Vector3());
+    const paused = options.actionReplay && options.replayPaused;
+    if (g.path && !(entry.blockFlags & 1) && !paused) {
+      const centre =
+        g.path.centre.lengthSq() === 0 ? entry.basePosition : g.path.centre;
+      // Native straight paths share ONE status/threshold across X,Y,Z. Each
+      // accepted axis copies the whole centre before writing that coordinate.
+      for (const axis of ["x", "y", "z"] as const) {
+        if (g.path.delta[axis] === 0) continue;
+        const value =
+          wave(g.path.mode, g.path.periodMs, nowMs, g.path.delta[axis]) +
+          centre[axis];
+        if (interrupt) {
+          entry.pathResumption = Math.fround(value);
+          entry.pathInterrupt = value >= position[axis] ? 2 : 1;
+        } else if (entry.pathInterrupt) {
+          const resumes =
+            entry.pathInterrupt === 1
+              ? value < entry.pathResumption
+              : value > entry.pathResumption;
+          if (!resumes) continue;
+          entry.pathInterrupt = 0;
+        }
+        position.copy(centre);
+        position[axis] = Math.fround(value);
+      }
+      entry.objectPosition.copy(position);
+    }
+    if (g.object && !(entry.blockFlags & 2) && !paused) {
+      const value = wave(
+        g.object.mode,
+        g.object.periodMs,
+        nowMs,
+        g.object.maxAngle,
+      );
+      let apply = true;
+      if (g.object.type === "rock") {
+        if (interrupt) {
+          entry.objectResumption = Math.fround(value);
+          entry.objectInterrupt = value >= entry.currentAngle ? 2 : 1;
+        } else if (entry.objectInterrupt) {
+          const resumes =
+            entry.objectInterrupt === 1
+              ? value < entry.objectResumption
+              : value > entry.objectResumption;
+          apply = resumes && !options.actionReplay;
+          if (apply) entry.objectInterrupt = 0;
+        }
+        if (apply) entry.currentAngle = Math.fround(value);
+      }
+      const radians = nativeGrooveRadians(
+        g.object.type === "rock" ? entry.currentAngle : value,
+      );
+      const axis = new THREE.Vector3(
+        Number(g.object.axis === "x"),
+        Number(g.object.axis === "y"),
+        Number(g.object.axis === "z"),
+      );
+      const pivot = g.object.centre;
+      const q = new THREE.Quaternion().setFromAxisAngle(axis, radians);
+      // GrooveThisDelic resets the source actor matrix to identity before
+      // applying ObjectGrooveBastard's post-rotation.
+      rotation.copy(q);
+      position
+        .copy(entry.objectPosition)
+        .add(pivot)
+        .sub(pivot.clone().applyQuaternion(q));
+    }
+    // GROOVE values are authored in the actor's source-parent coordinates.
+    // batchStaticWorld may reparent retained actors to an identity root, so
+    // convert through the live source-parent and current-parent world poses.
+    const worldPose = sourceWorld
+      .clone()
+      .multiply(
+        new THREE.Matrix4().compose(position, rotation, entry.baseScale),
+      );
+    if (actor.parent) {
+      actor.parent.updateWorldMatrix(true, false);
+      const parentInverse = actor.parent.matrixWorld.clone().invert();
+      worldPose.premultiply(parentInverse);
+    }
+    worldPose.decompose(actor.position, actor.quaternion, actor.scale);
+    actor.updateMatrix();
   }
 }

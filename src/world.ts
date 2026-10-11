@@ -14,6 +14,7 @@ export interface Surface {
   modifier: SurfaceModifier;
   twoSided: boolean;
   materialFlags: number;
+  pixelmapType?: number;
   faceFlags: number;
   owner?: RigidBody;
   actor?: THREE.Mesh;
@@ -133,6 +134,8 @@ export class WorldCollision {
           materialFlags:
             material?.userData.c2Flags ??
             (material?.side === THREE.DoubleSide ? 4096 : 0),
+          pixelmapType: (material as THREE.MeshLambertMaterial | undefined)?.map
+            ?.userData.c2PixelmapType,
           twoSided:
             !!((material?.userData.c2Flags ?? 0) & 0x1800) ||
             material?.side === THREE.DoubleSide,

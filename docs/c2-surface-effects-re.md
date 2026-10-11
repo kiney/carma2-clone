@@ -2,114 +2,89 @@
 
 ## Executive Summary
 
-Original track material modifiers are parsed into wheel friction, sound,
-sparkiness, smoke-type and skid-material fields. The browser currently uses
-tyre friction, but has no skid-mark, continuous-smoke or spark consumer. The
-installed HW binary confirms the skid-mark lifecycle and the force-driven
-per-wheel producer, which now emits tested requests in the browser motion
-pipeline. Persistent mark/smoke rendering and contact filtering remain open. Smoke production is reconstructed from rec2, while its
-installed allocator is not mapped. Sparkiness has no located rec2 consumer and
-remains open.
+Original track material modifiers drive tyre friction, dust/smoke and persistent
+tyre marks. Installed instructions establish the per-wheel force producer,
+contact filtering, geometry and 100-section mark pool. Original skid materials
+retain their fractional PIX transparency. The smoke allocator and renderer are
+covered in [smoke evidence](c2-smoke-columns-re.md). The world-contact spark
+allocator/renderer is reconstructed in [spark evidence](c2-sparks-re.md);
+world/car collision dispatch and the shared car/car allocator are integrated.
+Parsed sparkiness alone does not authorize an effect.
 
-## Data and current implementation
+## Data and evidence
 
-`src/physics/surfaces.ts` parses the nine numeric values and skid-material
-name from each material-modifier record. The values are wall friction, tyre
-friction, downforce, bumpiness, tyre sound, crash sound, scrape sound,
-sparkiness and smoke type. `surfaceIndex` maps the first material identifier
-character relative to `'/'`. Wheel ray hits retain their actual `Surface`, and
-`src/physics/motion.ts` applies the surface tyre-friction multiplier in the
-wheel-force calculation. No browser module currently reads `sparkiness`,
-`smokeType` or `skidMaterial` after parsing.
+`src/physics/surfaces.ts` parses wall friction, tyre friction, downforce,
+bumpiness, tyre sound, crash sound, scrape sound, sparkiness, smoke type and
+skid material. The first material character relative to '/' selects a modifier.
+Wheel hits retain the actual face; volume overrides select force/material
+parameters without replacing that physical face.
 
-The following installed-binary observations use HW SHA-256
+Installed HW SHA-256 is
 `698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c`.
-Addresses are absolute VAs for that installation.
+Addresses below are absolute VAs. rec2 supplies symbol and structure maps;
+installed instructions take precedence. Implementation is independent.
 
 ## Skid marks
 
-Installed HW `SkidMark` is at `0x4ea200`. The frame routine `0x4168e0`
-clears `car+0x159c` (`new_skidding`) and calls `SkidMark(car,wheel)` for each
-of the four wheels at `0x41702c–0x41703x`. WheelForces at `0x418870` also calls
-the helper `0x41bd60` at nine call sites. The helper sets the corresponding
-bit in `car+0x159c`; its caller supplies the per-wheel index and wheel-data
-pointer. This separates the transient newly-skidding mask from `wheel_slip`
-(`car+0x11f8`), which the force routine also updates.
+`SkidMark` is at `0x4ea200`, continuation/creation at `0x4e9c90`, and
+`StretchMark` at `0x4ea030`. Force step `0x4168e0` clears `new_skidding`
+(car+0x159c), runs the per-wheel request sites and calls SkidMark for four
+wheels at `0x41702c`. Caller `0x415a36` supplies `0.04`: this runs at each
+**40 ms physics force step**, independently of graphical frame frequency.
 
-`SkidMark` checks `oldd[wheel]` against the appropriate suspension height,
-uses the wheel's material index (`car+0x1274+4*wheel`), and considers the
-wheel's remaining oil (`car+0x16cc+4*wheel`). With no skid material, it clears
-the active old-skid bit. Otherwise, it combines `new_skidding` and
-`old_skidding` (`car+0x15a0`), then advances the mark using stored per-wheel
-positions, normals and section data. A failed continuation clears its active
-state; successful segments consume wheel oil by traveled distance. The
-installed helper calls `0x4e9c90` for mark continuation/creation. Rec2's
-`skidmark.c` gives the reconstructed details: material selection, oil override,
-per-wheel state, minimum segment spacing, surface-normal continuity and a
-bounded mark pool. Treat those geometric thresholds as rec2-reconstructed;
-they have not all been independently confirmed against installed instructions.
+Helper `0x41bd60` rejects missing face data, nested pixelmap type byte `0x12`
+(**RGBA4444**, not depth32), and a 12-character material identifier with '|'
+at offset 5. It sets a wheel bit and stores its position/normal. Metric wheel
+coordinates subtract X offset `odd ? +0.1725 : -0.1725` and suspension
+displacement in Y, divide by `6.9`, transform through the current force-step
+car pose and project onto the actual face plane. Volume overrides choose the
+skid material; eligibility and projection still use the physical face.
 
-### Wheel-force trigger status
+Installed constants establish minimum spacing/width `f32(0.05)`, normal
+continuity `f32(0.997)` and plane tolerance `f32(0.01)`. Sections may extend
+while their **row-zero length** is at most `0.5`, rather than rec2's squared
+length comparison. Tiny sections use scale `(0.001,1,0.001)`, also differing
+from rec2's uniform scale. Direction/material changes create separate sections.
+The 100-section circular pool persists until reuse or track reset, without
+fading. Outer-frame `SkidsPerFrame` restores stored world translations.
 
-Installed `0x41bd60` itself is **not** gated by a generic slip-percentage
-threshold. Its initial filters reject a null wheel-data object, a nested object
-with type byte `0x12`, and a wheel whose material-name string has the special
-12-character form with `'|'` at offset 5. It then sets the wheel bit and
-updates per-wheel mark start/position data. In `0x418870`, one call cluster at
-`0x41a521–0x41a53a` is inside a four-wheel loop and calls the helper when that
-wheel's oil field is nonzero. Other calls at `0x41ad35`, `0x41ad55`,
-`0x41ae4e`, `0x41af15`, `0x41b1ca`, `0x41b1eb`, `0x41b2eb` and `0x41b3b6`
-occur in tyre-force/slip branches. The latter clusters compare intermediates
-against the installed `20`/`60` constants and, in some branches, `0.1`, before
-marking a wheel.
+`SkidMarkSystem` retains four-wheel history for every car. Oil independently
+requests `OILSMEAR.MAT` when suspension permits; wheel oil decreases by the
+accepted sample's travelled distance, including a continuity failure. Production
+no longer consumes that distance a second time in the oil ground adapter.
+The current force-step provider retains exact faces, original modifiers and
+wheel requests rather than reconstructing marks from speed or chassis yaw.
 
-The surrounding wheel-force code updates `wheel_slip` and applies
-`friction_slipping_reduction` while resolving force demand against tyre
-capacity. The operand mapping and Float32/live comparison boundaries are now
-resolved in the force-driven request section below. Axle saturation alone is
-not the per-wheel mark producer. Preserve each wheel's selected road material,
-force request and history, accumulate eligible `new_skidding` across physics
-substeps, then update marks once during the native game-frame lifecycle.
-Speed or chassis yaw alone does not authorize a mark.
+`SkidMaterialLibrary` reads original MAT/PIX through the local asset service.
+Stock SKIDMARK, DESKID and SNOWSKID maximum alpha values are respectively
+238, 119 and 51; treating them as cutout textures loses their appearance.
+Textures are borrowed from the asset cache. A small browser depth offset avoids
+coplanar flicker without changing section coordinates; this is a rendering
+extension. Numerical tests cover state, ring reuse, slope/UV transforms, oil,
+filtering and material ownership; an installation test checks actual pixels.
 
 ## Continuous smoke
 
-Rec2 reconstructs a caller in `car.c:FinishCars`: for each wheel, smoke is
-considered when `oldd[wheel] < susp_height[wheel/2]`, material `smoke_type >= 2`,
-and movement is enabled. It calls `GenerateContinuousSmoke(car,wheel,pTime)`.
-The reconstructed producer accumulates a randomized 200–400 ms per-wheel
-timer, computes the wheel's local velocity including angular velocity, and
-returns below squared speed 25. Above that gate it derives decay/strength and
-selects a dust palette from `gDust_rotate + smoke_type - 2`, wrapping by the
-number of dust tables, before calling `CreatePuffOfSmoke`.
+FinishCars checks suspension displacement, material smoke type and movement
+state. Its wheel-point velocity includes angular motion; original dust palette
+rotation and per-wheel 200–400 ms source timers produce puffs. This is an
+**outer-frame** effect, unlike the 40 ms skid producer. Installed smoke pool,
+source columns, flame textures, puffs and native renderer equations are now
+implemented; see [smoke evidence](c2-smoke-columns-re.md) for exact addresses,
+verified differences from rec2 and remaining limitations.
 
-This is rec2 evidence, not a verified installed gate: rec2's
-`CreatePuffOfSmoke` at its annotated `0x4fb330` is a stub, and installed
-HW addresses must not be inferred from that annotation. The minimum faithful
-browser path is wheel-contact/suspension state plus surface smoke type and
-wheel point velocity, feeding a timed particle emitter with the original
-palette mapping. Particle allocation, decay and renderer parity remain open.
+## Sparks and remaining scope
 
-## Sparks and evidence gaps
-
-Rec2 `world.c` reads `sparkiness`, with default 1, but repository search found
-no gameplay consumer for it. Installed binary correlation with the spark
-producer has not been established. Do not treat `sparkiness` as a multiplier
-on every impact or tyre slip without locating its native caller and threshold.
-Likewise, exact skid branch operands, installed smoke creation/allocation and
-surface-specific spark lifecycle remain unresolved. These are separate gaps;
-the presence of parsed fields does not establish a runtime effect.
-
-## Runtime scope
-
-The present browser has data for a staged implementation: contacts already
-carry material identity and wheel motion has per-wheel support and force
-results. A skid implementation can reuse the verified mark mask lifecycle and
-the original material's skid texture once its force-trigger mapping is
-completed. Smoke should remain an independent timed wheel effect because its
-source gate is contact-height plus surface type and wheel velocity. Spark
-effects should wait for the producer trigger evidence. No visual or gameplay
-parity is claimed by this data-only audit.
+Installed dispatcher `0x41d773–0x41d7d4` selects sparkiness by the contact-face
+material prefix and calls world allocator `0x4f7af0` after native group/type/
+velocity/driver gates. Its mutable point velocity, separately scaled force,
+attached second batch and render-frame pool are documented in
+[spark evidence](c2-sparks-re.md). Car/car allocator `0x4f8020` and shrapnel
+`0x4f8590` use their distinct native paths and share the original spark ring
+and CRT stream; see [car/car sparks](c2-car-sparks-re.md) and
+[shrapnel](c2-shrapnel-re.md). Do not replace those with generic impact
+particles or claim complete source random-stream coverage. Independent smoke
+and tyre-mark consumers do not establish complete effect parity.
 
 ### Resolved force-driven skid requests
 
@@ -123,7 +98,7 @@ spill to Float32 does not replace its live value in the threshold comparison.
 The current-car pointer is verified at0x75914c (gProgram_state base0x7590a0,
 current_car offset0xac), not merely driver8.
 
-In a single-over branch, the initial allocation is f32(R*Cfirst), followed by
+In a single-over branch, the initial allocation is f32(R\*Cfirst), followed by
 live residual=(D−allocation)+D and its Float32 spill. Only if live residual is
 strictly above Csecond and Csecond>double0.1 does it compute
 (storedResidual−Csecond)/Csecond. That ratio also stays live for the threshold.
@@ -142,7 +117,7 @@ capacities,+0x20 stored sum,+0x10 spilled ratio establish these meanings.
 ULP boundary fixtures. WheelForces emits per-wheel MotionDebug.skidRequests;
 VehicleSimulation binds explicit local-current-car identity in the shared
 motion context. Tyre force allocation and velocity integration are unchanged.
-These requests still need native contact/material filtering, accumulation of
-new_skidding across a game frame, oil's independent request, and the persistent
-SkidMark/smoke renderer. DMG-03 therefore remains partial; an axle saturation
-flag or these request diagnostics alone do not complete visible surface effects.
+The production force-step callback now applies native contact/material filtering,
+oil's independent request and persistent section rendering. Smoke has its
+separate native consumer. DMG-03 remains partial while other native spark/shrapnel producers and
+complete source random-consumer chronology are incomplete.

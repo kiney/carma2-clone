@@ -20,6 +20,25 @@ export interface MovingWorldTriangle extends WorldSurfaceOptions {
   b: Vector3;
   c: Vector3;
   owner: MovingWorldBody;
+  /** Face collection precedes native StopGroovidelic. Keep that query's pose
+   * when the live actor/owner subsequently rolls back for another query. */
+  collectedPose?: MovingWorldPose;
+}
+
+export interface MovingWorldPose {
+  position: Vector3;
+  orientation: Quaternion;
+  predictedPosition: Vector3;
+  predictedOrientation: Quaternion;
+}
+
+export function captureMovingWorldPose(body: MovingWorldBody): MovingWorldPose {
+  return {
+    position: body.state.position.clone(),
+    orientation: body.state.orientation.clone(),
+    predictedPosition: body.state.predictedPosition.clone(),
+    predictedOrientation: body.state.predictedOrientation.clone(),
+  };
 }
 
 /** Kinematic rigid pose for a source world actor. The body is an immovable
@@ -118,10 +137,11 @@ export function sweepHullMovingTriangle(
   surface: MovingWorldTriangle,
 ): HullContact | null {
   const owner = surface.owner;
-  const oldPosition = owner.state.position,
-    oldOrientation = owner.state.orientation;
-  const targetPosition = owner.state.predictedPosition ?? oldPosition;
-  const targetOrientation = owner.state.predictedOrientation ?? oldOrientation;
+  const pose = surface.collectedPose ?? owner.state;
+  const oldPosition = pose.position,
+    oldOrientation = pose.orientation;
+  const targetPosition = pose.predictedPosition ?? oldPosition;
+  const targetOrientation = pose.predictedOrientation ?? oldOrientation;
   const oldHull = toLocalHull(
     hull,
     body.state.position,

@@ -126,3 +126,18 @@ Runtime checks use production Chromium through Playwright because Chrome
 DevTools MCP tools are not exposed in this session. Screenshots were inspected
 visually, and console/request/WebGL errors are collected. Software WebGL checks
 do not establish hardware-driver performance coverage (QUA-05).
+
+## Own-shape clearance bound after crush
+
+Installed ShapeRayCast (`0x461810–0x46194c`) clips stored planes, including
+planes whose auxiliary polygon is incomplete after crush. It does not bound
+the ray by the retained vertex radius. The browser guard now derives its
+repeat budget from the first positive outward plane exit, preserving the
+native inside stepping and positive-boundary stop. A ray without a finite
+exit still reports an explicit error. Numerical tests include original
+Buggy structural bending and a synthetic plane/vertex mismatch regression.
+Earlier Chromium crashes intermittently hit the former vertex-radius guard;
+no failing hull snapshot was captured. Three subsequent full crash runs
+passed before this correction, so the intermittent failure's exact cause
+remains unverified. The browser harness now captures the hull and camera
+state if it recurs.

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Box3, Group, Vector3 } from "three";
+import { Box3, Group, Quaternion, Vector3 } from "three";
 import { DamageSystem } from "../src/damage.ts";
 import { parseNonCarMechanics } from "../src/noncars.ts";
 import { createNonCarBody } from "../src/physics/noncar-body.ts";
@@ -88,7 +88,12 @@ function detachedPart(owner, joint = undefined) {
     owner,
     part: 12,
     joint,
-    state: { position: new Vector3() },
+    state: {
+      position: new Vector3(),
+      orientation: new Quaternion(),
+      velocity: new Vector3(),
+      angularVelocity: new Vector3(),
+    },
     actor: new Group(),
     hulls: [],
   };

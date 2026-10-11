@@ -5,6 +5,7 @@ import { SmokeSystem, surfaceSmokePuff } from "../src/smoke.ts";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { parsePix } from "../src/formats.ts";
+import { NativeRandom, sharedNativeRandom } from "../src/native-random.ts";
 
 const v = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const f = Math.fround;
@@ -32,6 +33,82 @@ const puff = (position = v(), extra = {}) => ({
 });
 const close = (actual, expected) =>
   assert.ok(Math.abs(actual - expected) < 1e-6, `${actual} != ${expected}`);
+
+test("split column and puff phases match composed update without duplicate advancement", () => {
+  const combinedRandom = new NativeRandom(901),
+    splitRandom = new NativeRandom(901);
+  const combined = new SmokeSystem(undefined, {
+      random: combinedRandom.random,
+    }),
+    split = new SmokeSystem(undefined, { random: splitRandom.random });
+  for (const smoke of [combined, split]) {
+    smoke.spawnColumn(column(actor(), 280));
+    smoke.spawnPuff(puff(v(), { velocity: v(1, 0, 0), type: 7 }));
+  }
+  for (let frame = 1; frame <= 9; frame++) {
+    combined.update(frame * 40, 40);
+    split.updateColumns(frame * 40, 40);
+    const columnsBeforeRender = split.snapshot().columns;
+    split.updatePuffs(frame * 40, 40);
+    assert.deepEqual(split.snapshot().columns, columnsBeforeRender);
+    assert.deepEqual(split.snapshot(), combined.snapshot());
+    assert.equal(splitRandom.state, combinedRandom.state);
+  }
+  combined.dispose();
+  split.dispose();
+});
+
+test("split phases preserve the production CRT save-sample and reseed sequence", () => {
+  const originalState = sharedNativeRandom.state;
+  const run = (split) => {
+    sharedNativeRandom.seed(803);
+    const smoke = new SmokeSystem();
+    smoke.spawnColumn(column());
+    smoke.spawnPuff(puff(v(), { type: 7 }));
+    for (let frame = 1; frame <= 7; frame++) {
+      if (split) {
+        smoke.updateColumns(frame * 40, 40);
+        smoke.updatePuffs(frame * 40, 40);
+      } else smoke.update(frame * 40, 40);
+    }
+    const result = {
+      snapshot: smoke.snapshot(),
+      state: sharedNativeRandom.state,
+    };
+    smoke.dispose();
+    return result;
+  };
+  try {
+    assert.deepEqual(run(true), run(false));
+  } finally {
+    sharedNativeRandom.seed(originalState);
+  }
+});
+
+test("final-flush arrivals advance puffs but leave new columns until the next producer phase", () => {
+  const smoke = new SmokeSystem(undefined, { random: () => 0 });
+  smoke.updateColumns(40, 40);
+  // Models a source emitted by the final smash flush, between producer/render.
+  const id = smoke.spawnColumn(column(actor(), 120));
+  const puffId = smoke.spawnPuff(
+    puff(v(), { velocity: v(2, 0, 0), type: 7, timeSyncMs: 1 }),
+  );
+  const newPuff = smoke.snapshot().puffs[puffId];
+  smoke.updatePuffs(40, 40);
+  let snapshot = smoke.snapshot();
+  assert.equal(snapshot.columns[id].remaining, 120);
+  assert.equal(snapshot.columns[id].time, 0);
+  const firstPosition = f(newPuff.position.x + newPuff.velocity.x * f(0.001));
+  close(snapshot.puffs[puffId].position.x, firstPosition);
+  assert.equal(snapshot.puffs[puffId].timeSync, 0);
+  close(snapshot.puffs[puffId].strength, f(newPuff.strength - 40 * f(0.001)));
+  smoke.updateColumns(80, 40);
+  snapshot = smoke.snapshot();
+  assert.equal(snapshot.columns[id].remaining, 80);
+  assert.equal(snapshot.columns[id].time, 40);
+  close(snapshot.puffs[puffId].position.x, firstPosition);
+  smoke.dispose();
+});
 
 test("native 10-column and 25-puff cursors overwrite active records and survive clear", () => {
   const smoke = new SmokeSystem(undefined, { random: () => 0 });

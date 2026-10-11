@@ -297,6 +297,326 @@ try {
       };
     }, scenario);
 
+  const enumerateCarrierTargets = () =>
+    page.evaluate(() => {
+      const c = window.carma;
+      const destruction = c.simulation.destruction;
+      const variable = c.raceDefinition?.smashVariable;
+      if (!destruction || !Number.isInteger(variable))
+        throw new Error("Stock Carrier mission definition is unavailable");
+      const seen = new Set();
+      const candidates = [];
+      for (const [specIndex, spec] of destruction.specs.entries()) {
+        if (!["remove", "replacemodel"].includes(spec.mode)) continue;
+        if (spec.trigger.name?.toLowerCase() === "&core.act") continue;
+        const data = [
+          ...(spec.connotations ? [spec.connotations] : []),
+          ...spec.levels.map((level) => level.connotations),
+        ].find((connotation) =>
+          connotation.variableChanges.some(
+            ([index, delta]) => index === variable && delta === 1,
+          ),
+        );
+        if (!data) continue;
+        for (const actor of destruction.retainActors) {
+          if (
+            !actor.visible ||
+            !actor.userData.worldSmashSpecIndices?.includes(specIndex) ||
+            seen.has(actor.uuid)
+          )
+            continue;
+          seen.add(actor.uuid);
+          candidates.push({
+            actorUuid: actor.uuid,
+            actor: actor.name,
+            trigger: spec.trigger.name,
+            mode: spec.mode,
+            specIndex,
+            sideEffects: data.sideEffects.length,
+          });
+        }
+      }
+      return {
+        mission: c.missionVariables.get(variable),
+        variable,
+        target: c.raceDefinition.smashTarget,
+        candidates,
+      };
+    });
+
+  const contactCarrierTarget = (candidate) =>
+    page.evaluate((candidate) => {
+      const c = window.carma;
+      const destruction = c.simulation.destruction;
+      const actor = destruction.retainActors.find(
+        (entry) => entry.uuid === candidate.actorUuid,
+      );
+      if (!actor?.visible)
+        return { candidate, changed: false, skipped: "source actor hidden" };
+      const point = actor.getWorldPosition(new actor.position.constructor());
+      const player = c.player;
+      player.state.position.copy(point).add(new point.constructor(1, 0, 0));
+      player.state.velocity.set(0, 0, 0);
+      c.simulation.sync(player);
+      const variable = c.raceDefinition.smashVariable;
+      const before = c.missionVariables.get(variable);
+      const pendingBefore = c.simulation.delayedSmashes.count;
+      const result = destruction.handleContact({
+        actor,
+        normalImpulse: 1001,
+        effectMagnitude: 1001,
+        kind: "body",
+        bodyActor: player.group,
+        impacteeVelocity: player.state.velocity,
+        impacteeTransform: player.group.matrixWorld,
+        point: point.clone(),
+        timeMs: c.simulation.elapsed * 1000,
+      });
+      return {
+        candidate,
+        point: point.toArray(),
+        changed: result.changed,
+        changeCount: result.changes.length,
+        missionBefore: before,
+        missionAfter: c.missionVariables.get(variable),
+        pendingBefore,
+        pendingAfter: c.simulation.delayedSmashes.count,
+      };
+    }, candidate);
+
+  const armCarrierCapture = () =>
+    page.evaluate(() => {
+      const c = window.carma;
+      const runtime = c.worldFollowups;
+      const destruction = c.simulation.destruction;
+      const variable = c.raceDefinition.smashVariable;
+      const capture = { dueRecords: [], followupCalls: [] };
+      runtime.options.testCapture = capture;
+      const originalDue = runtime.options.onDue;
+      runtime.options.onDue = (context) => {
+        const record = {
+          route: context.route,
+          selector: context.selector,
+          callerFlag: context.callerFlag,
+          dueMs: context.dueMs,
+          target: context.face.actor.readIdentifier(),
+          targetSpec: context.targetSpec
+            ? {
+                trigger: context.targetSpec.trigger,
+                mode: context.targetSpec.mode,
+              }
+            : null,
+          missionBefore: c.missionVariables.get(variable),
+          geometryBefore: destruction.geometryRevision,
+        };
+        capture.dueRecords.push(record);
+        originalDue(context);
+        record.missionAfter = c.missionVariables.get(variable);
+        record.geometryAfter = destruction.geometryRevision;
+      };
+      const originalFollowup = destruction.handleFollowup.bind(destruction);
+      destruction.handleFollowup = (contact, targetSpec, numbered) => {
+        const before = c.missionVariables.get(variable);
+        const result = originalFollowup(contact, targetSpec, numbered);
+        capture.followupCalls.push({
+          actor: contact.actor?.name ?? null,
+          targetSpec: targetSpec
+            ? { trigger: targetSpec.trigger, mode: targetSpec.mode }
+            : null,
+          changed: result.changed,
+          missionBefore: before,
+          missionAfter: c.missionVariables.get(variable),
+          geometryRevision: destruction.geometryRevision,
+        });
+        return result;
+      };
+    });
+
+  const advanceUntilDrained = async (timeoutMs = 15000) => {
+    await page.evaluate(() => {
+      window.carma.debugMode.timerFrozen = true;
+      window.carma.paused = false;
+    });
+    try {
+      await page.waitForFunction(
+        () => window.carma.simulation.delayedSmashes.count === 0,
+        null,
+        { timeout: timeoutMs },
+      );
+    } finally {
+      await page.evaluate(() => {
+        window.carma.paused = true;
+        window.carma.debugMode.timerFrozen = false;
+      });
+    }
+  };
+
+  const runCarrierCompletionChain = async () => {
+    const scenario = {
+      root: "data/",
+      pattern: "Carrier_mission",
+      trigger: "&CORE.ACT",
+    };
+    const loaded = await loadRace(scenario);
+    assert.equal(loaded.name, "MISSION: HARD CORE");
+    const inventory = await enumerateCarrierTargets();
+    assert.equal(inventory.variable, 1);
+    assert.equal(inventory.target, 19);
+    assert.equal(inventory.mission, 0);
+    assert.ok(
+      inventory.candidates.length >= 17,
+      `Stock Carrier has ${inventory.candidates.length} visible unique authored non-core objective sources`,
+    );
+    await armCarrierCapture();
+    const sourceContacts = [];
+    for (const candidate of inventory.candidates) {
+      const state = await page.evaluate(() => {
+        const c = window.carma;
+        return {
+          mission: c.missionVariables.get(c.raceDefinition.smashVariable),
+          delayed: c.simulation.delayedSmashes.count,
+        };
+      });
+      if (state.mission >= 17) break;
+      const result = await contactCarrierTarget(candidate);
+      sourceContacts.push(result);
+      if (result.pendingAfter >= 16) await advanceUntilDrained();
+    }
+    let state = await page.evaluate(() => {
+      const c = window.carma;
+      return {
+        mission: c.missionVariables.get(c.raceDefinition.smashVariable),
+        delayed: c.simulation.delayedSmashes.count,
+        status: c.race.status,
+      };
+    });
+    if (state.delayed > 0) await advanceUntilDrained();
+    state = await page.evaluate(() => {
+      const c = window.carma;
+      return {
+        mission: c.missionVariables.get(c.raceDefinition.smashVariable),
+        delayed: c.simulation.delayedSmashes.count,
+        status: c.race.status,
+      };
+    });
+    assert.equal(
+      state.mission,
+      17,
+      `authored non-core source contacts should prepare 17/19, without seeding: ${JSON.stringify({ state, sourceContacts })}`,
+    );
+    assert.equal(state.status, "racing");
+
+    const core = await page.evaluate(() => {
+      const c = window.carma;
+      const destruction = c.simulation.destruction;
+      const specIndex = destruction.specs.findIndex(
+        (spec) => spec.trigger.name?.toLowerCase() === "&core.act",
+      );
+      const actor = destruction.retainActors.find(
+        (entry) =>
+          entry.visible &&
+          entry.userData.worldSmashSpecIndices?.includes(specIndex),
+      );
+      if (!actor) throw new Error("Stock Carrier core actor is not live");
+      const point = actor.getWorldPosition(new actor.position.constructor());
+      const player = c.player;
+      player.state.position.copy(point).add(new point.constructor(1, 0, 0));
+      player.state.velocity.set(0, 0, 0);
+      c.simulation.sync(player);
+      const before = c.missionVariables.get(c.raceDefinition.smashVariable);
+      const pendingBefore = c.simulation.delayedSmashes.count;
+      const result = destruction.handleContact({
+        actor,
+        normalImpulse: 1001,
+        effectMagnitude: 1001,
+        kind: "body",
+        bodyActor: player.group,
+        impacteeVelocity: player.state.velocity,
+        impacteeTransform: player.group.matrixWorld,
+        point: point.clone(),
+        timeMs: c.simulation.elapsed * 1000,
+      });
+      return {
+        actor: actor.name,
+        point: point.toArray(),
+        changed: result.changed,
+        missionBefore: before,
+        missionAfter: c.missionVariables.get(c.raceDefinition.smashVariable),
+        pendingBefore,
+        pendingAfter: c.simulation.delayedSmashes.count,
+        status: c.race.status,
+      };
+    });
+    assert.equal(core.actor, "&coR0122.ACT");
+    assert.equal(core.changed, true);
+    assert.equal(core.missionBefore, 17);
+    assert.equal(core.missionAfter, 18);
+    if (core.pendingAfter <= core.pendingBefore) {
+      const attempt = {
+        loaded,
+        inventory,
+        sourceContacts,
+        stateBeforeCore: state,
+        core,
+        limitation:
+          "After all 17 authored pre-core actor instances are contacted, the core reaches 18 but its delayed *.DAT cuboid has no eligible live target to enqueue.",
+      };
+      await writeFile(
+        "artifacts/browser-smash-followup-stock-carrier-chain-attempt.json",
+        JSON.stringify(attempt, null, 2),
+      );
+      return {
+        outcome: "verified-incomplete",
+        ...attempt,
+      };
+    }
+    await advanceUntilDrained(20000);
+    const result = await page.evaluate(() => {
+      const c = window.carma;
+      return {
+        name: c.raceDefinition?.name,
+        target: c.raceDefinition?.smashTarget,
+        mission: c.missionVariables.get(c.raceDefinition.smashVariable),
+        status: c.race.status,
+        delayed: c.simulation.delayedSmashes.count,
+        dueRecords: c.worldFollowups.options.testCapture.dueRecords,
+        followupCalls: c.worldFollowups.options.testCapture.followupCalls,
+      };
+    });
+    assert.equal(result.name, "MISSION: HARD CORE");
+    assert.equal(result.target, 19);
+    assert.equal(result.mission, 19);
+    assert.equal(result.status, "completed");
+    assert.equal(result.delayed, 0);
+    assert.ok(
+      result.dueRecords.some(
+        (entry) =>
+          entry.selector === 1 &&
+          entry.callerFlag === 0 &&
+          entry.targetSpec?.trigger.name?.toLowerCase() === "&wigglybit.act",
+      ),
+      "core's ordinary delayed world follow-up resolves WIGGLYBIT",
+    );
+    assert.ok(
+      result.followupCalls.some(
+        (call) =>
+          call.changed && call.missionBefore === 18 && call.missionAfter === 19,
+      ),
+      "normal handleFollowup completes the authored 18→19 mission chain",
+    );
+    await page.screenshot({
+      path: "artifacts/browser-smash-followup-stock-carrier-completed.png",
+    });
+    return {
+      outcome: "completed",
+      loaded,
+      inventory,
+      sourceContacts,
+      core,
+      result,
+    };
+  };
+
   const waitForDue = async (maximumWaitMs, contactRun) => {
     await page.evaluate(() => {
       const c = window.carma;
@@ -339,10 +659,26 @@ try {
 
   const scenarios = [
     { root: "data/", pattern: "Carrier_mission", trigger: "&CORE.ACT" },
-    { root: "adv_data/", pattern: "Carrier_mission", trigger: "&CORE.ACT" },
     { root: "data/", pattern: "desert_mission", trigger: "&92" },
-    { root: "adv_data/", pattern: "desert_mission", trigger: "&92" },
     { root: "data/", pattern: "Silo_mission", trigger: "&20" },
+    {
+      root: "adv_data/",
+      pattern: "SILO_MISSION",
+      trigger: "&20",
+      noMissionExpected: false,
+    },
+    {
+      root: "adv_data/",
+      pattern: "Carrier_mission",
+      trigger: "&CORE.ACT",
+      noMissionExpected: true,
+    },
+    {
+      root: "adv_data/",
+      pattern: "desert_mission",
+      trigger: "&92",
+      noMissionExpected: true,
+    },
   ];
   const runs = [];
   for (const scenario of scenarios) {
@@ -351,6 +687,13 @@ try {
       loaded.path.toLowerCase().startsWith(scenario.root.toLowerCase()),
     );
     const run = await runAuthoredContact(scenario);
+    if (scenario.noMissionExpected) {
+      assert.equal(run.race.name, null);
+      assert.ok(run.race.variable == null);
+    } else if (scenario.root === "adv_data/") {
+      assert.ok(run.race.name, "Advanced Silo is a registered race mission");
+      assert.ok(Number.isInteger(run.race.variable));
+    }
     assert.ok(run.source.connotation.sideEffects.length > 0);
     assert.equal(run.source.contact.changed, true);
     assert.equal(
@@ -454,6 +797,8 @@ try {
     });
   }
 
+  const carrierCompletion = await runCarrierCompletionChain();
+
   const gl = await page.evaluate(() => {
     const context = document.querySelector("#view").getContext("webgl2");
     if (!context) throw new Error("WebGL2 context unavailable");
@@ -462,7 +807,7 @@ try {
   assert.equal(gl, 0);
   assert.deepEqual(errors, [], "Chromium has no page or console errors");
   assert.deepEqual(failedRequests, [], "all requested local assets load");
-  const report = { runs, errors, failedRequests, gl };
+  const report = { runs, carrierCompletion, errors, failedRequests, gl };
   await writeFile(
     "artifacts/browser-smash-followup.json",
     JSON.stringify(report, null, 2),

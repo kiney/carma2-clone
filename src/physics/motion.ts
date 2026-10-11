@@ -156,6 +156,8 @@ export interface MotionParameters {
   random?: () => number;
 }
 export interface MotionDebug {
+  /** Exact selected wheel faces at this force step; normals/points are world-space. */
+  wheelContacts?: readonly (MotionGroundHit | null)[];
   /** Original material_index[] friction and field_0x195c recovery gates. */
   wheelRoadFrictions: readonly number[];
   /** Retained native wheel material slots for FinishCars smoke/skid consumers. */
@@ -164,6 +166,9 @@ export interface MotionDebug {
   wheelSpringLoads: [number, number, number, number];
   wheelCapacities: [number, number, number, number];
   wheelTyreForces: [number, number, number, number];
+  /** Exact rear/front demand passed to native tyre allocation and mark gates. */
+  axleDemands: [number, number];
+  skidCurrentCar: boolean;
   /** Force-driven mark requests before native contact/material filtering; not traction flags. */
   skidRequests: [boolean, boolean, boolean, boolean];
   axleForces: [Vector3, Vector3];
@@ -521,6 +526,7 @@ export function applyVehicleForces(
   const loads: MotionDebug["wheelSpringLoads"] = [0, 0, 0, 0];
   const caps: MotionDebug["wheelCapacities"] = [0, 0, 0, 0];
   const actual: MotionDebug["wheelTyreForces"] = [0, 0, 0, 0];
+  const axleDemands: MotionDebug["axleDemands"] = [0, 0];
   const skidRequests: MotionDebug["skidRequests"] = [
     false,
     false,
@@ -915,6 +921,7 @@ export function applyVehicleForces(
       p.slipMultiplier,
       context.currentCar === s,
     );
+    axleDemands[0] = rearDemand;
     skidRequests[0] = rearSkid[0];
     skidRequests[1] = rearSkid[1];
     actual[0] = rearAllocation[0];
@@ -962,6 +969,7 @@ export function applyVehicleForces(
       p.slipMultiplier,
       context.currentCar === s,
     );
+    axleDemands[1] = frontDemand;
     skidRequests[2] = frontSkid[0];
     skidRequests[3] = frontSkid[1];
     actual[2] = frontAllocation[0];
@@ -1084,6 +1092,7 @@ export function applyVehicleForces(
   }
   s.curvature -= steeringDamage;
   return {
+    wheelContacts: hits,
     wheelSpringLoads: loads,
     wheelRoadFrictions: hits.map((hit) => hit?.friction ?? 0),
     wheelSurfaceModifiers: hits.map(
@@ -1092,6 +1101,8 @@ export function applyVehicleForces(
     dynamicWheelSupport: hits.some((hit, i) => wheelGrounded[i] && !!hit?.body),
     wheelCapacities: caps,
     wheelTyreForces: actual,
+    axleDemands,
+    skidCurrentCar: context.currentCar === s,
     skidRequests,
     axleForces: [
       rearDirection.clone().multiplyScalar(actual[0] + actual[1]),
