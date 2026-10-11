@@ -52,6 +52,14 @@ Existing PED-04, ANI-01, RAC-04, RAC-09 and PUP-11 retain asset, animation, rewa
 
 The split produced 99 tasks. After completing the three selected WIP tickets, the board contains 63 in `backlog`, 0 in `next`, 0 in `wip`, and 36 in `done`. The WIP limit remains 3. This completion does not resume or complete a paused broader Goal.
 
+PERF-01 / TASK-100 was subsequently added at priority 1 and taken directly into
+`wip` at the user's request. It owns the runtime performance investigation,
+subsequent validated optimizations and higher visual-visibility headroom. The
+initial [analysis](../docs/performance-investigation.md) is recorded; exact
+changes remain open. The board now has 100 tasks: 63 `backlog`, 0 `next`, 1 `wip`
+and 36 `done`. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
+memory and FPS-diagnostic scopes and user-edited priorities.
+
 ## Priorities and sorting
 
 The original five numeric levels remain visible in each task title (`[P1] PHY-10: …`), label (`priority-1`) and description. Lower numbers mean higher importance. Backlog.md's native three-level priority is an additional coarse grouping:

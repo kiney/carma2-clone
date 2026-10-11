@@ -37,6 +37,8 @@ The engine runs directly in the browser. See [architecture notes](docs/architect
 
 Tasks, evidence and priorities are maintained with [Backlog.md](backlog/README.md). Run `backlog board` for the terminal board or `backlog browser` for the editable local board. Columns are `backlog`, `next`, `wip`, `done`, sorted with priority 1 first. Original issue IDs and numeric priorities 1–5 are preserved; completed tasks remain in `done`. The `wip` column is limited to **3 actively worked-on tickets** by the project workflow; inactive partial implementations belong in `backlog`.
 
+Priority-1 PERF-01 tracks frame-time spikes and visibility headroom. The [performance investigation](docs/performance-investigation.md) records hardware CPU/GPU measurements and short profiling commands; optimization, resolution and distance policies remain open.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:

@@ -1,0 +1,212 @@
+# PERF-01: frame-time investigation
+
+Status: **analysis completed; optimization and exact policy remain open** in
+TASK-100 / PERF-01, priority 1, `wip`. No production engine behavior, resolution,
+simulation distance or collision safeguard was changed during this phase.
+
+## Findings
+
+The first hardware captures establish two independent CPU bottlenecks:
+
+1. The sky and main render each update the **entire scene hierarchy**, including
+   invisible pedestrian actors. In Snow Way Out this costs approximately 16 ms
+   per paused frame before drawing. A paused-only matrix-freezing diagnostic
+   reaches approximately 60 FPS, versus 40 FPS at the same settled car/camera pose.
+   This is evidence for redundant hierarchy work, not a safe production fix.
+2. During the controlled start drive, post-solver body-pair trajectory guarding
+   consumes approximately 64% of sampled physics CPU time. Eager SAT axis
+   construction alone consumes approximately 50% of physics time. Disabling
+   these guards would reintroduce tunneling and interlocked vehicles; retain
+   their decisions while investigating redundant calculations.
+
+In the measured native-resolution image the GPU takes approximately 1 ms for
+both render passes. Reducing pixel count by 74.5% changes paused FPS from 40.2
+to 43.9. Resolution is a real policy gap, but it is not the dominant bottleneck
+in this scene. Native 4K and other scenes have not been ruled out as GPU-bound.
+
+The reported **specific tunnel-exit regression is not yet isolated**. A short
+controlled route attempt around cave nodes 22→11 included rematerialization,
+opponent activation changes and a crash. Its severe CPU stalls are real, but
+the screenshots do not establish a clean tunnel-to-open-area passage. Do not
+use that attempt as evidence for a tunnel-specific cause or a before/after
+optimization result.
+
+## Capture conditions and results
+
+Baseline engine commit: `441358c`. Production bundle, Chromium through Chrome
+DevTools MCP, real `ANGLE (AMD, AMD Radeon Graphics (radeonsi gfx1150 LLVM
+19.1.7), OpenGL 4.6)`. No CPU/network throttling. CSS viewport 1414×987,
+DPR 1.484375, actual buffer 2098×1465 (3.07357 million pixels), 4×MSAA. The host
+advertises 24 logical processors and is concurrently used; short samples have
+scheduling noise and are not universal FPS predictions. Timing wrappers and
+the CPU trace add overhead. Durations below are wall-clock measurements;
+nested method times must not be summed.
+
+Each capture lasts 1.5–4 seconds, serially. Rendering is suppressed in the
+isolated diagnostic tab between captures; simulation is paused. No continuous
+simulation sweep or parallel browser stress jobs were used.
+
+| Original Snow scene / diagnostic                     | Duration | FPS  | Frame p50 / p95 / max  | Relevant CPU cost                                                            |
+| ---------------------------------------------------- | -------- | ---- | ---------------------- | ---------------------------------------------------------------------------- |
+| Start grid, paused, native buffer                    | 2.01s    | 42.2 | 20.4 / 38.2 / 44.8ms   | Scene matrices 16.0 ms/frame; both render calls 20.6 ms/frame                |
+| Settled post-drive pose, paused, native buffer       | 2.04s    | 40.2 | 21.6 / 44.6 / 49.4ms   | Scene matrices 16.5 ms/frame; render 21.3 ms/frame                           |
+| Same settled pose, ratio 0.75 (1060×740)             | 2.03s    | 43.9 | 20.0 / 39.0 / 40.9ms   | Scene matrices 15.8 ms/frame; render 20.0 ms/frame                           |
+| Same settled pose, paused matrix-freezing diagnostic | 2.01s    | 59.8 | 16.4 / 32.2 / 36.6ms   | Render 5.7 ms/frame; transforms deliberately held fixed                      |
+| Start grid, actual W input, CPU trace enabled        | 3.52s    | 7.4  | 94.1 / 378.0 / 388.9ms | 68 physics ticks; mean 39.3 ms/tick, max 118.6 ms; updateFrame mean 107.8 ms |
+
+The separate GPU-timer sample at the settled native-buffer pose measured
+mean 1.004 ms, max 1.108 ms across 8 asynchronously completed, non-disjoint queries
+spanning both passes. It injects no `gl.finish` or synchronous GPU wait.
+GPU time is not included in the CPU method totals. Main-pass draw counts at
+that pose are 303 calls / 14257 triangles; the probe totals include the additional
+sky draw (304 calls / 14385 triangles). `renderer.info.autoReset` resets per render,
+so the current application HUD diagnostics alone describe only the main pass.
+
+The controlled start drive advanced 3080 ms of simulation and skipped 360 ms of
+physics time through the existing five-step resynchronization budget. Long
+CPU frames can therefore produce both low FPS and visibly discontinuous motion.
+This does not show that interpolation itself is wrong.
+
+## Ranked bottlenecks and source evidence
+
+### 1. Repeated hierarchy traversal — verified
+
+`src/main.ts` renders the same scene twice. Three 0.180.0
+`WebGLRenderer.render` calls `scene.updateMatrixWorld()` when the scene's
+`matrixWorldAutoUpdate` is enabled. `Object3D.updateMatrixWorld` recomposes
+auto-updated local matrices and visits all descendants regardless of their
+visibility. Visibility pruning happens later in `projectObject`.
+
+The measured Snow scene contains 5804 meshes, of which 738 are visible at the start.
+A later census contains 15262 scene nodes; the pedestrian group owns 13618 nodes
+and 4908 meshes for 487 pedestrians. Only 22 pedestrians are active near the start.
+Hidden population thus accounts for about 89% of that node census. Model clones
+remain attached to the scene while inactive. Static track batching already
+exists; the issue is not simply one draw per original track mesh.
+
+Candidates, not yet selected: update world matrices once after all visual poses
+settle; freeze genuinely static local transforms; manage inactive visual
+subtrees or shared rendering without altering pedestrian movement/activation.
+Never globally freeze matrices during driving. Check current car/flap/groove,
+smash, billboard, effect, camera and picking transforms before accepting changes.
+
+### 2. SAT work inside the pair commit guard — verified
+
+The CPU trace sampled 2586.75 ms inside `updateFrame`, including:
+
+| Source function                                   | Inclusive sampled CPU | Share of physics |
+| ------------------------------------------------- | --------------------- | ---------------- |
+| `guardBodyTrajectories` (`physics/pair-guard.ts`) | 1658.77ms             | 64.1%            |
+| `guardPairTrajectory`                             | 1602.60ms             | 62.0%            |
+| `hullPenetration` (`physics/geometry.ts`)         | 1340.61ms             | 51.8%            |
+| `axes`                                            | 1298.28ms             | 50.2%            |
+
+The production bundle symbols `dp`, `Tk`, `du`, `L1`, `D1` were checked against
+their function bodies: body guard, pair guard, depth, hull penetration, axes.
+These symbols apply only to this build; they are not stable API names.
+
+`axes` constructs all face normals and every edge×edge cross product, normalizes
+and deduplicates them with a linear `.some` scan **before** penetration can reject
+on its first separating axis. With `Ea`/`Eb` edges and up to`K` accepted axes,
+construction can cost O((Fa+Fb+Ea×Eb)×K), plus vertex projections. Pair guarding
+samples up to 128 poses and can bisect 18 times. The same clear sample's depths are
+computed in `exceeds(end)` and again when updating allowed overlap.
+
+Potential exact-result savings: reuse already-computed sample depths; generate
+axes lazily in the identical order with unchanged duplicate thresholds; share
+immutable transformed hull data across pairs/samples. Changing tolerances,
+sample limits, contact order or solver decisions is a fidelity risk.
+
+Ordinary spherical noncars currently use sampled convex hulls, a separate known
+compatibility gap. A synthetic unit sphere helper has 132 edges versus 12 for the
+stock Eagle box, producing 1584 edge-cross candidates for that pair. This is a
+possible amplifier, not the measured Snow cause: the actual Snow noncar census
+in this run had at most 36 edges, and no sampled sphere was identified. The 204
+noncars do not all run SAT: immovable/immovable and broadphase-disjoint pairs
+are rejected. Avoid attributing the measured guard cost to every dormant prop.
+
+### 3. Cache collection and full-world synchronization — secondary, measured
+
+The start drive made 147 native `collectFaces` calls, totaling 226.7 ms, and 181 body
+contact collections totaling 277.1 ms. Every native cache collection checks all
+retained meshes and actor transforms before traversal. Snow retains 901 native
+actors and 667 MODEL meshes. Native cache wrap can recollect the query and repeat
+the synchronization. Dynamic refresh also traverses actor children and formats
+a 16-number transform string before deciding whether triangles changed.
+
+Dirty ownership/version tracking and shared unchanged-phase work are candidates.
+Preserve native 300-face capacity, ring lifetime, MODEL/ACT ordering and interleaved
+pull/stop side effects. Caching across callbacks without proving validity can
+change C2 behavior. Static world rebuilds are revision-gated, not unconditional
+per-frame work; no rebuild was established as the dominant event in these runs.
+
+### 4. Draw submission, visibility and resolution — verified structure, limited timing
+
+`batchStaticWorld` creates one whole-track mesh per material. Its bounding sphere
+gives coarse culling: a small visible portion can submit the entire material
+batch. There is no general occlusion/sector culling. Spatially partitioned render
+batches might improve long views; collision/source ACT ownership must remain
+independent and transparent ordering must survive.
+
+The renderer requests antialiasing and caps DPR at 1.7, with no absolute pixel
+budget. A 3840×2160 **CSS** viewport at DPR 1.7 becomes 6528×3672 (~24.0 million
+pixels); a physical 4K monitor under desktop scaling can have a smaller CSS
+viewport, so monitor resolution alone cannot establish the buffer size. The
+tested reduction from 3.07 million to 0.784 million pixels gives only a small CPU-
+dominated gain. A resolution cap/upscaling choice should be based on GPU
+measurements and visual comparison; UI can remain sharp at native CSS sizing.
+
+### Other hypotheses, not established as dominant
+
+Dense active-set contact solving has cubic matrix-solve cost and expensive
+fallbacks, but the sampled dominant path here is pair guarding, not that solver.
+GC/allocation and texture/shader warmup may contribute to individual stalls.
+Initial driving submitted new buffers/textures and three new program variants;
+the settled paused comparison had no upload/compile calls. GPU driver completion
+cost is not equal to the `compileShader` JavaScript call duration. No missing
+asset requests or console/WebGL failures occurred. Full allocation-rate,
+steady-state crash/debris, garbage-collection and development-server comparisons
+remain follow-up measurements; do not infer them from FPS alone.
+
+## Higher visibility
+
+Snow's actual camera Yon is 35 native units; landscape visibility is tied to the
+authored GENERAL/track multiplier. Pedestrian process/popup distances are 12/9.
+Their visibility currently follows processing activity, not an independent visual
+distance. Rival visual roots are likewise hidden when physics becomes inactive;
+native opponent view distance is `max(Yon+10,45)` and also feeds AI semantics.
+
+Raising these values blindly increases both CPU work and gameplay activation.
+Assess separate visual visibility/LOD or dormant pose presentation after removing
+measured overhead. Rendering distant actors should not make AI, pedestrian
+threat processing, collisions or native clocks secretly run at new distances.
+No distance multiplier or target resolution has been chosen yet.
+
+## Reproduce briefly
+
+With the existing production server running (`npm start` after a build):
+
+```sh
+node tools/profile-performance.mjs --race "snow way out" --seconds 2 --cpu-profile
+node tools/profile-performance.mjs --race "snow way out" --seconds 2 --ratio 0.75
+node tools/profile-performance.mjs --race "snow way out" --seconds 3 --drive
+```
+
+Run serially. Captures are explicitly capped at 0.25–5 seconds; main-thread stalls
+can delay the deadline. Loading time is separate. The tool closes its isolated
+Chromium instance after one capture. `--headful` opens a separate visible browser
+if needed for hardware access; the default headless backend may automatically
+fall back to SwiftShader even without `--software`. Always read the recorded GPU
+name; software FPS is not hardware performance evidence. `--width`/`--height`
+allow a bounded viewport comparison, and `--no-render` is diagnostic only.
+
+The standalone one-second capture and CDP profile export were checked and
+reported zero application/request/WebGL errors. That headless run selected
+SwiftShader and is **not** included in the AMD FPS table. Production was already
+built from 441358c; only tooling/documentation/backlog changed in this phase.
+
+Ignored evidence: `artifacts/performance-mcp-baseline.json`,
+`artifacts/performance-cli-smoke.json` and its `.cpuprofile`. The raw MCP CPU
+trace and inspected screenshots remain in `/tmp`. The opt-in probe restores
+methods, ratio, pause state and transient queries on disposal; it is not loaded
+by the application or included in the production bundle.
