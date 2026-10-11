@@ -101,6 +101,7 @@ export class NativeSmashQueue<Context> {
   flush(
     readTimeMs: () => number,
     consume: (entry: NativeSmashQueueDispatch<Context>, nowMs: number) => void,
+    beforeClear?: () => void,
   ): number {
     if (this.flushing)
       throw new Error("Cannot recursively flush native smash queue");
@@ -130,6 +131,9 @@ export class NativeSmashQueue<Context> {
         );
         consumed++;
       }
+      // Final native powerup grants run while consumed smash records still
+      // occupy capacity, before clearing this count at4ed011.
+      beforeClear?.();
       this.pendingCount = 0;
       return consumed;
     } finally {

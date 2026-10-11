@@ -3,6 +3,10 @@ import type { SmashActivation, SmashInitialSpeed } from "./world-smash";
 import type { WorldSmashContact } from "./world-destruction";
 import type { NonCarBody } from "./physics/noncar-body";
 import { activateNonCarMotor } from "./physics/noncar-motion";
+import {
+  NativeDelayedSideEffects,
+  type NativeDelayedTask,
+} from "./smash-delayed";
 
 export interface WorldActivationContact extends WorldSmashContact {
   /** Installed enqueue 0x4ed5d0 copies physics velocity without a unit conversion. */
@@ -12,6 +16,14 @@ export interface WorldActivationContact extends WorldSmashContact {
 }
 export interface WorldActivationOptions {
   random?: () => number;
+  delayed?: NativeDelayedSideEffects<NativeDelayedTask>;
+  readTimeMs?: () => number;
+  readPhysics?: (contact: WorldActivationContact) =>
+    | {
+        velocity: Vector3;
+        transform: Matrix4;
+      }
+    | undefined;
   /** Native actor.type_data != NULL: already pulled into active physics. */
   isPulled?: (body: NonCarBody) => boolean;
   onActivate?: (body: NonCarBody) => void;
@@ -115,7 +127,6 @@ export function nonCarInitialMovement(
 }
 
 interface Action {
-  group: number;
   body: NonCarBody;
   due: number;
   speed: SmashInitialSpeed;
@@ -128,18 +139,23 @@ interface Action {
  */
 export class WorldActivationRuntime {
   readonly diagnostics: string[] = [];
-  private actions: Action[] = [];
-  private groups = new Set<number>();
-  private nextGroup = 0;
+  readonly delayed: NativeDelayedSideEffects<NativeDelayedTask>;
+  private groups = new Set<{ actions: Action[] }>();
+  private activatedDuringUpdate: NonCarBody[] = [];
   private timeMs = 0;
   constructor(
     private readonly bodies:
       | readonly NonCarBody[]
       | (() => readonly NonCarBody[]),
     private readonly options: WorldActivationOptions = {},
-  ) {}
+  ) {
+    this.delayed = options.delayed ?? new NativeDelayedSideEffects();
+  }
   get pendingCount(): number {
-    return this.actions.length;
+    return [...this.groups].reduce(
+      (sum, group) => sum + group.actions.length,
+      0,
+    );
   }
   private list(): readonly NonCarBody[] {
     return typeof this.bodies === "function" ? this.bodies() : this.bodies;
@@ -149,10 +165,11 @@ export class WorldActivationRuntime {
     contact: WorldActivationContact,
   ): number {
     validateSpeed(activation.speed);
-    const now = contact.timeMs ?? this.timeMs;
+    const now = this.options.readTimeMs?.() ?? contact.timeMs ?? this.timeMs;
     if (
       !Number.isFinite(now) ||
-      now < this.timeMs ||
+      now < 0 ||
+      now > 0xffffffff ||
       ![...activation.min, ...activation.max, ...activation.delaySeconds].every(
         Number.isFinite,
       ) ||
@@ -161,20 +178,16 @@ export class WorldActivationRuntime {
     )
       throw new Error("Invalid noncar activation");
     const random = this.options.random ?? Math.random;
-    if (this.groups.size === 20) {
-      this.diagnostics.push(
-        "Noncar activation source queue limit20 cuboids reached",
-      );
-      return 0;
-    }
     let noncarActor: Object3D | undefined;
     for (let node: Object3D | null = contact.actor; node; node = node.parent)
-      if (/^&\d{2}/.test(node.name)) {
+      if (node.name.startsWith("&")) {
         noncarActor = node;
         break;
       }
     const contextActor = noncarActor ?? contact.bodyActor;
-    const transform = contact.impacteeTransform?.clone();
+    const live = this.options.readPhysics?.(contact);
+    const transform =
+      live?.transform.clone() ?? contact.impacteeTransform?.clone();
     const matrix = noncarActor
       ? (noncarActor.updateWorldMatrix(true, false),
         noncarActor.matrixWorld.clone())
@@ -206,7 +219,8 @@ export class WorldActivationRuntime {
       (!matrix &&
         activation.speed.towards[0] !== 0 &&
         activation.speed.towards[1] !== 0) ||
-      (!contact.impacteeVelocity &&
+      (!live &&
+        !contact.impacteeVelocity &&
         activation.speed.impacteeVelocityFactor !== 0)
     ) {
       this.diagnostics.push(
@@ -214,7 +228,10 @@ export class WorldActivationRuntime {
       );
       return 0;
     }
-    const velocity = contact.impacteeVelocity?.clone() ?? new Vector3();
+    const velocity =
+      live?.velocity.clone() ??
+      contact.impacteeVelocity?.clone() ??
+      new Vector3();
     if (
       !velocity.toArray().every(Number.isFinite) ||
       (matrix && !matrix.elements.every(Number.isFinite))
@@ -230,8 +247,7 @@ export class WorldActivationRuntime {
       (value) => (value * 1000) & 0xffff,
     );
     const type = (activation.nonCarType << 24) >> 24;
-    const group = this.nextGroup++;
-    this.groups.add(group);
+    const group = { actions: [] as Action[] };
     let selected = 0;
     for (const body of this.list()) {
       const match = /^&(\d{2})/.exec(body.actor.name);
@@ -248,27 +264,38 @@ export class WorldActivationRuntime {
       const milliseconds =
         delay[0] +
         Math.floor(checkedRandom(random) * (delay[1] - delay[0] + 1));
-      this.actions.push({
-        group,
+      group.actions.push({
         body,
-        due: now + milliseconds,
+        due: (Math.trunc(now) + milliseconds) >>> 0,
         speed,
         velocity,
         target,
       });
       selected++;
     }
+    // Native samples the entire cuboid before testing shared slot capacity.
+    // Even an empty cuboid retains a slot until the next delayed scan.
+    if (
+      !this.delayed.enqueue({
+        kind: "noncar",
+        context: { advance: (timeMs) => this.advanceGroup(group, timeMs) },
+      })
+    ) {
+      this.diagnostics.push(
+        "Source delayed side-effect limit20 cuboids/smashes reached",
+      );
+      return 0;
+    }
+    this.groups.add(group);
     return selected;
   }
-  update(timeMs: number): NonCarBody[] {
-    if (!Number.isFinite(timeMs) || timeMs < this.timeMs)
-      throw new Error("Invalid world activation time");
-    this.timeMs = timeMs;
-    const due = this.actions.filter((action) => action.due <= timeMs);
-    this.actions = this.actions.filter((action) => action.due > timeMs);
-    this.groups = new Set(this.actions.map((action) => action.group));
-    const activated: NonCarBody[] = [];
-    for (const action of due) {
+  private advanceGroup(group: { actions: Action[] }, timeMs: number): boolean {
+    const future: Action[] = [];
+    for (const action of group.actions) {
+      if (timeMs < action.due) {
+        future.push(action);
+        continue;
+      }
       const body = action.body;
       const pulled =
         this.options.isPulled?.(body) ??
@@ -300,13 +327,23 @@ export class WorldActivationRuntime {
       }
       body.actor.userData.noncarPulled = true;
       body.properties.immovable = false;
-      activated.push(body);
+      this.activatedDuringUpdate.push(body);
       this.options.onActivate?.(body);
     }
-    return activated;
+    group.actions = future;
+    if (!future.length) this.groups.delete(group);
+    return !future.length;
+  }
+  update(timeMs: number): NonCarBody[] {
+    if (!Number.isSafeInteger(timeMs) || timeMs < 0 || timeMs > 0xffffffff)
+      throw new Error("Invalid world activation time");
+    this.timeMs = timeMs;
+    this.activatedDuringUpdate = [];
+    this.delayed.update(timeMs, (entry, now) => entry.context.advance(now));
+    return this.activatedDuringUpdate;
   }
   dispose(): void {
-    this.actions = [];
+    this.delayed.initialize();
     this.groups.clear();
   }
 }

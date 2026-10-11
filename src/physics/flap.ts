@@ -141,6 +141,8 @@ export interface PlasticFlapInput {
   /** Saved parent hinge2 reference transformed into the current actor frame. */
   parentReference: Vector3;
   random?: () => number;
+  seedRandom?: (seed: number) => void;
+  physicsTickMs?: number;
   inverseBucklePercent?: number;
 }
 
@@ -152,7 +154,7 @@ export function applyPlasticFlap(state: FlapState, input: PlasticFlapInput) {
   const { origin, inward, normal } = flapBasis(input.points, input.hinges);
   const alignment = input.direction.dot(inward);
   const strongest = input.points[input.strongestVertex];
-  if (!(alignment > 0.2) || !strongest) return unchanged;
+  if (!(alignment > Math.fround(0.2)) || !strongest) return unchanged;
   const lever = inward.dot(origin.clone().sub(strongest)) / alignment;
   if (!(lever > 0)) return unchanged;
   const reference = input.parentReference.clone().sub(origin);
@@ -165,6 +167,9 @@ export function applyPlasticFlap(state: FlapState, input: PlasticFlapInput) {
         );
   let offset = Math.sqrt((lever + input.displacement) ** 2 - lever ** 2) * 0.5;
   const random = input.random ?? Math.random;
+  // Installed43263e seeds only after the plastic/alignment/lever/displacement
+  // gates. An ineligible panel must leave the shared CRT stream untouched.
+  input.seedRandom?.((input.physicsTickMs ?? 0) >>> 0);
   if (
     (input.inverseBucklePercent ?? 0) > 0 &&
     Math.floor(random() * 100) < Math.trunc(input.inverseBucklePercent!)

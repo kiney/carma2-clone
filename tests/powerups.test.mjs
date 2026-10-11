@@ -6,6 +6,7 @@ import { createAssetStore } from "../server/assets.mjs";
 import { createRace, createVehicle } from "../src/gameplay.ts";
 import { decodeText, parseAct } from "../src/formats.ts";
 import { parsePowerups, PowerupSystem } from "../src/powerups.ts";
+import { selectNapalmTarget } from "../src/combat-powerups.ts";
 
 function table(definitions) {
   const lines = [String(definitions.length)];
@@ -657,6 +658,18 @@ test(
     assert.equal(definitions[52].initialValue, -10);
     assert.equal(definitions[96].action, 34);
     assert.equal(definitions[96].initialValue, -3);
+    for (const [index, action, initialValue, floats] of [
+      [25, 31, 0, [3.5]],
+      [55, 37, -3, [36]],
+      [56, 38, -3, [12, 0.2, 3, 7]],
+      [65, 45, -5, [15, 0.25, 5, 10]],
+      [91, 49, -15, []],
+    ]) {
+      assert.equal(definitions[index].action, action);
+      assert.equal(definitions[index].initialValue, initialValue);
+      assert.deepEqual(definitions[index].floatParams, floats);
+    }
+    assert.equal(definitions[25].duration, 30);
   },
 );
 
@@ -711,8 +724,8 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      22,
-      "New City warns once per unsupported definition after native motion powerup support",
+      17,
+      "New City warns once per unsupported definition after combat powerup lifecycle registration",
     );
     assert.equal(system.group.children.length, system.pickups.length);
     system.dispose();
@@ -864,13 +877,176 @@ test("native game timestamps drive expiry independently of frame-period timer su
     { text: async () => table([{ action: 16, duration: 1, floats: [0.2] }]) },
     new THREE.Group(),
   ).init();
-  const car = createVehicle(new THREE.Vector3()), race = createRace([]);
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
   system.update(0.016, car, race, undefined, 32);
   system.grant(0, car, race);
-  assert.equal(system.update(0.016, car, race, undefined, 1031).gravityMultiplier,
-    Math.fround(0.2), "999ms game age remains active despite a small frame period");
-  assert.equal(system.update(0.016, car, race, undefined, 1032).gravityMultiplier, 1,
-    "the absolute game deadline expires at exactly one second");
+  assert.equal(
+    system.update(0.016, car, race, undefined, 1031).gravityMultiplier,
+    Math.fround(0.2),
+    "999ms game age remains active despite a small frame period",
+  );
+  assert.equal(
+    system.update(0.016, car, race, undefined, 1032).gravityMultiplier,
+    1,
+    "the absolute game deadline expires at exactly one second",
+  );
   for (const time of [-1, NaN, Infinity])
     assert.throws(() => system.update(0.016, car, race, undefined, time));
+});
+
+test("electric ray stores native squared float and expires after the physics window", async () => {
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([
+          { action: 31, duration: 30, floats: [3.5] },
+          { action: 8, duration: 60 },
+          { action: 51 },
+        ]),
+    },
+    new THREE.Group(),
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
+  assert.equal(system.electricRayDistanceSquared, 0);
+  system.beginFrame(0.016, car, race, undefined, 100);
+  const events = [];
+  system.grant(0, car, race, (event) => events.push(event));
+  system.grant(1, car, race);
+  assert.equal(events[0].kind, "effect");
+  assert.equal(system.electricRayDistanceSquared, 12.25);
+  assert.equal(system.abilities.size, 0);
+  system.beginFrame(0.016, car, race, undefined, 30100);
+  assert.equal(
+    system.electricRayDistanceSquared,
+    12.25,
+    "the source field survives the entire physics window at its expiry",
+  );
+  assert.equal(system.finishFrame().timerFrozen, true);
+  assert.equal(
+    system.electricRayDistanceSquared,
+    0,
+    "timer freeze leaves electric's normal game-time expiry running",
+  );
+  system.grant(0, car, race);
+  system.beginFrame(0.016, car, race, undefined, 31000);
+  system.grant(0, car, race);
+  system.update(0.016, car, race, undefined, 60100);
+  assert.equal(
+    system.electricRayDistanceSquared,
+    12.25,
+    "renewal replaces the previous timeout",
+  );
+  system.update(0.016, car, race, undefined, 61000);
+  assert.equal(system.electricRayDistanceSquared, 0);
+  system.grant(0, car, race);
+  system.grant(2, car, race);
+  assert.equal(system.electricRayDistanceSquared, 0);
+  system.grant(0, car, race);
+  system.dispose();
+  assert.equal(system.electricRayDistanceSquared, 0);
+});
+
+test("combat inventory requires native handler success and adds original charges on renewal", async () => {
+  for (const [action, initialValue, floats] of [
+    [37, -3, [36]],
+    [38, -3, [12, 0.2, 3, 7]],
+    [45, -5, [15, 0.25, 5, 10]],
+    [49, -15, []],
+  ]) {
+    const system = await new PowerupSystem(
+      {
+        text: async () =>
+          table([
+            { action, initialValue, floats, duration: -1 },
+            { action: 51 },
+          ]),
+      },
+      new THREE.Group(),
+    ).init();
+    const car = createVehicle(new THREE.Vector3()),
+      race = createRace([]);
+    const grants = [];
+    system.grant(0, car, race, (event) => grants.push(event));
+    assert.equal(grants[0].kind, "ability");
+    assert.equal(grants[0].amount, -initialValue);
+    assert.deepEqual(grants[0].definition.floatParams, floats);
+    assert.equal(system.electricRayDistanceSquared, 0);
+    for (const result of [false, -1, undefined]) {
+      assert.equal(
+        system.activateAbility(race, () => result),
+        false,
+      );
+      assert.equal(system.abilities.get(0).charges, -initialValue);
+      assert.equal(system.selectedAbility, 0);
+    }
+    assert.equal(
+      system.activateAbility(race),
+      false,
+      "an unconnected combat runtime cannot consume a charge",
+    );
+    assert.equal(
+      system.activateAbility(race, (event) => {
+        assert.equal(event.kind, "ability-use");
+        assert.equal(event.definition.action, action);
+        return true;
+      }),
+      true,
+    );
+    assert.equal(system.abilities.get(0).charges, -initialValue - 1);
+    system.grant(0, car, race);
+    assert.equal(system.abilities.get(0).charges, -2 * initialValue - 1);
+    system.grant(1, car, race);
+    assert.equal(
+      system.abilities.get(0).charges,
+      -2 * initialValue - 1,
+      "canceling timed effects does not erase keyboard inventory",
+    );
+    const count = system.abilities.get(0).charges;
+    for (let i = 0; i < count; i++)
+      assert.equal(
+        system.activateAbility(race, () => 0),
+        true,
+      );
+    assert.equal(system.abilities.has(0), false);
+    assert.equal(system.selectedAbility, null);
+    system.dispose();
+  }
+});
+
+test("napalm rejects full native bolt pool and no-target commands without consuming inventory", async () => {
+  const system = await new PowerupSystem(
+    { text: async () => table([{ action: 49, initialValue: -15 }]) },
+    new THREE.Group(),
+  ).init();
+  const car = createVehicle(new THREE.Vector3()),
+    race = createRace([]);
+  const target = {
+    position: new THREE.Vector3(1, 0, 0),
+    alive: true,
+    inSight: true,
+    burningOrReserved: false,
+  };
+  system.grant(0, car, race);
+  const activate = (targets, slots) =>
+    system.activateAbility(
+      race,
+      () =>
+        !!selectNapalmTarget(
+          car.position,
+          targets,
+          slots,
+          undefined,
+          false,
+          () => 1,
+        ),
+    );
+  assert.equal(activate([target], [true, true, true, true, true]), false);
+  assert.equal(system.abilities.get(0).charges, 15);
+  assert.equal(activate([], [false, false, false, false, false]), false);
+  assert.equal(system.abilities.get(0).charges, 15);
+  assert.equal(activate([target], [true, false, true, true, true]), true);
+  assert.equal(system.abilities.get(0).charges, 14);
+  system.dispose();
 });

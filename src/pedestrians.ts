@@ -29,6 +29,21 @@ import {
 } from "./ped-proximity";
 import type { PedProximity } from "./ped-proximity";
 import type { Surface as WorldSurface } from "./world";
+import {
+  pedestrianRepulsionImpulse,
+  repulsionParameters,
+  selectCombatPedestrians,
+  selectNapalmTarget,
+  electricRayHits,
+  stepNapalmMotion,
+  NAPALM_CAPACITY,
+  NAPALM_BURN_MS,
+} from "./combat-powerups";
+import type { NapalmMotion } from "./combat-powerups";
+import { NativeRandom, sharedNativeRandom } from "./native-random";
+import { parsePix } from "./formats";
+import { ExplosionRuntime, parseWastedExplosionSettings } from "./explosion";
+import type { SmashExplosion } from "./world-smash";
 export { PedAction } from "./ped-rules";
 export type { PedThreat } from "./ped-rules";
 
@@ -50,6 +65,20 @@ export interface PedHitEvent {
   total: number;
   speed: number;
   position: THREE.Vector3;
+  owner?: object;
+  cause?: "vehicle" | "annihilator" | "electric" | "napalm";
+}
+export interface PedCombatSource {
+  /** Native car.pos: live world centre of mass in raw actor units. */
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  /** Raw special-volume multiplier, not global low-gravity powerup state. */
+  gravityMultiplier?: number;
+  owner?: object;
+  /** Repulse links retain native pointers to live world COM positions. */
+  readPosition?: () => THREE.Vector3;
+  /** Live car origin including native local downward model-height/5 offset. */
+  readRayOrigin?: () => THREE.Vector3;
 }
 export type PedGround = (x: number, z: number, nearY: number) => number | null;
 export interface PedOptions {
@@ -57,6 +86,9 @@ export interface PedOptions {
   /** Explicit test/debug override; production uses the original 2000 cap. */
   maxCount?: number;
   random?: () => number;
+  /** Combat calls share the native CRT stream; population/movement retain their own stream. */
+  combatRandom?: () => number;
+  readGravityMultiplier?: (position: THREE.Vector3) => number | undefined;
   collision?: Pick<WorldCollision, "raycast"> &
     Partial<Pick<WorldCollision, "querySurfaces">>;
   onHit?: (event: PedHitEvent) => void;
@@ -232,6 +264,12 @@ interface Ped {
   action: PedAction;
   moveId: number;
   active: boolean;
+  corporeal: boolean;
+  angularVelocity: THREE.Vector3;
+  networkStateCutoffMs: number;
+  combatOwner?: object;
+  burningUntilMs: number;
+  napalmSlot: number;
   settled: boolean;
   profile: PedProfile;
   proximity: PedProximity;
@@ -253,7 +291,41 @@ interface PedProfile {
 export interface PedFrameOptions {
   cameraPosition?: THREE.Vector3;
   threats?: readonly PedThreat[];
+  gameTimeMs?: number;
+  physicsTickMs?: number;
+  /** Full native outer-frame period; bolt movement is not physics-step capped. */
+  framePeriodMs?: number;
+  electricRayDistanceSquared?: number;
+  combatOwner?: object;
+  /** Native car.pos is the live world centre of mass, not actor translation. */
+  combatPosition?: THREE.Vector3;
+  readCombatRayOrigin?: () => THREE.Vector3;
+  cameraOrientation?: THREE.Quaternion;
+  immortalPedestrians?: boolean;
+  gravityMultiplier?: number;
+  readGravityMultiplier?: (position: THREE.Vector3) => number | undefined;
 }
+interface PedCombatRay {
+  startMs: number;
+  source: PedCombatSource;
+  target: Ped;
+  object: THREE.Line;
+}
+interface PedRepulseRay {
+  startMs: number;
+  readSourcePosition: () => THREE.Vector3;
+  readTargetPosition: () => THREE.Vector3;
+  innerRadius: number;
+  outerRadius: number;
+  source?: PedCombatSource;
+  target?: Ped;
+}
+interface PedNapalmBolt extends NapalmMotion {
+  target: Ped;
+  source: PedCombatSource;
+  flames: THREE.Vector3[];
+}
+const NAPALM_FLAME_SCALES = [0.275, 0.2245, 0.2, 0.175, 0.15, 0.075, 0.05];
 
 /** Reparent the original rigid body parts around anatomical joints.
  * Their DAT vertices are in the exported T pose and already have the right UVs. */
@@ -532,6 +604,25 @@ export class PedestrianSystem {
   private blood?: PedBloodRuntime;
   private collision?: PedOptions["collision"];
   private nearReset = true;
+  private combatFrame: PedFrameOptions = {};
+  private napalm: Array<PedNapalmBolt | undefined> = Array.from({
+    length: NAPALM_CAPACITY,
+  });
+  private flameSprites: THREE.Sprite[][] = [];
+  // Native actors persist through slot release; spawn changes only the head.
+  private flamePositions = Array.from({ length: NAPALM_CAPACITY }, () =>
+    Array.from({ length: 7 }, () => new THREE.Vector3()),
+  );
+  private combatTextures = new Map<string, THREE.Texture>();
+  private burnExplosion?: ExplosionRuntime;
+  private burnGroups: SmashExplosion[] = [];
+  private proximityRays: Array<PedCombatRay | undefined> = Array.from({
+    length: 20,
+  });
+  private repulseRays: Array<PedRepulseRay | undefined> = Array.from({
+    length: 6,
+  });
+  private repulseMeshes: THREE.Mesh[] = [];
   private constructor(
     private groundAt: PedGround,
     private options: PedOptions,
@@ -550,10 +641,42 @@ export class PedestrianSystem {
       action: p.action,
       moveId: p.moveId,
       active: p.active,
+      alive: p.alive,
+      corporeal: p.corporeal,
+      velocity: p.velocity.clone(),
+      angularVelocity: p.angularVelocity.clone(),
+      mass: p.profile.mass,
+      networkStateCutoffMs: p.networkStateCutoffMs,
+      burningUntilMs: p.burningUntilMs,
+      napalmSlot: p.napalmSlot,
+      combatOwner: p.combatOwner,
       position: p.object.position.clone(),
       group: p.spec.group,
       walkPeriod: p.walkPeriod,
     }));
+  }
+  get combatStats() {
+    return {
+      bolts: this.napalm.flatMap((bolt, slot) =>
+        bolt
+          ? [
+              {
+                slot,
+                position: bolt.position.clone(),
+                target: bolt.target.object,
+                owner: bolt.source.owner,
+              },
+            ]
+          : [],
+      ),
+      proximityRays: this.proximityRays.filter(
+        (ray) => ray && ray.startMs !== 0,
+      ).length,
+      repulseRays: this.repulseRays.filter((ray) => ray && ray.startMs !== 0)
+        .length,
+      burning: this.peds.filter((ped) => ped.burningUntilMs > 0).length,
+      reserved: this.peds.filter((ped) => ped.napalmSlot >= 0).length,
+    };
   }
   get count() {
     return this.peds.length;
@@ -731,6 +854,11 @@ export class PedestrianSystem {
           action: PedAction.Walking,
           moveId: walkPeriod ? 30 : 0,
           active: false,
+          corporeal: false,
+          angularVelocity: new THREE.Vector3(),
+          networkStateCutoffMs: 0,
+          burningUntilMs: 0,
+          napalmSlot: -1,
           settled: false,
           profile,
           proximity: emptyPedProximity(),
@@ -785,7 +913,568 @@ export class PedestrianSystem {
     } catch (e) {
       system.warnings.push(`Pedestrian blood: ${e}`);
     }
+    await system.loadCombatVisuals(assets, settingsText);
     return system;
+  }
+
+  private targetGravity(position: THREE.Vector3): number | undefined {
+    return (
+      this.combatFrame.readGravityMultiplier ??
+      this.options.readGravityMultiplier
+    )?.(position);
+  }
+  private combatTargets() {
+    return this.peds.map((ped) => ({
+      ped,
+      position: ped.object.position,
+      alive: ped.alive,
+      inSight: ped.active,
+      burningOrReserved: ped.burningUntilMs > 0 || ped.napalmSlot >= 0,
+      specialVolumeGravityMultiplier: this.targetGravity(ped.object.position),
+    }));
+  }
+  private firstFaceFraction(
+    source: THREE.Vector3,
+    target: { position: THREE.Vector3 },
+  ): number {
+    const delta = target.position.clone().sub(source),
+      distance = delta.length();
+    if (distance === 0) return 1;
+    const hit = this.collision?.raycast(
+      source,
+      delta.divideScalar(distance),
+      distance,
+    );
+    return hit ? hit.distance / distance : 1;
+  }
+  /** Installed callbacks report success for any qualifying target, even when
+   * ordinary KillPedestrian's low-gravity gate prevents that target's death. */
+  useCombatPowerup(
+    action: 37 | 45 | 49,
+    floatParams: readonly number[],
+    source: PedCombatSource,
+    physicsTickMs: number,
+    gameTimeMs: number,
+  ): boolean {
+    if (
+      ![
+        ...source.position.toArray(),
+        ...source.velocity.toArray(),
+        physicsTickMs,
+        gameTimeMs,
+      ].every(Number.isFinite) ||
+      physicsTickMs < 0 ||
+      gameTimeMs < 0
+    )
+      throw new Error("Invalid pedestrian combat context");
+    const immortal = this.combatFrame.immortalPedestrians ?? false;
+    const targets = this.combatTargets();
+    const random = this.options.combatRandom ?? sharedNativeRandom.random;
+    if (action === 49) {
+      const chosen = selectNapalmTarget(
+        source.position,
+        targets,
+        this.napalm.map(Boolean),
+        source.gravityMultiplier,
+        immortal,
+        (origin, target) => this.firstFaceFraction(origin, target),
+      );
+      if (!chosen) return false;
+      chosen.target.ped.napalmSlot = chosen.slot;
+      const bolt: PedNapalmBolt = {
+        target: chosen.target.ped,
+        source,
+        position: source.position.clone(),
+        direction: new THREE.Vector3(),
+        bornAtMs: gameTimeMs,
+        lastDirectionAtMs: 0,
+        flames: this.flamePositions[chosen.slot],
+      };
+      bolt.flames[0].copy(source.position);
+      this.napalm[chosen.slot] = bolt;
+      const sprites = this.flameSprites[chosen.slot];
+      if (sprites) {
+        for (const sprite of sprites) sprite.visible = false;
+        sprites[0].position.copy(bolt.position);
+        sprites[0].visible = true;
+      }
+      return true;
+    }
+    const parameters =
+      action === 45 ? repulsionParameters(45, floatParams) : undefined;
+    const range = parameters?.range ?? floatParams[0];
+    const selected = selectCombatPedestrians(
+      source.position,
+      targets,
+      range,
+      immortal,
+      (origin, target) => this.firstFaceFraction(origin, target),
+    );
+    for (const target of selected) {
+      const ped = target.ped;
+      ped.combatOwner = source.owner;
+      if (action === 37) {
+        this.electrocute(ped, source, gameTimeMs, "annihilator");
+      } else {
+        // Source sets move91 and draws its period before the three omega draws.
+        ped.moveId = 91;
+        ped.runPeriod = pedRandomInteger(random, 75, 200);
+        ped.action = PedAction.Impacting;
+        ped.actionSinceMs = gameTimeMs;
+        ped.corporeal = true;
+        const impulse = pedestrianRepulsionImpulse(
+          source.position,
+          target.position,
+          ped.profile.mass,
+          parameters!,
+          physicsTickMs,
+          random,
+        );
+        if (!impulse) continue;
+        ped.velocity.add(impulse.deltaVelocity);
+        ped.angularVelocity.add(impulse.deltaAngularVelocity);
+        ped.networkStateCutoffMs = impulse.networkStateCutoffMs;
+        this.addRepulseRay(ped, source, gameTimeMs);
+      }
+    }
+    return selected.length > 0;
+  }
+  private electrocute(
+    ped: Ped,
+    source: PedCombatSource,
+    timeMs: number,
+    cause: "annihilator" | "electric",
+  ) {
+    this.kill(
+      ped,
+      timeMs,
+      0,
+      ped.velocity.clone(),
+      0,
+      source.owner,
+      cause,
+      113,
+    );
+    // Callback's animation substitution is independent of ordinary kill success.
+    ped.action = PedAction.Dead;
+    ped.moveId = 113;
+    ped.actionSinceMs = timeMs;
+    const slot = this.proximityRays.findIndex(
+      (ray) => !ray || ray.startMs === 0,
+    );
+    if (slot < 0) return;
+    const old = this.proximityRays[slot];
+    old?.object.geometry.dispose();
+    old?.object.removeFromParent();
+    if (old) (old.object.material as THREE.Material).dispose();
+    const object = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0xd7ffe9 }),
+    );
+    object.name = `ped-proximity-ray-${slot}`;
+    this.group.add(object);
+    this.proximityRays[slot] = { startMs: timeMs, target: ped, source, object };
+  }
+  private addRepulseRay(target: Ped, source: PedCombatSource, timeMs: number) {
+    this.allocateRepulseRay({
+      target,
+      source,
+      readSourcePosition: () => source.readPosition?.() ?? source.position,
+      readTargetPosition: () => target.object.position,
+      innerRadius: Math.fround(0.03),
+      outerRadius: Math.fround(0.05),
+      startMs: timeMs,
+    });
+  }
+  /** Opponent action38 shares the pedestrian six-slot visual pool, with
+   * installed caller radii .06/.12 and live car.pos endpoint pointers. */
+  emitOpponentRepulsion(
+    readSourcePosition: () => THREE.Vector3,
+    readTargetPosition: () => THREE.Vector3,
+    timeMs: number,
+  ): void {
+    this.allocateRepulseRay({
+      readSourcePosition,
+      readTargetPosition,
+      innerRadius: Math.fround(0.06),
+      outerRadius: Math.fround(0.12),
+      startMs: timeMs,
+    });
+  }
+  private allocateRepulseRay(ray: PedRepulseRay) {
+    let slot = this.repulseRays.findIndex((ray) => !ray || ray.startMs === 0);
+    if (slot < 0) {
+      slot = 0;
+      for (let i = 1; i < 6; i++)
+        if (this.repulseRays[i]!.startMs < this.repulseRays[slot]!.startMs)
+          slot = i;
+    }
+    this.repulseRays[slot] = ray;
+  }
+  private updateCombatRays(nowMs: number) {
+    for (let slot = 0; slot < 20; slot++) {
+      const ray = this.proximityRays[slot];
+      if (!ray) continue;
+      if (ray.startMs === 0 || (nowMs - ray.startMs) >>> 0 >= 500) {
+        ray.object.geometry.dispose();
+        (ray.object.material as THREE.Material).dispose();
+        ray.object.removeFromParent();
+        this.proximityRays[slot] = undefined;
+        continue;
+      }
+      const origin = ray.source.readRayOrigin?.() ?? ray.source.position;
+      const target = ray.target.object.position;
+      const delta = target.clone().sub(origin),
+        distance = delta.length();
+      const direction =
+        distance > 2 ** -22
+          ? delta.divideScalar(distance)
+          : new THREE.Vector3(1, 0, 0);
+      // RenderElectroBastardRays reseeds the CRT from time + endpoint sum.
+      // Injected combat RNGs remain isolated; production uses the shared stream.
+      // The installed executable passes the stored float's bits to srand,
+      // rather than the numeric cast shown in the reconstruction.
+      const seedBytes = new DataView(new ArrayBuffer(4));
+      seedBytes.setFloat32(
+        0,
+        target.x + target.y + target.z + origin.x + origin.y + origin.z,
+        true,
+      );
+      const seed = (nowMs + seedBytes.getUint32(0, true)) >>> 0;
+      const stream = this.options.combatRandom
+        ? new NativeRandom(seed)
+        : sharedNativeRandom;
+      stream.seed(seed);
+      const points = [origin.clone()];
+      for (
+        let t = 0;
+        t < distance;
+        t = Math.fround(Math.fround(t + Math.fround(0.05)) + Math.fround(0.05))
+      ) {
+        const jitter = new THREE.Vector3(
+          -0.1 + 0.2 * stream.random(),
+          -0.1 + 0.2 * stream.random(),
+          -0.1 + 0.2 * stream.random(),
+        );
+        if (this.combatFrame.cameraOrientation)
+          jitter.applyQuaternion(this.combatFrame.cameraOrientation);
+        points.push(origin.clone().addScaledVector(direction, t).add(jitter));
+      }
+      points.push(target.clone());
+      ray.object.geometry.dispose();
+      ray.object.geometry = new THREE.BufferGeometry().setFromPoints(points);
+    }
+    for (let slot = 0; slot < 6; slot++) {
+      const ray = this.repulseRays[slot],
+        mesh = this.repulseMeshes[slot];
+      if (!ray) continue;
+      const age = (nowMs - ray.startMs) >>> 0;
+      if (ray.startMs === 0 || age >= 700) {
+        this.repulseRays[slot] = undefined;
+        if (mesh) mesh.visible = false;
+        continue;
+      }
+      const origin = ray.readSourcePosition();
+      const delta = ray.readTargetPosition().clone().sub(origin);
+      if ((delta.x === 0 && delta.z === 0) || !mesh) continue;
+      const direction = delta.clone().normalize();
+      const base = delta
+        .clone()
+        .cross(new THREE.Vector3(0, 1, 0))
+        .normalize();
+      const offsets = Array.from({ length: 5 }, (_, index) =>
+        base
+          .clone()
+          .applyAxisAngle(
+            direction,
+            (Math.trunc((index * 65536) / 5) * Math.PI * 2) / 65536,
+          ),
+      );
+      const positions = mesh.geometry.getAttribute("position");
+      for (let j = 0; j < 51; j++) {
+        const center = origin.clone().addScaledVector(delta, (j + 1) / 50);
+        for (const [row, radius] of [
+          [0, ray.innerRadius],
+          [1, ray.outerRadius],
+        ]) {
+          const point = center.clone().addScaledVector(offsets[j % 5], radius);
+          positions.setXYZ(j + row * 51, point.x, point.y, point.z);
+        }
+      }
+      positions.needsUpdate = true;
+      mesh.geometry.computeBoundingSphere();
+      const fraction = Math.fround(age * Math.fround(1 / 700));
+      (mesh.material as THREE.MeshBasicMaterial).opacity =
+        fraction > 0.9
+          ? 0.25
+          : fraction > 0.8
+            ? 0.5
+            : fraction > 0.7
+              ? 0.75
+              : 1;
+      mesh.visible = true;
+    }
+  }
+  private kill(
+    ped: Ped,
+    timeMs: number,
+    speed: number,
+    velocity: THREE.Vector3,
+    force: number,
+    owner: object | undefined,
+    cause: PedHitEvent["cause"],
+    moveId: number,
+  ): boolean {
+    const gravity = this.targetGravity(ped.object.position);
+    if (!ped.alive || this.combatFrame.immortalPedestrians) return false;
+    // Installed KillPedestrian 4ccc8b jumps over gore/rigid setup in a
+    // low-gravity volume, then still runs OneLessPed and scoring at 4ccd84.
+    const physicalDeath = gravity === undefined || gravity >= 1;
+    ped.alive = false;
+    ped.action = moveId === 113 ? PedAction.Dead : PedAction.Impacting;
+    ped.moveId = moveId;
+    ped.actionSinceMs = timeMs;
+    ped.fallTime = physicalDeath ? 0 : 2;
+    ped.settled = !physicalDeath;
+    ped.combatOwner = owner;
+    ped.velocity.copy(velocity);
+    this.hits++;
+    const position = ped.object.position;
+    const bounds = new THREE.Box3()
+      .setFromObject(ped.visual)
+      .translate(position.clone().negate());
+    const cloudPosition = position.clone();
+    cloudPosition.y += ped.footOffset;
+    if (physicalDeath)
+      this.blood?.hit(cloudPosition, bounds, ped.velocity, force, timeMs);
+    this.options.onHit?.({
+      timeMs,
+      group: ped.spec.group,
+      count: 1,
+      total: this.hits,
+      speed,
+      position: position.clone(),
+      owner,
+      cause,
+    });
+    return true;
+  }
+  private releaseNapalm(slot: number): void {
+    const bolt = this.napalm[slot];
+    if (bolt?.target.napalmSlot === slot) bolt.target.napalmSlot = -1;
+    this.napalm[slot] = undefined;
+    for (const sprite of this.flameSprites[slot] ?? []) sprite.visible = false;
+  }
+  private updateNapalm(nowMs: number, dtMs: number): void {
+    if (!Number.isFinite(dtMs) || dtMs < 0)
+      throw new Error("Invalid napalm frame period");
+    const random = this.options.combatRandom ?? sharedNativeRandom.random;
+    for (let slot = 0; slot < NAPALM_CAPACITY; slot++) {
+      const bolt = this.napalm[slot];
+      if (!bolt) continue;
+      const ped = bolt.target;
+      const gravity = this.targetGravity(ped.object.position);
+      if (!ped.active || (gravity !== undefined && gravity < 1)) {
+        this.releaseNapalm(slot);
+        continue;
+      }
+      stepNapalmMotion(bolt, ped.object.position, nowMs, dtMs, random);
+      bolt.flames[0].copy(bolt.position);
+      // Native first checks head distance against each of the six simple-box
+      // coordinate squares, then tests seven current flame actors in body axes.
+      const bounds = ped.profile.bounds;
+      const distanceSquared = bolt.position.distanceToSquared(
+        ped.object.position,
+      );
+      const broad = [...bounds.min.toArray(), ...bounds.max.toArray()].some(
+        (value) => distanceSquared < value * value,
+      );
+      const inverse = ped.object.quaternion.clone().invert();
+      const hit =
+        broad &&
+        bolt.flames.some((position) =>
+          bounds.containsPoint(
+            position.clone().sub(ped.object.position).applyQuaternion(inverse),
+          ),
+        );
+      if (hit) {
+        ped.burningUntilMs = (nowMs + NAPALM_BURN_MS) >>> 0;
+        ped.combatOwner = bolt.source.owner;
+        ped.lastScareMs = nowMs;
+        ped.firstScareMs ||= nowMs;
+        if (!ped.corporeal && ped.alive) {
+          ped.action = PedAction.Running;
+          ped.moveId = this.reactionMove(ped, 41);
+          ped.runPeriod = 100;
+          ped.actionSinceMs = nowMs;
+        }
+        this.burnExplosion?.spawn(
+          this.burnGroups,
+          ped.object.position,
+          bounds,
+          nowMs,
+          undefined,
+          ped.object.quaternion,
+        );
+        this.releaseNapalm(slot);
+        continue;
+      }
+      // Installed float-to-int conversion truncates (time - .036) at every
+      // segment. +24 remains zero, so its clamped history index stays zero.
+      let trailTime = nowMs;
+      for (let i = 0; i < 7; i++) {
+        trailTime = Math.trunc(trailTime - 0.036);
+        if (i > 0) {
+          if (trailTime < bolt.bornAtMs) break;
+          bolt.flames[i]
+            .copy(bolt.flames[i - 1])
+            .addScaledVector(bolt.direction, -0.036);
+        }
+        const sprite = this.flameSprites[slot]?.[i];
+        if (sprite) {
+          sprite.position.copy(bolt.flames[i]);
+          sprite.visible = true;
+        }
+      }
+    }
+  }
+  private async loadCombatVisuals(
+    assets: PedAssets,
+    settingsText: string,
+  ): Promise<void> {
+    const marker = /\/\/\s*NAPALMED PED SPEC\b/i.exec(settingsText);
+    if (marker) {
+      try {
+        // ReadExplosion's group grammar is shared; adapt only the three
+        // WastedExplosion header fields before the independently parsed groups.
+        this.burnGroups = parseWastedExplosionSettings(
+          "// Wasted explosion settings\n100\n0\nboom\n" +
+            settingsText.slice(marker.index + marker[0].length),
+        ).groups;
+      } catch (error) {
+        this.warnings.push(`Pedestrian burning animation: ${error}`);
+      }
+    }
+    const names = new Set([
+      "ex00006",
+      ...this.burnGroups.flatMap((group) =>
+        group.frames.map((frame) => frame.pixelmap.toLowerCase()),
+      ),
+    ]);
+    for (const name of names) {
+      const file = assets.manifest.find((entry) =>
+        new RegExp(`^data/common/boom/pix16/${name}\\.pix$`, "i").test(
+          entry.path,
+        ),
+      );
+      if (!file) continue;
+      try {
+        const map = parsePix(await assets.bytes(file.path))[0];
+        if (!map) continue;
+        const texture = new THREE.DataTexture(
+          map.rgba,
+          map.width,
+          map.height,
+          THREE.RGBAFormat,
+        );
+        texture.name = map.name || name;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.flipY = false;
+        texture.needsUpdate = true;
+        this.combatTextures.set(name, texture);
+      } catch (error) {
+        this.warnings.push(`Pedestrian flame texture: ${error}`);
+      }
+    }
+    this.burnExplosion = new ExplosionRuntime(this.group, this.combatTextures, {
+      random: this.options.combatRandom ?? sharedNativeRandom.random,
+    });
+    const repulseFile = assets.manifest.find((entry) =>
+      /^data\/pixelmap\/pix16\/repulse\.pix$/i.test(entry.path),
+    );
+    if (repulseFile) {
+      try {
+        const map = parsePix(await assets.bytes(repulseFile.path))[0];
+        if (map) {
+          const texture = new THREE.DataTexture(
+            map.rgba,
+            map.width,
+            map.height,
+            THREE.RGBAFormat,
+          );
+          texture.name = map.name || "REPULSE";
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.flipY = false;
+          texture.needsUpdate = true;
+          this.combatTextures.set("repulse", texture);
+          this.repulseMeshes = Array.from({ length: 6 }, (_, slot) => {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(new Float32Array(102 * 3), 3),
+            );
+            const uvs = Array.from({ length: 102 }, (_, j) => [
+              j % 2,
+              j < 51 ? 0 : 1,
+            ]).flat();
+            geometry.setAttribute(
+              "uv",
+              new THREE.Float32BufferAttribute(uvs, 2),
+            );
+            geometry.setIndex(
+              Array.from({ length: 50 }, (_, j) => [
+                j,
+                j + 1,
+                j + 52,
+                j + 51,
+                j + 52,
+                j,
+              ]).flat(),
+            );
+            const mesh = new THREE.Mesh(
+              geometry,
+              new THREE.MeshBasicMaterial({
+                map: texture,
+                side: THREE.DoubleSide,
+                transparent: true,
+                depthWrite: false,
+              }),
+            );
+            mesh.name = `ped-repulse-ray-${slot}`;
+            mesh.visible = false;
+            this.group.add(mesh);
+            return mesh;
+          });
+        }
+      } catch (error) {
+        this.warnings.push(`Pedestrian repulse texture: ${error}`);
+      }
+    }
+    const texture = this.combatTextures.get("ex00006");
+    if (!texture) return;
+    const image = texture.image as { width: number; height: number };
+    this.flameSprites = Array.from({ length: NAPALM_CAPACITY }, (_, slot) =>
+      NAPALM_FLAME_SCALES.map((scale, index) => {
+        const sprite = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: texture,
+            transparent: true,
+            depthWrite: false,
+          }),
+        );
+        sprite.name = `napalm-${slot}-${index}`;
+        sprite.visible = false;
+        // Native quad coordinates span -.5..1 in both billboard axes.
+        sprite.scale.set(
+          (image.width * scale * 1.5) / 128,
+          (image.height * scale * 1.5) / 128,
+          1,
+        );
+        sprite.center.set(1 / 3, 1 / 3);
+        this.group.add(sprite);
+        return sprite;
+      }),
+    );
   }
 
   private nextTurn(movement: PedMovement, timeMs: number) {
@@ -919,7 +1608,8 @@ export class PedestrianSystem {
   update(dt: number, car: PedThreat, frame: PedFrameOptions = {}) {
     dt = THREE.MathUtils.clamp(dt, 0, 0.1);
     this.elapsed += dt;
-    const timeMs = this.elapsed * 1000,
+    this.combatFrame = frame;
+    const timeMs = frame.gameTimeMs ?? this.elapsed * 1000,
       from = this.previousCar,
       to = car.position,
       dx = to.x - from.x,
@@ -940,6 +1630,56 @@ export class PedestrianSystem {
       ped.active = inProcess && (ped.active || this.nearReset || !inPopup);
       ped.object.visible = ped.active;
       if (!ped.active) continue;
+      const volumeGravity = this.targetGravity(ped.object.position);
+      if (volumeGravity !== undefined && volumeGravity < 1) {
+        if (ped.napalmSlot >= 0) this.releaseNapalm(ped.napalmSlot);
+        ped.burningUntilMs = 0;
+      }
+      if (
+        ped.alive &&
+        ped.burningUntilMs > 0 &&
+        timeMs >= ped.burningUntilMs &&
+        !frame.immortalPedestrians
+      ) {
+        this.kill(
+          ped,
+          timeMs,
+          0,
+          ped.velocity.clone(),
+          0,
+          ped.combatOwner,
+          "napalm",
+          113,
+        );
+        ped.burningUntilMs = 0;
+      }
+      if (
+        ped.alive &&
+        !frame.immortalPedestrians &&
+        electricRayHits(
+          frame.combatPosition ?? car.position,
+          car.velocity ??
+            new THREE.Vector3(
+              -Math.sin(car.yaw) * car.speed,
+              0,
+              -Math.cos(car.yaw) * car.speed,
+            ),
+          p,
+          ped.velocity,
+          frame.electricRayDistanceSquared ?? 0,
+        )
+      )
+        this.electrocute(
+          ped,
+          {
+            position: frame.combatPosition ?? car.position,
+            velocity: car.velocity ?? new THREE.Vector3(),
+            owner: frame.combatOwner,
+            readRayOrigin: frame.readCombatRayOrigin,
+          },
+          timeMs,
+          "electric",
+        );
       if (!ped.alive) {
         ped.fallTime += dt;
         if (ped.fallTime < 2) {
@@ -1001,35 +1741,48 @@ export class PedestrianSystem {
         distance < 0.34 &&
         Math.abs(p.y - nearCarY) < 0.45
       ) {
-        ped.alive = false;
-        ped.action = PedAction.Impacting;
-        ped.moveId = 91;
-        ped.actionSinceMs = timeMs;
-        this.hits++;
-        ped.velocity
-          .set(-Math.sin(car.yaw), 0, -Math.cos(car.yaw))
-          .multiplyScalar(THREE.MathUtils.clamp(car.speed * 0.45, -2, 2));
-        const bounds = new THREE.Box3().setFromObject(ped.visual);
-        bounds.translate(p.clone().negate());
-        const cloudPosition = p.clone();
-        cloudPosition.y += ped.footOffset;
-        // PED-03's swept contact has no native solver impulse yet. This explicit
-        // momentum bridge supplies a dimensional force estimate to source effects.
-        this.blood?.hit(
-          cloudPosition,
-          bounds,
-          ped.velocity,
+        const velocity = new THREE.Vector3(
+          -Math.sin(car.yaw),
+          0,
+          -Math.cos(car.yaw),
+        ).multiplyScalar(THREE.MathUtils.clamp(car.speed * 0.45, -2, 2));
+        this.kill(
+          ped,
+          timeMs,
+          Math.abs(car.speed),
+          velocity,
           ped.profile.mass * Math.abs(car.speed) * 6.9,
-          timeMs,
+          frame.combatOwner,
+          "vehicle",
+          91,
         );
-        this.options.onHit?.({
-          timeMs,
-          group: ped.spec.group,
-          count: 1,
-          total: this.hits,
-          speed: Math.abs(car.speed),
-          position: p.clone(),
-        });
+        continue;
+      }
+      if (ped.corporeal) {
+        // Generic PHIL gravity in actor units (installed 0x4b6c60); the native
+        // combat V increment is already in these units and is not divided again.
+        ped.velocity.y -=
+          (9.8 / 6.9) *
+          (frame.gravityMultiplier ?? 1) *
+          (volumeGravity ?? 1) *
+          dt;
+        p.addScaledVector(ped.velocity, dt);
+        const rate = ped.angularVelocity.length();
+        if (rate > 0)
+          ped.object.quaternion
+            .multiply(
+              new THREE.Quaternion().setFromAxisAngle(
+                ped.angularVelocity.clone().divideScalar(rate),
+                rate * dt,
+              ),
+            )
+            .normalize();
+        // This is the existing height bridge, not native articulated contacts.
+        const ground = this.groundAt(p.x, p.z, p.y + 0.3);
+        if (ground !== null && p.y < ground) {
+          p.y = ground;
+          if (ped.velocity.y < 0) ped.velocity.y = 0;
+        }
         continue;
       }
       if (
@@ -1307,6 +2060,9 @@ export class PedestrianSystem {
         else limb.object.rotation.x = Math.max(0, -step * limb.side) * 0.35;
       }
     }
+    this.updateNapalm(timeMs, frame.framePeriodMs ?? dt * 1000);
+    this.updateCombatRays(timeMs);
+    this.burnExplosion?.update(timeMs);
     this.blood?.update(dt, timeMs);
     this.nearReset = false;
     this.previousCar.copy(car.position);
@@ -1318,6 +2074,16 @@ export class PedestrianSystem {
   }
   reset() {
     this.hits = 0;
+    for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);
+    this.burnExplosion?.dispose();
+    if (this.burnExplosion)
+      this.burnExplosion = new ExplosionRuntime(
+        this.group,
+        this.combatTextures,
+        { random: this.options.combatRandom ?? sharedNativeRandom.random },
+      );
+    this.clearCombatRays();
+    this.combatFrame = {};
     this.blood?.reset();
     this.nearReset = true;
     this.elapsed = 0;
@@ -1327,6 +2093,12 @@ export class PedestrianSystem {
       ped.action = PedAction.Walking;
       ped.moveId = ped.walkPeriod ? 30 : 0;
       ped.active = false;
+      ped.corporeal = false;
+      ped.angularVelocity.set(0, 0, 0);
+      ped.networkStateCutoffMs = 0;
+      ped.combatOwner = undefined;
+      ped.burningUntilMs = 0;
+      ped.napalmSlot = -1;
       ped.settled = false;
       ped.lastScareMs = 0;
       ped.proximity = emptyPedProximity();
@@ -1348,8 +2120,30 @@ export class PedestrianSystem {
     }
   }
 
+  private clearCombatRays() {
+    for (const ray of this.proximityRays)
+      if (ray) {
+        ray.object.geometry.dispose();
+        (ray.object.material as THREE.Material).dispose();
+        ray.object.removeFromParent();
+      }
+    this.proximityRays.fill(undefined);
+    this.repulseRays.fill(undefined);
+    for (const mesh of this.repulseMeshes) mesh.visible = false;
+  }
   dispose() {
+    this.clearCombatRays();
     this.blood?.dispose();
+    for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);
+    this.burnExplosion?.dispose();
+    this.combatTextures.forEach((texture) => texture.dispose());
+    this.combatTextures.clear();
+    for (const sprites of this.flameSprites)
+      for (const sprite of sprites) {
+        sprite.material.dispose();
+        sprite.removeFromParent();
+      }
+    this.flameSprites = [];
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
     this.group.traverse((o) => {

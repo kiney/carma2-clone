@@ -71,13 +71,17 @@ import {
   compressedModelCoordinate,
   compressedBendReference,
   bendHullVertices,
-  selectStructuralBend,
+  selectStructuralBranch,
+  createStructuralBend,
+  DEFAULT_STRUCTURAL_SETTINGS,
   createBendTransform,
   stepBendRepair,
   bendSteeringCurvature,
   type BendTransform,
+  type StructuralSettings,
 } from "./physics/structural";
 import { NativeSmashQueue } from "./smash-queue";
+import { sharedNativeRandom } from "./native-random";
 
 import {
   readSmashConnotations,
@@ -103,6 +107,8 @@ export interface WamSmashEvent {
   mesh: Mesh<BufferGeometry>;
   localPoint: Vector3;
   localDirection: Vector3;
+  /** First enqueue's metric starting-step velocity, not later flush velocity. */
+  startingVelocity: Vector3;
   timeMs: number;
   oldLevel: number;
   targetLevel: number;
@@ -117,9 +123,13 @@ export interface WamSmashQueueContext {
 export function flushWamSmashQueue(
   queue: NativeSmashQueue<WamSmashQueueContext>,
   readTimeMs: () => number,
+  beforeClear?: () => void,
 ): number {
-  return queue.flush(readTimeMs, (entry, nowMs) =>
-    entry.context.execute(entry.targetTier, entry.reachedTier, nowMs),
+  return queue.flush(
+    readTimeMs,
+    (entry, nowMs) =>
+      entry.context.execute(entry.targetTier, entry.reachedTier, nowMs),
+    beforeClear,
   );
 }
 
@@ -415,6 +425,8 @@ export class DamageSystem {
   /** Native CheckDamage calls after component-program increments. */
   onWastageCheck?: () => void;
   onWamSmash?: (event: WamSmashEvent) => void;
+  onStructuralBendSound?: (playbackRate: number) => void;
+  readSmashStartingVelocity?: () => Vector3;
   /** Native full repair removes deferred SPAM, not ordinary impact records. */
   cancelQueuedSpam?: () => void;
   /** Return true when the outer physics queue owns this request, including
@@ -433,7 +445,12 @@ export class DamageSystem {
     this.sharedSmashQueue = queue;
   }
   readonly runtimeParts: DamageRuntimePart[] = [];
-  damageContext: Partial<ComponentDamageContext> = {};
+  damageContext: Partial<ComponentDamageContext> & {
+    seedRandom?: (seed: number) => void;
+  } = {
+    random: sharedNativeRandom.random,
+    seedRandom: sharedNativeRandom.seed,
+  };
   repairRevision = 0;
   deformationRevision = 0;
   /** Source1pending,2rebuild,4contraction,8pendingCOM. Root clears on success. */
@@ -443,6 +460,8 @@ export class DamageSystem {
   splitRuntime?: DamageSplitRuntime;
   private shellModelActive = false;
   structuralBend?: BendTransform;
+  structuralSettings: Readonly<StructuralSettings> =
+    DEFAULT_STRUCTURAL_SETTINGS;
   readonly currentCenterOfMass = new Vector3();
   currentWheelPositions: Vector3[] = [];
   private meshes: DamageMesh[] = [];
@@ -523,6 +542,14 @@ export class DamageSystem {
       this.runtimeParts.find((part) => part.actor.parent === this.group) ??
       this.runtimeParts[0];
     return this.meshes.filter((data) => data.runtime === primary);
+  }
+  /** RenderElectroBastardRays reads the primary render model, not bb1/bb2.
+   * Recompute after crush so this remains the live model-space extent. */
+  get primaryRenderModelBounds(): Box3 | undefined {
+    const geometry = this.principalModels()[0]?.mesh.geometry;
+    if (!geometry) return;
+    geometry.computeBoundingBox();
+    return geometry.boundingBox?.clone() ?? undefined;
   }
   prepareSplitPlane(
     normal: Vector3,
@@ -1357,7 +1384,7 @@ export class DamageSystem {
   }
 
   /** Source FlapBits passes (v-now - v-previous)/dt + Batty gravity, transformed
-   * into the car frame. Call once per original physics step, after impacts. */
+   * into the car frame. Production calls once per native outer frame. */
   stepFlaps(forceInCar: Vector3): number {
     let changed = 0;
     this.group.updateMatrixWorld(true);
@@ -1477,7 +1504,11 @@ export class DamageSystem {
           this.componentLevels[index] = applyDamageUnit(
             this.componentLevels[index],
             index,
-            10 + Math.floor(random() * 31),
+            mineRandomInteger(
+              random,
+              this.structuralSettings.damageMinimum,
+              this.structuralSettings.damageMaximum,
+            ),
             { ...this.damageContext, human },
           );
         } while (
@@ -1925,7 +1956,8 @@ export class DamageSystem {
     force: number,
     nowMs: number,
     human: boolean,
-  ): { maxInfluence: number } {
+    deferBend = false,
+  ): { maxInfluence: number; markedForBend?: boolean } {
     if (!this.wam || !this.modelLimits || this.snapped)
       return { maxInfluence: 0 };
     const currentBounds = new Box3();
@@ -1933,7 +1965,7 @@ export class DamageSystem {
       for (const vertex of shape.vertices) currentBounds.expandByPoint(vertex);
     if (currentBounds.isEmpty()) currentBounds.copy(this.bounds);
     {
-      const structural = selectStructuralBend({
+      const structural = selectStructuralBranch({
         mean,
         direction,
         force,
@@ -1946,15 +1978,63 @@ export class DamageSystem {
         raceCount: this.damageContext.raceCount,
         random: this.damageContext.random,
         alreadyBent: !!this.structuralBend,
+        minimumForce: this.structuralSettings.minimumForce,
+        bendingChance: this.structuralSettings.bendingChance,
       });
       if (structural.skipOrdinary) {
-        if (structural.bend) this.applyStructuralBend(structural.bend, human);
+        if (structural.markedForBend && !deferBend && !this.structuralBend)
+          this.applyDeferredBend(mean, direction, force, nowMs, human);
         return {
           maxInfluence: 0,
+          markedForBend: structural.markedForBend,
         };
       }
     }
     return this.applyModelCrush(contacts, mean, direction, force, nowMs);
+  }
+
+  /** Called only for native negatively marked events after ordinary crush,
+   * shape swapping and detachment. Later marks still resolve their direction
+   * and random pivot even when the first eligible event has bent this car. */
+  applyDeferredBend(
+    mean: Vector3,
+    direction: Vector3,
+    force: number,
+    physicsTickMs: number,
+    human: boolean,
+    liveBounds?: Box3,
+  ): boolean {
+    if (!this.wam || this.snapped) return false;
+    const bounds = liveBounds?.clone() ?? new Box3();
+    if (!liveBounds)
+      for (const shape of this.shapes)
+        for (const vertex of shape.vertices) bounds.expandByPoint(vertex);
+    if (bounds.isEmpty()) bounds.copy(this.bounds);
+    const bend = createStructuralBend({
+      mean,
+      direction,
+      force,
+      bendability: this.wam.bendability,
+      bendZMin: this.wam.bendZMin,
+      bendZMax: this.wam.bendZMax,
+      bounds,
+      human,
+      random: this.damageContext.random,
+      seedRandom: this.damageContext.seedRandom,
+      physicsTickMs,
+      minimumForce: this.structuralSettings.minimumForce,
+    });
+    if (!bend) return false;
+    if (!this.structuralBend) this.applyStructuralBend(bend, human);
+    // DoBending438c50 consumes this pitch even when BendCar already bent the
+    // car on an earlier eligible mark and refuses another geometry change.
+    const pitch = mineRandomInteger(
+      this.damageContext.random ?? sharedNativeRandom.random,
+      0xe000,
+      0x12000,
+    );
+    this.onStructuralBendSound?.(pitch / 0x10000);
+    return true;
   }
 
   /** Shared ordinary vertex/texture/attachment path, without damage programs. */
@@ -2065,6 +2145,10 @@ export class DamageSystem {
                 .clone()
                 .applyMatrix4(runtime.actor.matrix.clone().invert()),
               random: this.damageContext.random,
+              seedRandom: this.damageContext.seedRandom,
+              physicsTickMs: nowMs,
+              inverseBucklePercent:
+                this.structuralSettings.inverseBucklePercent,
             });
             if (plastic.movedVertices) {
               this.writePartVertices(runtime, points);
@@ -2108,6 +2192,8 @@ export class DamageSystem {
               mesh: data.mesh,
               localPoint: mean.clone(),
               localDirection: direction.clone(),
+              startingVelocity:
+                this.readSmashStartingVelocity?.().clone() ?? new Vector3(),
               timeMs: nowMs,
               oldLevel,
               targetLevel: level,

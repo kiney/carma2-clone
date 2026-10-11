@@ -24,6 +24,13 @@ import { nativeHasCarFallenOffWorld } from "./ai/fallen-world";
 import { NONCAR_FLAGS } from "./physics/noncar-motion";
 import { parseDefaultGravityMultiplier } from "./physics/global-gravity";
 import { BrowserGameClock } from "./game-clock";
+import { sharedNativeRandom } from "./native-random";
+import { parseStructuralSettings } from "./physics/structural";
+import {
+  consumeSmashAward,
+  enqueueConnotationPowerup,
+  type NativeSmashAwardState,
+} from "./smash-gameplay";
 import * as THREE from "three";
 import { placeCarAtStart } from "./physics/spawn";
 import { Assets } from "./content";
@@ -50,6 +57,7 @@ import {
 } from "./gameplay";
 import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
+import { WorldFollowupRuntime, type FollowupDue } from "./world-followup";
 import { DamageSystem } from "./damage";
 import {
   PowerupSystem,
@@ -70,6 +78,7 @@ import { parseSurfaceModifiers } from "./physics/surfaces";
 import {
   parseDefaultWaterVolume,
   parseTrackSpecialVolumes,
+  findSpecialVolume,
 } from "./physics/volumes";
 import { OilRuntime } from "./physics/oil";
 import { parseNonCarMechanics, parseTrackNonCarFiles } from "./noncars";
@@ -155,6 +164,12 @@ let cameraControlReset = false;
 let nativeCameraSettings: CameraSettings | undefined;
 let cameraNeedsReset = true;
 const missionVariables = new MissionVariables();
+let smashAwardStates = new WeakMap<
+  object,
+  Map<SmashConnotations, NativeSmashAwardState>
+>();
+let miscStrings: string[] = [];
+let worldFollowups: WorldFollowupRuntime | undefined;
 const raceCatalogs = new Map<string, RaceCatalog>();
 const assets = new Assets();
 const audio = new AudioSystem(assets);
@@ -238,6 +253,9 @@ const debug = {
   },
   get simulation() {
     return simulation;
+  },
+  get worldFollowups() {
+    return worldFollowups;
   },
   get player() {
     return player;
@@ -570,6 +588,8 @@ async function loadRace() {
         currentTrack.split("/").pop()!.toLowerCase(),
     );
     missionVariables.clear();
+    smashAwardStates = new WeakMap();
+    worldFollowups = undefined;
     const generalText = await assets.text("data/GENERAL.TXT");
     nativeCameraSettings = parseCameraSettings(generalText);
     camera.fov = nativeCameraSettings.runtimeFovDegrees;
@@ -595,7 +615,7 @@ async function loadRace() {
     const loadedPowerups = new PowerupSystem(
       assets,
       world.group,
-      Math.random,
+      sharedNativeRandom.random,
       definition?.powerupExclusions ?? [],
       defaultGravityMultiplier,
     );
@@ -610,6 +630,12 @@ async function loadRace() {
       if (oilPath) await assets.pixelmaps(oilPath);
     }
     raceAwards = parseRaceAwards(generalText);
+    const miscPath = assets.resolve(`${currentTrack.split("/")[0]}/TEXT.TXT`);
+    miscStrings = miscPath
+      ? (await assets.text(miscPath))
+          .split(/\r?\n/)
+          .filter((line) => line.trim() && !line.trim().startsWith("//"))
+      : [];
     pedAwards = parsePedAwards(
       await assets.text(
         `${currentTrack.toLowerCase().startsWith("adv_data/") ? "adv_data" : "data"}/PEDS/settings.txt`,
@@ -644,6 +670,7 @@ async function loadRace() {
     );
     const loadedDamage = new DamageSystem(assets, loadedCar.group, carText);
     await loadedDamage.init();
+    loadedDamage.structuralSettings = parseStructuralSettings(generalText);
     status("Building collision geometry…");
     const noncarDefinitions = new Map<
       number,
@@ -692,8 +719,7 @@ async function loadRace() {
         models: world.models,
         textures: world.textures,
         materials: world.materials,
-        onActivation: (activation, contact) =>
-          simulation?.worldActivations.enqueue(activation, contact),
+        random: sharedNativeRandom.random,
         onConnotations: dispatchSmashConnotations,
       },
     );
@@ -714,6 +740,7 @@ async function loadRace() {
       ...loadedGrooves.actors,
       ...loadedDestruction.retainActors,
     ]);
+    loadedDestruction.root = world.group;
     const newCollision = new WorldCollision(
       world.group,
       parseSurfaceModifiers(trackText),
@@ -723,11 +750,13 @@ async function loadRace() {
     explosions?.dispose();
     shards?.dispose();
     shards = new ShardRuntime(scene, world.materials, {
+      random: sharedNativeRandom.random,
       gravity: () => simulation?.gravityMultiplier ?? defaultGravityMultiplier,
     });
     explosions = new ExplosionRuntime(
       scene,
       new Map([...world.textures, ...assets.textures]),
+      { random: sharedNativeRandom.random },
     );
     if (mineModel) disposeGroup(mineModel);
     mineModel = loadedMine.group;
@@ -808,15 +837,35 @@ async function loadRace() {
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    simulation.onOpponentRepulsed = (source, target) => {
+      const com = (body: SimulatedCar) =>
+        body.properties.centerOfMass
+          .clone()
+          .applyQuaternion(body.state.orientation)
+          .add(body.state.position);
+      pedestrians?.emitOpponentRepulsion(
+        () => com(source),
+        () => com(target),
+        stats.gameTimeMs,
+      );
+    };
     simulation.deferFinalSmashFlush = true;
     simulation.smashClock = () => stats.gameTimeMs >>> 0;
+    simulation.onSmashPowerup = ({ car: recipient, index }) => {
+      if (recipient === player && race)
+        powerups?.grant(index, recipient.state, race, onPowerupEvent);
+    };
     simulation.gravityMultiplier = defaultGravityMultiplier;
+    simulation.flapGravity = loadedDamage.structuralSettings.battyGravity;
     simulation.onPinball = () => void audio.playSound(9011);
     simulation.onWorldGeometryChanged = () =>
       pedestrians?.invalidateWorldGeometry();
     simulation.specialVolumes = parseTrackSpecialVolumes(trackText);
     simulation.defaultWaterVolume = parseDefaultWaterVolume(generalText);
-    simulation.oil = new OilRuntime({ texture: assets.textures.get("oil") });
+    simulation.oil = new OilRuntime({
+      texture: assets.textures.get("oil"),
+      random: sharedNativeRandom.random,
+    });
     simulation.mineFactory = {
       actor: mineModel,
       bounds: new THREE.Box3().setFromObject(mineModel),
@@ -837,6 +886,28 @@ async function loadRace() {
         );
     };
     simulation.destruction = loadedDestruction;
+    const followupSimulation = simulation;
+    const followupRoot = world.group;
+    worldFollowups = new WorldFollowupRuntime({
+      delayed: simulation.delayedSmashes,
+      readTimeMs: () => followupSimulation.smashClock(),
+      readTrackMatrix: () => {
+        followupRoot.updateWorldMatrix(true, false);
+        return followupRoot.matrixWorld.elements;
+      },
+      collectFaces: (query, capacity) =>
+        loadedDestruction.collectFollowupFaces(query, capacity, {
+          readActorPose: (actor) =>
+            followupSimulation.liveSmashPhysics(actor)?.transform,
+          isRegisteredNoncar: (actor) =>
+            followupSimulation.noncars.some((body) => body.actor === actor),
+        }),
+      random: sharedNativeRandom.random,
+      onDue: (context) =>
+        dispatchFollowupSmash(followupSimulation, loadedDestruction, context),
+      onUnsupportedDirection: () =>
+        console.warn("Native parallel followup direction is unresolved"),
+    });
     simulation.grooves = loadedGrooves;
     for (const body of movingWorld) simulation.addMovingWorld(body);
     assets.warnings.push(
@@ -1035,10 +1106,92 @@ async function loadRace() {
 function dispatchSmashConnotations(
   data: SmashConnotations,
   contact: WorldSmashContact,
+  suppressed = false,
+  shrapnel?: () => void,
 ) {
-  const sound = chooseSmashAudio(data.sounds);
+  const sound = chooseSmashAudio(data.sounds, sharedNativeRandom.random);
   if (sound !== undefined)
     void audio.playSound(sound.id, 0.65, sound.playbackRate);
+  const owner = simulation?.cars.find(
+    (body) => body.group === contact.bodyActor,
+  );
+  const physics = owner
+    ? {
+        type: 1,
+        owner: { car: owner, driver: owner.human ? 8 : 6 },
+        position: owner.state.position.toArray() as [number, number, number],
+      }
+    : undefined;
+  if (!suppressed)
+    for (const activation of data.activations)
+      simulation?.worldActivations.enqueue(activation, contact);
+  if (
+    !suppressed &&
+    data.sideEffects.length &&
+    simulation &&
+    contact.bodyActor
+  ) {
+    const sourceActor = contact.bodyActor;
+    const live = simulation.liveSmashPhysics(sourceActor);
+    if (live) {
+      const activeSimulation = simulation;
+      worldFollowups?.enqueue(
+        data.sideEffects,
+        {
+          actor: sourceActor,
+          readMatrix: () =>
+            (
+              activeSimulation.liveSmashPhysics(sourceActor)?.transform ??
+              live.transform
+            ).elements,
+          readVelocity: () =>
+            (
+              activeSimulation.liveSmashPhysics(sourceActor)?.velocity ??
+              live.velocity
+            ).toArray(),
+        },
+        contact.effectMagnitude ?? contact.normalImpulse,
+      );
+    }
+  }
+  // Native roomCode is an authored powerup index, following side-effect enqueue.
+  if (simulation)
+    enqueueConnotationPowerup(
+      simulation.smashPowerupQueue,
+      data.roomCode,
+      physics,
+      contact.point?.toArray() as [number, number, number] | undefined,
+      suppressed,
+    );
+  shrapnel?.();
+  const identity = contact.effectIdentity ?? data;
+  let states = smashAwardStates.get(identity);
+  if (!states) {
+    states = new Map();
+    smashAwardStates.set(identity, states);
+  }
+  let state = states.get(data);
+  if (!state) {
+    state = { awarded: false };
+    states.set(data, state);
+  }
+  const award = consumeSmashAward(data.award, state, {
+    physics: physics
+      ? { type: physics.type, driver: physics.owner.driver }
+      : undefined,
+    effectMagnitude: contact.effectMagnitude ?? contact.normalImpulse,
+    suppressed,
+    raceFinished: !race || race.status !== "racing" || race.awardsClosed,
+    noTimeAwards: race?.disableTimeAwards,
+  });
+  if (award) {
+    if (race) {
+      awardRaceCredits(race, award.credits);
+      awardRaceTime(race, award.timeSeconds);
+    }
+    if (award.textIndex && miscStrings[award.textIndex])
+      message(miscStrings[award.textIndex], 3);
+  }
   if (data.explosions.length) {
     const source = contact.bodyActor ?? contact.actor;
     source.updateWorldMatrix(true, true);
@@ -1062,10 +1215,61 @@ function dispatchSmashConnotations(
   checkSmashObjective();
 }
 
+function dispatchFollowupSmash(
+  activeSimulation: VehicleSimulation,
+  destruction: WorldDestruction,
+  context: FollowupDue,
+) {
+  const actor = context.face.actor.identity as THREE.Object3D;
+  if (context.route === "numbered") {
+    const body = activeSimulation.noncars.find((body) => body.actor === actor);
+    if (body) {
+      body.actor.userData.noncarPulled = true;
+      body.properties.immovable = false;
+      body.motor.sleeping = false;
+    }
+    actor.name = actor.name.slice(0, 3) + "!" + actor.name.slice(4);
+    if (!context.eligibleAfterRelease) return;
+  }
+  const source = context.face.source as
+    | { actor: THREE.Object3D; faceIndex: number; material: string }
+    | undefined;
+  const revision = destruction.geometryRevision;
+  const bodyActor = context.sourcePhysics.actor as THREE.Object3D;
+  destruction.handleFollowup(
+    {
+      actor: source?.actor ?? actor,
+      faceIndex: source?.faceIndex,
+      material: source?.material,
+      normalImpulse: context.magnitude,
+      effectMagnitude: context.magnitude,
+      kind: "body",
+      bodyActor,
+      point: new THREE.Vector3(...context.point),
+      impacteeVelocity: new THREE.Vector3(...context.sourceVelocity),
+      effectForce: new THREE.Vector3(...context.force),
+      smashStartingVelocity:
+        activeSimulation.startingActorSmashVelocity(bodyActor),
+      impacteeTransform:
+        activeSimulation.liveSmashPhysics(bodyActor)?.transform,
+      timeMs: activeSimulation.smashClock(),
+    },
+    context.targetSpec,
+    context.route === "numbered",
+  );
+  if (revision !== destruction.geometryRevision) {
+    activeSimulation.world.rebuildStatic();
+    activeSimulation.world.invalidateDynamic();
+    activeSimulation.onWorldGeometryChanged?.();
+  }
+}
+
 function bindWamEffects(
   body: SimulatedCar,
   materials: ReadonlyMap<string, THREE.Material>,
 ) {
+  body.damage.onStructuralBendSound = (playbackRate) =>
+    void audio.playSound(5099, 0.65, playbackRate);
   body.damage.onWamSmash = (event) => {
     // Use the collision body's current pose, not its interpolated render pose.
     const transform = new THREE.Matrix4().compose(
@@ -1082,6 +1286,9 @@ function bindWamEffects(
       impacteeTransform: transform,
       point: event.localPoint.clone().applyMatrix4(transform),
       timeMs: event.timeMs,
+      smashStartingVelocity: event.startingVelocity,
+      effectMagnitude: Math.fround(event.startingVelocity.length()),
+      effectIdentity: body.damage,
     };
     // Preserve model/ACT transforms, replacing only the stale render root pose.
     body.group.updateWorldMatrix(true, true);
@@ -1107,23 +1314,20 @@ function bindWamEffects(
         ? [slot]
         : [],
     );
-    for (const spec of event.connotations.shrapnel)
-      if (spec.kind === "shards")
-        shards?.spawn(spec, {
-          geometry: event.mesh.geometry,
-          matrixWorld: meshTransform,
-          materialSlots: slots,
-          sourceVertexLimit: 50,
-          sourceFaceLimit: 50,
-          materials,
-          impacteeVelocity: nativeSmashStartingVelocity(
-            simulation?.startingCarSmashVelocity(body) ?? body.state.velocity,
-          ),
-          timeMs: event.timeMs,
-        });
-    for (const activation of event.connotations.activations)
-      simulation?.worldActivations.enqueue(activation, contact);
-    dispatchSmashConnotations(event.connotations, contact);
+    dispatchSmashConnotations(event.connotations, contact, false, () => {
+      for (const spec of event.connotations.shrapnel)
+        if (spec.kind === "shards")
+          shards?.spawn(spec, {
+            geometry: event.mesh.geometry,
+            matrixWorld: meshTransform,
+            materialSlots: slots,
+            sourceVertexLimit: 50,
+            sourceFaceLimit: 50,
+            materials,
+            impacteeVelocity: event.startingVelocity,
+            timeMs: event.timeMs,
+          });
+    });
   };
 }
 
@@ -1184,6 +1388,7 @@ async function loadRivals(
     player,
     {
       skill: activeSimulation.skill,
+      random: sharedNativeRandom.random,
       raceIndex,
       raceCount: catalog.races.length,
       viewDistance: nativeOpponentViewDistance(camera.far),
@@ -1231,6 +1436,7 @@ async function loadRivals(
     const config = parseCarConfig(text);
     const model = await assets.scene(dirOf(configPath), stemOf(configPath));
     const rivalDamage = new DamageSystem(assets, model.group, text);
+    rivalDamage.structuralSettings = parseStructuralSettings(generalText);
     await rivalDamage.init();
     if (activeTrack !== currentTrack || loadGeneration !== generation) {
       disposeGroup(model.group);
@@ -1331,6 +1537,13 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     {
       spawn: vehicle.position,
       collision,
+      readGravityMultiplier: (position) =>
+        simulation
+          ? findSpecialVolume(
+              simulation.specialVolumes?.volumes ?? [],
+              position,
+            )?.gravityMultiplier
+          : undefined,
       onHit: (event) => {
         if (race?.status === "racing" && !race.awardsClosed) {
           if (
@@ -1342,7 +1555,11 @@ async function loadPedestrians(text: string, loadGeneration: number) {
           }
           // Native direct-kill path calls OneLessPed/completion before scoring.
           checkRaceObjective();
-          if (pedAwards && race.status === "racing") {
+          if (
+            pedAwards &&
+            race.status === "racing" &&
+            (!event.owner || event.owner === player)
+          ) {
             const award = pedAwardCounter.score(event.timeMs, pedAwards, 0);
             race.credits += award.credits;
             awardRaceTime(race, award.seconds);
@@ -1580,6 +1797,25 @@ el("menu-button").addEventListener("click", () => {
     setPaused(!paused);
   }
 });
+function readPlayerCombatPosition(): THREE.Vector3 {
+  if (!player) return new THREE.Vector3();
+  return player.properties.centerOfMass
+    .clone()
+    .applyQuaternion(player.state.orientation)
+    .add(player.state.position);
+}
+function readPlayerCombatRayOrigin(): THREE.Vector3 {
+  if (!player) return new THREE.Vector3();
+  const bounds = player.damage.primaryRenderModelBounds;
+  const offset = new THREE.Vector3(
+    0,
+    bounds ? -(bounds.max.y - bounds.min.y) / 5 : 0,
+    0,
+  );
+  return offset
+    .applyQuaternion(player.state.orientation)
+    .add(readPlayerCombatPosition());
+}
 addEventListener("keydown", (event) => {
   if (event.code === "Escape") {
     event.preventDefault();
@@ -1604,6 +1840,35 @@ addEventListener("keydown", (event) => {
     powerups?.activateAbility(
       race,
       (event) => {
+        if ([37, 45, 49].includes(event.definition.action)) {
+          const hit =
+            pedestrians?.useCombatPowerup(
+              event.definition.action as 37 | 45 | 49,
+              event.definition.floatParams,
+              {
+                position: readPlayerCombatPosition(),
+                velocity: player!.state.velocity,
+                gravityMultiplier:
+                  player!.specialVolume?.volume?.gravityMultiplier,
+                owner: player,
+                readRayOrigin: readPlayerCombatRayOrigin,
+                readPosition: readPlayerCombatPosition,
+              },
+              Math.round((simulation?.elapsed ?? 0) * 1000) >>> 0,
+              stats.gameTimeMs,
+            ) ?? false;
+          message(hit ? event.name : "NO ELIGIBLE PEDESTRIAN TARGET");
+          return hit;
+        }
+        if (event.definition.action === 38) {
+          const hit =
+            simulation?.repulseOpponents(
+              player!,
+              event.definition.floatParams,
+            ) ?? false;
+          message(hit ? event.name : "REPULSION · NO OPPONENT IN RANGE");
+          return hit;
+        }
         if (event.definition.action === 36) {
           commandJump(player!.state, event.definition.floatParams[0] ?? 0);
           void audio.playSound(9010);
@@ -1972,6 +2237,15 @@ function animate(now: number) {
         },
         {
           cameraPosition: camera.position,
+          gameTimeMs: stats.gameTimeMs,
+          physicsTickMs: Math.round((simulation?.elapsed ?? 0) * 1000) >>> 0,
+          framePeriodMs: gameFrame.periodMs,
+          electricRayDistanceSquared: powerups?.electricRayDistanceSquared ?? 0,
+          combatOwner: player,
+          combatPosition: readPlayerCombatPosition(),
+          readCombatRayOrigin: readPlayerCombatRayOrigin,
+          cameraOrientation: camera.getWorldQuaternion(new THREE.Quaternion()),
+          gravityMultiplier: player?.specialVolume?.volume?.gravityMultiplier,
           threats: simulation
             ? [...simulation.cars, ...simulation.noncars].map((body) => {
                 // Source SetObjectRadius uses the furthest authored bound on each

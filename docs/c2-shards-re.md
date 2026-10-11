@@ -72,7 +72,7 @@ Rotate about normalized spin by `|spin|*dt` when its absolute value reaches `0.0
 
 ## Implementation and limits
 
-`src/smash-shards.ts` owns generated triangle geometries and cloned two-sided material state, clones texture transform state while sharing the source images, and leaves source geometry and materials untouched. `clear()` removes the transient geometry; `dispose()` also releases owned material clones. Positions and UVs are emitted as float32 buffers; JavaScript intermediate calculations are not bit-identical x87 arithmetic. Native replay reverse-time behavior and random-seed save/restore are outside this live runtime. The injectable random source retains the native 15-bit distribution, but does not promise the original MS runtime RNG stream.
+`src/smash-shards.ts` owns generated triangle geometries and cloned two-sided material state, clones texture transform state while sharing the source images, and leaves source geometry and materials untouched. `clear()` removes the transient geometry; `dispose()` also releases owned material clones. Positions and UVs are emitted as float32 buffers; JavaScript intermediate calculations are not bit-identical x87 arithmetic. Native replay reverse-time behavior and random-seed save/restore are outside this live runtime. Production supplies the shared MSVC random stream; tests may inject a bounded deterministic source. Complete original random-consumer coverage is not established.
 
 The implemented pool holds shards only. Native blood/gib/ghost fragments can share the 200-entry pool with other priorities; sharing those future effects requires a unified allocator. Current stock WAM evidence contains authored shards, so same-priority capacity behavior is implemented directly.
 

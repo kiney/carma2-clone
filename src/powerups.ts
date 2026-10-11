@@ -70,8 +70,10 @@ export interface PowerupEvent {
 
 const implementedActions = new Set([
   0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27,
-  28, 30, 34, 35, 36, 46, 47, 51,
+  28, 30, 31, 34, 35, 36, 37, 38, 45, 46, 47, 49, 51,
 ]);
+
+const combatAbilityActions = new Set([37, 38, 45, 49]);
 
 export function isPowerupImplemented(definition: PowerupDefinition): boolean {
   return implementedActions.has(definition.action);
@@ -183,7 +185,8 @@ interface ActiveEffect {
     | 21
     | 22
     | 27
-    | 28;
+    | 28
+    | 31;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -223,6 +226,12 @@ export class PowerupSystem {
   private wallClimb = false;
   private readonly gravity: GlobalGravityState;
   private pinballFactor = 0;
+  private proxyRayDistanceSquared = 0;
+  /** Native car +170c: action31 squares its authored float, reset clears it.
+   * Remains active through beginFrame's physics window until finishFrame. */
+  get electricRayDistanceSquared(): number {
+    return this.proxyRayDistanceSquared;
+  }
   private elapsedMs = 0;
   /** Called after physics, matching native DoPowerupPeriodics ordering. */
   periodicBounce(state: {
@@ -443,7 +452,7 @@ export class PowerupSystem {
    * one even when an oil allocator refuses unsuitable placement. */
   activateAbility(
     race: RaceState,
-    onEvent?: (event: PowerupEvent) => void | number,
+    onEvent?: (event: PowerupEvent) => void | number | boolean,
     knackered = false,
   ): boolean {
     if (
@@ -470,7 +479,17 @@ export class PowerupSystem {
     // MungeKeyboardPowerup 0x4db36a then leaves inventory unchanged.
     // Oil/mine allocator failure is different: their native handlers still
     // return the definition index, so existing void handlers remain successful.
-    if (typeof result === "number" && result < 0) return false;
+    if (result === false || (typeof result === "number" && result < 0))
+      return false;
+    // Combat got handlers return -1 when target selection/allocation fails.
+    // A missing runtime handler cannot report success for these actions.
+    // Existing mine/oil callbacks retain their successful void convention.
+    if (
+      combatAbilityActions.has(ability.definition.action) &&
+      result !== true &&
+      !(typeof result === "number" && Number.isFinite(result) && result >= 0)
+    )
+      return false;
     ability.charges--;
     if (!ability.charges) {
       this.abilities.delete(ability.definition.index);
@@ -530,6 +549,9 @@ export class PowerupSystem {
       case 28:
         this.instantHandbrake = false;
         break;
+      case 31:
+        this.proxyRayDistanceSquared = 0;
+        break;
       case 16:
         this.gravity.reset();
         break;
@@ -584,7 +606,11 @@ export class PowerupSystem {
     switch (def.action) {
       case 34:
       case 35:
-      case 36: {
+      case 36:
+      case 37:
+      case 38:
+      case 45:
+      case 49: {
         // Installed GotPowerupEarwig0x4d8e69 adds the authored initial value
         // to existing inventory; preserve remaining charges on repeat pickups.
         const charges =
@@ -642,11 +668,21 @@ export class PowerupSystem {
       case 18:
       case 22:
       case 27:
-      case 28: {
+      case 28:
+      case 31: {
         if (def.action === 5) this.invulnerable = true;
         if (def.action === 6) this.freeRepairs = true;
         if (def.action === 8) this.timerFrozen = true;
         if (def.action === 10) this.underwaterAbility = true;
+        if (def.action === 31) {
+          const value = Math.fround(def.floatParams[0]);
+          const squared = Math.fround(value * value);
+          if (!Number.isFinite(squared))
+            throw new Error(
+              "Missing or invalid electric ray powerup parameter",
+            );
+          this.proxyRayDistanceSquared = squared;
+        }
         if (def.action === 14 || def.action === 15) {
           const value = def.floatParams[0];
           if (value === undefined || !Number.isFinite(value))

@@ -1,4 +1,5 @@
 import {
+  Box3,
   BufferGeometry,
   Float32BufferAttribute,
   Material,
@@ -11,6 +12,11 @@ import {
   Vector3,
 } from "three";
 import type { DatModel } from "./formats";
+import {
+  resolveFollowupActorSpec,
+  type FollowupFace,
+  type FollowupQuery,
+} from "./world-followup";
 import type { WorldActivationContact } from "./world-activation";
 import { createModelGeometry } from "./render-geometry";
 import { NativeSmashQueue } from "./smash-queue";
@@ -41,6 +47,14 @@ export interface WorldSmashContact {
   bodyActor?: Object3D;
   /** Source delayed activation snapshots raw model-unit physics velocity. */
   impacteeVelocity?: Vector3;
+  /** Authored followup direction/strength retained separately from its magnitude. */
+  effectForce?: Vector3;
+  /** Native queue copies this already metric, F32 starting-step vector. */
+  smashStartingVelocity?: Vector3;
+  /** Direct effects use solved impulse; queued effects use first starting speed. */
+  effectMagnitude?: number;
+  /** Runtime decal/texture identity scopes its per-level award latch. */
+  effectIdentity?: object;
   impacteeTransform?: Matrix4;
   point?: Vector3;
   timeMs?: number;
@@ -395,7 +409,7 @@ export class WorldDestruction {
     this.sharedSmashQueue = queue;
   }
   constructor(
-    readonly root: Object3D,
+    public root: Object3D,
     readonly specs: readonly WorldSmashSpec[],
     readonly assets: WorldDestructionAssets = {},
   ) {
@@ -447,6 +461,7 @@ export class WorldDestruction {
       this.actorSpecs.set(actor, [
         ...new Set([...(this.actorSpecs.get(actor) ?? []), ...indices]),
       ]);
+      actor.userData.worldSmashOriginalIdentifier ??= actor.name;
       actor.userData.worldSmashRetained = true;
       actor.userData.worldSmashSpecIndices = this.actorSpecs.get(actor);
       retained.add(actor);
@@ -538,7 +553,8 @@ export class WorldDestruction {
     if (
       !suppressActivationsAndAwards &&
       data.activations.length &&
-      !this.assets.onActivation
+      !this.assets.onActivation &&
+      !this.assets.onConnotations
     )
       out.diagnostics.push("Noncar activation requires onActivation callback");
     for (const activation of suppressActivationsAndAwards
@@ -599,7 +615,154 @@ export class WorldDestruction {
     );
     return { geometry, materials: used };
   }
+  /** Followup selection includes pass-through triangles; collision cells
+   * deliberately omit them. The cap is applied before target eligibility. */
+  collectFollowupFaces(
+    query: FollowupQuery,
+    capacity: number,
+    options: {
+      readActorPose?: (actor: Object3D) => Matrix4 | undefined;
+      isRegisteredNoncar?: (actor: Object3D) => boolean;
+    } = {},
+  ): FollowupFace[] {
+    const result: FollowupFace[] = [];
+    const box = new Box3(new Vector3(...query.min), new Vector3(...query.max));
+    const trackInverse = new Matrix4()
+      .fromArray([...query.trackMatrix])
+      .invert();
+    this.root.updateWorldMatrix(true, true);
+    this.root.traverse((node) => {
+      if (!(node instanceof Mesh) || result.length >= capacity) return;
+      for (
+        let ancestor: Object3D | null = node;
+        ancestor;
+        ancestor = ancestor.parent
+      )
+        if (ancestor.userData.worldSmashDisabled) return;
+      const data = this.meshData(node);
+      let actor: Object3D = node.parent ?? node;
+      for (
+        let ancestor: Object3D | null = node;
+        ancestor;
+        ancestor = ancestor.parent
+      )
+        if (
+          this.actorSpecs.has(ancestor) ||
+          options.isRegisteredNoncar?.(ancestor)
+        ) {
+          actor = ancestor;
+          break;
+        }
+      const indices = this.actorSpecs.get(actor) ?? [];
+      const ordinarySpec = resolveFollowupActorSpec(this.specs, indices, [
+        node.name,
+        actor.name,
+        actor.userData.worldSmashOriginalIdentifier ?? actor.name,
+      ]);
+      const numberedSpec = indices
+        .map((i) => this.specs[i])
+        .filter((spec) => spec.trigger.kind === "number")
+        .at(-1);
+      const pose = options.readActorPose?.(actor);
+      const meshMatrix = pose
+        ? pose
+            .clone()
+            .multiply(actor.matrixWorld.clone().invert())
+            .multiply(node.matrixWorld)
+        : node.matrixWorld;
+      for (const [index, face] of data.faces.entries()) {
+        if (result.length >= capacity) break;
+        const vertices = face.vertices.map((vertex) =>
+          vertex.position.clone().applyMatrix4(meshMatrix),
+        );
+        const local = vertices.map((vertex) =>
+          vertex.clone().applyMatrix4(trackInverse),
+        );
+        if (!box.intersectsTriangle(new Triangle(local[0], local[1], local[2])))
+          continue;
+        const materialIndex = this.bindings.get(
+          `material:${key(face.originalMaterial)}`,
+        );
+        const materialSpec =
+          materialIndex === undefined ? undefined : this.specs[materialIndex];
+        const normal = new Triangle(
+          vertices[0],
+          vertices[1],
+          vertices[2],
+        ).getNormal(new Vector3());
+        const groupIndex = Math.max(
+          0,
+          data.geometry.groups.findIndex(
+            (group) =>
+              index * 3 >= group.start && index * 3 < group.start + group.count,
+          ),
+        );
+        result.push({
+          actor: {
+            identity: actor,
+            readIdentifier: () => actor.name,
+            readTranslation: () => {
+              const current = options.readActorPose?.(actor);
+              return current
+                ? [
+                    current.elements[12],
+                    current.elements[13],
+                    current.elements[14],
+                  ]
+                : actor.position.toArray();
+            },
+            ordinarySpec,
+            ordinarySpecProxy: !!ordinarySpec,
+            numbered: {
+              registered: options.isRegisteredNoncar?.(actor) ?? !!numberedSpec,
+              argument:
+                numberedSpec?.trigger.kind === "number"
+                  ? numberedSpec.trigger.argument
+                  : 0,
+            },
+          },
+          groupIndex,
+          faceIndex: index,
+          vertices: vertices.map((vertex) => vertex.toArray()) as [
+            [number, number, number],
+            [number, number, number],
+            [number, number, number],
+          ],
+          normal: normal.toArray(),
+          material: {
+            identifier: face.originalMaterial,
+            spec: materialSpec,
+            specProxy: !!materialSpec,
+          },
+          source: {
+            actor: node,
+            faceIndex: index,
+            material: face.originalMaterial,
+          },
+        });
+      }
+    });
+    return result;
+  }
+
   handleContact(contact: WorldSmashContact): WorldDestructionResult {
+    return this.handleNativeContact(contact);
+  }
+
+  /** Installed delayed dispatcher enters SmashEnvironment/BashObject directly,
+   * bypassing ProcessForcesCallback's .02 solved-contact gate. */
+  handleFollowup(
+    contact: WorldSmashContact,
+    spec?: WorldSmashSpec,
+    numbered = false,
+  ): WorldDestructionResult {
+    return this.handleNativeContact(contact, { spec, numbered });
+  }
+
+  private handleNativeContact(
+    contact: WorldSmashContact,
+    followup?: { spec?: WorldSmashSpec; numbered: boolean },
+  ): WorldDestructionResult {
     const out: WorldDestructionResult = {
       changed: false,
       changes: [],
@@ -615,6 +778,7 @@ export class WorldDestruction {
     if (contact.point && !contact.point.toArray().every(Number.isFinite))
       throw new Error("Invalid destruction contact point");
     if (
+      !followup &&
       contact.kind === "body" &&
       !(contact.normalImpulse > SMASH_BODY_IMPULSE_GATE)
     )
@@ -628,6 +792,8 @@ export class WorldDestruction {
             ? this.meshData(mesh).faces[contact.faceIndex]?.originalMaterial
             : undefined));
     for (const [i, spec] of this.specs.entries()) {
+      if (followup?.numbered && spec.trigger.kind !== "number") continue;
+      if (followup?.spec && spec !== followup.spec) continue;
       if (
         this.bindings.get(`${spec.trigger.kind}:${key(spec.trigger.name)}`) !==
         i
@@ -651,7 +817,9 @@ export class WorldDestruction {
         continue;
       if (
         spec.trigger.kind === "number" &&
-        !numericSmashTriggerEligible(spec.trigger, owner.name)
+        !(followup?.numbered
+          ? (spec.trigger.argument & 2) !== 0
+          : numericSmashTriggerEligible(spec.trigger, owner.name))
       )
         continue;
       if (spec.mode === "texturechange" || spec.mode === "decal") {
@@ -924,6 +1092,11 @@ export class WorldDestruction {
       ...contact,
       point: contact.point?.clone(),
       impacteeVelocity: contact.impacteeVelocity?.clone(),
+      smashStartingVelocity: contact.smashStartingVelocity?.clone(),
+      effectMagnitude: Math.fround(
+        contact.smashStartingVelocity?.length() ?? 0,
+      ),
+      effectIdentity: patch,
       impacteeTransform: contact.impacteeTransform?.clone(),
     };
     const deferred = !!this.sharedSmashQueue;

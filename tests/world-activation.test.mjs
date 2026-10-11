@@ -9,6 +9,7 @@ import {
 import { parseNonCarMechanics } from "../src/noncars.ts";
 import { createNonCarBody } from "../src/physics/noncar-body.ts";
 import { NONCAR_FLAGS } from "../src/physics/noncar-motion.ts";
+import { NativeDelayedSideEffects } from "../src/smash-delayed.ts";
 import { parseTrackSmashables } from "../src/world-smash.ts";
 import { decodeText } from "../src/formats.ts";
 import { createAssetStore } from "../server/assets.mjs";
@@ -316,4 +317,98 @@ test("stock cuboid activation metadata drives installed lift state when assets a
     }
   }
   assert.ok(count > 0, "stock authored noncar cuboids were exercised");
+});
+
+test("noncar cuboids share slots with followup work and still sample delays when full", () => {
+  const delayed = new NativeDelayedSideEffects();
+  for (let i = 0; i < 20; i++)
+    delayed.enqueue({ kind: "smash", context: { advance: () => false } });
+  let draws = 0;
+  const runtime = new WorldActivationRuntime([body(), body()], {
+    delayed,
+    random: () => {
+      draws++;
+      return 0.5;
+    },
+  });
+  assert.equal(runtime.enqueue(activation(), event()), 0);
+  assert.equal(
+    draws,
+    2,
+    "native candidate delay draws precede free-slot search",
+  );
+  assert.equal(runtime.pendingCount, 0);
+  assert.equal(delayed.count, 20);
+  assert.match(runtime.diagnostics.at(-1), /limit20/);
+});
+
+test("empty noncar cuboids reserve a shared slot until the native delayed pass", () => {
+  const delayed = new NativeDelayedSideEffects();
+  const runtime = new WorldActivationRuntime([], {
+    delayed,
+    random: () => {
+      throw new Error("no candidates must draw");
+    },
+  });
+  for (let i = 0; i < 20; i++)
+    assert.equal(runtime.enqueue(activation(), event()), 0);
+  assert.equal(runtime.pendingCount, 0);
+  assert.equal(delayed.count, 20);
+  assert.equal(runtime.enqueue(activation(), event()), 0);
+  assert.match(runtime.diagnostics.at(-1), /limit20/);
+  runtime.update(100);
+  assert.equal(delayed.count, 0);
+});
+
+test("activation snapshots live physics and game time before delayed callback ownership", () => {
+  const prop = body(new Vector3(9, 0, 0));
+  const delayed = new NativeDelayedSideEffects();
+  const liveVelocity = new Vector3(6.9, 0, 0);
+  const liveTransform = new Matrix4().makeTranslation(10, 0, 0);
+  const runtime = new WorldActivationRuntime([prop], {
+    delayed,
+    random: () => 0.5,
+    readTimeMs: () => 500,
+    readPhysics: () => ({ velocity: liveVelocity, transform: liveTransform }),
+    onActivate: () => {
+      assert.equal(
+        delayed.count,
+        1,
+        "source cuboid stays active throughout the outlet",
+      );
+      delayed.enqueue({
+        kind: "smash",
+        context: {
+          advance: () => {
+            order.push("child");
+            return true;
+          },
+        },
+      });
+      order.push("parent");
+    },
+  });
+  const order = [];
+  assert.equal(
+    runtime.enqueue(
+      activation({
+        coordinates: "relative",
+        delaySeconds: [1, 1],
+        speed: { ...zeros(), impacteeVelocityFactor: 1 },
+      }),
+      event({
+        timeMs: 100,
+        impacteeVelocity: new Vector3(999, 0, 0),
+        impacteeTransform: new Matrix4().makeTranslation(999, 0, 0),
+      }),
+    ),
+    1,
+  );
+  liveVelocity.x = 999;
+  liveTransform.setPosition(999, 0, 0);
+  assert.deepEqual(runtime.update(1499), []);
+  assert.deepEqual(runtime.update(1500), [prop]);
+  close(prop.state.velocity.x, 1);
+  assert.deepEqual(order, ["parent", "child"]);
+  assert.equal(delayed.count, 0);
 });

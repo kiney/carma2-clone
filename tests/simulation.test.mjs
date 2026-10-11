@@ -20,6 +20,7 @@ import { originalCar } from "./support/original-car.mjs";
 import { transformHull } from "../src/physics/geometry.ts";
 import { buildBoxHull } from "../src/physics/box-hull.ts";
 import { createBallJoint } from "../src/physics/joint.ts";
+import { createMovingWorldBody } from "../src/physics/moving-world.ts";
 async function stock(t, name, position = new Vector3()) {
   let data;
   try {
@@ -51,6 +52,72 @@ const emptyWorld = {
     return [];
   },
 };
+
+test("live smash contexts substitute committed motion without discarding authored actor scale", () => {
+  const scene = new Group(),
+    actor = new Group();
+  actor.scale.set(2, 3, 4);
+  actor.position.set(1, 2, 3);
+  scene.add(actor);
+  const body = createMovingWorldBody(actor);
+  body.state.position.set(10, 20, 30);
+  body.state.orientation.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2);
+  body.state.velocity.set(1, 2, 3);
+  const sim = new VehicleSimulation(new WorldCollision(scene), scene);
+  sim.addMovingWorld(body);
+  const live = sim.liveSmashPhysics(actor);
+  const point = new Vector3(1, 1, 1).applyMatrix4(live.transform);
+  assert.ok(point.distanceTo(new Vector3(14, 23, 28)) < 1e-10);
+  assert.deepEqual(live.velocity.toArray(), [1, 2, 3]);
+  assert.deepEqual(
+    actor.position.toArray(),
+    [1, 2, 3],
+    "physics query leaves interpolated render pose alone",
+  );
+  live.velocity.set(0, 0, 0);
+  assert.deepEqual(
+    body.state.velocity.toArray(),
+    [1, 2, 3],
+    "snapshot does not alias live state",
+  );
+});
+
+test("native argument-one smash barriers retain queued grants until final argument-zero drain", async (t) => {
+  const car = await stock(t, "EAGLE3");
+  if (!car) return;
+  const simulation = new VehicleSimulation(emptyWorld, new Group());
+  simulation.add(car);
+  t.after(() => simulation.dispose());
+  simulation.deferFinalSmashFlush = true;
+  const calls = [];
+  simulation.onSmashPowerup = ({ index }) => {
+    calls.push(index);
+    assert.equal(
+      simulation.smashQueue.count,
+      1,
+      "smash capacity is held while grants execute",
+    );
+    if (index === 14)
+      simulation.smashPowerupQueue.enqueue({ car, index: 7, actor: null });
+  };
+  simulation.smashPowerupQueue.enqueue({ car, index: 14, actor: null });
+  simulation.updateFrame(0, 10);
+  assert.equal(simulation.smashPowerupQueue.count, 1);
+  simulation.flushSmashEffectsBarrier();
+  assert.deepEqual(calls, []);
+  simulation.smashQueue.enqueue({
+    key: {},
+    targetTier: 1,
+    getReachedTier: () => 0,
+    getLevelCount: () => 2,
+    hasModel: () => true,
+    context: { execute: () => {} },
+  });
+  simulation.flushSmashEffects();
+  assert.deepEqual(calls, [14, 7]);
+  assert.equal(simulation.smashPowerupQueue.count, 0);
+  assert.equal(simulation.smashQueue.count, 0);
+});
 function roadCorner(size = 20) {
   const scene = new Group();
   const material = new MeshBasicMaterial({ side: DoubleSide });

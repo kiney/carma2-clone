@@ -3,6 +3,58 @@ import { Box3, Matrix4, Vector3 } from "three";
 const ANGLE_SCALE = 65536 / (2 * Math.PI);
 const unsigned = (angle: number) => angle & 0xffff;
 const bendQuant = 0xe38;
+
+export interface StructuralSettings {
+  minimumForce: number;
+  bendingChance: number;
+  inverseBucklePercent: number;
+  battyGravity: number;
+  damageMinimum: number;
+  damageMaximum: number;
+}
+
+export const DEFAULT_STRUCTURAL_SETTINGS: Readonly<StructuralSettings> = {
+  minimumForce: 2.5,
+  bendingChance: 30,
+  inverseBucklePercent: 0,
+  battyGravity: 1.44,
+  damageMinimum: 10,
+  damageMaximum: 40,
+};
+
+/** These authored GENERAL fields are stored as native floats by429c0f–50. */
+export function parseStructuralSettings(text: string): StructuralSettings {
+  const read = (name: string): number => {
+    const line = text
+      .split(/\r?\n/)
+      .find((line) =>
+        new RegExp(`\\b${name}\\b`, "i").test(line.split("//")[1] ?? ""),
+      );
+    const value = Number(line?.split("//")[0].trim());
+    if (
+      !line ||
+      !Number.isFinite(value) ||
+      !Number.isFinite(Math.fround(value))
+    )
+      throw new Error(`GENERAL.TXT: missing or invalid ${name}`);
+    return Math.fround(value);
+  };
+  const settings = {
+    minimumForce: read("gMin_bend_force"),
+    bendingChance: read("gChance_of_bending"),
+    inverseBucklePercent: read("gChance_of_inverse_buckle"),
+    battyGravity: read("gBatty_gravity"),
+    damageMinimum: Math.trunc(read("gMin_bend_damage")),
+    damageMaximum: Math.trunc(read("gMax_bend_damage")),
+  };
+  if (
+    settings.minimumForce <= 0 ||
+    settings.damageMinimum < 0 ||
+    settings.damageMaximum < settings.damageMinimum
+  )
+    throw new Error("GENERAL.TXT: invalid structural force or damage range");
+  return settings;
+}
 /** Common original515e70/515f50 packing used by repair and transition-bend
  * references. The expand reciprocal is stored as a Float32 in the binary. */
 export function compressedModelCoordinate(value: number): number {
@@ -48,27 +100,42 @@ export interface StructuralImpact {
   raceIndex?: number;
   raceCount?: number;
   random?: () => number;
+  seedRandom?: (seed: number) => void;
+  physicsTickMs?: number;
   minimumForce?: number;
   bendingChance?: number;
   alreadyBent?: boolean;
 }
 
-/** Installed DoCrushing0x4360c0 selects the structural branch before local
- * crush. A failed bending probability still suppresses that force's dent. */
-export function selectStructuralBend(input: StructuralImpact): {
+/** Installed DoCrushing4360c0 marks an event; it does not bend geometry.
+ * The probability is consumed even for a car already bent in an earlier frame.
+ * Both a successful and a failed structural choice suppress ordinary crush. */
+export function selectStructuralBranch(input: StructuralImpact): {
   skipOrdinary: boolean;
-  bend?: BendTransform;
+  markedForBend: boolean;
 } {
-  const minimumForce = input.minimumForce ?? 2.5;
+  const minimumForce = Math.fround(input.minimumForce ?? 2.5);
   const raceRatio = (input.raceIndex ?? 0) / Math.max(1, input.raceCount ?? 1);
-  const opponentFactor = 5.95 - 4.95 * raceRatio;
+  const opponentFactor = 1 - (1 - raceRatio) * 99 * -0.05;
   const amount =
-    input.force * input.bendability * (input.human ? 1 : opponentFactor);
-  if (!(amount > minimumForce)) return { skipOrdinary: false };
-  if (input.alreadyBent) return { skipOrdinary: true };
+    Math.fround(input.force) *
+    Math.fround(input.bendability) *
+    (input.human ? 1 : opponentFactor);
+  if (!(amount > minimumForce))
+    return { skipOrdinary: false, markedForBend: false };
   const random = input.random ?? Math.random;
-  if (Math.floor(random() * 100) >= Math.trunc(input.bendingChance ?? 30))
-    return { skipOrdinary: true };
+  const chance = Math.trunc(Math.fround(input.bendingChance ?? 30));
+  const markedForBend = chance !== 0 && Math.floor(random() * 100) < chance;
+  return { skipOrdinary: true, markedForBend };
+}
+
+/** DoBending4389e0 resolves marked events against live post-crush bounds.
+ * Eligibility and the initial probability were evaluated in another phase. */
+export function createStructuralBend(
+  input: StructuralImpact,
+): BendTransform | undefined {
+  const minimumForce = Math.fround(input.minimumForce ?? 2.5);
+  const random = input.random ?? Math.random;
   let rear: boolean;
   const pivot = new Vector3();
   let farZ: number;
@@ -80,12 +147,13 @@ export function selectStructuralBend(input: StructuralImpact): {
     rear = false;
     pivot.z = input.bendZMin;
     farZ = input.bounds.max.z;
-  } else return { skipOrdinary: true };
+  } else return;
   let angleX = 0,
     angleY = 0;
   const direction = input.direction;
   // Source tests Z then X against sqrt(.5); the final branch uses Y.
-  if (Math.abs(direction.z) > 0.707107) {
+  if (Math.abs(direction.z) > Math.fround(0.707107)) {
+    input.seedRandom?.((input.physicsTickMs ?? 0) >>> 0);
     const upper = Math.floor(random() * 100) < 50;
     pivot.y = upper ? input.bounds.max.y : input.bounds.min.y;
     const sign = upper === rear ? 1 : -1;
@@ -93,7 +161,7 @@ export function selectStructuralBend(input: StructuralImpact): {
       Math.atan2(sign * Math.abs(direction.z) * input.force, minimumForce) *
         ANGLE_SCALE,
     );
-  } else if (Math.abs(direction.x) > 0.707107) {
+  } else if (Math.abs(direction.x) > Math.fround(0.707107)) {
     const negative = direction.x < 0;
     pivot.x = negative ? input.bounds.max.x : input.bounds.min.x;
     const sign = negative === rear ? 1 : -1;
@@ -112,9 +180,22 @@ export function selectStructuralBend(input: StructuralImpact): {
   }
   angleX = quantize(angleX, 0xce3c, 0x31c4);
   angleY = quantize(angleY, 0xdc74, 0x238c);
+  return createBendTransform(input.bounds, pivot, farZ, angleX, angleY);
+}
+
+/** Synchronous adapter for explicit standalone impact tools. Production
+ * separates these phases through the simulation's retained crush records. */
+export function selectStructuralBend(input: StructuralImpact): {
+  skipOrdinary: boolean;
+  bend?: BendTransform;
+} {
+  const branch = selectStructuralBranch(input);
   return {
-    skipOrdinary: true,
-    bend: createBendTransform(input.bounds, pivot, farZ, angleX, angleY),
+    skipOrdinary: branch.skipOrdinary,
+    bend:
+      branch.markedForBend && !input.alreadyBent
+        ? createStructuralBend(input)
+        : undefined,
   };
 }
 

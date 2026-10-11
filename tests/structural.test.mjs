@@ -1,13 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { access } from "node:fs/promises";
+import { createAssetStore } from "../server/assets.mjs";
+import { decodeText } from "../src/formats.ts";
 import { Box3, Vector3 } from "three";
 import {
   createBendTransform,
   bendPoint,
   selectStructuralBend,
+  selectStructuralBranch,
+  createStructuralBend,
   stepBendRepair,
   bendSteeringCurvature,
   compressedBendReference,
+  parseStructuralSettings,
 } from "../src/physics/structural.ts";
 
 const bounds = new Box3(new Vector3(-0.2, 0, -0.6), new Vector3(0.2, 0.3, 0.6));
@@ -21,6 +27,54 @@ const input = () => ({
   bounds,
   human: true,
   random: () => 0,
+});
+
+test("stock and Advanced GENERAL structural settings load authored native float fields", async (t) => {
+  try {
+    await access("carma2_orig");
+  } catch {
+    t.skip("Original installation absent");
+    return;
+  }
+  const assets = await createAssetStore();
+  for (const root of ["data", "adv_data"]) {
+    const settings = parseStructuralSettings(
+      decodeText(await assets.read(`${root}/general.txt`)),
+    );
+    assert.deepEqual(settings, {
+      minimumForce: 2.5,
+      bendingChance: 30,
+      inverseBucklePercent: 0,
+      battyGravity: Math.fround(1.44),
+      damageMinimum: 10,
+      damageMaximum: 40,
+    });
+  }
+  assert.throws(() => parseStructuralSettings(""), /GENERAL/);
+});
+
+test("dominant Z bends seed the captured tick only in the deferred phase", () => {
+  const calls = [];
+  const context = {
+    ...input(),
+    physicsTickMs: 1234,
+    seedRandom: (tick) => calls.push(["seed", tick]),
+    random: () => {
+      calls.push(["draw"]);
+      return 0;
+    },
+  };
+  selectStructuralBranch(context);
+  assert.deepEqual(calls, [["draw"]]);
+  createStructuralBend(context);
+  assert.deepEqual(calls, [["draw"], ["seed", 1234], ["draw"]]);
+  calls.length = 0;
+  createStructuralBend({ ...context, direction: new Vector3(1, 0, 0) });
+  assert.deepEqual(
+    calls,
+    [],
+    "native X branch consumes neither seed nor pivot draw",
+  );
 });
 
 test("transition repair references use source bounded compressed CAR coordinates", () => {
@@ -113,6 +167,49 @@ test("front and rear structural requests use authored bend plane, far end and so
     selectStructuralBend({ ...input(), mean: new Vector3() }).bend,
     undefined,
   );
+});
+
+test("ordinary structural selection draws once even for an already bent car, without selecting a pivot", () => {
+  let draws = 0;
+  const random = () => {
+    draws++;
+    return 0;
+  };
+  assert.deepEqual(
+    selectStructuralBranch({ ...input(), alreadyBent: true, random }),
+    { skipOrdinary: true, markedForBend: true },
+  );
+  assert.equal(draws, 1, "43617d precedes DoBending's already-bent gate");
+  assert.deepEqual(
+    selectStructuralBend({ ...input(), alreadyBent: true, random }),
+    { skipOrdinary: true, bend: undefined },
+  );
+  assert.equal(draws, 2);
+  selectStructuralBranch({ ...input(), bendingChance: 0, random });
+  assert.equal(draws, 2, "PercentageChance zero does not advance the stream");
+});
+
+test("marked bending uses live later bounds and an invalid middle contact consumes no pivot draw", () => {
+  let draws = 0;
+  const random = () => {
+    draws++;
+    return 0;
+  };
+  assert.equal(
+    selectStructuralBranch({ ...input(), random }).markedForBend,
+    true,
+  );
+  assert.equal(draws, 1);
+  assert.equal(
+    createStructuralBend({ ...input(), mean: new Vector3(), random }),
+    undefined,
+  );
+  assert.equal(draws, 1);
+  const changed = bounds.clone();
+  changed.max.y = 0.25;
+  const bend = createStructuralBend({ ...input(), bounds: changed, random });
+  assert.equal(bend.pivot.y, 0.25);
+  assert.equal(draws, 2, "pivot selection belongs to the later phase");
 });
 test("bend field fixes the far end, interpolates between planes and rotates the outer end", () => {
   const bend = createBendTransform(

@@ -35,6 +35,23 @@ test("global capacity precedes duplicate upgrades and model lookup", () => {
   assert.equal(queue.enqueue(fixture().request), "ignored");
 });
 
+test("final powerup hook runs before consumed smash records release their native capacity", () => {
+  const queue = new NativeSmashQueue();
+  for (let i = 0; i < 20; i++) queue.enqueue(fixture().request);
+  let consumed = 0;
+  queue.flush(
+    () => 1000,
+    () => consumed++,
+    () => {
+      assert.equal(consumed, 20);
+      assert.equal(queue.count, 20);
+      assert.equal(queue.enqueue(fixture().request), "ignored");
+    },
+  );
+  assert.equal(queue.count, 0);
+  assert.equal(queue.enqueue(fixture().request), "inserted");
+});
+
 test("authored object identity and higher tier retain every first-event field", () => {
   const queue = new NativeSmashQueue();
   const first = fixture({ startingVelocity: [6.9, 0, 0], actor: {} });

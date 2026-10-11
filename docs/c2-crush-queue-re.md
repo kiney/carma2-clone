@@ -15,8 +15,9 @@ and legacy `update` paths. Component damage stays immediate; ordinary physical
 candidate and mesh crush wait until the fixed-step budget finishes. Candidate
 hulls are committed afterward. A real original-Eagle/finite-wall numerical
 test checks this phase separation. Explicit single-step diagnostic calls keep
-their earlier immediate behavior. Native structural-bend phase/RNG ordering
-and browser acceptance remain separate work.
+their earlier immediate behavior. Production processes all ordinary callbacks,
+commits shapes, samples attached flaps once, processes detachments, then applies
+marked structural bends against live hull bounds.
 SPAM uses a separate eight-car queue. Full repair cancels pending SPAM and
 detach/door records, but does **not** remove ordinary queued crush events.
 
@@ -202,8 +203,15 @@ PercentageChance(percent) = floor(rand * 100 / 32768) < percent
 zero returns without drawing. The initial bendability chance uses the
 existing shared RNG state before the later seed. Reseeding is not isolated
 to one car: subsequent effect/random consumers observe its changed state.
-The current structural helper's injected `damageContext.random`/`Math.random`
-does not establish this tick-seeded Z choice or shared-state side effect.
+`NativeRandom` now supplies the shared MSVC stream, initially state1, to damage,
+world destruction, shards, pickups and the opponent fleet. Eligible plastic panels
+and Z-dominant bends seed that stream with the retained event tick directly.
+GENERAL supplies minimum bend force, chance, inverse-buckle chance and component
+damage bounds. Later marks still consume pivot/sound randomness after an earlier
+bend; invalid mean-position marks do not. Complete original random-consumer
+coverage and startup seed chronology remain unverified. See
+[attached flap sampling](c2-flap-frame-re.md) for the verified global clock and
+explicit zero-period/overflow robustness guards.
 
 ## SPAM, repair and cancellation
 
@@ -266,9 +274,12 @@ per-impact queue or one flush after every car's ordinary crush. See
 [shared smash queue evidence](c2-smash-queue-re.md) for the complete barriers.
 
 Focused pure-queue tests establish numerical admission/replacement behavior.
-The original-Eagle simulation test also checks the deferred phase, while
-source structural RNG ordering and Chromium crash/repair validation remain
-separate acceptance work. The car WAM adapter uses the twenty-entry effect
-queue with live tiers, first-hit context and per-record flush time. World
-texture/decal sharing and intermediate physics flush barriers are being
-integrated separately; this does not establish complete native scheduling.
+Original-Eagle simulation tests check ordinary callbacks before detachment and
+marked bending, immediate component damage, live candidate commitment and
+same-frame wasting. Numerical tests cover shared RNG recurrence, direct captured
+tick seeds, already-bent chance consumption and GENERAL values from Stock and
+Advanced data. The WAM/world adapter shares twenty effect records and installed
+intermediate/final barriers, preserving first-hit context and live flush time.
+The separate fifty-entry powerup queue drains at the final barrier before the
+twenty records clear. Follow-up scheduling, other debris classes and complete
+native RNG consumer ordering remain separate acceptance work.

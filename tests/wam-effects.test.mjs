@@ -146,6 +146,21 @@ test("shared WAM queue retains first impact context across cars and samples the 
   assert.equal(queue.count, 1, "repair rearms the authored tier");
 });
 
+test("WAM keeps the first queued starting velocity through upgrades and later physical changes", async () => {
+  const { damage, events } = await system();
+  const queue = new NativeSmashQueue();
+  damage.configureWamSmashQueue(queue);
+  const velocity = new Vector3(6.9, 0, 0);
+  damage.readSmashStartingVelocity = () => velocity;
+  impact(damage);
+  velocity.set(0, 0, 99);
+  impact(damage);
+  flushWamSmashQueue(queue, () => 1000);
+  assert.ok(events.length > 0);
+  for (const event of events)
+    assert.deepEqual(event.startingVelocity.toArray(), [6.9, 0, 0]);
+});
+
 const full = [
   "2",
   "110",

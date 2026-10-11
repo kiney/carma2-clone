@@ -138,3 +138,51 @@ test("outer-frame health refresh preserves deferred AI attenuation until a real 
   assert.equal(car.wastedAt, 0.04);
   assert.deepEqual(wasted, [car]);
 });
+
+test("original Eagle ordinary dent and detachment phase precede retained structural bending", async (t) => {
+  const fixture = await eagle(t);
+  if (!fixture) return;
+  const { car, damage, simulation } = fixture;
+  damage.damageContext.random = () => 0;
+  const frontZ = Math.min(...car.shapeVertices.flat().map((point) => point.z));
+  const phases = [];
+  const crush = damage.applyQueuedCrush.bind(damage);
+  damage.applyQueuedCrush = (...args) => {
+    assert.equal(damage.structuralBend, undefined);
+    phases.push("ordinary");
+    return crush(...args);
+  };
+  const detach = simulation.detachParts.bind(simulation);
+  simulation.detachParts = (...args) => {
+    assert.equal(damage.structuralBend, undefined);
+    phases.push("detach");
+    return detach(...args);
+  };
+  const bend = damage.applyDeferredBend.bind(damage);
+  damage.applyDeferredBend = (...args) => {
+    phases.push("bend");
+    assert.ok(
+      damage.deformationRevision > 0,
+      "the weaker ordinary contact has already dented the model",
+    );
+    return bend(...args);
+  };
+  simulation.step = () => {
+    simulation.elapsed += 0.04;
+    // First contact marks structural bending; the later weak contact must
+    // still crush the unbent body before the marked event is consumed.
+    for (const magnitude of [10, 1])
+      damage.applyImpact(
+        [new Vector3(-0.12, 0.06, frontZ)],
+        new Vector3(),
+        false,
+        true,
+        40,
+        new Vector3(0, 0, magnitude),
+      );
+  };
+  simulation.updateFrame(0, 10);
+  assert.deepEqual(phases, ["ordinary", "ordinary", "detach", "bend"]);
+  assert.ok(damage.structuralBend);
+  assert.equal(simulation.ordinaryCrushQueue.count, 0);
+});

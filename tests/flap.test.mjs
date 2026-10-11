@@ -105,3 +105,78 @@ test("plastic flap eligibility uses .2 direction threshold and cumulative plasti
   assert.equal(state.plastic, false);
   assert.equal(applyPlasticFlap(state, input).movedVertices, 0);
 });
+
+test("eligible plastic callbacks seed the retained physics tick before taper, including inverse-limit adjustment", () => {
+  for (const inverseBucklePercent of [0, 100]) {
+    const points = panel();
+    const state = createFlapState(points[1], points[2]);
+    state.plasticLimit = 0.001;
+    const order = [];
+    const result = applyPlasticFlap(state, {
+      points,
+      hinges,
+      checkVertices: flapCheckVertices(points, hinges),
+      direction: v(0, 0, -1),
+      strongestVertex: 2,
+      displacement: 0.01,
+      parentReference: points[2].clone(),
+      seedRandom: (seed) => order.push(["seed", seed]),
+      physicsTickMs: 123456,
+      random: () => {
+        order.push(["draw"]);
+        return 0.5;
+      },
+      inverseBucklePercent,
+    });
+    assert.deepEqual(
+      order,
+      inverseBucklePercent
+        ? [["seed", 123456], ["draw"], ["draw"]]
+        : [["seed", 123456], ["draw"]],
+    );
+    assert.equal(state.plastic, false);
+    assert.equal(result.activated, true);
+    assert.equal(Math.sign(state.plasticOffset), inverseBucklePercent ? -1 : 1);
+    assert.ok(result.movedVertices > 0);
+    assert.ok(Math.abs(Math.abs(points[3].y) - 0.0005) < 1e-12);
+  }
+});
+
+test("ineligible plastic callbacks preserve the random stream and seed state", () => {
+  for (const variant of [
+    "not-plastic",
+    "zero-displacement",
+    "alignment",
+    "lever",
+  ]) {
+    const points = panel();
+    const state = createFlapState(points[1], points[2]);
+    const snapshots = points.map((point) => point.toArray());
+    const order = [];
+    const input = {
+      points,
+      hinges,
+      checkVertices: flapCheckVertices(points, hinges),
+      direction: v(0, 0, -1),
+      strongestVertex: 2,
+      displacement: 0.01,
+      parentReference: points[2].clone(),
+      seedRandom: (seed) => order.push(seed),
+      random: () => {
+        order.push("draw");
+        return 0.5;
+      },
+      physicsTickMs: 123456,
+    };
+    if (variant === "not-plastic") state.plastic = false;
+    if (variant === "zero-displacement") input.displacement = 0;
+    if (variant === "alignment") input.direction.z = -Math.fround(0.2);
+    if (variant === "lever") input.strongestVertex = 0;
+    assert.equal(applyPlasticFlap(state, input).activated, false);
+    assert.deepEqual(order, []);
+    assert.deepEqual(
+      points.map((point) => point.toArray()),
+      snapshots,
+    );
+  }
+});

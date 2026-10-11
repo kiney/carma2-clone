@@ -19,7 +19,7 @@ Verified from bounded installed HW disassembly:
 | `0x4ed376`, `0x4ed509`, `0x4ed54d` | Dispatches shrapnel (`0x4eb660`), visibility-gated explosion (`0x4eaa70`, visibility `0x4e5aa0`) and spill (`0x4a6a20`).                                                                                             |
 | `0x4ed575`, `0x4ed5c3`             | Applies variable changes (`0x4e71d0`, special 9999 through `0x4e71f0`) before the mission-goal completion path.                                                                                                      |
 
-Locality/ownership conditions for room and follow-up side effects are not fully reconstructed. Dispatch addresses establish native outlets, not complete parity of their runtime implementations.
+Installed evidence identifies the retained `roomCode` field as a powerup index, with verified human-owner and proximity gates. Awards and the separate fifty-record powerup queue are integrated; follow-up candidate selection and delayed execution remain open. See [smash gameplay](c2-smash-gameplay-re.md).
 
 ## Implemented event boundary
 
@@ -29,7 +29,7 @@ The reached-tier state is keyed by the authored `WamSmash`, independently of pix
 
 The simulation gathers the highest target for each authored smashable in the shared twenty-entry WAM/world queue. Capacity is tested before deduplication; an overflowing repeat cannot upgrade an existing entry. The first impact context is retained and the live reached tier is read at flush. Linked textures reach the final tier before its permitted effect repetitions. Overflow entries remain eligible for a later impact. Explicit standalone damage tools use a local queue and immediate flush.
 
-`VehicleSimulation` initializes the shared queue per outer frame, flushes it at wheel/environment and world/noncar barriers before early collision exits, and retains WAM requests from deferred crush until the final game-clock barrier. Main dispatch runs this after ordinary effects and before glass-fragment update. The separate fifty-entry powerup queue and exact structural-bend/flap/detachment phase ordering remain open. Runtime effect handlers are separate integration work: retaining metadata and emitting a typed event does not by itself implement all shrapnel/ghost/noncar geometry, slick material binding, room effects, follow-up smashes or awards. See [queue evidence](c2-smash-queue-re.md) and [deferred crush](c2-crush-queue-re.md).
+`VehicleSimulation` initializes the shared queue per outer frame, flushes it at wheel/environment and world/noncar barriers before early collision exits, and retains WAM requests from deferred crush until the final game-clock barrier. Main dispatch runs this after ordinary effects and before glass-fragment update. The separate fifty-entry powerup queue now drains during the final argument-zero barrier before the twenty records clear. Structural bends follow shape/flap/detachment phases with a shared tick-seeded MSVC random stream. Runtime effect handlers remain separate integration work: other shrapnel/ghost/noncar geometry, slick material binding and follow-up world smashes are still incomplete. See [queue evidence](c2-smash-queue-re.md) and [deferred crush](c2-crush-queue-re.md).
 
 ## External stock inventory
 

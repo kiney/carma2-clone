@@ -29,7 +29,11 @@
     "test:opponent-powerups": "npm run build && node tests/browser-opponent-powerups.mjs",
     "test:crash-earnings": "npm run build && node tests/browser-crash-earnings.mjs",
     "test:wam-effects": "npm run build && node tests/browser-wam-effects.mjs",
-    "test:native-ai": "npm run build && node tests/browser-native-ai.mjs"
+    "test:native-ai": "npm run build && node tests/browser-native-ai.mjs",
+    "test:crash-matrix": "npm run build && node tests/browser-crash-matrix.mjs",
+    "test:smash-followup": "npm run build && node tests/browser-smash-followup.mjs",
+    "test:smash-gameplay": "npm run build && node tests/browser-smash-gameplay.mjs",
+    "test:combat-powerups": "npm run build && node tests/browser-combat-powerups.mjs"
   },
   "dependencies": {
     "three": "0.180.0",
