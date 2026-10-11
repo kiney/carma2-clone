@@ -66,6 +66,10 @@ import {
 } from "./powerups";
 import { DebugPanel } from "./debug-panel";
 import { SmokeSystem, type SmokeRigid } from "./smoke";
+import type { SmokeCar } from "./smoke";
+import { prepareCarSmokeSampler, parseNativeDriverZOffset } from "./car-smoke";
+import { createNativeWreckColumns } from "./wreck-smoke";
+import { NativeTyreEffects } from "./physics/tyre-smoke";
 import { SkidMarkSystem } from "./skidmarks";
 import { SkidMaterialLibrary } from "./skid-materials";
 import { SparkSystem } from "./sparks";
@@ -88,7 +92,7 @@ import {
   PHYSICS_STEP,
 } from "./physics/simulation";
 import { RenderPoses } from "./render-pose";
-import { parseSurfaceModifiers } from "./physics/surfaces";
+import { parseSurfaceModifiers, DEFAULT_SURFACE } from "./physics/surfaces";
 import {
   parseDefaultWaterVolume,
   parseTrackSpecialVolumes,
@@ -230,6 +234,20 @@ let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
 let shards: ShardRuntime | undefined;
 let smoke: SmokeSystem | undefined;
+const tyreEffects = new NativeTyreEffects<SimulatedCar>({
+  isPlaying: (tag) => audio.isSoundPlaying(tag),
+  startSound: (source) =>
+    audio.startTrackedSound(
+      source.soundId,
+      source.volume / 255,
+      source.pitch / 65536,
+    ),
+  stopSound: (tag) => audio.stopTrackedSound(tag),
+});
+const carSmokeSources = new WeakMap<
+  SimulatedCar,
+  { car: SmokeCar; sample: ReturnType<typeof prepareCarSmokeSampler>["sample"] }
+>();
 let skidmarks: SkidMarkSystem | undefined;
 let skidMaterials: SkidMaterialLibrary | undefined;
 let sparks: SparkSystem | undefined;
@@ -523,6 +541,47 @@ function registerShrapnelMaterials(
     return;
   }
   carShrapnelMaterials.set(actor, materials as THREE.Material[]);
+}
+
+function registerCarSmoke(body: SimulatedCar, carText: string) {
+  const mesh = body.damage.primaryRenderMesh;
+  if (!mesh) {
+    assets.warnings.push(
+      `Original principal smoke model missing: ${body.group.name}`,
+    );
+    return;
+  }
+  const driverZOffset = parseNativeDriverZOffset(carText);
+  if (driverZOffset === undefined)
+    assets.warnings.push(
+      `Original smoke cockpit head offset missing: ${body.group.name}`,
+    );
+  const sampler = prepareCarSmokeSampler(mesh, body.group, {
+    cockpit:
+      driverZOffset === undefined
+        ? undefined
+        : () => ({
+            enabled: cameraMode === 1,
+            driver: body.human ? 8 : 6,
+            driverZOffset,
+          }),
+  });
+  const car: SmokeCar = {
+    get velocity() {
+      return body.state.velocity;
+    },
+    invertedSourceY: () => {
+      const vertices = body.hulls[0]?.vertices;
+      if (!vertices?.length)
+        throw new Error("Wreck smoke requires the first live shape");
+      return Math.min(...vertices.map((vertex) => vertex.y));
+    },
+    isOnDetachedHalf: (local) => {
+      const plane = body.damage.splitRuntime?.plane;
+      return !!plane && plane.normal.dot(local) - plane.constant < 0;
+    },
+  };
+  carSmokeSources.set(body, { car, sample: sampler.sample });
 }
 
 async function initializeShrapnel() {
@@ -851,6 +910,7 @@ async function loadRace() {
       parseSurfaceModifiers(trackText),
     );
     noncarRenderBatch?.dispose();
+    for (const body of simulation?.cars ?? []) tyreEffects.stopOwner(body);
     simulation?.dispose();
     explosions?.dispose();
     shards?.dispose();
@@ -1058,6 +1118,35 @@ async function loadRace() {
           );
       }
     };
+    simulation.onStopTyreEffects = (body) => tyreEffects.stopOwner(body);
+    simulation.onTyreAxle = (body, input) => {
+      const selection = tyreEffects.selectAxle(input);
+      if (!selection) return;
+      const modifier =
+        input.modifiers[selection.wheel] ??
+        simulation!.world.modifier?.(0) ??
+        DEFAULT_SURFACE;
+      const actorPhysicsMatrix = new THREE.Matrix4().compose(
+        body.state.position.clone().multiplyScalar(6.9),
+        body.state.orientation,
+        new THREE.Vector3(1, 1, 1),
+      );
+      const result = tyreEffects.produce({
+        ...selection,
+        owner: body,
+        driver: body.state.driver ?? (body.human ? 8 : 6),
+        modifier,
+        wheelPositionPhysics: body.motion.wheelPositions[selection.wheel],
+        oldSuspensionDistance: body.state.wheelLengths[selection.wheel],
+        actorPhysicsMatrix,
+        omegaBody: input.omegaBody,
+        velocityCarSpace: input.velocityCarSpace,
+        supportNormalBody: input.supportNormalBody,
+        cachedSoundVelocity: body.cachedSoundVelocity,
+        timeSyncMs: simulation!.mechanicsTimeSync,
+      });
+      if (result.puff) smoke?.spawnPuff(result.puff);
+    };
     simulation.onWorldSparks = (source) => sparks?.spawnWorld(source);
     simulation.onCarSparks = (source) => carSparks?.spawn(source);
     simulation.onOpponentRepulsed = (source, target) => {
@@ -1161,6 +1250,7 @@ async function loadRace() {
       message(`${multiplier > 1 ? "CRASH BONUS" : "DAMAGE"} · +${credits} CR`);
     };
     bindWamEffects(player, loadedCar.materials);
+    registerCarSmoke(player, carText);
     registerShrapnelMaterials(
       player.group,
       parseCarShrapnelMaterials(carText),
@@ -1197,6 +1287,14 @@ async function loadRace() {
         audio.impact(speed / 6);
       }
     };
+    simulation.onFullRepair = (body) => {
+      const source = carSmokeSources.get(body);
+      if (source) smoke?.expireCarColumns(source.car);
+    };
+    simulation.onWetSmoke = (body) => {
+      const source = carSmokeSources.get(body);
+      if (source) smoke?.shortenCarColumns(source.car, 2000);
+    };
     simulation.onWasted = (body) => {
       const rival = rivals.find((r) => r.body === body);
       if (body.human && race) race.awardsClosed = true;
@@ -1223,6 +1321,31 @@ async function loadRace() {
         undefined,
         body.state.orientation,
       );
+      const source = carSmokeSources.get(body);
+      if (smoke && source)
+        createNativeWreckColumns({
+          networkMode: 0,
+          knackered: body.knackered,
+          volumeGravity: body.specialVolume?.volume?.gravityMultiplier,
+          shortenExisting: (maximum) =>
+            smoke!.shortenCarColumns(source.car, maximum),
+          spawn: (packet) =>
+            smoke!.spawnColumn({
+              ...packet,
+              actor: body.group,
+              car: source.car,
+              rigid: {
+                get velocity() {
+                  return body.state.velocity;
+                },
+                get omega() {
+                  return body.state.angularVelocity;
+                },
+                actor: body.group,
+              },
+              sampleVertex: source.sample,
+            }),
+        });
     };
     car.position.copy(start);
     car.quaternion.copy(vehicle.orientation);
@@ -1759,6 +1882,7 @@ async function loadRivals(
       state.powerMultiplier =
         player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
     bindWamEffects(body, model.materials);
+    registerCarSmoke(body, text);
     registerShrapnelMaterials(
       body.group,
       parseCarShrapnelMaterials(text),
@@ -2578,6 +2702,10 @@ function animate(now: number) {
           gameFrame.periodMs,
         );
         stats.physicsSkippedMs += physicsWindow.skippedMs;
+        // Installed4567db–4567f3 copies sound velocity after physics. Retain
+        // this frame's snapshot for subsequent mechanics-phase tyre calls.
+        for (const body of simulation.cars)
+          body.cachedSoundVelocity.copy(body.state.velocity);
         modifiers = powerups?.finishFrame();
         if (modifiers) {
           simulation.gravityMultiplier = modifiers.gravityMultiplier;

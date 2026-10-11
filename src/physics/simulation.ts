@@ -208,6 +208,8 @@ export interface BodyVolumeState {
   waterNormal?: Vector3;
 }
 export interface SimulatedCar extends RigidBody {
+  /** MungeEngineNoise's retained car+13cc world velocity, used next frame. */
+  cachedSoundVelocity: Vector3;
   state: SimulatedVehicleState;
   group: Group;
   mechanics: CarMechanics;
@@ -417,6 +419,7 @@ export function createSimulatedCar(
     repairing: false,
     repairAwaitingShapeSwap: false,
     knackered: false,
+    cachedSoundVelocity: new Vector3(),
     recoveryHistory: new SafeCarHistory(state),
     lastAttributedImpactMs: 0,
     temporaryMassMultiplier: 1,
@@ -507,6 +510,13 @@ export class VehicleSimulation {
   onImpact?: (car: SimulatedCar, impact: number) => void;
   onWorldSparks?: (source: WorldSparkSource) => void;
   onCarSparks?: (source: CarSparkSource) => void;
+  onTyreAxle?: (
+    car: SimulatedCar,
+    input: Parameters<
+      NonNullable<import("./motion").MotionGround["tyreAxle"]>
+    >[0],
+  ) => void;
+  onStopTyreEffects?: (car: SimulatedCar) => void;
   onOpponentRepulsed?: (source: SimulatedCar, target: SimulatedCar) => void;
   onFinishCars?: (framePeriodMs: number) => void;
   /** Native end-of-force-step tyre mark consumer, distinct from FinishCars smoke. */
@@ -544,6 +554,8 @@ export class VehicleSimulation {
   /** AI earnings redistribution alone does not invoke native CheckDamage. */
   private readonly deferredCrashWastage = new WeakSet<SimulatedCar>();
   onWasted?: (car: SimulatedCar) => void;
+  onFullRepair?: (car: SimulatedCar) => void;
+  onWetSmoke?: (car: SimulatedCar) => void;
   onWorldGeometryChanged?: () => void;
   settings?: UpgradeSettings;
   skill: 0 | 1 | 2 = 0;
@@ -1421,6 +1433,12 @@ export class VehicleSimulation {
   }
   private oilGround(car: SimulatedCar) {
     return {
+      stopTyreEffects: () => this.onStopTyreEffects?.(car),
+      tyreAxle: (
+        input: Parameters<
+          NonNullable<import("./motion").MotionGround["tyreAxle"]>
+        >[0],
+      ) => this.onTyreAxle?.(car, input),
       raycast: this.world.raycast.bind(this.world),
       wheelRaycast: (origin: Vector3, direction: Vector3, distance: number) =>
         this.cachedWheelRaycast(car, origin, direction, distance),
@@ -1667,6 +1685,13 @@ export class VehicleSimulation {
     );
     state.volume = selected.volume;
     state.automatic = selected.automatic;
+    // Installed4ff27a–4ff2a8 repeats this check even without a volume change.
+    if (
+      "motion" in body &&
+      state.volume &&
+      Math.fround(state.volume.gravityMultiplier) < 1
+    )
+      this.onWetSmoke?.(body);
     return state;
   }
   private applyFreeBodyForces(body: SimulationBody) {
@@ -1690,6 +1715,7 @@ export class VehicleSimulation {
   /** Full powerup repair439460 also resets suspension, including an unbent
    * car. Restore partition properties before recalculating axle loads. */
   repair(car: SimulatedCar) {
+    this.onFullRepair?.(car);
     car.damage.repair();
     this.syncStructuralState(car);
     resetMotionSuspension(car.motion);
@@ -1884,6 +1910,7 @@ export class VehicleSimulation {
   private beginCrashFrame(): void {
     for (const car of this.cars) {
       if (!this.isCarPhysicsActive(car)) continue;
+      if (car.state.slipping === 0) this.onStopTyreEffects?.(car);
       car.damage.lastComponentLevels.set(car.damage.componentLevels);
       car.crashRecord.beginFrame(
         car.knackered,

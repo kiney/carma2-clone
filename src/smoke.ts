@@ -480,6 +480,20 @@ export class SmokeSystem {
     return index;
   }
 
+  /** StopCarSmoking4fc7d0 shortens existing matching car columns without
+   * deleting them, changing their cursor or touching free/pedestrian sources. */
+  shortenCarColumns(car: SmokeCar, maximumMs: number): void {
+    uint(maximumMs, "maximum column lifetime");
+    for (const column of this.columns)
+      if (column.active && column.source?.car === car)
+        column.remaining = Math.min(column.remaining, maximumMs);
+  }
+
+  /** StopCarSmokingInstantly4fc800 leaves retirement to the next column pass. */
+  expireCarColumns(car: SmokeCar): void {
+    this.shortenCarColumns(car, 0);
+  }
+
   spawnPuff(source: SmokePuffSource): number | null {
     if (this.disposed || !this.enabled) return null;
     if (

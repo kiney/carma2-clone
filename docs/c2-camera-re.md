@@ -141,3 +141,9 @@ no failing hull snapshot was captured. Three subsequent full crash runs
 passed before this correction, so the intermittent failure's exact cause
 remains unverified. The browser harness now captures the hull and camera
 state if it recurs.
+
+Installed `0x413443–0x413491` also supplies world +X for a COM-to-camera
+direction of length at most `2^-22`. The helper now follows that branch,
+with zero/tiny-vector tests. The native repeat has no unbounded-ray fallback;
+a newer intermittent Chromium `no finite exit` error remains under
+investigation rather than being hidden with a vertex-box substitution.

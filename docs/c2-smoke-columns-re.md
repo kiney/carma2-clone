@@ -68,8 +68,11 @@ local position also supplies the angular-velocity emission calculation.
 Mode 1 reads a car model vertex plus its principal-model actor translation,
 then uses the car master actor transform. Its upright state has hysteresis:
 actor matrix `[1][1] > 0.1` sets upright, `< -0.1` clears it. The inverted
-car source-Y adjustment and special Eagle tail path require their own car
-integration; they are not needed for mode-2 napalm.
+car source-Y adjustment and cockpit-only local-driver path have separate car
+providers; they are not needed for mode-2 napalm. The installed global
+`0x7590ec` is `program_state.cockpit_on`, not an Eagle-specific flag. See
+[wreck producers and lifecycle](c2-wreck-smoke-re.md) and
+[prepared-model sampling](c2-car-prepared-re.md).
 
 ## Lifetime and smoke emission
 

@@ -96,6 +96,18 @@ export interface MotionGroundHit {
   surface?: import("../world").Surface;
 }
 export interface MotionGround {
+  stopTyreEffects?(): void;
+  /** Native axle effect outlet, before force application; rear precedes front. */
+  tyreAxle?(input: {
+    axle: 0 | 1;
+    demand: number;
+    capacities: [number, number];
+    reduction: number;
+    supportNormalBody: Vector3;
+    omegaBody: Vector3;
+    velocityCarSpace: Vector3;
+    modifiers: readonly (SurfaceModifier | undefined)[];
+  }): void;
   wheelRaycast?(
     origin: Vector3,
     direction: Vector3,
@@ -924,6 +936,16 @@ export function applyVehicleForces(
     axleDemands[0] = rearDemand;
     skidRequests[0] = rearSkid[0];
     skidRequests[1] = rearSkid[1];
+    ground.tyreAxle?.({
+      axle: 0,
+      demand: rearDemand,
+      capacities: [caps[0], caps[1]],
+      reduction: p.slipMultiplier,
+      supportNormalBody: n.clone(),
+      omegaBody: omega.clone(),
+      velocityCarSpace: s.velocity.clone().applyQuaternion(inv),
+      modifiers: hits.map((hit) => s.volumeSurface ?? hit?.surface?.modifier),
+    });
     actual[0] = rearAllocation[0];
     actual[1] = rearAllocation[1];
     if (rearAllocation[2]) s.slipping |= 2;
@@ -972,6 +994,16 @@ export function applyVehicleForces(
     axleDemands[1] = frontDemand;
     skidRequests[2] = frontSkid[0];
     skidRequests[3] = frontSkid[1];
+    ground.tyreAxle?.({
+      axle: 1,
+      demand: frontDemand,
+      capacities: [caps[2], caps[3]],
+      reduction: p.slipMultiplier,
+      supportNormalBody: n.clone(),
+      omegaBody: omega.clone(),
+      velocityCarSpace: s.velocity.clone().applyQuaternion(inv),
+      modifiers: hits.map((hit) => s.volumeSurface ?? hit?.surface?.modifier),
+    });
     actual[2] = frontAllocation[0];
     actual[3] = frontAllocation[1];
     if (frontAllocation[2]) s.slipping |= 1;
@@ -986,6 +1018,7 @@ export function applyVehicleForces(
     }
   }
   s.groundedWheelCount = grounded;
+  if (grounded === 0) ground.stopTyreEffects?.();
   s.velocity.addScaledVector(
     F.clone().applyQuaternion(s.orientation),
     dt / (p.mass * S),

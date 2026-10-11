@@ -41,13 +41,15 @@ Rigid: mass `+4`, inertia `+8/+0xc/+0x10`, COM `+0x14`, world V `+0x68`,
 transform `+0x8c`, contact-face range `+0x174/+0x176`, rigid type byte `+0x238`,
 owner `+0x23c`, special volume `+0x258`.
 
-ReadForm is reconstructed by rec2: every positive bone mass is read in kg and
-divided by 1000, accumulated into the simple body's mass. Simple pool slots
+ReadForm is reconstructed by rec2 and its installed accumulation was verified:
+every bone mass is read in kg, multiplied by double0.001, stored as Float32,
+and accumulated into the simple body's Float32 mass. Simple pool slots
 have stride8, body pointer `+4`, and use box collision shapes. Personality
 bounds and COM are remapped by the root bone's original remap before use.
 Installed `0x408ef0–0x408f16` passes personality bounds/COM and rendered root
 actor into body initialization `0x4085f0`. Simple box inertia is
-`M*(otherSide1²+otherSide2²)*f32(1/12)` (`0x408b27–0x408bdc`), with authored
+`M*(otherSide1²+otherSide2²)*f32(0.025)` (`0x408b67–0x408bdc`, constant
+`0x588390`, value `0.02500000037252903`), with authored
 COM overriding the box center. Root actor and body COM positions must remain
 distinct. Rigid type2 is the simple ped; types3/4 are articulated bones.
 The maximum simple/render/articulated pool counts come from the form.

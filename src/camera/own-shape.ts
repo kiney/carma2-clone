@@ -98,8 +98,8 @@ export function clearCameraFromOwnShape(
     if (limit !== undefined && iteration >= limit)
       throw new Error("Camera own-shape clearance exceeded plane exit");
     const outward = position.clone().sub(worldCOM);
-    if (outward.lengthSq() === 0)
-      throw new Error("Camera clearance ray starts at the centre of mass");
+    // Installed413443–413491 uses +X when length is <=2^-22.
+    if (outward.length() <= 2.384185791015625e-7) outward.set(1, 0, 0);
     outward.normalize().multiplyScalar(clearance);
     const from = position.clone().sub(shape.position).applyQuaternion(inverse);
     const to = position

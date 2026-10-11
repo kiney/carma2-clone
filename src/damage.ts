@@ -543,6 +543,10 @@ export class DamageSystem {
       this.runtimeParts[0];
     return this.meshes.filter((data) => data.runtime === primary);
   }
+  /** Original car_actor's principal render model, also used by mode-1 fire. */
+  get primaryRenderMesh(): Mesh<BufferGeometry> | undefined {
+    return this.principalModels()[0]?.mesh;
+  }
   /** RenderElectroBastardRays reads the primary render model, not bb1/bb2.
    * Recompute after crush so this remains the live model-space extent. */
   get primaryRenderModelBounds(): Box3 | undefined {

@@ -157,7 +157,7 @@ test("an exactly reached plane remains inside before the native boundary probe",
   assert.equal(result.position.z, 0.75);
 });
 
-test("own-shape camera clearance rejects invalid near planes and zero COM rays", () => {
+test("own-shape camera clearance rejects invalid near planes", () => {
   for (const near of [0, -0.1, NaN, Infinity])
     assert.throws(
       () =>
@@ -169,16 +169,19 @@ test("own-shape camera clearance rejects invalid near planes and zero COM rays",
         ),
       /near plane/,
     );
-  assert.throws(
-    () =>
-      clearCameraFromOwnShape(
-        new Vector3(),
-        new Vector3(),
-        shape([box()]),
-        0.06,
-      ),
-    /centre of mass/,
-  );
+});
+
+test("native zero and tiny COM directions use +X clearance", () => {
+  for (const offset of [new Vector3(), new Vector3(0, 1e-8, 0)]) {
+    const result = clearCameraFromOwnShape(
+      offset,
+      new Vector3(),
+      shape([box()]),
+      0.06,
+    );
+    assert.ok(result.position.x > 0.5);
+    assert.ok(Math.abs(result.position.z) < 1e-12);
+  }
 });
 
 test("installed Eagle and Bigdump mechanics hulls support own-shape clearance", async (t) => {

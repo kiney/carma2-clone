@@ -27,6 +27,14 @@ export class AudioSystem {
   private checkpointId?: number;
   private pickupIds: number[] = [];
   private disposed = false;
+  private nextSoundTag = 1;
+  private trackedSounds = new Map<
+    number,
+    {
+      source?: AudioBufferSourceNode;
+      gain?: GainNode;
+    }
+  >();
 
   constructor(assets: Assets) {
     this.assets = assets;
@@ -217,9 +225,63 @@ export class AudioSystem {
     await this.playOneShot(id, volume, playbackRate);
   }
 
+  /** Stable playback tags for native two-channel tyre voice ownership. A
+   * pending WAV decode counts as a voice so repeated physics calls do not
+   * allocate duplicates. Cancelled pending voices never start later. */
+  startTrackedSound(id: number, volume: number, playbackRate: number): number {
+    if (
+      !Number.isFinite(volume) ||
+      !(playbackRate > 0 && Number.isFinite(playbackRate))
+    )
+      throw new Error("Invalid tracked sound parameters");
+    if (this.disposed || !this.context || this.context.state !== "running")
+      return 0;
+    const tag = this.nextSoundTag++;
+    const voice: { source?: AudioBufferSourceNode; gain?: GainNode } = {};
+    this.trackedSounds.set(tag, voice);
+    void this.loadSound(id).then((buffer) => {
+      if (this.trackedSounds.get(tag) !== voice) return;
+      if (!buffer || !this.context || !this.master || this.disposed) {
+        this.trackedSounds.delete(tag);
+        return;
+      }
+      const source = this.context.createBufferSource();
+      const gain = this.context.createGain();
+      voice.source = source;
+      voice.gain = gain;
+      source.buffer = buffer;
+      source.playbackRate.value = playbackRate;
+      gain.gain.value = clamp(volume, 0, 1);
+      source.connect(gain);
+      gain.connect(this.master);
+      source.onended = () => this.stopTrackedSound(tag);
+      source.start();
+    });
+    return tag;
+  }
+  isSoundPlaying(tag: number): boolean {
+    return this.trackedSounds.has(tag);
+  }
+  stopTrackedSound(tag: number): void {
+    const voice = this.trackedSounds.get(tag);
+    if (!voice) return;
+    this.trackedSounds.delete(tag);
+    if (voice.source) {
+      voice.source.onended = null;
+      try {
+        voice.source.stop();
+      } catch {
+        /* A voice may already have ended. */
+      }
+      voice.source.disconnect();
+    }
+    voice.gain?.disconnect();
+  }
+
   dispose(): void {
     this.disposed = true;
     this.stopEngine();
+    for (const tag of this.trackedSounds.keys()) this.stopTrackedSound(tag);
     if (this.context) void this.context.close();
     this.context = undefined;
     this.master = undefined;

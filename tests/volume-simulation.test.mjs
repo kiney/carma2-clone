@@ -98,8 +98,15 @@ test("two original cars enter, submerge and recover using finite water faces and
     scene.add(car.group);
     const simulation = new VehicleSimulation(world, scene);
     simulation.defaultWaterVolume = defaultWater();
+    let wetSmokeChecks = 0;
+    simulation.onWetSmoke = (body) => {
+      assert.equal(body, car);
+      assert.ok(body.specialVolume.volume.gravityMultiplier < 1);
+      wetSmokeChecks++;
+    };
     simulation.add(car);
     simulation.step();
+    assert.equal(wetSmokeChecks, 1);
     near(car.specialVolume.depth, expectedDepth);
     assert.equal(car.specialVolume.volume, simulation.defaultWaterVolume);
     near(car.state.volumeGravityFactor, expectedGravity);
@@ -126,12 +133,20 @@ test("two original cars enter, submerge and recover using finite water faces and
     );
     near(car.state.volumeGravityFactor, 0.2);
     car.state.underwaterAbility = true;
+    const beforeRepeatedWet = wetSmokeChecks;
     simulation.step();
+    assert.equal(
+      wetSmokeChecks,
+      beforeRepeatedWet + 1,
+      "source smoke stop repeats inside unchanged wet volume",
+    );
     near(car.state.volumeGravityFactor, 0.52);
     near(car.state.volumeDragFactor, 30);
     car.state.position.set(10, 2, 10);
     simulation.reset(car);
+    const beforeDryStep = wetSmokeChecks;
     simulation.step();
+    assert.equal(wetSmokeChecks, beforeDryStep);
     assert.equal(
       car.specialVolume.volume,
       null,
@@ -139,6 +154,22 @@ test("two original cars enter, submerge and recover using finite water faces and
     );
     near(car.state.volumeGravityFactor, 1);
     near(car.state.volumeDragFactor, 1);
+    const originalRepair = damage.repair.bind(damage),
+      repairOrder = [];
+    damage.repair = () => {
+      repairOrder.push("damage");
+      originalRepair();
+    };
+    simulation.onFullRepair = (body) => {
+      assert.equal(body, car);
+      repairOrder.push("expire smoke");
+    };
+    simulation.repair(car);
+    assert.deepEqual(
+      repairOrder,
+      ["expire smoke", "damage"],
+      "TotallyRepairACar expires columns before repairs",
+    );
     simulation.dispose();
   }
 });
