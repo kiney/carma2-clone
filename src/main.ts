@@ -65,6 +65,8 @@ import {
   type PowerupDefinition,
 } from "./powerups";
 import { DebugPanel } from "./debug-panel";
+import { SmokeSystem, type SmokeRigid } from "./smoke";
+import { parseDustShades } from "./dust-shades";
 import { CarAnimation, TextureAnimation } from "./animation";
 import { applyRaceObjectives, isSupportedRace, objectiveText } from "./rules";
 import {
@@ -97,9 +99,13 @@ import {
   parseRaceAwards,
   parseCrashDamageAwards,
   parsePedAwards,
-  PedAwardCounter,
   wastedCarCredits,
 } from "./race-awards";
+import { NativePedAwardCounter } from "./ped-awards";
+import {
+  NativeCunningStuntCounter,
+  parseCunningStuntBonus,
+} from "./cunning-stunts";
 import { commandJump, instantHandbrake } from "./physics/command-powerups";
 import { parseTrackSmashables, type SmashConnotations } from "./world-smash";
 import { WorldGrooveRuntime } from "./world-groove";
@@ -211,12 +217,15 @@ let noncarRenderBatch: NonCarRenderBatch | undefined;
 let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
 let shards: ShardRuntime | undefined;
+let smoke: SmokeSystem | undefined;
 const renderPosition = new THREE.Vector3(),
   renderOrientation = new THREE.Quaternion();
 let racePayout: RacePayout | undefined;
 let raceAwards: ReturnType<typeof parseRaceAwards> | undefined;
 let pedAwards: ReturnType<typeof parsePedAwards> | undefined;
-let pedAwardCounter = new PedAwardCounter();
+let pedAwardCounter = new NativePedAwardCounter();
+const cunningStunts = new NativeCunningStuntCounter();
+let cunningStuntCredits: ReturnType<typeof parseCunningStuntBonus> | undefined;
 let rivalsReady = false,
   pedestriansReady = false;
 let opponentFleet: NativeOpponentFleet | undefined;
@@ -277,6 +286,12 @@ const debug = {
   },
   get pedestrians() {
     return pedestrians;
+  },
+  get smoke() {
+    return smoke;
+  },
+  get cunningStunts() {
+    return cunningStunts;
   },
   get opponentsReady() {
     return rivalsReady;
@@ -535,6 +550,7 @@ const debugPanel = new DebugPanel(app, {
   recover: () => {
     if (!player || !simulation) return;
     simulation.recover(player);
+    cunningStunts.cancelPending();
     cameraNeedsReset = true;
     pedestrians?.resetCar(player.state.position);
     powerups?.resetPath(player.state.position);
@@ -630,6 +646,8 @@ async function loadRace() {
       if (oilPath) await assets.pixelmaps(oilPath);
     }
     raceAwards = parseRaceAwards(generalText);
+    cunningStuntCredits = parseCunningStuntBonus(generalText);
+    cunningStunts.cancelPending();
     const miscPath = assets.resolve(`${currentTrack.split("/")[0]}/TEXT.TXT`);
     miscStrings = miscPath
       ? (await assets.text(miscPath))
@@ -641,7 +659,7 @@ async function loadRace() {
         `${currentTrack.toLowerCase().startsWith("adv_data/") ? "adv_data" : "data"}/PEDS/settings.txt`,
       ),
     );
-    pedAwardCounter = new PedAwardCounter();
+    pedAwardCounter = new NativePedAwardCounter();
     audio.configurePowerups(generalText);
     const loadedMine = await assets.scene("data/MINE", "ShitMine");
     const explosionSettings = parseWastedExplosionSettings(generalText);
@@ -749,6 +767,16 @@ async function loadRace() {
     simulation?.dispose();
     explosions?.dispose();
     shards?.dispose();
+    smoke?.dispose();
+    smoke = new SmokeSystem(assets, {
+      camera,
+      random: sharedNativeRandom.random,
+      shadeColours: Array<number | undefined>(8)
+        .fill(undefined)
+        .concat(parseDustShades(trackText)),
+    });
+    scene.add(smoke.group);
+    await smoke.loadTextures();
     shards = new ShardRuntime(scene, world.materials, {
       random: sharedNativeRandom.random,
       gravity: () => simulation?.gravityMultiplier ?? defaultGravityMultiplier,
@@ -837,6 +865,43 @@ async function loadRace() {
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    const dustCount = parseDustShades(trackText).length;
+    simulation.onFinishCars = (framePeriodMs) => {
+      if (!smoke || !simulation || !dustCount) return;
+      for (const body of simulation.cars) {
+        if (!simulation.isCarPhysicsActive(body) || !body.debug) continue;
+        const inverse = body.state.orientation.clone().invert();
+        const velocity = body.state.velocity.clone().applyQuaternion(inverse);
+        const omega = body.state.angularVelocity
+          .clone()
+          .applyQuaternion(inverse);
+        const bounds = new THREE.Box3();
+        for (const hull of body.hulls)
+          for (const point of hull.vertices) bounds.expandByPoint(point);
+        body.group.updateMatrixWorld(true);
+        body.debug.wheelSurfaceModifiers?.forEach((modifier, wheel) => {
+          if (!modifier) return;
+          smoke!.spawnSurfaceSmoke(
+            {
+              actor: body.group,
+              wheel,
+              wheelPosition: body.motion.wheelPositions[wheel],
+              suspensionDistance: body.state.wheelLengths[wheel],
+              suspensionHeight: body.motion.suspensionLength[wheel >> 1],
+              velocityCarSpace: velocity,
+              omega,
+              bounds,
+              smokeType: modifier.smokeType,
+              dustRotate: 0,
+              dustCount,
+              driver: body.state.driver ?? (body.human ? 8 : 6),
+              disabled: false,
+            },
+            framePeriodMs,
+          );
+        });
+      }
+    };
     simulation.onOpponentRepulsed = (source, target) => {
       const com = (body: SimulatedCar) =>
         body.properties.centerOfMass
@@ -1529,6 +1594,7 @@ async function loadRivals(
 async function loadPedestrians(text: string, loadGeneration: number) {
   if (!content || !collision || !vehicle) return;
   const active = currentTrack;
+  const napalmSmoke = new WeakMap<THREE.Object3D, SmokeRigid>();
   const system = await PedestrianSystem.create(
     assets,
     content,
@@ -1537,6 +1603,74 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     {
       spawn: vehicle.position,
       collision,
+      onCombatSound: (id) => {
+        void audio.playSound(id);
+      },
+      onNapalmExtinguished: (actor) => {
+        const rigid = napalmSmoke.get(actor);
+        if (rigid) smoke?.stopObject(rigid);
+      },
+      onNapalmIgnited: (actor, velocity, omega) => {
+        let mesh: THREE.Mesh<THREE.BufferGeometry> | undefined;
+        actor.traverse((child) => {
+          if (
+            !mesh &&
+            child instanceof THREE.Mesh &&
+            child.geometry.getAttribute("position")
+          )
+            mesh = child;
+        });
+        if (!mesh || !smoke) return;
+        const geometry = mesh.geometry,
+          positions = geometry.getAttribute("position");
+        const group = geometry.groups[0];
+        const sourceIndices = geometry.userData.sourceVertexIndices as
+          | Uint32Array
+          | undefined;
+        // Adapter maps the first render group to unique original vertices.
+        // Exact BRender prepared-vertex ordering remains an animation gap.
+        const candidates = Array.from(
+          { length: group?.count ?? geometry.index?.count ?? positions.count },
+          (_, i) =>
+            geometry.index?.getX((group?.start ?? 0) + i) ??
+            (group?.start ?? 0) + i,
+        );
+        const seen = new Set<number>();
+        const indices = candidates.filter((index) => {
+          const id = sourceIndices?.[index] ?? index;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        if (!indices.length) return;
+        // Preserve the native inclusive draw; protect its one-past-end result
+        // instead of reading invalid BRender memory or silently losing the fire.
+        const vertex = Math.min(
+          indices.length - 1,
+          Math.floor(sharedNativeRandom.random() * (indices.length + 1)),
+        );
+        const rigid = { velocity, omega, actor };
+        napalmSmoke.set(actor, rigid);
+        smoke.spawnColumn({
+          mode: 2,
+          actor,
+          rigid,
+          colour: 0,
+          vertex,
+          lifetimeMs: 25000,
+          sampleVertex: (index, out) => {
+            const selected = indices[index];
+            if (selected === undefined) return false;
+            mesh!.updateWorldMatrix(true, false);
+            actor.updateWorldMatrix(true, false);
+            out
+              .fromBufferAttribute(positions, selected)
+              .applyMatrix4(mesh!.matrixWorld)
+              .applyMatrix4(actor.matrixWorld.clone().invert());
+            return true;
+          },
+        });
+      },
       readGravityMultiplier: (position) =>
         simulation
           ? findSpecialVolume(
@@ -1558,16 +1692,43 @@ async function loadPedestrians(text: string, loadGeneration: number) {
           if (
             pedAwards &&
             race.status === "racing" &&
-            (!event.owner || event.owner === player)
+            event.owner === player &&
+            player
           ) {
-            const award = pedAwardCounter.score(event.timeMs, pedAwards, 0);
-            race.credits += award.credits;
-            awardRaceTime(race, award.seconds);
-            message(
-              `PEDESTRIAN HIT · +${award.credits} CR${award.combo > 1 ? ` · COMBO ${award.combo}` : ""}`,
-            );
+            const inverse = player.state.orientation.clone().invert();
+            const center = player.properties.centerOfMass
+              .clone()
+              .applyQuaternion(player.state.orientation)
+              .add(player.state.position);
+            const award = pedAwardCounter.score(event.timeMs, pedAwards, 0, {
+              ...event.awardContext,
+              killerDriver: player.state.driver,
+              killerAngularVelocity: player.state.angularVelocity
+                .clone()
+                .applyQuaternion(inverse),
+              killerUpY: new THREE.Vector3(0, 1, 0).applyQuaternion(
+                player.state.orientation,
+              ).y,
+              killerActorOriginY: player.state.position.y,
+              pedestrianY: event.position.y,
+              localPedPosition: event.position
+                .clone()
+                .sub(center)
+                .applyQuaternion(inverse),
+              killerLocalVelocity: player.state.velocity
+                .clone()
+                .applyQuaternion(inverse),
+            });
+            if (award) {
+              const before = race.credits;
+              awardRaceCredits(race, award.credits);
+              awardRaceTime(race, award.seconds);
+              message(
+                `PEDESTRIAN HIT · +${(race.credits - before) | 0} CR${award.combo > 1 ? ` · COMBO ${award.combo}` : ""}`,
+              );
+            }
           }
-          audio.impact(0.25);
+          if (event.count > 0) audio.impact(0.25);
           checkSmashObjective();
         }
       },
@@ -1774,6 +1935,7 @@ function recover() {
   );
   if (recovered) {
     simulation.recover(player);
+    cunningStunts.cancelPending();
     cameraNeedsReset = true;
     if (voucher) powerups?.consumeRecoveryVoucher();
     pedestrians?.resetCar(vehicle.position);
@@ -2034,6 +2196,8 @@ function checkSmashObjective() {
 }
 
 function onPowerupEvent(event: PowerupEvent) {
+  if (event.definition.action === 48 && event.kind === "effect")
+    void audio.playSound(3601, 1);
   if (event.kind === "ability") {
     message(`${event.name} · ${event.amount} · F TO USE`);
     return;
@@ -2192,6 +2356,9 @@ function animate(now: number) {
           player.state.bounceRate = modifiers.bouncePeriodMs;
         }
         if (powerups?.periodicBounce(player.state)) void audio.playSound(9010);
+        const drunkVoice = powerups?.drinkDriving.periodic(stats.gameTimeMs);
+        if (drunkVoice)
+          void audio.playSound(drunkVoice.id, 1, drunkVoice.playbackRate);
         explosions?.update(simulation.elapsed * 1000);
         simulation.flushSmashEffects();
         shards?.update(stats.gameTimeMs);
@@ -2271,6 +2438,10 @@ function animate(now: number) {
             : undefined,
         },
       );
+      smoke?.update(
+        Math.trunc(stats.gameTimeMs) >>> 0,
+        Math.trunc(gameFrame.periodMs) >>> 0,
+      );
       checkRaceObjective();
       const animationInput = {
         ...(player ? motionAnimation(player) : {}),
@@ -2325,6 +2496,32 @@ function animate(now: number) {
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.mineBodies)
         if (body.actor.parent) renderPoses.apply(body, body.actor, renderAlpha);
+    }
+    if (player && gameFrame && !paused && cunningStuntCredits) {
+      const award = cunningStunts.advance({
+        pdTimeMs: performance.now(),
+        driver: player.state.driver ?? (player.human ? 8 : 6),
+        mass: player.properties.mass,
+        bodyInertia: player.properties.inertia,
+        bodyAngularVelocity: player.state.angularVelocity
+          .clone()
+          .applyQuaternion(player.state.orientation.clone().invert()),
+        upY: new THREE.Vector3(0, 1, 0).applyQuaternion(
+          player.state.orientation,
+        ).y,
+        wheelsDown: player.state.groundedWheelCount ?? 0,
+        volumeGravity: player.specialVolume?.volume?.gravityMultiplier,
+        actionReplay: false,
+        skill: 0,
+        creditsBySkill: cunningStuntCredits,
+      });
+      if (award) {
+        const before = race.credits;
+        if (awardRaceCredits(race, award.credits))
+          message(`CUNNING STUNT · +${(race.credits - before) | 0} CR`);
+        if (award.kind === "landing")
+          cunningStunts.recordLandingAwardPdTime(performance.now());
+      }
     }
     if (player && gameFrame)
       cameraVehicleTravel.update(player.state.velocity, renderOrientation);
@@ -2430,6 +2627,15 @@ function animate(now: number) {
       camera.near = nativeCameraSettings?.hitherGeneral ?? 0.06;
       camera.position.copy(renderPosition).add(new THREE.Vector3(0, 14, 0.1));
       car.visible = true;
+    }
+    if (nativeCameraSettings && powerups) {
+      camera.fov =
+        (powerups.drinkDriving.fovAngle16(
+          nativeCameraSettings.fovDegrees,
+          stats.gameTimeMs,
+        ) *
+          360) /
+        65536;
     }
     camera.updateProjectionMatrix();
     camera.lookAt(target);

@@ -25,7 +25,7 @@ const source = (position = v(), overrides = {}) => ({
 });
 async function fixture(
   count = 1,
-  { wall = false, gravity, random = () => 0.5 } = {},
+  { wall = false, gravity, random = () => 0.5, hooks = {} } = {},
 ) {
   const track = new THREE.Group();
   const floorGeometry = new THREE.BufferGeometry();
@@ -70,6 +70,7 @@ async function fixture(
       collision: new WorldCollision(track),
       readGravityMultiplier: gravity,
       onHit: (event) => events.push(event),
+      ...hooks,
     },
   );
   const objects = peds.group.children.slice(0, count);
@@ -249,13 +250,26 @@ test("flamethrower reserves nearest targets in five persistent slots and respect
 
 test("napalm contact starts fifteen-second burning, retains owner, kills via ordinary outlet and cancels underwater", async () => {
   let wet = false;
-  const f = await fixture(2, { gravity: () => (wet ? 0.5 : 1) });
+  const sounds = [],
+    columns = [],
+    extinguished = [];
+  const f = await fixture(2, {
+    gravity: () => (wet ? 0.5 : 1),
+    hooks: {
+      onCombatSound: (id) => sounds.push(id),
+      onNapalmIgnited: (actor) => columns.push(actor),
+      onNapalmExtinguished: (actor) => extinguished.push(actor),
+    },
+  });
   f.objects[0].position.set(0, 0, 0);
   f.objects[1].position.set(10, 0, 0);
   f.update();
   const origin = source();
   assert.equal(f.peds.useCombatPowerup(49, [], origin, 80, 1000), true);
+  assert.deepEqual(sounds, [3701]);
   f.update(1000);
+  assert.deepEqual(sounds, [3701, 3702]);
+  assert.equal(columns.length, 1);
   assert.equal(f.peds.combatStats.bolts.length, 0);
   assert.equal(f.peds.combatStats.reserved, 0);
   assert.equal(f.peds.states[0].burningUntilMs, 16000);
@@ -284,6 +298,64 @@ test("napalm contact starts fifteen-second burning, retains owner, kills via ord
   f.update(40000);
   assert.equal(f.peds.alive, 2);
   assert.equal(f.peds.combatStats.burning, 0);
+  f.peds.dispose();
+});
+
+test("inactive burning scores immediately without OneLessPed and stops smoke despite immortality", async () => {
+  const extinguished = [];
+  const f = await fixture(2, {
+    hooks: { onNapalmExtinguished: (actor) => extinguished.push(actor) },
+  });
+  f.objects[0].position.set(0, 0, 0);
+  f.objects[1].position.set(10, 0, 0);
+  f.update(1000);
+  const origin = source();
+  f.peds.useCombatPowerup(49, [], origin, 80, 1000);
+  f.update(1000);
+  assert.equal(f.peds.states[0].burningUntilMs, 16000);
+  assert.equal(f.peds.states[0].awardCauseFlags, 0x20);
+  f.update(1001, { cameraPosition: v(10000, 0, 0), immortalPedestrians: true });
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].owner, origin.owner);
+  assert.equal(f.events[0].count, 0);
+  assert.equal(f.events[0].awardContext.cacheFlags, 0x20);
+  assert.equal(f.events[0].awardContext.cachePresent, true);
+  assert.equal(f.peds.hits, 0);
+  assert.equal(f.peds.states[0].alive, false);
+  assert.equal(f.peds.states[0].burningUntilMs, 0);
+  assert.deepEqual(extinguished, [f.objects[0]]);
+  f.update(1002);
+  assert.equal(
+    f.objects[0].visible,
+    false,
+    "MakePedVanish survives returning processing camera",
+  );
+  assert.equal(f.events.length, 1);
+  f.peds.reset();
+  assert.equal(f.peds.states[0].awardCauseFlags, 0);
+  f.update(1003);
+  assert.equal(f.objects[0].visible, true);
+  f.peds.dispose();
+});
+
+test("ray killing a burning pedestrian retains the native napalm cause flag, reset clears it", async () => {
+  const f = await fixture(2);
+  f.objects[0].position.set(0, 0, 0);
+  f.objects[1].position.set(10, 0, 0);
+  f.update(1000);
+  const origin = source();
+  f.peds.useCombatPowerup(49, [], origin, 80, 1000);
+  f.update(1000);
+  f.peds.useCombatPowerup(37, [36], origin, 80, 1001);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].cause, "annihilator");
+  assert.equal(f.events[0].awardContext.cacheFlags, 0x20);
+  f.peds.reset();
+  f.objects[0].position.set(0, 0, 0);
+  f.objects[1].position.set(10, 0, 0);
+  f.update(1002);
+  f.peds.useCombatPowerup(37, [36], origin, 80, 1002);
+  assert.equal(f.events[1].awardContext.cacheFlags, 0);
   f.peds.dispose();
 });
 

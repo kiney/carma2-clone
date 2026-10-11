@@ -99,7 +99,11 @@ try {
   if (catalogs.dune12 && catalogs.dune12 !== catalogs.snow)
     cases.push(["dune12", catalogs.dune12, null]);
 
-  for (const [name, trackPath, expectedCount] of cases) {
+  for (const [name, trackPath, expectedCount] of cases.filter(
+    ([name]) =>
+      !process.env.CARMA_BROWSER_CASE ||
+      name === process.env.CARMA_BROWSER_CASE,
+  )) {
     await page.evaluate(
       async ({ trackPath, carPath }) => {
         const c = window.carma;
@@ -228,6 +232,19 @@ try {
       `${name}: native rematerialization transition failed: ${JSON.stringify(transition)}`,
     );
 
+    // The synthetic visibility fixture advances fleet time by five seconds and
+    // rematerializes a body directly onto the player. It is a separate scenario:
+    // restore all simulation/history state by reloading before real-key driving.
+    await page.evaluate(async () => {
+      const c = window.carma;
+      await c.loadRace();
+      c.paused = true;
+      document.querySelector("#panel").hidden = true;
+    });
+    await page.waitForFunction(() => window.carma.opponentsReady, null, {
+      timeout: 90000,
+    });
+
     await page.evaluate(() => {
       window.carma.paused = false;
     });
@@ -275,12 +292,59 @@ try {
       `${name}: freeze did not stop AI control forces`,
     );
     await page.waitForTimeout(450);
-    const playerStart = await page.evaluate(() =>
-      window.carma.player.state.position.toArray(),
-    );
+    const driveStart = await page.evaluate(() => ({
+      position: window.carma.player.state.position.toArray(),
+      frames: window.carma.stats.gameFrames,
+    }));
+    const playerStart = driveStart.position;
     await page.locator("#view").click();
     await page.keyboard.down("w");
-    await page.waitForTimeout(500);
+    // Software WebGL can render only a few frames in 500 ms. Count actual
+    // gameplay frames, rather than treating a wall-time sleep as simulation.
+    await page.waitForFunction(
+      (start) => window.carma.stats.gameFrames >= start + 12,
+      driveStart.frames,
+      { timeout: 20000 },
+    );
+    const heldInput = await page.evaluate(() => {
+      const c = window.carma;
+      const p = c.player,
+        guard = c.simulation.advanceWorldContacts(p, true);
+      const describe = (row) => ({
+        normal: row.normal.toArray(),
+        point: row.point.toArray(),
+        impulse: row.normalImpulse,
+        penetration: row.penetration,
+        type: row.sourceType,
+        actor: row.sourceSurface?.actor?.name,
+        material: row.sourceSurface?.material,
+        other: row.b?.actor?.name ?? row.b?.group?.name,
+      });
+      return {
+        throttle: p.input.throttle,
+        active: c.simulation.isCarPhysicsActive(p),
+        wasted: p.knackered,
+        components: p.damage.componentLevels,
+        grounded: p.state.groundedWheelCount,
+        position: p.state.position.toArray(),
+        velocity: p.state.velocity.toArray(),
+        omega: p.state.angularVelocity.toArray(),
+        orientation: p.state.orientation.toArray(),
+        worldRecovery: p.worldRecovery,
+        worldOverlap: p.worldOverlapDetected,
+        guard: {
+          fraction: guard.fraction,
+          crossing: guard.crossingFraction,
+          contacts: guard.contacts.map(describe),
+        },
+        lastImpacts: c.simulation.lastImpacts
+          .filter((i) => i.a === p || i.b === p)
+          .slice(0, 12)
+          .map(describe),
+        focus: document.activeElement?.id,
+        frames: c.stats.gameFrames,
+      };
+    });
     await page.keyboard.up("w");
     const playerEnd = await page.evaluate(() => {
       const c = window.carma;
@@ -296,7 +360,7 @@ try {
     assert.ok(
       Math.hypot(...playerEnd.position.map((v, i) => v - playerStart[i])) >
         0.01,
-      `${name}: player did not drive while opponents were frozen: ${JSON.stringify({ playerStart, playerEnd })}`,
+      `${name}: player did not drive while opponents were frozen: ${JSON.stringify({ playerStart, heldInput, playerEnd })}`,
     );
     await page.selectOption("#debug-powerup", "93");
     await page.click("#debug-grant");
@@ -314,6 +378,7 @@ try {
       moving,
       freezeCount: freeze.rivals.length,
       transition,
+      drive: { playerStart, heldInput, playerEnd },
     });
     await page.evaluate(() => {
       document.querySelector("#panel").hidden = true;

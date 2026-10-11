@@ -228,7 +228,13 @@ try {
           .forEach((o, i) =>
             o.position
               .copy(base)
-              .add(new base.constructor(i === 0 ? 2 : 500 + i, 0, 0)),
+              .add(
+                i === 0
+                  ? new base.constructor(0, 0, -1.2).applyQuaternion(
+                      p.state.orientation,
+                    )
+                  : new base.constructor(500 + i, 0, 0),
+              ),
           );
         for (const car of c.simulation.cars)
           c.simulation.setCarPhysicsActive(car, false);
@@ -336,11 +342,67 @@ try {
       assert.equal(result.state.alive, true);
       assert.equal(result.hits, setup.beforeHits);
     }
+    if (action === 49) {
+      const fire = await page.evaluate(() => {
+        const c = window.carma,
+          ps = c.pedestrians,
+          f = window.__combatFixture,
+          start = c.stats.gameTimeMs;
+        let ignitedAt, initialColumn;
+        for (let step = 1; step <= 100; step++) {
+          const now = Math.trunc(start) + step * 40;
+          ps.update(
+            0,
+            {
+              position: f.farCar,
+              velocity: c.player.state.velocity,
+              yaw: 0,
+              speed: 0,
+            },
+            {
+              cameraPosition: f.base,
+              combatPosition: f.base,
+              combatOwner: c.player,
+              gameTimeMs: now,
+              framePeriodMs: 40,
+            },
+          );
+          c.smoke.update(now, 40);
+          if (ps.states[0].burningUntilMs && ignitedAt === undefined) {
+            ignitedAt = now;
+            initialColumn = c.smoke.snapshot().columns.find((x) => x.active);
+          }
+          if (ignitedAt !== undefined && now - ignitedAt > 400) break;
+        }
+        return {
+          ignitedAt,
+          burning: ps.states[0].burningUntilMs,
+          stats: c.smoke.stats,
+          initialColumn,
+          after: c.smoke.snapshot(),
+          diagnostics: c.smoke.diagnostics,
+        };
+      });
+      assert.ok(fire.ignitedAt !== undefined, JSON.stringify(fire));
+      assert.equal(fire.burning - fire.ignitedAt, 15000);
+      assert.ok(fire.stats.columns > 0, JSON.stringify(fire));
+      assert.ok(fire.stats.puffs > 0, JSON.stringify(fire));
+      assert.ok(fire.initialColumn.remaining >= 24960);
+      assert.ok(fire.stats.flameSprites > 0, JSON.stringify(fire));
+      result.fire = fire;
+    }
     if (action !== 31) assert.equal(result.charges, setup.beforeCharges - 1);
     else assert.equal(result.electric, 12.25);
     report.pedestrians.push({ setup, result });
+    await page.evaluate(() => {
+      document.querySelector("#panel").hidden = true;
+      document.querySelector("#debug-panel").hidden = true;
+    });
     await page.screenshot({
       path: `artifacts/browser-combat-ped-${action}.png`,
+    });
+    await page.evaluate(() => {
+      document.querySelector("#debug-panel").hidden = false;
     });
   }
   report.glError = await page.evaluate(() =>

@@ -67,6 +67,15 @@ export interface PedHitEvent {
   position: THREE.Vector3;
   owner?: object;
   cause?: "vehicle" | "annihilator" | "electric" | "napalm";
+  /** Native cache score inputs, retained independently of the eventual killer. */
+  awardContext: {
+    cachePresent: boolean;
+    cacheFlags: number;
+    height: number;
+    napalmDeadlineMs: number;
+    pedVelocity?: THREE.Vector3;
+    pedStartingVelocity?: THREE.Vector3;
+  };
 }
 export interface PedCombatSource {
   /** Native car.pos: live world centre of mass in raw actor units. */
@@ -92,6 +101,13 @@ export interface PedOptions {
   collision?: Pick<WorldCollision, "raycast"> &
     Partial<Pick<WorldCollision, "querySurfaces">>;
   onHit?: (event: PedHitEvent) => void;
+  onNapalmIgnited?: (
+    actor: THREE.Object3D,
+    velocity: THREE.Vector3,
+    omega: THREE.Vector3,
+  ) => void;
+  onNapalmExtinguished?: (actor: THREE.Object3D) => void;
+  onCombatSound?: (id: 3701 | 3702, position: THREE.Vector3) => void;
 }
 type PedAssets = Pick<Assets, "manifest" | "scene" | "text" | "bytes">;
 const clean = (text: string) =>
@@ -246,6 +262,7 @@ interface Ped {
   heading: number;
   phase: number;
   alive: boolean;
+  vanished: boolean;
   fallTime: number;
   velocity: THREE.Vector3;
   spec: PedSpawnSpec;
@@ -268,6 +285,9 @@ interface Ped {
   angularVelocity: THREE.Vector3;
   networkStateCutoffMs: number;
   combatOwner?: object;
+  /** Cache+2e cause bits survive subsequent ray callbacks until cache reset. */
+  awardCauseFlags: number;
+  startingVelocity: THREE.Vector3;
   burningUntilMs: number;
   napalmSlot: number;
   settled: boolean;
@@ -650,6 +670,7 @@ export class PedestrianSystem {
       burningUntilMs: p.burningUntilMs,
       napalmSlot: p.napalmSlot,
       combatOwner: p.combatOwner,
+      awardCauseFlags: p.awardCauseFlags,
       position: p.object.position.clone(),
       group: p.spec.group,
       walkPeriod: p.walkPeriod,
@@ -836,8 +857,11 @@ export class PedestrianSystem {
           heading,
           phase: system.random() * Math.PI * 2,
           alive: true,
+          vanished: false,
           fallTime: 0,
           velocity: new THREE.Vector3(),
+          startingVelocity: new THREE.Vector3(),
+          awardCauseFlags: 0,
           spec: surface.spec,
           movement,
           walkPeriod,
@@ -947,8 +971,7 @@ export class PedestrianSystem {
     );
     return hit ? hit.distance / distance : 1;
   }
-  /** Installed callbacks report success for any qualifying target, even when
-   * ordinary KillPedestrian's low-gravity gate prevents that target's death. */
+  /** Installed callbacks report success for any qualifying target. */
   useCombatPowerup(
     action: 37 | 45 | 49,
     floatParams: readonly number[],
@@ -998,6 +1021,7 @@ export class PedestrianSystem {
         sprites[0].position.copy(bolt.position);
         sprites[0].visible = true;
       }
+      this.options.onCombatSound?.(3701, source.position);
       return true;
     }
     const parameters =
@@ -1032,6 +1056,7 @@ export class PedestrianSystem {
         );
         if (!impulse) continue;
         ped.velocity.add(impulse.deltaVelocity);
+        ped.startingVelocity.copy(ped.velocity);
         ped.angularVelocity.add(impulse.deltaAngularVelocity);
         ped.networkStateCutoffMs = impulse.networkStateCutoffMs;
         this.addRepulseRay(ped, source, gameTimeMs);
@@ -1224,12 +1249,18 @@ export class PedestrianSystem {
     owner: object | undefined,
     cause: PedHitEvent["cause"],
     moveId: number,
+    inactiveBurnScore = false,
   ): boolean {
     const gravity = this.targetGravity(ped.object.position);
-    if (!ped.alive || this.combatFrame.immortalPedestrians) return false;
+    if (
+      !ped.alive ||
+      (!inactiveBurnScore && this.combatFrame.immortalPedestrians)
+    )
+      return false;
     // Installed KillPedestrian 4ccc8b jumps over gore/rigid setup in a
     // low-gravity volume, then still runs OneLessPed and scoring at 4ccd84.
-    const physicalDeath = gravity === undefined || gravity >= 1;
+    const physicalDeath =
+      !inactiveBurnScore && (gravity === undefined || gravity >= 1);
     ped.alive = false;
     ped.action = moveId === 113 ? PedAction.Dead : PedAction.Impacting;
     ped.moveId = moveId;
@@ -1238,7 +1269,11 @@ export class PedestrianSystem {
     ped.settled = !physicalDeath;
     ped.combatOwner = owner;
     ped.velocity.copy(velocity);
-    this.hits++;
+    if (physicalDeath && !ped.corporeal) {
+      ped.startingVelocity.copy(velocity);
+      ped.corporeal = true;
+    }
+    if (!inactiveBurnScore) this.hits++;
     const position = ped.object.position;
     const bounds = new THREE.Box3()
       .setFromObject(ped.visual)
@@ -1250,12 +1285,22 @@ export class PedestrianSystem {
     this.options.onHit?.({
       timeMs,
       group: ped.spec.group,
-      count: 1,
+      count: inactiveBurnScore ? 0 : 1,
       total: this.hits,
       speed,
       position: position.clone(),
       owner,
       cause,
+      awardContext: {
+        cachePresent: ped.active || inactiveBurnScore,
+        cacheFlags: ped.awardCauseFlags,
+        height: 0,
+        napalmDeadlineMs: ped.burningUntilMs,
+        pedVelocity: ped.corporeal ? ped.velocity.clone() : undefined,
+        pedStartingVelocity: ped.corporeal
+          ? ped.startingVelocity.clone()
+          : undefined,
+      },
     });
     return true;
   }
@@ -1300,6 +1345,7 @@ export class PedestrianSystem {
       if (hit) {
         ped.burningUntilMs = (nowMs + NAPALM_BURN_MS) >>> 0;
         ped.combatOwner = bolt.source.owner;
+        ped.awardCauseFlags |= 0x20;
         ped.lastScareMs = nowMs;
         ped.firstScareMs ||= nowMs;
         if (!ped.corporeal && ped.alive) {
@@ -1316,6 +1362,12 @@ export class PedestrianSystem {
           undefined,
           ped.object.quaternion,
         );
+        this.options.onNapalmIgnited?.(
+          ped.object,
+          ped.velocity,
+          ped.angularVelocity,
+        );
+        this.options.onCombatSound?.(3702, ped.object.position);
         this.releaseNapalm(slot);
         continue;
       }
@@ -1628,11 +1680,34 @@ export class PedestrianSystem {
         Math.abs(p.y - camera.y) <= 0.6 * this.settings.popupDistance &&
         Math.abs(p.z - camera.z) <= this.settings.popupDistance;
       ped.active = inProcess && (ped.active || this.nearReset || !inPopup);
-      ped.object.visible = ped.active;
-      if (!ped.active) continue;
+      ped.object.visible = ped.active && !ped.vanished;
+      if (!ped.active) {
+        // Installed4d545d scores an inactive burning target immediately, without
+        // OneLessPed, ordinary immortality/volume gates or waiting for expiry.
+        if ((ped.burningUntilMs | 0) > 0) {
+          if (ped.alive)
+            this.kill(
+              ped,
+              timeMs,
+              0,
+              ped.velocity.clone(),
+              0,
+              ped.combatOwner,
+              "napalm",
+              113,
+              true,
+            );
+          this.options.onNapalmExtinguished?.(ped.object);
+          ped.burningUntilMs = 0;
+          ped.vanished = true;
+        }
+        continue;
+      }
       const volumeGravity = this.targetGravity(ped.object.position);
       if (volumeGravity !== undefined && volumeGravity < 1) {
         if (ped.napalmSlot >= 0) this.releaseNapalm(ped.napalmSlot);
+        if (ped.burningUntilMs > 0)
+          this.options.onNapalmExtinguished?.(ped.object);
         ped.burningUntilMs = 0;
       }
       if (
@@ -2075,6 +2150,8 @@ export class PedestrianSystem {
   reset() {
     this.hits = 0;
     for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);
+    for (const ped of this.peds)
+      this.options.onNapalmExtinguished?.(ped.object);
     this.burnExplosion?.dispose();
     if (this.burnExplosion)
       this.burnExplosion = new ExplosionRuntime(
@@ -2090,6 +2167,7 @@ export class PedestrianSystem {
     this.previousCar.copy(this.options.spawn);
     for (const ped of this.peds) {
       ped.alive = true;
+      ped.vanished = false;
       ped.action = PedAction.Walking;
       ped.moveId = ped.walkPeriod ? 30 : 0;
       ped.active = false;
@@ -2097,6 +2175,8 @@ export class PedestrianSystem {
       ped.angularVelocity.set(0, 0, 0);
       ped.networkStateCutoffMs = 0;
       ped.combatOwner = undefined;
+      ped.awardCauseFlags = 0;
+      ped.startingVelocity.set(0, 0, 0);
       ped.burningUntilMs = 0;
       ped.napalmSlot = -1;
       ped.settled = false;

@@ -1,4 +1,5 @@
 import { Vector3 } from "three";
+import { consumeNativeEarnCredits } from "./ped-awards";
 
 /** Original asset coordinates: rec2's WORLD_SCALE is 6.9 metres per unit.
  * This independent arcade approximation uses a bicycle steering model, tyre
@@ -238,6 +239,8 @@ export interface RaceOptions {
   deferCompletionAwards?: boolean;
 }
 export interface RaceState extends RaceOptions {
+  /** Native global credit multiplier: zero means identity, independent of payouts. */
+  earnedCreditMultiplier?: number;
   /** Native finished guard while a wasted body still simulates its countdown. */
   awardsClosed?: boolean;
   completionReason?: 0 | 1 | 2 | 3;
@@ -342,8 +345,14 @@ export function awardRaceCredits(race: RaceState, amount: number): boolean {
     amount === 0
   )
     return false;
-  race.credits += amount;
-  return true;
+  const result = consumeNativeEarnCredits({
+    amount,
+    creditMultiplier: race.earnedCreditMultiplier ?? 0,
+    currentCredits: race.credits,
+    raceFinished: false,
+  });
+  if (result.accepted) race.credits = result.credits;
+  return result.accepted;
 }
 
 /** Installed AddTimeAward0x44baf0 checks the current race's no_time flag.

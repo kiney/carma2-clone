@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { NativeDrinkDriving } from "./drink-driving";
 import { GlobalGravityState } from "./physics/global-gravity";
 import {
   setBouncePowerup,
@@ -70,7 +71,7 @@ export interface PowerupEvent {
 
 const implementedActions = new Set([
   0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27,
-  28, 30, 31, 34, 35, 36, 37, 38, 45, 46, 47, 49, 51,
+  28, 30, 31, 34, 35, 36, 37, 38, 45, 46, 47, 48, 49, 51,
 ]);
 
 const combatAbilityActions = new Set([37, 38, 45, 49]);
@@ -186,7 +187,8 @@ interface ActiveEffect {
     | 22
     | 27
     | 28
-    | 31;
+    | 31
+    | 48;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -203,6 +205,8 @@ type AssetTextSource = { text(path: string): Promise<string> };
  * Other actions collect with an explicit unsupported event.
  */
 export class PowerupSystem {
+  readonly drinkDriving: NativeDrinkDriving;
+  private earnedRace?: RaceState;
   private motionFactors = { engineFactor: 1, tyreGripFactor: 1 };
   private suspension?: SuspensionPowerupValues;
   private invulnerable = false;
@@ -270,6 +274,7 @@ export class PowerupSystem {
     defaultGravityMultiplier = 1,
   ) {
     this.gravity = new GlobalGravityState(defaultGravityMultiplier);
+    this.drinkDriving = new NativeDrinkDriving(random);
     this.exclusions = new Set(exclusions);
     this.group.name = "Original powerups";
   }
@@ -521,6 +526,10 @@ export class PowerupSystem {
    * Invulnerability represents both crush+1b4 and component+1b8 immunity. */
   private resetEffect(action: ActiveEffect["action"]): void {
     switch (action) {
+      case 48:
+        this.drinkDriving.reset();
+        if (this.earnedRace) this.earnedRace.earnedCreditMultiplier = 0;
+        break;
       case 5:
         this.invulnerable = false;
         break;
@@ -603,6 +612,7 @@ export class PowerupSystem {
     if (this.exclusions.has(index)) index = 0;
     const def = this.definitions[index];
     if (!def) return;
+    this.earnedRace = race;
     switch (def.action) {
       case 34:
       case 35:
@@ -669,7 +679,16 @@ export class PowerupSystem {
       case 22:
       case 27:
       case 28:
+      case 48:
       case 31: {
+        if (def.action === 48) {
+          this.drinkDriving.set(
+            def.floatParams,
+            def.integerParams,
+            this.elapsedMs,
+          );
+          race.earnedCreditMultiplier = this.drinkDriving.creditMultiplier;
+        }
         if (def.action === 5) this.invulnerable = true;
         if (def.action === 6) this.freeRepairs = true;
         if (def.action === 8) this.timerFrozen = true;
@@ -750,12 +769,13 @@ export class PowerupSystem {
           high = def.integerParams[1] ?? low;
         // Installed GotCredits 0x4dbf60 truncates the sampled award to hundreds.
         const award = Math.trunc(this.randomBetween(low, high) / 100) * 100;
+        const before = race.credits;
         const credited = awardRaceCredits(race, award);
         onEvent?.({
           kind: "credits",
           name: def.message,
           definition: def,
-          amount: credited ? award : 0,
+          amount: credited ? (race.credits - before) | 0 : 0,
         });
         break;
       }

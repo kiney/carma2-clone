@@ -30,6 +30,11 @@ import "./command-powerups.test.mjs";
 import "./combat-powerups.test.mjs";
 import "./opponent-repulsion.test.mjs";
 import "./ped-combat-integration.test.mjs";
+import "./ped-awards-binary.test.mjs";
+import "./drink-driving.test.mjs";
+import "./cunning-stunts.test.mjs";
+import "./smoke.test.mjs";
+import "./dust-shades.test.mjs";
 
 import "./mechanics.test.mjs";
 import "./damage-program.test.mjs";

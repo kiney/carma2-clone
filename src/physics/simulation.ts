@@ -478,6 +478,7 @@ export class VehicleSimulation {
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
   onOpponentRepulsed?: (source: SimulatedCar, target: SimulatedCar) => void;
+  onFinishCars?: (framePeriodMs: number) => void;
   /** First-seen body order, after both receivers' damage and before the next pair. */
   onImpactPair?: (
     a: Readonly<SimulatedCar> | undefined,
@@ -1428,6 +1429,7 @@ export class VehicleSimulation {
     } finally {
       this.collectingOrdinaryCrush = false;
     }
+    this.onFinishCars?.(Math.round(Math.max(0, dt) * 1000) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
     this.flushSmashEffects();
@@ -1460,6 +1462,7 @@ export class VehicleSimulation {
     this.cameraContacts.finish(window.lastPhysicsTickMs, window.frameEndMs);
     this.elapsed = window.lastPhysicsTickMs / 1000;
     this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
+    this.onFinishCars?.(Math.round(framePeriodMs) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
     for (const car of this.cars) {

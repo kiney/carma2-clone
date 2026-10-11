@@ -158,6 +158,8 @@ export interface MotionParameters {
 export interface MotionDebug {
   /** Original material_index[] friction and field_0x195c recovery gates. */
   wheelRoadFrictions: readonly number[];
+  /** Retained native wheel material slots for FinishCars smoke/skid consumers. */
+  wheelSurfaceModifiers?: readonly (SurfaceModifier | undefined)[];
   dynamicWheelSupport: boolean;
   wheelSpringLoads: [number, number, number, number];
   wheelCapacities: [number, number, number, number];
@@ -1084,6 +1086,9 @@ export function applyVehicleForces(
   return {
     wheelSpringLoads: loads,
     wheelRoadFrictions: hits.map((hit) => hit?.friction ?? 0),
+    wheelSurfaceModifiers: hits.map(
+      (hit) => s.volumeSurface ?? hit?.surface?.modifier,
+    ),
     dynamicWheelSupport: hits.some((hit, i) => wheelGrounded[i] && !!hit?.body),
     wheelCapacities: caps,
     wheelTyreForces: actual,

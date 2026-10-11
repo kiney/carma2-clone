@@ -209,7 +209,11 @@ try {
       target,
       value: c.missionVariables.get(variable),
       status: c.race.status,
-      snapshot,
+      beforeSmashCredits: snapshot,
+      // Authored connotation awards on preceding targets are ordinary earned
+      // credits. Native payout snapshots the account at completion, not before
+      // the controlled smash chain began.
+      snapshot: c.race.credits,
       expectedCompletionBonus:
         c.race.completionCreditsByReason?.[c.race.completionReason ?? 0] ??
         c.race.completionCredits,
@@ -392,13 +396,29 @@ try {
         "Pedestrian award callback is not exposed on the loaded system",
       );
     const before = { credits: c.race.credits, timeLeft: c.race.timeLeft };
+    // Explicit callback adapter fixture, not evidence of native ped collision.
+    // Supply an upright stationary local killer and known cache score inputs.
+    c.player.state.orientation.identity();
+    c.player.state.angularVelocity.set(0, 0, 0);
+    c.player.state.velocity.set(0, 0, 0);
+    const position = c.player.state.position.clone();
+    const awardContext = {
+      cachePresent: true,
+      cacheFlags: 0,
+      height: 0,
+      napalmDeadlineMs: 0,
+      pedVelocity: position.clone().set(0, 0, 0),
+      pedStartingVelocity: position.clone().set(0, 0, 0),
+    };
     callback({
       timeMs: 1000,
       group: 0,
       count: 1,
       total: 1,
       speed: 1,
-      position: c.vehicle.position.clone(),
+      position,
+      owner: c.player,
+      awardContext,
     });
     const first = { credits: c.race.credits, timeLeft: c.race.timeLeft };
     callback({
@@ -407,7 +427,9 @@ try {
       count: 1,
       total: 2,
       speed: 1,
-      position: c.vehicle.position.clone(),
+      position,
+      owner: c.player,
+      awardContext,
     });
     return {
       before,
@@ -577,6 +599,9 @@ try {
   const advPedestrian = await page.evaluate(() => {
     const c = window.carma;
     const before = { credits: c.race.credits, timeLeft: c.race.timeLeft };
+    c.player.state.orientation.identity();
+    c.player.state.angularVelocity.set(0, 0, 0);
+    c.player.state.velocity.set(0, 0, 0);
     c.pedestrians.options.onHit({
       timeMs: 1000,
       group: 0,
@@ -584,6 +609,15 @@ try {
       total: 1,
       speed: 1,
       position: c.vehicle.position.clone(),
+      owner: c.player,
+      awardContext: {
+        cachePresent: true,
+        cacheFlags: 0,
+        height: 0,
+        napalmDeadlineMs: 0,
+        pedVelocity: c.vehicle.velocity.clone(),
+        pedStartingVelocity: c.vehicle.velocity.clone(),
+      },
     });
     return {
       credits: c.race.credits - before.credits,

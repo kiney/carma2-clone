@@ -291,7 +291,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
 
 test("unsupported pickups collect once with an explicit event and definition warning", async () => {
   const assets = {
-    text: async () => table([{ message: "Unknown", action: 48 }]),
+    text: async () => table([{ message: "Unknown", action: 43 }]),
   };
   const root = new THREE.Group(),
     pickup = new THREE.Group();
@@ -300,7 +300,7 @@ test("unsupported pickups collect once with an explicit event and definition war
   const system = await new PowerupSystem(assets, root).init();
   assert.equal(system.pickups.length, 1);
   assert.equal(root.children.includes(pickup), false);
-  assert.match(system.warnings[0], /unsupported action 48/);
+  assert.match(system.warnings[0], /unsupported action 43/);
   assert.equal(system.warnings.length, 1);
   const car = createVehicle(new THREE.Vector3());
   const race = createRace([]);
@@ -446,7 +446,7 @@ test("random pickup preserves an unsupported choice and guards cyclic tables", a
   const system = await syntheticEffects(
     [
       { action: 4, ints: [1] },
-      { action: 48, message: "Original ability" },
+      { action: 43, message: "Original ability" },
     ],
     [0, 100],
     () => 0,
