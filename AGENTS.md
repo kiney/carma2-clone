@@ -4,7 +4,7 @@
 
 - All authored application UI must be English, regardless of the language of the user's prompt. This includes menus, HUD text, debug tools, tooltips, accessibility labels, loading/status messages and errors. Keep `index.html` marked `lang="en"`. Preserve original proper names and asset identifiers.
 - Conversation with the user may remain German. Do not infer a UI localization request from a German conversation.
-- Keep all project documentation in English, including README, TODO entries, workflow policies and reverse-engineering notes. Translate newly reported German issues into English when documenting them. Use English for new code comments. Preserve user-maintained TODO identifiers, priorities, status meanings and technical evidence; do not retain German prose solely because an entry was authored by the user. A later explicit localization request may override this policy.
+- Keep all project documentation in English, including README, Backlog tasks, workflow policies and reverse-engineering notes. Translate newly reported German issues into English when documenting them. Use English for new code comments. Preserve user-maintained legacy issue identifiers, priorities, status meanings and technical evidence; do not retain German prose solely because an entry was authored by the user. A later explicit localization request may override this policy.
 - For longer responses, start with an Executive Summary stating the outcome, decisions and important limitations. Omit it for short responses. Give concise progress updates during extended work; report actual results and validation.
 
 ## Scope and autonomy
@@ -13,7 +13,7 @@
 - Make routine engineering decisions and complete authorized implementation, integration and debugging without asking the user to choose a language, library, architecture, directory layout, priorities or agent setup. Follow runtime permission rules.
 - If a missing system tool is materially necessary, first try installed tools and project-local dependencies. Prefer Debian packages. Ask only for the exact required installation, explaining why existing tools are insufficient and giving an exact `sudo apt install ...` command. Project-local dependencies need no separate approval; retain reproducible lockfiles.
 - If an explicit active Goal exists, use its actual acceptance criteria. A milestone, passing tests or an approximation of a core requirement does not by itself complete the Goal. Do not create a Goal unless explicitly requested.
-- Keep `TODO.md` current with discovered defects and compatibility gaps. Reconcile duplicates, retain stable identifiers, and respect priorities the user edits. Distinguish reported symptoms, reproduced defects, approximations and verified fixes.
+- Keep Backlog tasks in `backlog/tasks/` current with discovered defects and compatibility gaps, using the `backlog` CLI. Reconcile duplicates, retain stable legacy identifiers (such as `PHY-09`) in titles and labels, and respect priorities the user edits. Distinguish reported symptoms, reproduced defects, approximations and verified fixes. Use board statuses `backlog`, `next`, `wip`, `done`; preserve exact numeric priorities 1–5 in `[P<number>]` titles and `priority-<number>` labels. Keep board ordinals ordered by numeric priority; see `backlog/README.md` for native priority mapping and migration semantics. `TODO.md` is only a redirect, not a second task list.
 - Prioritize C2 gameplay, collision, crush, damage, destruction and repair fidelity over cosmetic UI work when working on engine fidelity. Follow the user's current task and priority changes.
 
 ## Original assets and licensing
@@ -60,6 +60,8 @@ The established practice is proactive delegation when tasks can be separated use
 Common commands from the repository root:
 
 ```sh
+backlog board          # Priority-ordered task board
+backlog browser        # Editable local board
 npm ci
 npm run dev             # Local assets; http://localhost:5173
 npm run build           # TypeScript check and production bundle
@@ -71,4 +73,4 @@ npm run test:crashes    # Ignored numerical crash report
 npm run test:car-damage # Ignored multi-car impact/repair audit
 ```
 
-Read `README.md`, `TODO.md` and relevant `docs/` notes for current status. Inspect actual code and runtime behavior before relying on an earlier status report.
+Read `README.md`, `backlog/README.md`, relevant Backlog tasks and `docs/` notes for current status. Inspect actual code and runtime behavior before relying on an earlier status report.

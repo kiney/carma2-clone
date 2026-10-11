@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The engine loads stock and Advanced tracks and cars from a local installation, including original geometry, materials, pixelmaps, and TIFF textures. Driving, crashes, water, oil, lifts, world destruction, noncars and mines have source-based runtime paths, stock/headless tests and Chromium validation. Mission, campaign, AI, and several animation systems remain incomplete; [TODO.md](../TODO.md) tracks priorities and remaining gaps.
+The engine loads stock and Advanced tracks and cars from a local installation, including original geometry, materials, pixelmaps, and TIFF textures. Driving, crashes, water, oil, lifts, world destruction, noncars and mines have source-based runtime paths, stock/headless tests and Chromium validation. Mission, campaign, AI, and several animation systems remain incomplete; [Backlog](../backlog/README.md) tracks priorities and remaining gaps.
 
 ## Supported content
 
