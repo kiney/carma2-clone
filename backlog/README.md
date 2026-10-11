@@ -59,15 +59,21 @@ choices remain open. The user then separated upcoming work as follows:
 
 | Backlog ID | Issue | Priority | Status | Scope / order |
 | --- | --- | --- | --- | --- |
-| TASK-100 | PERF-01 | 1 | `wip` | Collision/simulation performance and unresolved frame-time spikes |
+| TASK-100 | PERF-01 | 1 | `wip` | Cross-subsystem profiling, unresolved frame-time spikes and finding coordination |
 | TASK-101 | PERF-02 | 1 | `next` | Scene-hierarchy CPU overhead; explicitly no solution prescribed |
+| TASK-104 | PERF-05 | 1 | `next` | Physics code/algorithm optimization; Web Workers reserved as a last resort |
 | TASK-103 | PERF-04 | 2 | `next` | Higher visual visibility, dependent on TASK-101 |
 | TASK-102 | PERF-03 | 4 | `backlog` | High-resolution rendering policy; deferred, measured gain was small |
 
-The board now has 103 tasks: 64 `backlog`, 2 `next`, 1 `wip` and 36 `done`.
-Only the simulation investigation remains active; queued tickets do not consume
+The board now has 104 tasks: 64 `backlog`, 3 `next`, 1 `wip` and 36 `done`.
+Only the profiling investigation remains active; queued tickets do not consume
 WIP slots. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
 memory and FPS-diagnostic scopes and user-edited priorities.
+
+PERF-05 / TASK-104 owns physics implementation separately from PERF-01's analysis.
+Prioritize code and algorithm improvements while preserving collision decisions,
+native timing and anti-tunneling/interlock safeguards. Consider a separately scoped
+worker redesign only as a last resort if measurements after optimization justify it.
 
 ## Priorities and sorting
 
@@ -85,7 +91,7 @@ All columns use explicit ordinals to put numeric priority 1 first and priority 5
 
 The three completed checklist items had no original issue ID or numeric priority. They retain that distinction, use `unprioritized` and `imported-checklist` labels, and sort after the numbered issues in `done` rather than inventing a user-assigned priority.
 
-The interactive terminal/browser board and default task list respect ordinals. Backlog.md 1.47.1's Markdown board export (also used by `backlog board` without an interactive terminal) instead sorts by update date, so it does not preserve this priority order.
+The interactive terminal/browser board respects ordinals. Plain task-list output does not reliably reflect those ordinals, and its native priority sort cannot distinguish numeric P1 from P2. Backlog.md 1.47.1's Markdown board export (also used by `backlog board` without an interactive terminal) instead sorts by update date, so it does not preserve this priority order. The stored ordinals and the interactive board remain the intended queue order.
 
 ## Preserved context
 

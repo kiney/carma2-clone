@@ -1,8 +1,10 @@
 # PERF-01: frame-time investigation
 
 Status: **initial analysis completed; optimization and exact policy remain open**.
-TASK-100 / PERF-01 remains priority 1, `wip`, for simulation/collision overhead and
-unresolved spikes. TASK-101 / PERF-02 owns scene-hierarchy work (P1, `next`), with
+TASK-100 / PERF-01 remains priority 1, `wip`, for profiling, unresolved spikes and
+finding coordination. TASK-104 / PERF-05 owns physics code/algorithm optimization
+(P1, `next`), with Web Workers reserved as a last resort.
+TASK-101 / PERF-02 owns scene-hierarchy work (P1, `next`), with
 no solution prescribed. TASK-103 / PERF-04 owns higher visual visibility (P2,
 `next`, after TASK-101); TASK-102 / PERF-03 owns resolution policy (P4, `backlog`).
 No production engine behavior, resolution, simulation distance or collision
@@ -107,6 +109,13 @@ rendering. It would not reduce the physics algorithm's CPU cost: the measured
 39.3 ms tick already nearly fills its 40 ms budget. Optimizing the measured
 collision overhead remains useful regardless of threading. This is a feasibility
 assessment, not a selected architecture or an implementation claim.
+
+The user's 2026-10-12 direction is **code and algorithm optimization first**,
+tracked in TASK-104 / PERF-05. Web Workers remain a **last resort** if residual
+measurements after those improvements justify the larger redesign. Worker migration
+is not part of the initial implementation scope; any such follow-up needs separate
+scope and measured justification. Preserve numerical decisions, native timing,
+collision safeguards and damage/crush semantics during optimization.
 
 ## Ranked bottlenecks and source evidence
 
