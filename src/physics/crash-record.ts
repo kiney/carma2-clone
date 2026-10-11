@@ -1,4 +1,4 @@
-import { Vector3 } from "three";
+import { Quaternion, Vector3 } from "three";
 import {
   normalizeDamagePoint,
   selectDamageFace,
@@ -39,6 +39,64 @@ const sectors = {
   rear: 5,
 } as const;
 
+/** BrVector3Normalise: live length/reciprocal, Float32 component stores. */
+export function nativeCrashDirection(value: Vector3): Vector3 {
+  return normalizeLiveDirection(vector(value));
+}
+function normalizeLiveDirection(v: Vector3): Vector3 {
+  const length = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  if (!(length > Math.fround(2 ** -22))) return new Vector3(1, 0, 0);
+  const inverse = 1 / length;
+  return vector(v.multiplyScalar(inverse));
+}
+
+/** Installed4167c1–4168d8: last substep velocity, live interpolation arithmetic. */
+export function nativeCrashViewerDirection(
+  original: Vector3,
+  current: Vector3,
+  deltaMs: number,
+): Vector3 {
+  if (!Number.isInteger(deltaMs) || deltaMs < 0 || deltaMs > 0xffffffff)
+    throw new Error("Invalid native crash viewer interpolation delta");
+  const oldV = vector(original),
+    v = vector(current);
+  const dt = deltaMs * Math.fround(0.025);
+  return normalizeLiveDirection(
+    new Vector3(
+      (oldV.x - v.x) * dt + v.x,
+      (oldV.y - v.y) * dt + v.y,
+      (oldV.z - v.z) * dt + v.z,
+    ),
+  );
+}
+
+/** Installed4411d1–441224 uses original A/B snapshots, not selected roles. */
+export function nativeCrashHeadOn(
+  a: NativeCrashRecord,
+  b: NativeCrashRecord,
+): boolean {
+  const face = (r: NativeCrashRecord) =>
+    r.firstContactFace < 4
+      ? r.normalizedContactZ < 0.25
+        ? 4
+        : r.normalizedContactZ > 0.75
+          ? 5
+          : r.firstContactFace
+      : r.firstContactFace;
+  if (
+    face(a) !== 4 ||
+    face(b) !== 4 ||
+    !(a.preSpeed > Math.fround(0.001)) ||
+    !(b.preSpeed > Math.fround(0.001))
+  )
+    return false;
+  const da = a.preDirection,
+    db = b.preDirection;
+  return (
+    Math.fround(da.x * db.x + da.y * db.y + da.z * db.z) < Math.fround(-0.7)
+  );
+}
+
 /** One native car's outer-frame damage snapshot. Caller begins once per game
  * frame, not per40ms substep; accepted attribution clears only accumulated
  * damage, while the first-contact face survives until the next frame. */
@@ -47,6 +105,8 @@ export class NativeCrashRecord {
   preSpeed = 0;
   frameKnackered = false;
   localVelocity = new Vector3();
+  cachedDirection = new Vector3(0, 0, -1);
+  preDirection = new Vector3(0, 0, -1);
   firstContactFace = 7;
   normalizedContactZ = 0;
   accumulator = 0;
@@ -58,13 +118,28 @@ export class NativeCrashRecord {
     this.frameKnackered = knackered;
     this.preSpeed = stored(this.cachedSpeed);
     this.localVelocity.copy(velocity);
+    this.preDirection.copy(this.cachedDirection);
     this.firstContactFace = 7;
     this.accumulator = 0;
     // Native RecordLastDamage does not clear the stale normalized-Z field.
   }
 
-  finishFrame(worldVelocity: Vector3): void {
+  resetDirection(orientation: Quaternion): void {
+    this.cachedDirection.copy(
+      vector(new Vector3(0, 0, -1).applyQuaternion(orientation)),
+    );
+  }
+
+  finishFrame(worldVelocity: Vector3, orientation = new Quaternion()): void {
     this.cachedSpeed = nativeCrashSpeedCache(this.cachedSpeed, worldVelocity);
+    if (this.cachedSpeed > Math.fround(0.0001)) {
+      this.cachedDirection.copy(nativeCrashDirection(worldVelocity));
+    } else {
+      const k = vector(new Vector3(0, 0, 1).applyQuaternion(orientation));
+      const d = this.cachedDirection;
+      const dot = d.x * -k.x + d.y * -k.y + d.z * -k.z;
+      this.cachedDirection.copy(k.multiplyScalar(dot < 0 ? 1 : -1));
+    }
   }
 
   recordCarContact(point: Vector3, bounds: ComponentBounds): void {

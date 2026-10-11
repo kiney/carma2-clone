@@ -305,6 +305,7 @@ export function placeCarAtStart(
     car.state.wheelLengths = lengths as SimulatedCar["state"]["wheelLengths"];
     car.state.groundedWheelCount = 4;
     car.state.speed = 0;
+    car.crashRecord.resetDirection(orientation);
     car.recoveryHistory = new SafeCarHistory(car.state);
     car.worldRecovery = car.worldOverlapDetected = car.overlapDetected = false;
     car.poseEpoch++;

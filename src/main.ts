@@ -12,6 +12,15 @@ import {
   approachOpponentCurvature,
 } from "./physics/opponent-speed";
 import { applyOpponentHotrod } from "./physics/opponent-hotrod";
+import { NativeOpponentFleet } from "./ai/runtime";
+import { NativeOpponentPlacement } from "./physics/opponent-placement";
+import { readNativeOpponentRepairLimits } from "./ai/repair";
+import {
+  assignNativePersonalities,
+  resolveNativeRaceNastiness,
+} from "./ai/personality";
+import { nativeOpponentViewDistance } from "./ai/proximity";
+import { nativeHasCarFallenOffWorld } from "./ai/fallen-world";
 import { NONCAR_FLAGS } from "./physics/noncar-motion";
 import { parseDefaultGravityMultiplier } from "./physics/global-gravity";
 import { BrowserGameClock } from "./game-clock";
@@ -37,6 +46,7 @@ import {
   speedMph,
   recoverVehicle,
   awardRaceTime,
+  awardRaceCredits,
 } from "./gameplay";
 import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
@@ -65,7 +75,9 @@ import { OilRuntime } from "./physics/oil";
 import { parseNonCarMechanics, parseTrackNonCarFiles } from "./noncars";
 import { createNonCarBody, nonCarActors } from "./physics/noncar-body";
 import { NonCarRenderBatch } from "./noncar-render";
-import { WorldDestruction } from "./world-destruction";
+import { WorldDestruction, type WorldSmashContact } from "./world-destruction";
+import { chooseSmashAudio, nativeSmashStartingVelocity } from "./smash-effects";
+import { ShardRuntime } from "./smash-shards";
 import { MissionVariables } from "./mission-variables";
 import { RacePayout } from "./race-payout";
 import {
@@ -74,12 +86,13 @@ import {
 } from "./opponent-selection";
 import {
   parseRaceAwards,
+  parseCrashDamageAwards,
   parsePedAwards,
   PedAwardCounter,
   wastedCarCredits,
 } from "./race-awards";
 import { commandJump, instantHandbrake } from "./physics/command-powerups";
-import { parseTrackSmashables } from "./world-smash";
+import { parseTrackSmashables, type SmashConnotations } from "./world-smash";
 import { WorldGrooveRuntime } from "./world-groove";
 import { createMovingWorldBody } from "./physics/moving-world";
 import { parseDat } from "./formats";
@@ -103,7 +116,7 @@ import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics; simplified AI and browser HUD.</small></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -182,6 +195,7 @@ let renderPoses = new RenderPoses();
 let noncarRenderBatch: NonCarRenderBatch | undefined;
 let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
+let shards: ShardRuntime | undefined;
 const renderPosition = new THREE.Vector3(),
   renderOrientation = new THREE.Quaternion();
 let racePayout: RacePayout | undefined;
@@ -190,6 +204,7 @@ let pedAwards: ReturnType<typeof parsePedAwards> | undefined;
 let pedAwardCounter = new PedAwardCounter();
 let rivalsReady = false,
   pedestriansReady = false;
+let opponentFleet: NativeOpponentFleet | undefined;
 const keys = new Set<string>(),
   target = new THREE.Vector3(),
   previous = new THREE.Vector3();
@@ -211,6 +226,12 @@ const stats = {
 const debug = {
   stats,
   audio,
+  get shards() {
+    return shards;
+  },
+  get opponentFleet() {
+    return opponentFleet;
+  },
   wastedFeedback,
   get debugMode() {
     return debugPanel;
@@ -673,26 +694,7 @@ async function loadRace() {
         materials: world.materials,
         onActivation: (activation, contact) =>
           simulation?.worldActivations.enqueue(activation, contact),
-        onConnotations: (data, contact) => {
-          missionVariables.apply(data.variableChanges);
-          checkSmashObjective();
-          for (const id of data.sounds) void audio.playSound(id);
-          if (data.explosions.length) {
-            const source = contact.bodyActor ?? contact.actor;
-            source.updateWorldMatrix(true, true);
-            const bounds = new THREE.Box3()
-              .setFromObject(source)
-              .applyMatrix4(source.matrixWorld.clone().invert());
-            explosions?.spawn(
-              data.explosions,
-              contact.point ?? source.getWorldPosition(new THREE.Vector3()),
-              bounds,
-              contact.timeMs ?? 0,
-              undefined,
-              source.getWorldQuaternion(new THREE.Quaternion()),
-            );
-          }
-        },
+        onConnotations: dispatchSmashConnotations,
       },
     );
     await loadedDestruction.preload(async (name) => {
@@ -719,6 +721,10 @@ async function loadRace() {
     noncarRenderBatch?.dispose();
     simulation?.dispose();
     explosions?.dispose();
+    shards?.dispose();
+    shards = new ShardRuntime(scene, world.materials, {
+      gravity: () => simulation?.gravityMultiplier ?? defaultGravityMultiplier,
+    });
     explosions = new ExplosionRuntime(
       scene,
       new Map([...world.textures, ...assets.textures]),
@@ -750,6 +756,7 @@ async function loadRace() {
       disposeGroup(rival.object);
     }
     rivals = [];
+    opponentFleet = undefined;
     if (pedestrians) {
       scene.remove(pedestrians.group);
       pedestrians.dispose();
@@ -801,6 +808,8 @@ async function loadRace() {
     player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    simulation.deferFinalSmashFlush = true;
+    simulation.smashClock = () => stats.gameTimeMs >>> 0;
     simulation.gravityMultiplier = defaultGravityMultiplier;
     simulation.onPinball = () => void audio.playSound(9011);
     simulation.onWorldGeometryChanged = () =>
@@ -849,6 +858,15 @@ async function loadRace() {
         ...activeSimulation.mineBodies,
       ]);
     simulation.settings = upgradeSettings;
+    simulation.crashDamageAwards = parseCrashDamageAwards(generalText);
+    simulation.onCrashAttribution = (attacker, victim) =>
+      opponentFleet?.onCrashAttribution(attacker, victim);
+    simulation.onCrashDamageAward = (_victim, credits, seconds, multiplier) => {
+      if (!race || !awardRaceCredits(race, credits)) return;
+      awardRaceTime(race, seconds);
+      message(`${multiplier > 1 ? "CRASH BONUS" : "DAMAGE"} · +${credits} CR`);
+    };
+    bindWamEffects(player, loadedCar.materials);
     simulation.add(player);
     for (const body of noncarBodies) simulation.addNonCar(body);
     noncarRenderBatch = new NonCarRenderBatch(noncarBodies, scene);
@@ -874,9 +892,10 @@ async function loadRace() {
       }
     };
     simulation.onWasted = (body) => {
-      if (body.human && race) race.awardsClosed = true;
-      else checkRaceObjective();
       const rival = rivals.find((r) => r.body === body);
+      if (body.human && race) race.awardsClosed = true;
+      else if (rival) finishRivalWastage(rival);
+      else checkRaceObjective();
       wastedFeedback.wasted(
         body.human ? "player" : "rival",
         body.human ? "player" : (rival?.id ?? body.group.uuid),
@@ -993,7 +1012,7 @@ async function loadRace() {
         if (loadGeneration === generation) pedestriansReady = true;
       })
       .catch((error) => console.warn("Pedestrian content:", error));
-    loadRivals(definition, loadGeneration)
+    loadRivals(definition, loadGeneration, generalText)
       .then(() => {
         if (loadGeneration === generation) rivalsReady = true;
       })
@@ -1010,11 +1029,112 @@ async function loadRace() {
     el("play").removeAttribute("disabled");
   }
 }
+/** Shared world/WAM effect outlets. Native alternatives select one sound.
+ * Positional audio and unsupported connotation classes remain tracked gaps.
+ */
+function dispatchSmashConnotations(
+  data: SmashConnotations,
+  contact: WorldSmashContact,
+) {
+  const sound = chooseSmashAudio(data.sounds);
+  if (sound !== undefined)
+    void audio.playSound(sound.id, 0.65, sound.playbackRate);
+  if (data.explosions.length) {
+    const source = contact.bodyActor ?? contact.actor;
+    source.updateWorldMatrix(true, true);
+    const bounds = new THREE.Box3()
+      .setFromObject(source)
+      .applyMatrix4(source.matrixWorld.clone().invert());
+    const transform = contact.impacteeTransform ?? source.matrixWorld;
+    const orientation = new THREE.Quaternion();
+    transform.decompose(new THREE.Vector3(), orientation, new THREE.Vector3());
+    explosions?.spawn(
+      data.explosions,
+      contact.point ?? new THREE.Vector3().setFromMatrixPosition(transform),
+      bounds,
+      contact.timeMs ?? 0,
+      undefined,
+      orientation,
+    );
+  }
+  // Native variable effects precede the immediate smash-completion check.
+  missionVariables.apply(data.variableChanges);
+  checkSmashObjective();
+}
+
+function bindWamEffects(
+  body: SimulatedCar,
+  materials: ReadonlyMap<string, THREE.Material>,
+) {
+  body.damage.onWamSmash = (event) => {
+    // Use the collision body's current pose, not its interpolated render pose.
+    const transform = new THREE.Matrix4().compose(
+      body.state.position,
+      body.state.orientation,
+      new THREE.Vector3(1, 1, 1),
+    );
+    const contact: WorldSmashContact = {
+      actor: event.actor,
+      bodyActor: body.group,
+      kind: "body",
+      normalImpulse: 0,
+      impacteeVelocity: body.state.velocity.clone(),
+      impacteeTransform: transform,
+      point: event.localPoint.clone().applyMatrix4(transform),
+      timeMs: event.timeMs,
+    };
+    // Preserve model/ACT transforms, replacing only the stale render root pose.
+    body.group.updateWorldMatrix(true, true);
+    let ancestor: THREE.Object3D | null = event.mesh;
+    while (ancestor && ancestor !== body.group) ancestor = ancestor.parent;
+    // Detachment can reparent the live queued actor before this final flush.
+    // Independent physical pieces already have their own world-space pose.
+    const meshTransform = ancestor
+      ? transform
+          .clone()
+          .multiply(
+            body.group.matrixWorld
+              .clone()
+              .invert()
+              .multiply(event.mesh.matrixWorld),
+          )
+      : event.mesh.matrixWorld.clone();
+    const meshMaterials = Array.isArray(event.mesh.material)
+      ? event.mesh.material
+      : [event.mesh.material];
+    const slots = meshMaterials.flatMap((material, slot) =>
+      material.name.toLowerCase() === event.smash.material.toLowerCase()
+        ? [slot]
+        : [],
+    );
+    for (const spec of event.connotations.shrapnel)
+      if (spec.kind === "shards")
+        shards?.spawn(spec, {
+          geometry: event.mesh.geometry,
+          matrixWorld: meshTransform,
+          materialSlots: slots,
+          sourceVertexLimit: 50,
+          sourceFaceLimit: 50,
+          materials,
+          impacteeVelocity: nativeSmashStartingVelocity(
+            simulation?.startingCarSmashVelocity(body) ?? body.state.velocity,
+          ),
+          timeMs: event.timeMs,
+        });
+    for (const activation of event.connotations.activations)
+      simulation?.worldActivations.enqueue(activation, contact);
+    dispatchSmashConnotations(event.connotations, contact);
+  };
+}
+
 async function loadRivals(
   definition: RaceCatalogEntry | undefined,
   loadGeneration: number,
+  generalText: string,
 ) {
-  if (!track || !vehicle || !collision) return;
+  if (!track || !vehicle || !collision || !simulation || !player) return;
+  const activeSimulation = simulation;
+  const activeCollision = collision;
   const activeTrack = currentTrack;
   const gridOrigin = vehicle.position.clone();
   const gridHeading = vehicle.heading;
@@ -1046,6 +1166,65 @@ async function loadRivals(
     return { id, path };
   });
   const count = candidates.length;
+  const pathNodes = nodes.map((p) => new THREE.Vector3(...p));
+  const nastiness = resolveNativeRaceNastiness(catalog, raceIndex);
+  const personalities = assignNativePersonalities(count, nastiness);
+  const placement = new NativeOpponentPlacement(
+    activeSimulation,
+    activeCollision,
+    pathNodes,
+    track.pathSections,
+    (body) => fleet.teleportToSafeLocation(body),
+  );
+  const fleet = new NativeOpponentFleet(
+    pathNodes,
+    track.pathSections,
+    opponents,
+    nastiness,
+    player,
+    {
+      skill: activeSimulation.skill,
+      raceIndex,
+      raceCount: catalog.races.length,
+      viewDistance: nativeOpponentViewDistance(camera.far),
+      repairLimits: readNativeOpponentRepairLimits(generalText),
+      rayFraction: (origin, direction) => {
+        const length = direction.length();
+        const hit = activeCollision.raycast(origin, direction, length);
+        return hit ? Math.fround(hit.distance / length) : 100;
+      },
+      isPhysicsActive: (body) => activeSimulation.isCarPhysicsActive(body),
+      setPhysicsActive: (body, active) => {
+        activeSimulation.setCarPhysicsActive(body, active);
+        body.group.visible = active;
+      },
+      rematerialize: (body, view, slot, speed) =>
+        placement.onSection(body, view, slot, speed),
+      rematerializeNearest: (body, speed) => placement.nearest(body, speed),
+      hasFallenOffWorld: (body) =>
+        nativeHasCarFallenOffWorld(
+          {
+            position: body.state.position,
+            actorUp: new THREE.Vector3(0, 1, 0).applyQuaternion(
+              body.state.orientation,
+            ),
+            driver: body.human ? 8 : 6,
+            wheelsOnGround: body.state.groundedWheelCount ?? 0,
+            cachedMaterialNames: activeSimulation.cachedCarMaterialNames(body),
+            carFlying: false,
+            actionReplay: false,
+          },
+          (origin) => activeCollision.nativeYBelow(origin),
+        ),
+      repair: (body) => activeSimulation.repair(body),
+      // Installed empty-route return reads an uninitialized stack slot. The
+      // browser treats only that undefined branch as continue, never throws
+      // or invents a physical path-end transition.
+      emptyRaceRouteStatus: () => 0,
+      diagnostic: (text) => assets.warnings.push(text),
+    },
+  );
+  opponentFleet = fleet;
   for (let i = 0; i < count && i < candidates.length; i++) {
     const configPath = candidates[i].path;
     const text = await assets.text(configPath);
@@ -1108,7 +1287,9 @@ async function loadRivals(
     if (upgradeSettings)
       state.powerMultiplier =
         player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
+    bindWamEffects(body, model.materials);
     simulation?.add(body);
+    fleet.add(body, candidates[i].id, personalities[i]);
     model.group.position.copy(state.position);
     model.group.quaternion.copy(state.orientation);
     scene.add(model.group);
@@ -1210,6 +1391,38 @@ function motionAnimation(body: SimulatedCar) {
     componentDamage: Array.from(body.damage.componentLevels),
   };
 }
+/** Commit native wastage and its one-time feedback before race completion.
+ * CheckDamage's callback can end the race within the same physics frame.
+ */
+function finishRivalWastage(r: Rival) {
+  if (r.wasted) return;
+  r.wasted = true;
+  r.state.accForce = r.state.brakeForce = 0;
+  r.body.input = { throttle: 0, steer: 0, brake: 0, handbrake: false };
+  checkRaceObjective();
+  if (
+    r.body.wastedByPlayer &&
+    raceAwards &&
+    race &&
+    !race.awardsClosed &&
+    race.status === "racing"
+  ) {
+    const credits = wastedCarCredits(
+      raceAwards.wastingCredits[0],
+      r.damage.carSoftness,
+    );
+    awardRaceCredits(race, credits);
+    awardRaceTime(race, raceAwards.wastingTime[0]);
+    message(`OPPONENT WASTED · +${credits} CR`);
+  }
+  r.object.traverse((o) => {
+    if (o instanceof THREE.Mesh)
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (m instanceof THREE.MeshLambertMaterial) m.color.multiplyScalar(0.3);
+      }
+  });
+}
+
 function updateRivals(dt: number, speedFactor = 1) {
   if (!track || !collision || !vehicle || !race) return;
   const special = rivals.find((rival) => rival.id === 29);
@@ -1221,6 +1434,37 @@ function updateRivals(dt: number, speedFactor = 1) {
       speedState.active,
     );
     special.hotrodRevision = speedState.revision;
+  }
+  if (opponentFleet) {
+    if (rivalsReady)
+      opponentFleet.update(
+        stats.gameTimeMs,
+        Math.round(dt * 1000),
+        speedFactor,
+        race.status !== "racing",
+      );
+    else
+      // Async browser loading is outside C2's synchronous InitOpponents.
+      // Keep loaded cars parked until the entire authored fleet is registered.
+      for (const r of rivals) {
+        r.state.accForce = 0;
+        r.state.brakeForce = Math.fround(15 * r.body.properties.mass);
+      }
+    for (const r of rivals) {
+      r.frozen = speedFactor === 0;
+      const animation = {
+        ...motionAnimation(r.body),
+        speed: r.state.speed,
+        steer: r.body.input.steer,
+        brake: !!r.body.input.brake,
+        throttle: r.body.input.throttle,
+      };
+      r.animation.update(dt, animation);
+      r.state.wheelDamageOffsets = r.animation.wheelDamageOffsets;
+      r.textures.update(dt, animation);
+      if (r.body.knackered) finishRivalWastage(r);
+    }
+    return;
   }
   for (const r of rivals) {
     if (r.wasted) {
@@ -1292,34 +1536,7 @@ function updateRivals(dt: number, speedFactor = 1) {
     });
     r.object.position.copy(r.state.position);
     r.object.quaternion.copy(r.state.orientation);
-    if (r.damage.wasted) {
-      r.wasted = true;
-      checkRaceObjective();
-      r.body.input = { throttle: 0, steer: 0, brake: 0, handbrake: false };
-      if (
-        r.body.wastedByPlayer &&
-        raceAwards &&
-        !race.awardsClosed &&
-        race.status === "racing"
-      ) {
-        const credits = wastedCarCredits(
-          raceAwards.wastingCredits[0],
-          r.damage.carSoftness,
-        );
-        race.credits += credits;
-        awardRaceTime(race, raceAwards.wastingTime[0]);
-        message(`OPPONENT WASTED · +${credits} CR`);
-      }
-      r.object.traverse((o) => {
-        if (o instanceof THREE.Mesh)
-          for (const m of Array.isArray(o.material)
-            ? o.material
-            : [o.material]) {
-            if (m instanceof THREE.MeshLambertMaterial)
-              m.color.multiplyScalar(0.3);
-          }
-      });
-    }
+    if (r.body.knackered) finishRivalWastage(r);
   }
 }
 
@@ -1507,7 +1724,7 @@ function checkRaceObjective() {
   if (!race) return;
   const victory = applyRaceObjectives(race, definition, {
     opponentsTotal: rivals.length,
-    opponentsWasted: rivals.filter((r) => r.damage.wasted).length,
+    opponentsWasted: rivals.filter((r) => r.body.knackered).length,
     pedestriansTotal: pedestrians?.count ?? 0,
     pedestriansKilled: pedestrians?.hits ?? 0,
     groupCounts: pedestrians?.groupCounts,
@@ -1519,7 +1736,7 @@ function checkRaceObjective() {
     pedestriansReady,
     opponentInstances: rivals.map((r) => ({
       id: r.id,
-      wasted: r.damage.wasted,
+      wasted: r.body.knackered,
     })),
   });
   if (victory.completed) {
@@ -1711,6 +1928,8 @@ function animate(now: number) {
         }
         if (powerups?.periodicBounce(player.state)) void audio.playSound(9010);
         explosions?.update(simulation.elapsed * 1000);
+        simulation.flushSmashEffects();
+        shards?.update(stats.gameTimeMs);
         // Installed C2 RaceCompleted(reason6) lets the wasted body continue
         // simulating during its ten-second end countdown.
         if (
@@ -1979,7 +2198,7 @@ function animate(now: number) {
       : objectiveText(definition, {
           opponentInstances: rivals.map((r) => ({
             id: r.id,
-            wasted: r.damage.wasted,
+            wasted: r.body.knackered,
           })),
           opponentsTotal: rivals.length,
           opponentsWasted: rivals.filter((r) => r.wasted).length,

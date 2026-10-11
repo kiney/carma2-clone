@@ -456,6 +456,21 @@ try {
       // With the debug timer frozen, native powerup time still advances. Let
       // the real 30-second effect expire on the loaded game clock.
       const expiryStart = await sample();
+      await page.evaluate(() => {
+        const race = window.carma.race;
+        let value = race.timeLeft;
+        window.__frozenTimerDecreases = [];
+        Object.defineProperty(race, "timeLeft", {
+          configurable: true,
+          enumerable: true,
+          get: () => value,
+          set: (next) => {
+            if (next < value - 1e-9)
+              window.__frozenTimerDecreases.push([value, next]);
+            value = next;
+          },
+        });
+      });
       await page.waitForFunction(
         () =>
           window.__opponentModifiers?.opponentSpeedFactor === 1 &&
@@ -468,11 +483,15 @@ try {
         expired.gameTimeMs >= turboEffect.expiresAtMs,
         `stock turbo expired before its native deadline: ${expired.gameTimeMs} < ${turboEffect.expiresAtMs}`,
       );
-      assert.equal(
-        expired.timer,
-        expiryStart.timer,
-        "debug timer freeze must not freeze the opponent powerup's 30-second expiry",
+      assert.deepEqual(
+        await page.evaluate(() => window.__frozenTimerDecreases),
+        [],
+        "debug timer freeze must prevent every countdown decrement while native powerup time advances",
       );
+      // Native AI can crash/waste cars and legitimately award additional time.
+      // Timer freeze stops countdown, not earnings; inspect every timer write
+      // so positive rewards cannot conceal an erroneous countdown decrement.
+      assert.ok(expired.timer >= expiryStart.timer);
       assert.equal(expired.modifiers.copSpeedFactor, 1);
       await page.screenshot({
         path: "artifacts/browser-opponent-powerups-stock-expired.png",

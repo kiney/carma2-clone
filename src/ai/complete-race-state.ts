@@ -1,3 +1,10 @@
+import {
+  NativeFollowLifecycle,
+  NativeObjectiveFollowBridge,
+  type NativeFollowLifecycleHooks,
+  type NativeFollowLifecycleResult,
+  type NativeObjectiveFollowQuery,
+} from "./follow-lifecycle";
 import { Vector3 } from "three";
 import type { TrackPathSection } from "../config";
 import {
@@ -13,6 +20,8 @@ export type NativeCompleteRaceQuery = Omit<
   "ignoreEnd" | "neverStruggle" | "pursuit"
 > & {
   cheating: boolean;
+  physical?: boolean;
+  followHooks?: NativeFollowLifecycleHooks;
 };
 
 export interface NativeCompleteRaceHooks {
@@ -32,6 +41,7 @@ export interface NativeCompleteRaceResult {
     | "empty-return";
   route: ReturnType<NativeRaceRouteState["prepare"]>["entries"];
   follower?: NativePhysicalPathResult;
+  follow?: NativeFollowLifecycleResult;
   forces?: { accForce: number; brakeForce: number };
   rawStatus?: number;
 }
@@ -49,13 +59,13 @@ export class NativeCompleteRaceState {
     private readonly nodes: readonly Vector3[],
     private readonly sections: readonly TrackPathSection[],
     private readonly race: NativeRaceRouteState,
-    follower: NativePhysicalPathFollower,
+    follower: NativePhysicalPathFollower | NativeFollowLifecycle,
     random = Math.random,
   ) {
-    this.follower = follower;
+    this.follower = new NativeObjectiveFollowBridge(follower);
     this.random = random;
   }
-  private readonly follower: NativePhysicalPathFollower;
+  private readonly follower: NativeObjectiveFollowBridge;
 
   get entries() {
     return this.race.route.entries;
@@ -70,14 +80,13 @@ export class NativeCompleteRaceState {
   }
 
   start(query: NativeCompleteRaceQuery): NativeCompleteRaceResult {
-    this.rejectCheating(query);
     const nearest = findNearestPathSection(
       query.position,
       this.nodes,
       this.sections,
     );
     const route = this.race.start(nearest?.section);
-    this.follower.start(query.nowMs, 0);
+    this.follower.start(this.physicalQuery(query), 0);
     this.followSlot = 0;
     this.started = true;
     return { transition: "started", route };
@@ -91,20 +100,19 @@ export class NativeCompleteRaceState {
     rawEmptyRouteStatus?: number,
   ): NativeCompleteRaceResult {
     if (!this.started) throw new Error("Complete-race state has not started");
-    this.rejectCheating(query);
     if (Math.fround(query.factor) === 0) {
       const forces = {
         accForce: 0,
         brakeForce: Math.fround(15 * Math.fround(query.mass)),
       };
-      const follower = this.follower.run(
+      const result = this.follower.run(
         this.nodes,
         this.sections,
         this.entries,
         this.physicalQuery(query),
         this.random,
       );
-      return { transition: "continue", route: this.entries, follower, forces };
+      return { transition: "continue", route: this.entries, ...result, forces };
     }
 
     const prepared = this.race.prepare(this.followSlot);
@@ -135,18 +143,25 @@ export class NativeCompleteRaceState {
       };
     }
 
-    const follower = this.follower.run(
+    const result = this.follower.run(
       this.nodes,
       this.sections,
       prepared.entries,
       this.physicalQuery(query),
       this.random,
     );
-    this.everMoved ||= follower.movedOnTask;
-    this.follower.syncCarForces(follower.accForce, follower.brakeForce);
-    this.followSlot = follower.geometry.sectionSlot;
-    if (follower.kind === "given-up") return this.restart(query, follower);
-    return { transition: "continue", route: this.entries, follower };
+    this.everMoved ||= result.follower?.movedOnTask ?? false;
+    if (result.follower)
+      this.follower.syncCarForces(
+        result.follower.accForce,
+        result.follower.brakeForce,
+      );
+    this.followSlot = result.sectionSlot;
+    if (result.rawStatus === 2)
+      return { ...this.restart(query, result.follower), ...result };
+    if (result.rawStatus === 1)
+      return { ...this.onPathEnd(query, hooks), ...result };
+    return { transition: "continue", route: this.entries, ...result };
   }
 
   /** Native result1 is explicit; physical destination geometry never implies it. */
@@ -155,7 +170,6 @@ export class NativeCompleteRaceState {
     hooks: NativeCompleteRaceHooks,
   ): NativeCompleteRaceResult {
     if (!this.started) throw new Error("Complete-race state has not started");
-    this.rejectCheating(query);
     hooks.newGetNearPlayer();
     hooks.objectiveComplete();
     return { transition: "objective-complete", route: this.entries };
@@ -171,7 +185,7 @@ export class NativeCompleteRaceState {
       this.sections,
     );
     const route = this.race.start(nearest?.section);
-    this.follower.start(query.nowMs, 0);
+    this.follower.start(this.physicalQuery(query), 0);
     this.followSlot = 0;
     return {
       transition: "restarted",
@@ -182,15 +196,8 @@ export class NativeCompleteRaceState {
 
   private physicalQuery(
     query: NativeCompleteRaceQuery,
-  ): NativePhysicalPathQuery {
+  ): NativeObjectiveFollowQuery {
     return { ...query, ignoreEnd: false, neverStruggle: false, pursuit: false };
-  }
-
-  private rejectCheating(query: NativeCompleteRaceQuery): void {
-    if (query.cheating)
-      throw new Error(
-        "Cheaty following is not implemented by complete-race state",
-      );
   }
 
   private validateRawStatus(status: number): void {

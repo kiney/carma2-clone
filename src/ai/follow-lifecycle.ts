@@ -17,6 +17,8 @@ import type { ProjectedPathSection } from "./path-route";
 export interface NativeFollowLifecycleQuery extends NativePhysicalPathQuery {
   cheating: boolean;
   physical: boolean;
+  /** Projected routes have12 slots; a25-node target trail has24. */
+  routeCapacity?: 12 | 24;
 }
 
 export interface NativeFollowLifecycleHooks {
@@ -146,6 +148,7 @@ export class NativeFollowLifecycle {
           nodes,
           sections,
           query.dtMs,
+          query.routeCapacity ?? 12,
         );
         this.cheatyState = movement.state;
         hooks.turnPhysicsOff();
@@ -181,6 +184,7 @@ export class NativeFollowLifecycle {
         nodes,
         sections,
         query.dtMs,
+        query.routeCapacity ?? 12,
       );
       this.cheatyState = movement.state;
       this.sectionSlot = movement.state.sectionSlot;
@@ -209,5 +213,94 @@ export class NativeFollowLifecycle {
       status: follower.kind === "given-up" ? 2 : 0,
       follower,
     };
+  }
+}
+
+/** Objective-owned geometry and flags paired with the shared Follow dispatcher.
+ * The physical follower form preserves existing isolated callers; live mode
+ * transitions require a NativeFollowLifecycle and explicit engine hooks. */
+export interface NativeObjectiveFollowQuery extends NativePhysicalPathQuery {
+  cheating: boolean;
+  physical?: boolean;
+  routeCapacity?: 12 | 24;
+  followHooks?: NativeFollowLifecycleHooks;
+}
+export interface NativeObjectiveFollowResult {
+  rawStatus: 0 | 1 | 2;
+  follow?: NativeFollowLifecycleResult;
+  follower?: NativePhysicalPathResult;
+  sectionSlot: number;
+}
+export class NativeObjectiveFollowBridge {
+  constructor(
+    private readonly source: NativePhysicalPathFollower | NativeFollowLifecycle,
+  ) {}
+
+  get supportsModeTransitions(): boolean {
+    return this.source instanceof NativeFollowLifecycle;
+  }
+
+  start(query: NativeObjectiveFollowQuery, sectionSlot = 0): void {
+    if (this.source instanceof NativeFollowLifecycle) {
+      this.source.start(this.query(query), this.hooks(query), sectionSlot);
+    } else {
+      this.requirePhysical(query);
+      this.source.start(query.nowMs, sectionSlot);
+    }
+  }
+
+  setSectionSlot(sectionSlot: number): void {
+    this.source.setSectionSlot(sectionSlot);
+  }
+
+  syncCarForces(accForce: number, brakeForce: number): void {
+    this.source.syncCarForces(accForce, brakeForce);
+  }
+
+  run(
+    nodes: readonly Vector3[],
+    sections: readonly TrackPathSection[],
+    route: readonly ProjectedPathSection[],
+    query: NativeObjectiveFollowQuery,
+    random = Math.random,
+  ): NativeObjectiveFollowResult {
+    if (this.source instanceof NativeFollowLifecycle) {
+      const follow = this.source.run(
+        nodes,
+        sections,
+        route,
+        this.query(query),
+        this.hooks(query),
+        random,
+      );
+      return {
+        rawStatus: follow.status,
+        follow,
+        ...(follow.kind === "physical" ? { follower: follow.follower } : {}),
+        sectionSlot: this.source.snapshot.sectionSlot,
+      };
+    }
+    this.requirePhysical(query);
+    const follower = this.source.run(nodes, sections, route, query, random);
+    return {
+      rawStatus: follower.kind === "given-up" ? 2 : 0,
+      follower,
+      sectionSlot: follower.geometry.sectionSlot,
+    };
+  }
+
+  private query(query: NativeObjectiveFollowQuery): NativeFollowLifecycleQuery {
+    return { ...query, physical: query.physical ?? true };
+  }
+  private hooks(query: NativeObjectiveFollowQuery): NativeFollowLifecycleHooks {
+    if (!query.followHooks)
+      throw new Error("Native follow lifecycle requires engine hooks");
+    return query.followHooks;
+  }
+  private requirePhysical(query: NativeObjectiveFollowQuery): void {
+    if (query.cheating || query.physical === false)
+      throw new Error(
+        "Cheaty following is not implemented by the physical adapter; use NativeFollowLifecycle for mode transitions",
+      );
   }
 }

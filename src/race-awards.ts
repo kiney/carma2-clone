@@ -7,6 +7,41 @@ export interface RaceAwards {
   rollingTime: SkillAward;
   rollingCredits: SkillAward;
 }
+export interface CrashDamageAwards {
+  creditsPerDamage: SkillAward;
+  secondsPerDamage: SkillAward;
+}
+
+/** Installed LoadGeneral loads Float32 skill tables at758e50/75f3f0. */
+export function parseCrashDamageAwards(text: string): CrashDamageAwards {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const read = (label: RegExp): SkillAward => {
+    const marker = lines.findIndex((line) =>
+      label.test(line.split("//").slice(1).join("//")),
+    );
+    if (marker < 0)
+      throw new Error(`GENERAL.TXT: missing damage award ${label.source}`);
+    for (let i = marker; i < lines.length; i++) {
+      const value = lines[i].split("//")[0].trim();
+      if (!value) continue;
+      const parts = value.split(/[\s,]+/).map(Number);
+      if (
+        parts.length !== 3 ||
+        parts.some(
+          (n) =>
+            !Number.isFinite(n) || n < 0 || !Number.isFinite(Math.fround(n)),
+        )
+      )
+        throw new Error(`GENERAL.TXT: invalid damage award at line ${i + 1}`);
+      return parts.map(Math.fround) as SkillAward;
+    }
+    throw new Error("GENERAL.TXT: truncated damage awards");
+  };
+  return {
+    creditsPerDamage: read(/Credits per unit car damage for each skill level/i),
+    secondsPerDamage: read(/Seconds per unit car damage for each skill level/i),
+  };
+}
 
 /** Independent labelled GENERAL reader; installed LoadGeneral reads these
  * three-skill records in order. Inline and preceding comments are supported. */

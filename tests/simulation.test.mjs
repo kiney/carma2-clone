@@ -105,6 +105,115 @@ function roadCorner(size = 20) {
   return { scene, world: new WorldCollision(scene) };
 }
 
+test("outer physics retains original Eagle crush events until all five steps finish", async (t) => {
+  const car = await stock(t, "EAGLE3", new Vector3(0, 0.15, 0.6));
+  if (!car) return;
+  // Isolate ordinary dent timing from the separately tested bend/split paths.
+  car.damage.wam.bendability = car.damage.wam.snappability = 0;
+  car.damage.damageContext.random = () => 0.5;
+  car.state.velocity.set(0, -2, -4);
+  const { scene, world } = roadCorner();
+  scene.add(car.group);
+  const simulation = new VehicleSimulation(world, scene);
+  simulation.add(car);
+  t.after(() => simulation.dispose());
+  const step = simulation.step.bind(simulation);
+  const consume = car.damage.applyQueuedCrush.bind(car.damage);
+  let frameRevision = 0;
+  let queuedSteps = 0;
+  let consumed = 0;
+  let stepsInFrame = 0;
+  simulation.step = () => {
+    step();
+    stepsInFrame++;
+    assert.equal(
+      car.damage.deformationRevision,
+      frameRevision,
+      "candidate shape and mesh remain unchanged during the frame's impulses",
+    );
+    if (simulation.ordinaryCrushQueue.count) queuedSteps++;
+  };
+  car.damage.applyQueuedCrush = (...args) => {
+    assert.equal(
+      stepsInFrame,
+      5,
+      "crush executes after the full physics budget",
+    );
+    assert.equal(simulation.collectingOrdinaryCrush, false);
+    consumed++;
+    return consume(...args);
+  };
+  for (let frame = 0; frame < 5; frame++) {
+    frameRevision = car.damage.deformationRevision;
+    stepsInFrame = 0;
+    simulation.updateFrame(frame * 200, 200);
+    assert.equal(simulation.ordinaryCrushQueue.count, 0);
+  }
+  assert.ok(
+    queuedSteps > 0 && consumed > 0,
+    "real finite-wall collision queues and consumes crush",
+  );
+  assert.ok(car.damage.deformationRevision > 0);
+  assert.equal(
+    car.revision,
+    car.damage.deformationRevision,
+    "the candidate hull is committed after deferred model deformation",
+  );
+});
+
+test("physics SPAM precedes ordinary crush; full repair cancels SPAM without deleting ordinary events", async (t) => {
+  const car = await stock(t, "EAGLE3");
+  if (!car) return;
+  car.damage.damageContext.random = () => 0.5;
+  const simulation = new VehicleSimulation(emptyWorld, new Group());
+  simulation.add(car);
+  t.after(() => simulation.dispose());
+  const phases = [];
+  const spam = car.damage.spamModel.bind(car.damage);
+  const crush = car.damage.applyQueuedCrush.bind(car.damage);
+  car.damage.spamModel = (...args) => {
+    phases.push(["spam", args[0]]);
+    return spam(...args);
+  };
+  car.damage.applyQueuedCrush = (...args) => {
+    phases.push(["ordinary", args[3]]);
+    return crush(...args);
+  };
+  let step = 0;
+  // Source-derived queue/repair scenario, isolated from contact discovery.
+  simulation.step = () => {
+    if (step === 0) {
+      car.damage.applyImpact(
+        [new Vector3(-0.16, 0.06, -0.38)],
+        new Vector3(0, 0, 0.5),
+        false,
+        true,
+        40,
+        new Vector3(0, 0, 0.5),
+      );
+      simulation.spamCar(car, 0.1);
+      simulation.spamCar(car, 0.5);
+    }
+    if (step === 1) {
+      assert.equal(simulation.spamCrushQueue.count, 1);
+      assert.equal(simulation.ordinaryCrushQueue.count, 1);
+      car.damage.repair();
+      assert.equal(simulation.spamCrushQueue.count, 0);
+      assert.equal(simulation.ordinaryCrushQueue.count, 1);
+      simulation.spamCar(car, 0.3);
+    }
+    assert.deepEqual(phases, [], "neither model path runs inside physics");
+    step++;
+  };
+  simulation.updateFrame(0, 200);
+  assert.equal(phases[0][0], "spam");
+  assert.equal(phases[0][1], Math.fround(0.3));
+  assert.equal(phases[1][0], "ordinary");
+  assert.equal(phases.length, 2);
+  assert.equal(simulation.spamCrushQueue.count, 0);
+  assert.equal(simulation.ordinaryCrushQueue.count, 0);
+});
+
 test("post-impact pitch, fast falls and rotation stay above finite road triangles", async (t) => {
   let hadJointedPart = false;
   for (const [velocity, pitch] of [

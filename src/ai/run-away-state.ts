@@ -1,3 +1,10 @@
+import {
+  NativeFollowLifecycle,
+  NativeObjectiveFollowBridge,
+  type NativeFollowLifecycleHooks,
+  type NativeFollowLifecycleResult,
+  type NativeObjectiveFollowQuery,
+} from "./follow-lifecycle";
 import { Vector3 } from "three";
 import type { TrackPathSection } from "../config";
 import {
@@ -14,6 +21,8 @@ export type NativeRunAwayQuery = Omit<
 > & {
   actorDirection: Vector3;
   cheating: boolean;
+  physical?: boolean;
+  followHooks?: NativeFollowLifecycleHooks;
 };
 
 export interface NativeRunAwayHooks {
@@ -24,6 +33,8 @@ export interface NativeRunAwayResult {
   transition: "started" | "continue" | "restarted" | "objective-complete";
   route: readonly ProjectedPathSection[];
   follower?: NativePhysicalPathResult;
+  follow?: NativeFollowLifecycleResult;
+  rawStatus?: 0 | 1 | 2;
 }
 
 function uint(value: number): boolean {
@@ -38,9 +49,10 @@ function random15(random: () => number): number {
 }
 
 /** Installed START/RUN/DIE run-away objective over shared route/follower state.
- * Cheaty following remains owned by the outer objective dispatcher. */
+ * Physical and cheaty RUN use the shared Follow lifecycle. */
 export class NativeRunAwayState {
   private started = false;
+  private readonly follower: NativeObjectiveFollowBridge;
   private stopDeadlineMs = 0;
   private followSlot = 0;
 
@@ -48,9 +60,11 @@ export class NativeRunAwayState {
     private readonly nodes: readonly Vector3[],
     private readonly sections: readonly TrackPathSection[],
     private readonly route: NativeProjectedRoute,
-    private readonly follower: NativePhysicalPathFollower,
+    follower: NativePhysicalPathFollower | NativeFollowLifecycle,
     private readonly random = Math.random,
-  ) {}
+  ) {
+    this.follower = new NativeObjectiveFollowBridge(follower);
+  }
 
   get entries() {
     return this.route.entries;
@@ -69,14 +83,13 @@ export class NativeRunAwayState {
   }
 
   start(query: NativeRunAwayQuery): NativeRunAwayResult {
-    this.rejectCheating(query);
     this.validateQuery(query);
     const seconds = 30 + Math.floor((random15(this.random) * 61) / 32768);
     this.stopDeadlineMs = (query.nowMs + seconds * 1000) >>> 0;
     this.route.clear();
     this.seed(query);
     this.route.topUpRandom(-1, false, this.random);
-    this.follower.start(query.nowMs, 0);
+    this.follower.start(this.physicalQuery(query), 0);
     this.followSlot = 0;
     this.started = true;
     return { transition: "started", route: this.entries };
@@ -91,7 +104,6 @@ export class NativeRunAwayState {
     hooks: NativeRunAwayHooks,
   ): NativeRunAwayResult {
     if (!this.started) throw new Error("Run-away state has not started");
-    this.rejectCheating(query);
     this.validateQuery(query);
     if (query.nowMs > this.stopDeadlineMs) {
       hooks.objectiveComplete();
@@ -105,34 +117,35 @@ export class NativeRunAwayState {
       throw new Error("Native run-away route became empty before RUN");
     if (this.entries.length < 12)
       this.route.topUpRandom(12 - this.entries.length, false, this.random);
-    const followerResult = this.follower.run(
+    const result = this.follower.run(
       this.nodes,
       this.sections,
       this.entries,
       this.physicalQuery(query),
       this.random,
     );
-    this.follower.syncCarForces(
-      followerResult.accForce,
-      followerResult.brakeForce,
-    );
-    this.followSlot = followerResult.geometry.sectionSlot;
-    if (followerResult.kind === "given-up") {
+    if (result.follower)
+      this.follower.syncCarForces(
+        result.follower.accForce,
+        result.follower.brakeForce,
+      );
+    this.followSlot = result.sectionSlot;
+    if (result.rawStatus === 2) {
       this.route.clear();
       this.seed(query);
       this.route.topUpRandom(-1, false, this.random);
-      this.follower.start(query.nowMs, 0);
+      this.follower.start(this.physicalQuery(query), 0);
       this.followSlot = 0;
       return {
         transition: "restarted",
         route: this.entries,
-        follower: followerResult,
+        ...result,
       };
     }
     return {
       transition: "continue",
       route: this.entries,
-      follower: followerResult,
+      ...result,
     };
   }
 
@@ -160,13 +173,8 @@ export class NativeRunAwayState {
     this.route.append(nearest.section, direction < 0 ? 0 : 1);
   }
 
-  private physicalQuery(query: NativeRunAwayQuery): NativePhysicalPathQuery {
+  private physicalQuery(query: NativeRunAwayQuery): NativeObjectiveFollowQuery {
     return { ...query, ignoreEnd: false, neverStruggle: false, pursuit: false };
-  }
-
-  private rejectCheating(query: NativeRunAwayQuery): void {
-    if (query.cheating)
-      throw new Error("Cheaty following is not implemented by run-away state");
   }
 
   private validateQuery(query: NativeRunAwayQuery): void {

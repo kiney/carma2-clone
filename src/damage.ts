@@ -77,12 +77,52 @@ import {
   bendSteeringCurvature,
   type BendTransform,
 } from "./physics/structural";
+import { NativeSmashQueue } from "./smash-queue";
+
+import {
+  readSmashConnotations,
+  SmashTextReader,
+  type SmashConnotations,
+} from "./world-smash";
 
 export interface WamSmashLevel {
+  connotations: SmashConnotations;
   threshold: number;
   flags: number;
   pixelmaps: string[];
 }
+/** One native permitted repetition of the final damage tier's effects.
+ * Position/direction are car-root model coordinates; actor and bodyActor
+ * preserve the scene context needed for world-space outlets. */
+export interface WamSmashEvent {
+  connotations: SmashConnotations;
+  smash: WamSmash;
+  part: WamPart;
+  actor: Object3D;
+  bodyActor: Group;
+  mesh: Mesh<BufferGeometry>;
+  localPoint: Vector3;
+  localDirection: Vector3;
+  timeMs: number;
+  oldLevel: number;
+  targetLevel: number;
+  repetition: number;
+  repetitions: number;
+}
+
+/** First queued context survives stronger repeat hits until native flush. */
+export interface WamSmashQueueContext {
+  execute: (targetTier: number, reachedTier: number, timeMs: number) => void;
+}
+export function flushWamSmashQueue(
+  queue: NativeSmashQueue<WamSmashQueueContext>,
+  readTimeMs: () => number,
+): number {
+  return queue.flush(readTimeMs, (entry, nowMs) =>
+    entry.context.execute(entry.targetTier, entry.reachedTier, nowMs),
+  );
+}
+
 export interface WamSmash {
   material: string;
   intactPixelmap: string;
@@ -148,46 +188,21 @@ class WamReader {
   }
 }
 
-/** Consume documented smash connotations to preserve alignment. Audio, debris,
- * non-car activation, explosions and scripted awards are metadata only here.
- */
-function skipConnotations(r: WamReader): void {
-  r.skip(r.count()); // Sound IDs.
-  const shrapnel = r.count();
-  for (let i = 0; i < shrapnel; i++) {
-    const type = r.read().toLowerCase();
-    r.skip(6); // Initial velocity: vector pair plus five scalars.
-    if (type !== "shards") {
-      if (r.read().toLowerCase() === "sphereclumped") r.skip(2);
-    }
-    if (type !== "noncars") r.skip(1); // Lifetime pair.
-    if (type === "shards") r.skip(3);
-    else if (type === "ghostparts") {
-      r.skip(1);
-      const count = r.count();
-      r.skip(Math.max(1, count));
-    } else if (type === "noncars") {
-      r.skip(1);
-      if (r.number() > 0) r.skip(2);
-      r.skip(1);
-      r.skip(r.count() * 2);
-    } else {
-      throw new Error(`Unsupported WAM shrapnel type: ${type}`);
+/** Reuse bounded smash token operations without borrowing the WAM cursor. */
+class WamConnotationReader extends SmashTextReader {
+  constructor(private wam: WamReader) {
+    super("", "WAM");
+  }
+  override read(label: string): string {
+    try {
+      return this.wam.read();
+    } catch {
+      this.fail(`incomplete ${label}`);
     }
   }
-  const explosions = r.count();
-  for (let i = 0; i < explosions; i++) {
-    r.skip(9);
-    r.skip(r.count() * 2);
+  override fail(message: string): never {
+    throw new Error(`WAM record ${this.wam.cursor}: ${message}`);
   }
-  r.skip(1); // Slick material.
-  r.skip(r.count() * 11); // Non-car activation cuboids.
-  r.skip(r.count() * 7); // Side-effect smash cuboids.
-  const extensionFlags = r.number();
-  if (extensionFlags & 1) r.skip(1);
-  r.skip(1); // Room code.
-  if (r.read().toLowerCase() !== "none") r.skip(4);
-  r.skip(r.count()); // Runtime variable changes.
 }
 
 /** Independent parser of C2 WAM version 4/104 master, part and texture records.
@@ -270,9 +285,9 @@ export function parseWam(text: string): WamData {
       for (let k = 0; k < levels; k++) {
         const threshold = r.number(),
           flags = r.number();
-        skipConnotations(r);
+        const connotations = readSmashConnotations(new WamConnotationReader(r));
         const pixelmaps = Array.from({ length: r.count() }, () => r.read());
-        smash.levels.push({ threshold, flags, pixelmaps });
+        smash.levels.push({ threshold, flags, connotations, pixelmaps });
       }
       part.smashes.push(smash);
     }
@@ -395,6 +410,28 @@ export class DamageSystem {
   wam?: WamData;
   damagePrograms?: DamageProgramSet;
   readonly componentLevels = new Uint8Array(12);
+  /** Native damage_units.last_damage_level: outer-frame / earned-pair baseline. */
+  readonly lastComponentLevels = new Uint8Array(12);
+  /** Native CheckDamage calls after component-program increments. */
+  onWastageCheck?: () => void;
+  onWamSmash?: (event: WamSmashEvent) => void;
+  /** Native full repair removes deferred SPAM, not ordinary impact records. */
+  cancelQueuedSpam?: () => void;
+  /** Return true when the outer physics queue owns this request, including
+   * requests rejected by native capacity. Explicit tool impacts run directly. */
+  deferOrdinaryCrush?: (
+    contacts: readonly Vector3[],
+    crushVector: Vector3,
+    human: boolean,
+    physicsTickMs: number,
+  ) => boolean;
+  private readonly smashLevels = new Map<WamSmash, number>();
+  private sharedSmashQueue?: NativeSmashQueue<WamSmashQueueContext>;
+  /** The simulation supplies native shared lifetime; standalone tools flush
+   * locally after each explicit impact. */
+  configureWamSmashQueue(queue?: NativeSmashQueue<WamSmashQueueContext>): void {
+    this.sharedSmashQueue = queue;
+  }
   readonly runtimeParts: DamageRuntimePart[] = [];
   damageContext: Partial<ComponentDamageContext> = {};
   repairRevision = 0;
@@ -676,6 +713,7 @@ export class DamageSystem {
         );
       } while (index === 0 && this.componentLevels[0] < 80 && ++attempts < 30);
     }
+    this.onWastageCheck?.();
     this.splitRuntime = {
       actor,
       plane,
@@ -1448,6 +1486,7 @@ export class DamageSystem {
           ++attempts < 30
         );
       }
+      this.onWastageCheck?.();
     }
     this.structuralBend = bend;
     if (this.wam?.version === 4) this.pendingShapeSwapFlags |= 0xb;
@@ -1831,6 +1870,12 @@ export class DamageSystem {
           context: { ...this.damageContext, human },
         })
       : undefined;
+    if (
+      component?.events.some(
+        (event) => event.increment >= 5 && !(human && event.systemIndex === 2),
+      )
+    )
+      this.onWastageCheck?.();
     const vector =
       localCrushVector?.clone() ??
       localEnergyVector.clone().multiplyScalar(human ? 0.5 : 1.5);
@@ -1839,13 +1884,54 @@ export class DamageSystem {
       vectorTuple(vector),
       this.damagePrograms?.softness ?? 1,
     );
-    if (!this.wam || !force || !this.modelLimits || this.snapped)
+    if (!this.wam || !this.modelLimits || this.snapped)
       return {
         componentEvents: component?.events ?? [],
         queuedForce: force,
         maxInfluence: 0,
       };
-    const direction = vector.normalize();
+    if (this.deferOrdinaryCrush?.(localContacts, vector, human, nowMs))
+      return {
+        componentEvents: component?.events ?? [],
+        queuedForce: force,
+        maxInfluence: 0,
+      };
+    if (!force)
+      return {
+        componentEvents: component?.events ?? [],
+        queuedForce: 0,
+        maxInfluence: 0,
+      };
+    return {
+      ...this.applyQueuedCrush(
+        contacts,
+        mean,
+        vector.normalize(),
+        force,
+        nowMs,
+        human,
+      ),
+      componentEvents: component?.events ?? [],
+      queuedForce: force,
+    };
+  }
+
+  /** Deferred ordinary physical candidates and model damage share one
+   * retained contact primitive. Component damage has already been applied. */
+  applyQueuedCrush(
+    contacts: Vector3[],
+    mean: Vector3,
+    direction: Vector3,
+    force: number,
+    nowMs: number,
+    human: boolean,
+  ): { maxInfluence: number } {
+    if (!this.wam || !this.modelLimits || this.snapped)
+      return { maxInfluence: 0 };
+    const currentBounds = new Box3();
+    for (const shape of this.shapes)
+      for (const vertex of shape.vertices) currentBounds.expandByPoint(vertex);
+    if (currentBounds.isEmpty()) currentBounds.copy(this.bounds);
     {
       const structural = selectStructuralBend({
         mean,
@@ -1864,17 +1950,11 @@ export class DamageSystem {
       if (structural.skipOrdinary) {
         if (structural.bend) this.applyStructuralBend(structural.bend, human);
         return {
-          componentEvents: component?.events ?? [],
-          queuedForce: force,
           maxInfluence: 0,
         };
       }
     }
-    return {
-      ...this.applyModelCrush(contacts, mean, direction, force, nowMs),
-      componentEvents: component?.events ?? [],
-      queuedForce: force,
-    };
+    return this.applyModelCrush(contacts, mean, direction, force, nowMs);
   }
 
   /** Shared ordinary vertex/texture/attachment path, without damage programs. */
@@ -1905,6 +1985,8 @@ export class DamageSystem {
     spam = false,
   ) {
     this.shellModelActive = false;
+    const smashQueue =
+      this.sharedSmashQueue ?? new NativeSmashQueue<WamSmashQueueContext>();
     let changed = this.crushShapes(contacts, direction, force, spam);
     let maxInfluence = 0;
     this.group.updateMatrixWorld(true);
@@ -2011,26 +2093,41 @@ export class DamageSystem {
               vectorTuple(saved.centroid),
               vectorTuple(modelMean),
             );
-            let level = saved.level;
+            const oldLevel = this.smashLevels.get(smash) ?? 0;
+            let level = oldLevel;
             smash.levels.forEach((candidate, index) => {
               if (candidate.threshold <= magnitude && index + 1 > level)
                 level = index + 1;
             });
-            if (level === saved.level) continue;
-            saved.level = level;
-            const replacement = smash.levels[level - 1]?.pixelmaps
-              .map((name) => this.textures.get(textureKey(name)))
-              .find(Boolean);
-            if (!replacement) continue;
-            const texture = replacement.clone();
-            if (saved.map) {
-              texture.matrixAutoUpdate = saved.map.matrixAutoUpdate;
-              texture.matrix.copy(saved.map.matrix);
-            }
-            if (saved.material.map && saved.material.map !== saved.map)
-              saved.material.map.dispose();
-            saved.material.map = texture;
-            saved.material.needsUpdate = true;
+            if (level <= oldLevel) continue;
+            const event = {
+              smash,
+              part: runtime.part,
+              actor: runtime.actor,
+              bodyActor: this.group,
+              mesh: data.mesh,
+              localPoint: mean.clone(),
+              localDirection: direction.clone(),
+              timeMs: nowMs,
+              oldLevel,
+              targetLevel: level,
+            };
+            smashQueue.enqueue({
+              key: smash,
+              targetTier: level,
+              getReachedTier: () => this.smashLevels.get(smash) ?? 0,
+              getLevelCount: () => smash.levels.length + 1,
+              hasModel: () => !!data.mesh.geometry.getAttribute("position"),
+              context: {
+                execute: (targetLevel, oldLevel, timeMs) =>
+                  this.dispatchWamSmash({
+                    ...event,
+                    targetLevel,
+                    oldLevel,
+                    timeMs,
+                  }),
+              },
+            });
           }
         }
       }
@@ -2047,8 +2144,57 @@ export class DamageSystem {
         );
       }
     }
+    if (!this.sharedSmashQueue)
+      flushWamSmashQueue(smashQueue, () => Math.round(nowMs) >>> 0);
     if (changed) this.deformationRevision++;
     return { maxInfluence };
+  }
+
+  private dispatchWamSmash(
+    event: Omit<WamSmashEvent, "connotations" | "repetition" | "repetitions">,
+  ): void {
+    // A later LOD/contact can raise the queued target. Bring every linked
+    // material to that final tier before any effect callback observes it.
+    for (const data of this.meshes) {
+      if (data.runtime?.part !== event.part) continue;
+      for (const saved of data.materials) {
+        if (
+          saved.material.name.toLowerCase() !==
+            event.smash.material.toLowerCase() ||
+          saved.level === event.targetLevel
+        )
+          continue;
+        saved.level = event.targetLevel;
+        const replacement = event.smash.levels[event.targetLevel - 1].pixelmaps
+          .map((name) => this.textures.get(textureKey(name)))
+          .find(Boolean);
+        if (!replacement) continue;
+        const texture = replacement.clone();
+        if (saved.map) {
+          texture.matrixAutoUpdate = saved.map.matrixAutoUpdate;
+          texture.matrix.copy(saved.map.matrix);
+        }
+        if (saved.material.map && saved.material.map !== saved.map)
+          saved.material.map.dispose();
+        saved.material.map = texture;
+        saved.material.needsUpdate = true;
+      }
+    }
+    this.smashLevels.set(event.smash, event.targetLevel);
+    const crossed = event.smash.levels.slice(event.oldLevel, event.targetLevel);
+    const repetitions = crossed.filter(
+      (level) => !(level.flags & 1) || event.targetLevel - event.oldLevel === 1,
+    ).length;
+    const connotations = event.smash.levels[event.targetLevel - 1].connotations;
+    for (let repetition = 0; repetition < repetitions; repetition++)
+      this.onWamSmash?.({
+        ...event,
+        connotations,
+        repetition,
+        repetitions,
+        localPoint: event.localPoint.clone(),
+        localDirection: event.localDirection.clone(),
+      });
   }
 
   private crushShapes(
@@ -2136,6 +2282,7 @@ export class DamageSystem {
     runtime: DamageRuntimePart,
     models: DamageMesh[],
   ): boolean {
+    for (const smash of runtime.part.smashes) this.smashLevels.delete(smash);
     runtime.state.accumulatedForce = 0;
     runtime.strongestVertex = -1;
     runtime.strongestDisplacement = 0;
@@ -2314,6 +2461,8 @@ export class DamageSystem {
   }
 
   repair(): void {
+    this.cancelQueuedSpam?.();
+    this.smashLevels.clear();
     this.restoreSplit();
     for (const runtime of this.runtimeParts) {
       runtime.originalParent.add(runtime.actor);
@@ -2357,6 +2506,7 @@ export class DamageSystem {
     this.resetStructuralState();
     for (const runtime of this.runtimeParts) this.updatePartBounds(runtime);
     this.componentLevels.fill(0);
+    this.lastComponentLevels.fill(0);
     this.shellModelActive = true;
     this.repairRevision++;
     this.deformationRevision++;

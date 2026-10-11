@@ -1,13 +1,20 @@
 import { CameraContactFrame } from "../camera/contact-frame";
 import { applyWorldPinball } from "./pinball";
 import { planPhysicsFrameWindow } from "./frame-window";
+import { NativeCarCrushQueue } from "./crush-queue";
+import { NativeSpamQueue } from "./spam-queue";
 import { Box3, Group, Object3D, Quaternion, Triangle, Vector3 } from "three";
 import {
   parseCarMechanics,
   type CarMechanics,
   type MechanicsShape,
 } from "../mechanics";
-import type { DamageSystem } from "../damage";
+import {
+  flushWamSmashQueue,
+  type DamageSystem,
+  type WamSmashQueueContext,
+} from "../damage";
+import { NativeSmashQueue } from "../smash-queue";
 import type { WorldDestruction } from "../world-destruction";
 import type { WorldGrooveRuntime } from "../world-groove";
 import { WorldActivationRuntime } from "../world-activation";
@@ -29,6 +36,11 @@ import {
 } from "./mines";
 import { createMineBody, type MineBody } from "./mine-body";
 import type { VehicleState, VehicleInput } from "../gameplay";
+import type { CrashDamageAwards } from "../race-awards";
+import {
+  redistributeNativeCrashDamage,
+  nativeCrashDamageAward,
+} from "./crash-components";
 import type { WorldCollision, Surface } from "../world";
 import {
   applyVehicleForces,
@@ -107,7 +119,11 @@ import {
   type SpecialVolumeConfig,
 } from "./volumes";
 import { scaleImpactVectors } from "./impact";
-import { NativeCrashRecord } from "./crash-record";
+import {
+  NativeCrashRecord,
+  nativeCrashHeadOn,
+  nativeCrashViewerDirection,
+} from "./crash-record";
 import {
   groupNativeImpactRows,
   NATIVE_IMPACT_MINIMUM_LAMBDA,
@@ -375,6 +391,7 @@ export function createSimulatedCar(
     vertices,
     motion.wheelPositions.map((p) => p.clone().multiplyScalar(1 / 6.9)),
   );
+  car.crashRecord.resetDirection(state.orientation);
   return car;
 }
 function candidate(body: RigidBody, dt: number) {
@@ -436,11 +453,31 @@ export class VehicleSimulation {
   ) => void;
   /** Native selected roles, while victim accumulation is still available. */
   onCrashAttribution?: (attacker: SimulatedCar, victim: SimulatedCar) => void;
+  onCrashDamageAward?: (
+    victim: SimulatedCar,
+    credits: number,
+    seconds: number,
+    multiplier: number,
+  ) => void;
+  crashDamageAwards?: CrashDamageAwards;
   /** PDGetTotalTime is the raw platform clock, not pause-adjusted GetTotalTime. */
   crashClock: () => number = () => Math.floor(performance.now()) >>> 0;
   private readonly crashCars = new Map<string, SimulatedCar>();
   /** Native car-spec owner slot0xc8; separate from attachment/repair ownership. */
   private readonly crashOwnerSlots = new WeakMap<RigidBody, RigidBody>();
+  private readonly lastCrashStepVelocity = new WeakMap<SimulatedCar, Vector3>();
+  private collectingOrdinaryCrush = false;
+  readonly smashQueue = new NativeSmashQueue<WamSmashQueueContext>();
+  readonly spamCrushQueue = new NativeSpamQueue<SimulatedCar>();
+  /** Production's final barrier follows ordinary effects, before glass update. */
+  deferFinalSmashFlush = false;
+  smashClock: () => number = () => Math.round(this.elapsed * 1000) >>> 0;
+  readonly ordinaryCrushQueue = new NativeCarCrushQueue<
+    SimulatedCar,
+    { human: boolean; physicsTickMs: number }
+  >();
+  /** AI earnings redistribution alone does not invoke native CheckDamage. */
+  private readonly deferredCrashWastage = new WeakSet<SimulatedCar>();
   onWasted?: (car: SimulatedCar) => void;
   onWorldGeometryChanged?: () => void;
   settings?: UpgradeSettings;
@@ -467,6 +504,27 @@ export class VehicleSimulation {
     public scene: Object3D,
   ) {}
   add(car: SimulatedCar) {
+    car.damage.cancelQueuedSpam = () => this.spamCrushQueue.cancel(car);
+    car.damage.deferOrdinaryCrush = (
+      contacts,
+      vector,
+      human,
+      physicsTickMs,
+    ) => {
+      if (!this.collectingOrdinaryCrush) return false;
+      this.ordinaryCrushQueue.enqueue(
+        car,
+        contacts,
+        vector,
+        car.damage.carSoftness,
+        { human, physicsTickMs },
+      );
+      return true;
+    };
+    car.damage.onWastageCheck = () => {
+      this.deferredCrashWastage.delete(car);
+      if (car.damage.wasted) car.knackered = true;
+    };
     car.damage.configureDetachmentScheduling(this.detachmentScheduling);
     this.crashCars.set(car.group.uuid, car);
     this.cars.push(car);
@@ -474,6 +532,16 @@ export class VehicleSimulation {
   }
   isCarPhysicsActive(car: SimulatedCar): boolean {
     return !this.inactiveCars.has(car);
+  }
+  /** Last physics broad-phase face cache, also used by C2's fallen-world test. */
+  cachedCarMaterialNames(car: SimulatedCar): readonly string[] {
+    return (this.contactSurfaces.get(car) ?? []).map((face) => face.material);
+  }
+  /** Collision+1b4 snapshots velocity before the40ms step's forces/contacts.
+   * The smash queue converts this starting model vector to metric shard units.
+   */
+  startingCarSmashVelocity(car: SimulatedCar): Vector3 {
+    return (this.lastCrashStepVelocity.get(car) ?? car.state.velocity).clone();
   }
   /** Collision activity subset of native TurnOpponentPhysicsOff. Call between
    * physics steps; objective/matrix placement and active-list rendering belong
@@ -691,6 +759,10 @@ export class VehicleSimulation {
     );
   }
   spamCar(car: SimulatedCar, strength: number) {
+    if (this.collectingOrdinaryCrush) {
+      this.spamCrushQueue.enqueue(car, strength);
+      return undefined;
+    }
     const result = car.damage.spamModel(
       strength,
       this.elapsed * 1000,
@@ -711,14 +783,14 @@ export class VehicleSimulation {
     if (event.kind === "crush") this.spamCar(event.victim, event.strength);
     else if (event.kind === "reaction") {
       const car = event.victim;
-      const wasWasted = car.damage.wasted;
+      const wasWasted = car.knackered;
       car.state.velocity.add(event.deltaVelocity);
       car.state.angularVelocity.add(
         event.deltaAngularVelocity
           .clone()
           .applyQuaternion(car.state.orientation),
       );
-      for (const increment of event.components)
+      for (const increment of event.components) {
         car.damage.componentLevels[increment.unit] = mineComponentDamage(
           car.damage.componentLevels[increment.unit],
           increment,
@@ -726,6 +798,17 @@ export class VehicleSimulation {
           car.human ? 8 : 6,
           !!car.damage.damageContext.invulnerable,
         );
+        if (
+          event.damageMode === "filtered" &&
+          increment.magnitude >= 5 &&
+          !car.damage.damageContext.invulnerable &&
+          !(car.human && increment.unit === 2)
+        ) {
+          // DoDamage43f885 checks even a rejected5..9 finishing increment.
+          car.damage.onWastageCheck?.();
+          if (car.damage.wasted) car.knackered = true;
+        }
+      }
       if (event.creditOwner && event.creditOwner !== car) {
         this.crashCars.set(event.creditOwner.group.uuid, event.creditOwner);
         car.crashHistory.lastAttacker = event.creditOwner.group.uuid;
@@ -734,8 +817,14 @@ export class VehicleSimulation {
         car.lastAwardImpactMs = car.crashHistory.lastMs;
       }
       car.lastAttributedImpactMs = car.crashHistory.lastMs;
-      if (!wasWasted && car.damage.wasted)
+      if (
+        !wasWasted &&
+        (car.knackered ||
+          (car.damage.wasted && !this.deferredCrashWastage.has(car)))
+      ) {
         car.wastedByPlayer = !!event.creditOwner?.human;
+        car.knackered = true;
+      }
       car.state.health = 100 - Math.max(...car.damage.componentLevels);
     } else if (event.kind === "explode" || event.kind === "release") {
       const body = this.mineBodies.find((body) => body.mine === event.mine);
@@ -792,6 +881,66 @@ export class VehicleSimulation {
     car.group.position.copy(car.state.position);
     car.group.quaternion.copy(car.state.orientation);
     car.group.updateMatrixWorld(true);
+  }
+  /** Installed rematerialization4a8884–4a8bb4 resets motion caches after each
+   * ground-aligned attempt. Preserve damage and the complete supplied rotation.
+   */
+  rematerializePose(
+    car: SimulatedCar,
+    position: Vector3,
+    orientation: Quaternion,
+    velocity: Vector3,
+  ): void {
+    car.state.position.copy(position);
+    car.state.orientation.copy(orientation);
+    car.poseEpoch++;
+    car.state.velocity.copy(velocity);
+    car.state.angularVelocity.set(0, 0, 0);
+    car.state.curvature = car.state.turnSpeed = car.state.rpm = 0;
+    car.state.gear = 0;
+    car.state.speed = velocity.length();
+    car.state.wheelLengths.fill(car.motion.suspensionBase.rideHeight);
+    car.state.predictedPosition = undefined;
+    car.state.predictedOrientation = undefined;
+    car.overlapDetected = car.worldOverlapDetected = false;
+    car.overlapRecovery = car.worldRecovery = true;
+    car.crashRecord.resetDirection(orientation);
+    const forward = new Vector3(0, 0, -1).applyQuaternion(orientation);
+    car.state.heading = Math.atan2(-forward.x, -forward.z);
+    this.contactSurfaces.delete(car);
+    this.oilWheelPrevious.delete(car);
+    this.sync(car);
+  }
+  /** Native sensible-place public polarity: an obstruction is0, clear is-1.
+   * Reuse the current authored/deformed hull and finite world feature queries.
+   */
+  testCarPlacement(car: SimulatedCar): 0 | -1 {
+    return this.placementDirection(car, car.hulls) ? 0 : -1;
+  }
+  /** Installed ResetCarSpecialVolume4ff2c0 changes only automatic volume/depth.
+   * Recompute immediately; do not erase authored volume or water-plane caches.
+   */
+  resetCarSpecialVolume(car: SimulatedCar): void {
+    const hit = this.world.raycast(
+      car.state.position,
+      new Vector3(0, 1, 0),
+      200,
+      true,
+    );
+    const automatic =
+      hit && /^[!#]/.test(hit.surface.material)
+        ? (this.specialVolumes?.defaultWater ?? this.defaultWaterVolume)
+        : null;
+    if (car.specialVolume) {
+      car.specialVolume.automatic = automatic;
+      car.specialVolume.depth = 1;
+    } else
+      car.specialVolume = {
+        automatic,
+        depth: 1,
+        waterDistance: NO_WATER_DISTANCE,
+        volume: null,
+      };
   }
   reset(car: SimulatedCar) {
     car.poseEpoch++;
@@ -987,6 +1136,7 @@ export class VehicleSimulation {
           impacteeTransform: car.group.matrixWorld,
           timeMs: this.elapsed * 1000,
         });
+        this.flushSmashEffectsBarrier();
         if (result.changes.some((change) => change.requiresRebuild)) {
           this.world.rebuildStatic();
           this.world.invalidateDynamic();
@@ -1138,6 +1288,9 @@ export class VehicleSimulation {
   }
   update(dt: number) {
     this.beginCrashFrame();
+    this.beginSmashEffects();
+    this.ordinaryCrushQueue.initialize();
+    this.spamCrushQueue.initialize();
     // updateFrame's accumulator is a pose fraction, not legacy step debt.
     if (this.frameWindowActive) {
       this.accumulator = 0;
@@ -1147,11 +1300,18 @@ export class VehicleSimulation {
       this.accumulator + Math.max(0, dt),
       PHYSICS_STEP * 5,
     );
-    while (this.accumulator >= PHYSICS_STEP) {
-      this.step();
-      this.accumulator -= PHYSICS_STEP;
+    this.collectingOrdinaryCrush = true;
+    try {
+      while (this.accumulator >= PHYSICS_STEP) {
+        this.step();
+        this.accumulator -= PHYSICS_STEP;
+      }
+    } finally {
+      this.collectingOrdinaryCrush = false;
     }
+    this.flushOrdinaryCrush();
     this.finishCrashFrame();
+    this.flushSmashEffects();
   }
   /** Native absolute race-relative window; elapsed remains the physics tick.
    * A skipped interval advances timed physics state without inventing forces.
@@ -1164,21 +1324,103 @@ export class VehicleSimulation {
     );
     this.frameWindowActive = true;
     this.beginCrashFrame();
+    this.beginSmashEffects();
+    this.ordinaryCrushQueue.initialize();
+    this.spamCrushQueue.initialize();
     this.cameraContacts.begin();
     this.elapsed = window.stepStartMs / 1000;
-    for (let i = 0; i < window.steps; i++) {
-      this.step();
-      this.cameraContacts.step(this.lastImpacts);
+    this.collectingOrdinaryCrush = true;
+    try {
+      for (let i = 0; i < window.steps; i++) {
+        this.step();
+        this.cameraContacts.step(this.lastImpacts);
+      }
+    } finally {
+      this.collectingOrdinaryCrush = false;
     }
     this.cameraContacts.finish(window.lastPhysicsTickMs, window.frameEndMs);
     this.elapsed = window.lastPhysicsTickMs / 1000;
     this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
+    this.flushOrdinaryCrush();
     this.finishCrashFrame();
+    for (const car of this.cars) {
+      const original = this.lastCrashStepVelocity.get(car);
+      if (
+        car.human &&
+        this.isCarPhysicsActive(car) &&
+        original &&
+        window.lastPhysicsTickMs > window.frameEndMs &&
+        car.crashRecord.cachedSpeed > Math.fround(0.0001)
+      )
+        car.crashRecord.cachedDirection.copy(
+          nativeCrashViewerDirection(
+            original,
+            car.state.velocity,
+            window.lastPhysicsTickMs - window.frameEndMs,
+          ),
+        );
+    }
+    if (!this.deferFinalSmashFlush) this.flushSmashEffects();
     return window;
+  }
+  private beginSmashEffects(): void {
+    this.smashQueue.initialize();
+    this.destruction?.configureSmashQueue(this.smashQueue);
+    for (const car of this.cars)
+      car.damage.configureWamSmashQueue(this.smashQueue);
+  }
+  /** Standalone tools return to immediate effects after their outer frame. */
+  flushSmashEffects(): number {
+    const count = this.flushSmashEffectsBarrier();
+    this.destruction?.configureSmashQueue();
+    for (const car of this.cars) car.damage.configureWamSmashQueue();
+    return count;
+  }
+  /** Native argument-one barriers retain configured queue ownership. */
+  private flushSmashEffectsBarrier(): number {
+    const revision = this.destruction?.geometryRevision;
+    const count = flushWamSmashQueue(this.smashQueue, this.smashClock);
+    if (revision !== this.destruction?.geometryRevision) {
+      this.world.rebuildStatic();
+      this.world.invalidateDynamic();
+      this.onWorldGeometryChanged?.();
+    }
+    return count;
+  }
+  /** Installed4360c0 consumes retained car-local events after outer physics,
+   * then commits candidate hulls. Explicit single-step diagnostic calls keep
+   * their historical immediate execution; production uses updateFrame. */
+  private flushOrdinaryCrush(): void {
+    // Native431560 executes directly once the physics-active flag is cleared.
+    for (const { identity, strength } of this.spamCrushQueue.drain())
+      this.spamCar(identity, strength);
+    for (const { identity: car, event } of this.ordinaryCrushQueue.drain()) {
+      car.damage.applyQueuedCrush(
+        event.contacts,
+        event.meanContact,
+        event.direction,
+        event.force,
+        event.context.physicsTickMs,
+        event.context.human,
+      );
+    }
+    for (const car of this.cars) {
+      if (!this.isCarPhysicsActive(car)) continue;
+      this.syncStructuralState(car);
+      this.detachParts(car);
+      // Deferred bend/SPAM can damage components after the last force step.
+      car.state.health = 100 - Math.max(...car.damage.componentLevels);
+      if (
+        car.knackered ||
+        (car.damage.wasted && !this.deferredCrashWastage.has(car))
+      )
+        this.finishWastage(car);
+    }
   }
   private beginCrashFrame(): void {
     for (const car of this.cars) {
       if (!this.isCarPhysicsActive(car)) continue;
+      car.damage.lastComponentLevels.set(car.damage.componentLevels);
       car.crashRecord.beginFrame(
         car.knackered,
         car.state.velocity
@@ -1190,7 +1432,7 @@ export class VehicleSimulation {
   private finishCrashFrame(): void {
     for (const car of this.cars)
       if (this.isCarPhysicsActive(car))
-        car.crashRecord.finishFrame(car.state.velocity);
+        car.crashRecord.finishFrame(car.state.velocity, car.state.orientation);
   }
   private recoverySurfaces(surfaces: readonly Surface[]) {
     return surfaces.map((surface) => ({
@@ -1865,8 +2107,13 @@ export class VehicleSimulation {
             )
             .forEach((event) => this.handleMineEvent(event));
     }
-    if (this.processWorldSmash(impacts, restarts)) return false;
-    if (this.processNonCarContacts(impacts, restarts)) return false;
+    const worldRestart = this.processWorldSmash(impacts, restarts);
+    const noncarRestart = worldRestart
+      ? false
+      : this.processNonCarContacts(impacts, restarts);
+    // Installed41cb88 runs before cap/restart exits and ordinary crush.
+    this.flushSmashEffectsBarrier();
+    if (worldRestart || noncarRestart) return false;
     const split = this.trySplit(impacts, restarts);
     if (split.restart) return false;
     if (split.occurred) return;
@@ -2106,7 +2353,7 @@ export class VehicleSimulation {
               : 1,
           },
         );
-        const wasWasted = car.damage.wasted;
+        const wasWasted = car.knackered;
         car.crashRecord.accumulate(
           vectors.accumulatedDamage,
           !!car.damage.damageContext.invulnerable,
@@ -2133,9 +2380,16 @@ export class VehicleSimulation {
           vectors.crush,
           impact.mean.divideScalar(impact.weight),
         );
-        if (!wasWasted && car.damage.wasted) {
+        if (
+          !wasWasted &&
+          (car.knackered ||
+            (car.damage.wasted && !this.deferredCrashWastage.has(car)))
+        ) {
           newlyWasted.add(car);
           car.wastedByPlayer = false;
+          // Native DoDamage checks wasting before earnings attenuation. Lower
+          // attacker component levels cannot revive an already-knackered car.
+          car.knackered = true;
         }
         this.onImpact?.(car, impact.severity);
       }
@@ -2145,6 +2399,7 @@ export class VehicleSimulation {
           pair.b && "damage" in pair.b ? (pair.b as SimulatedCar) : undefined,
         );
       this.attributeCrashPair(pair.a, pair.b, newlyWasted);
+      for (const car of newlyWasted) this.finishWastage(car);
     }
     for (const car of this.cars)
       if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
@@ -2200,7 +2455,7 @@ export class VehicleSimulation {
   private attributeCrashPair(
     first: RigidBody,
     second: RigidBody | undefined,
-    newlyWasted: ReadonlySet<SimulatedCar>,
+    newlyWasted: Set<SimulatedCar>,
   ): void {
     const a = "damage" in first ? (first as SimulatedCar) : undefined;
     const b =
@@ -2235,8 +2490,25 @@ export class VehicleSimulation {
       (attacker, victim) => {
         const source = this.crashCars.get(String(attacker.identity))!;
         const target = this.crashCars.get(String(victim.identity))!;
-        if (newlyWasted.has(target)) target.wastedByPlayer = source.human;
         this.onCrashAttribution?.(source, target);
+        const delta = redistributeNativeCrashDamage(
+          source.damage.componentLevels,
+          source.damage.lastComponentLevels,
+          target.damage.componentLevels,
+          target.damage.lastComponentLevels,
+        );
+        // Offline AI selections redistribute components but skip the additional
+        // CheckDamage43f620 at440df1, which is past the local-human guard.
+        if (source.human && !target.knackered && target.damage.wasted) {
+          target.knackered = true;
+          newlyWasted.add(target);
+        }
+        if (!source.human && !target.knackered && target.damage.wasted)
+          this.deferredCrashWastage.add(target);
+        if (newlyWasted.has(target)) target.wastedByPlayer = source.human;
+        // Native completion runs before ordinary crash credit/time awards.
+        for (const car of newlyWasted) this.finishWastage(car);
+        this.awardCrashDamage(source, target, a, b, delta);
       },
     );
     for (const car of [a, b]) {
@@ -2250,6 +2522,50 @@ export class VehicleSimulation {
         history.lastAttacker === null ? undefined : history.lastMs;
       car.lastAttributedImpactMs = history.lastMs;
     }
+  }
+  private awardCrashDamage(
+    attacker: SimulatedCar,
+    victim: SimulatedCar,
+    a: SimulatedCar | undefined,
+    b: SimulatedCar | undefined,
+    componentDelta: number,
+  ): void {
+    if (
+      !attacker.human ||
+      victim.damage.damageContext.invulnerable ||
+      !this.crashDamageAwards
+    )
+      return;
+    let multiplier =
+      a && b && nativeCrashHeadOn(a.crashRecord, b.crashRecord) ? 2 : 1;
+    const omega = victim.state.angularVelocity
+      .clone()
+      .applyQuaternion(victim.state.orientation.clone().invert());
+    omega.set(Math.fround(omega.x), Math.fround(omega.y), Math.fround(omega.z));
+    if (Math.abs(omega.x) > 4 || Math.abs(omega.y) > 6 || Math.abs(omega.z) > 4)
+      multiplier *= 2;
+    const award = nativeCrashDamageAward(
+      componentDelta,
+      victim.damage.carSoftness,
+      multiplier,
+      this.crashDamageAwards.creditsPerDamage[this.skill],
+      this.crashDamageAwards.secondsPerDamage[this.skill],
+    );
+    if (award.rawCredits === 0 && !victim.knackered) return;
+    if (!victim.knackered)
+      this.onCrashDamageAward?.(
+        victim,
+        award.credits,
+        award.seconds,
+        multiplier,
+      );
+    victim.damage.lastComponentLevels.set(victim.damage.componentLevels);
+  }
+  private finishWastage(car: SimulatedCar): void {
+    if (car.wastedAt !== undefined) return;
+    car.wastedAt = this.elapsed;
+    car.knackered = true;
+    this.onWasted?.(car);
   }
   private processNonCarContacts(
     impacts: ContactImpact[],
@@ -2314,6 +2630,9 @@ export class VehicleSimulation {
   }
   step() {
     this.onBeforeStep?.();
+    for (const car of this.cars)
+      if (car.human && this.isCarPhysicsActive(car))
+        this.lastCrashStepVelocity.set(car, car.state.velocity.clone());
     // Native skid threshold compares against gProgram_state.current_car,
     // rather than driver type. Keep the shared force context tied to this world.
     this.motionContext.currentCar = this.cars.find((car) => car.human)?.state;
@@ -2713,10 +3032,12 @@ export class VehicleSimulation {
       car.state.speed = car.state.velocity.dot(forward);
       car.state.heading = Math.atan2(-forward.x, -forward.z);
       car.state.health = 100 - Math.max(...car.damage.componentLevels);
-      if (car.damage.wasted && car.wastedAt === undefined) {
-        car.wastedAt = this.elapsed;
-        this.onWasted?.(car);
-        car.knackered = true;
+      if (
+        (car.knackered ||
+          (car.damage.wasted && !this.deferredCrashWastage.has(car))) &&
+        car.wastedAt === undefined
+      ) {
+        this.finishWastage(car);
       }
       this.sync(car);
       car.damage.stepFlaps(
@@ -2902,6 +3223,14 @@ export class VehicleSimulation {
     }
   }
   dispose() {
+    this.ordinaryCrushQueue.initialize();
+    this.spamCrushQueue.initialize();
+    this.smashQueue.initialize();
+    for (const car of this.cars) {
+      car.damage.deferOrdinaryCrush = undefined;
+      car.damage.cancelQueuedSpam = undefined;
+      car.damage.configureWamSmashQueue();
+    }
     this.oil?.dispose();
     this.destruction?.dispose();
     this.mines.clear();

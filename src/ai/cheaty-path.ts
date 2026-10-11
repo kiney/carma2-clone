@@ -30,6 +30,7 @@ function validate(
   nodes: readonly Vector3[],
   sections: readonly TrackPathSection[],
   framePeriodMs: number,
+  routeCapacity: 12 | 24,
 ) {
   if (
     !finiteVector(position) ||
@@ -39,7 +40,8 @@ function validate(
     !Number.isInteger(framePeriodMs) ||
     framePeriodMs < 0 ||
     framePeriodMs > 0xffffffff ||
-    route.length > 12
+    (routeCapacity !== 12 && routeCapacity !== 24) ||
+    route.length > routeCapacity
   )
     throw new Error("Invalid native cheaty-path input");
   for (const entry of route) {
@@ -132,8 +134,9 @@ export function enterCheatyPath(
   nodes: readonly Vector3[],
   sections: readonly TrackPathSection[],
   framePeriodMs: number,
+  routeCapacity: 12 | 24 = 12,
 ): CheatyPathResult {
-  validate(position, route, nodes, sections, framePeriodMs);
+  validate(position, route, nodes, sections, framePeriodMs, routeCapacity);
   if (!Number.isInteger(sectionSlot) || !route[sectionSlot])
     throw new Error("Invalid native cheaty-path section slot");
   const { start, finish } = sectionPoints(route[sectionSlot], nodes, sections);
@@ -165,8 +168,9 @@ export function stepCheatyPath(
   nodes: readonly Vector3[],
   sections: readonly TrackPathSection[],
   framePeriodMs: number,
+  routeCapacity: 12 | 24 = 12,
 ): CheatyPathResult {
-  validate(position, route, nodes, sections, framePeriodMs);
+  validate(position, route, nodes, sections, framePeriodMs, routeCapacity);
   if (
     !Number.isInteger(state.sectionSlot) ||
     state.sectionSlot < 0 ||

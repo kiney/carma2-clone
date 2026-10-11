@@ -130,7 +130,23 @@ export interface WorldSmashSpec {
   reserved: [number, number, number, number];
 }
 
-class Reader {
+/** Structural reader shared by world and WAM connotation records. */
+export interface SmashConnotationReader {
+  fail(message: string): never;
+  token(label: string): string;
+  scalar(label: string): number;
+  integer(label: string): number;
+  count(label: string, max?: number): number;
+  pair(label: string): SmashPair;
+  integerPair(label: string): SmashPair;
+  amount(label: string): SmashAmount;
+  vector(label: string): SmashVec3;
+  enum<T extends string>(label: string, options: readonly T[]): T;
+  list<T>(label: string, read: () => T, max?: number): T[];
+}
+
+/** Bounds-checked token operations; WAM adapters may supply their own cursor. */
+export class SmashTextReader implements SmashConnotationReader {
   lines: { value: string; line: number }[];
   cursor = 0;
   constructor(
@@ -210,7 +226,7 @@ class Reader {
     return Array.from({ length: this.count(label, max) }, read);
   }
 }
-function speed(r: Reader): SmashInitialSpeed {
+function speed(r: SmashConnotationReader): SmashInitialSpeed {
   return {
     towards: r.pair("towards speed"),
     impacteeVelocityFactor: r.scalar("impactee velocity factor"),
@@ -220,13 +236,13 @@ function speed(r: Reader): SmashInitialSpeed {
     randomSpinRateMax: r.scalar("random spin"),
   };
 }
-function fire(r: Reader): SmashFire {
+function fire(r: SmashConnotationReader): SmashFire {
   const chance = r.integer("fire chance");
   return chance
     ? { chance, count: r.count("fire columns"), smokiness: r.pair("smokiness") }
     : { chance };
 }
-function shrapnel(r: Reader): SmashShrapnel {
+function shrapnel(r: SmashConnotationReader): SmashShrapnel {
   const kind = r.enum("shrapnel type", [
     "abstract",
     "shards",
@@ -289,7 +305,7 @@ function shrapnel(r: Reader): SmashShrapnel {
   }
   return result;
 }
-function explosion(r: Reader): SmashExplosion {
+function explosion(r: SmashConnotationReader): SmashExplosion {
   return {
     amount: r.pair("explosion amount"),
     delaySeconds: r.pair("explosion delay"),
@@ -309,7 +325,9 @@ function explosion(r: Reader): SmashExplosion {
     })),
   };
 }
-function connotations(r: Reader): SmashConnotations {
+export function readSmashConnotations(
+  r: SmashConnotationReader,
+): SmashConnotations {
   const sounds = r.list("sounds", () => r.integer("sound ID"), 100);
   const debris = r.list("shrapnel", () => shrapnel(r), 100);
   const explosions = r.list("explosions", () => explosion(r), 100);
@@ -400,7 +418,7 @@ function connotations(r: Reader): SmashConnotations {
     variableChanges,
   };
 }
-function parse(r: Reader): WorldSmashSpec[] {
+function parse(r: SmashConnotationReader): WorldSmashSpec[] {
   return r.list("smash specs", () => {
     const flags = r.integer("smash flags");
     const name = r.token("smash trigger");
@@ -452,7 +470,7 @@ function parse(r: Reader): WorldSmashSpec[] {
             threshold,
             flags,
             collisionMode,
-            connotations: connotations(r),
+            connotations: readSmashConnotations(r),
             pixelmaps: r.list(
               "level pixelmaps",
               () => r.token("level pixelmap"),
@@ -464,7 +482,7 @@ function parse(r: Reader): WorldSmashSpec[] {
       );
     } else {
       spec.removalThreshold = r.scalar("removal threshold");
-      spec.connotations = connotations(r);
+      spec.connotations = readSmashConnotations(r);
     }
     if (mode === "replacemodel") {
       const model = r.token("replacement model");
@@ -490,7 +508,7 @@ export function parseSmashableEnvironment(
   text: string,
   source = "smash environment",
 ): WorldSmashSpec[] {
-  const r = new Reader(text, source);
+  const r = new SmashTextReader(text, source);
   const specs = parse(r);
   if (r.cursor !== r.lines.length)
     r.fail("unexpected data after smash environment");
@@ -509,7 +527,7 @@ export function parseTrackSmashables(
   );
   if (marker < 0) return [];
   return parse(
-    new Reader(lines.slice(marker + 1).join("\n"), source, marker + 1),
+    new SmashTextReader(lines.slice(marker + 1).join("\n"), source, marker + 1),
   );
 }
 /** Native 0x4f0ec0 item flags: 1 suppresses wheel/support contacts, 2 body

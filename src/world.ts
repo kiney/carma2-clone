@@ -253,6 +253,45 @@ export class WorldCollision {
   modifier(index: number): SurfaceModifier {
     return this.modifiers[index] ?? DEFAULT_SURFACE;
   }
+  /** Installed FindYBelow's nearest downward triangle traversal. Height below
+   * -100 is rejected by every fallen-world consumer, so bound the finite query
+   * there instead of traversing to FLT_MAX. This query uses source material
+   * facing flags rather than THREE material visibility/collision-mode flags.
+   */
+  nativeYBelow(origin: THREE.Vector3): {
+    y: number;
+    materialName: string | null;
+  } {
+    const miss: { y: number; materialName: string | null } = {
+      y: -3.4028234663852886e38,
+      materialName: null,
+    };
+    if (origin.y < -100) return miss;
+    const bottom = new THREE.Vector3(origin.x, -100, origin.z);
+    const bounds = new THREE.Box3()
+      .setFromPoints([origin, bottom])
+      .expandByScalar(0.005);
+    const ray = new THREE.Ray(origin, new THREE.Vector3(0, -1, 0));
+    const point = new THREE.Vector3();
+    let best = miss;
+    for (const face of [
+      ...this.querySurfaces(bounds.min, bounds.max, true),
+      ...this.dynamicSurfaces(bounds),
+    ]) {
+      if (face.enabled === false || /^[!>]/.test(face.material)) continue;
+      const facing = -face.normal.y;
+      if (
+        Math.abs(facing) < 2 ** -22 ||
+        (!(face.materialFlags & 0x1800) && facing > 0)
+      )
+        continue;
+      if (!ray.intersectTriangle(face.a, face.b, face.c, false, point))
+        continue;
+      if (point.y >= -100 && point.y > best.y)
+        best = { y: Math.fround(point.y), materialName: face.material };
+    }
+    return best;
+  }
   raycast(
     origin: THREE.Vector3,
     direction: THREE.Vector3,

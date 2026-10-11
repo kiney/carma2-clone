@@ -13,6 +13,8 @@ import {
 import type { DatModel } from "./formats";
 import type { WorldActivationContact } from "./world-activation";
 import { createModelGeometry } from "./render-geometry";
+import { NativeSmashQueue } from "./smash-queue";
+import type { WamSmashQueueContext } from "./damage";
 import {
   numericSmashTriggerEligible,
   removalSmashTriggered,
@@ -59,6 +61,8 @@ export interface WorldDestructionAssets {
   onConnotations?: (
     data: SmashConnotations,
     contact: WorldSmashContact,
+    /** Native world texturechange suppresses activations/followups and awards. */
+    suppressActivationsAndAwards?: boolean,
   ) => void;
   /** Enqueue synchronously: native 0x4ed5d0 snapshots candidates/context now and
    * samples a separate authored delay for each actor. Caller owns due actions. */
@@ -370,6 +374,8 @@ function writeFaces(mesh: Mesh, data: MeshData): void {
  * Source: HW dispatcher0x4f0ec0, tile creation0x4f1660, threshold queue0x4ee010.
  */
 export class WorldDestruction {
+  /** Changes consumed by the simulation's collision-cache flush barrier. */
+  geometryRevision = 0;
   readonly retainActors: Object3D[] = [];
   readonly requiredModels: string[];
   readonly diagnostics: string[] = [];
@@ -384,6 +390,10 @@ export class WorldDestruction {
   private ownedMaterials = new Set<Material>();
   private ownedTextures = new Set<Texture>();
   private decals = new Set<Mesh>();
+  private sharedSmashQueue?: NativeSmashQueue<WamSmashQueueContext>;
+  configureSmashQueue(queue?: NativeSmashQueue<WamSmashQueueContext>): void {
+    this.sharedSmashQueue = queue;
+  }
   constructor(
     readonly root: Object3D,
     readonly specs: readonly WorldSmashSpec[],
@@ -521,12 +531,19 @@ export class WorldDestruction {
     data: SmashConnotations | undefined,
     contact: WorldSmashContact,
     out: WorldDestructionResult,
+    suppressActivationsAndAwards = false,
   ): void {
     if (!data) return;
-    this.assets.onConnotations?.(data, contact);
-    if (data.activations.length && !this.assets.onActivation)
+    this.assets.onConnotations?.(data, contact, suppressActivationsAndAwards);
+    if (
+      !suppressActivationsAndAwards &&
+      data.activations.length &&
+      !this.assets.onActivation
+    )
       out.diagnostics.push("Noncar activation requires onActivation callback");
-    for (const activation of data.activations)
+    for (const activation of suppressActivationsAndAwards
+      ? []
+      : data.activations)
       this.assets.onActivation?.(activation, contact);
     this.update(Math.max(this.timeMs, contact.timeMs ?? this.timeMs));
   }
@@ -534,12 +551,19 @@ export class WorldDestruction {
     change: WorldDestructionChange,
     contact: WorldSmashContact,
     out: WorldDestructionResult,
+    suppressActivationsAndAwards = false,
   ): void {
     out.changed = true;
     out.changes.push(change);
+    if (change.requiresRebuild) this.geometryRevision++;
     this.assets.onChange?.(change);
     for (let repeat = 0; repeat < (change.connotationRepeats ?? 1); repeat++)
-      this.effects(change.connotations, contact, out);
+      this.effects(
+        change.connotations,
+        contact,
+        out,
+        suppressActivationsAndAwards,
+      );
   }
   private owner(
     contact: WorldSmashContact,
@@ -808,42 +832,36 @@ export class WorldDestruction {
       .map((f) => f.sourceFace)
       .sort((a, b) => a - b)
       .join(",")}:${bounds.join(",")}`;
-    const old = data.patches.get(patchId),
-      level = selectSmashLevel(spec, contact.normalImpulse, old?.level ?? 0);
-    if (level === (old?.level ?? 0)) return;
-    const authored = spec.levels[level - 1];
-    if (!authored.pixelmaps.length) {
-      out.diagnostics.push("Smash level has no pixelmaps");
-      return;
+    const old = data.patches.get(patchId);
+    if (old && old.level >= spec.levels.length) return;
+    const level = selectSmashLevel(
+      spec,
+      contact.normalImpulse,
+      old?.level ?? 0,
+    );
+    // Missing local assets are a browser loading failure. Refuse preparation
+    // before changing geometry; asset availability consumes no random draws.
+    if (level > (old?.level ?? 0)) {
+      const pixelmaps = spec.levels[level - 1].pixelmaps;
+      if (!pixelmaps.length) {
+        out.diagnostics.push("Smash level has no pixelmaps");
+        return;
+      }
+      if (!pixelmaps.some((name) => lookup(this.assets.textures, name))) {
+        out.diagnostics.push(`Missing smash pixelmap '${pixelmaps[0]}'`);
+        return;
+      }
     }
-    const name =
-        authored.pixelmaps[
-          Math.floor(this.random() * authored.pixelmaps.length)
-        ],
-      texture = lookup(this.assets.textures, name);
-    if (!texture) {
-      out.diagnostics.push(`Missing smash pixelmap '${name}'`);
-      return;
+    const material = old?.material ?? original.material.clone();
+    if (!old) {
+      this.ownedMaterials.add(material);
+      material.userData.worldSmashOriginalMaterial = original.originalMaterial;
+      material.userData.worldSmashLevel = 0;
     }
-    const material = (old?.material ?? original.material).clone();
-    const map = texture.clone();
-    map.matrixAutoUpdate = false;
-    map.matrix.identity();
-    map.needsUpdate = true;
-    this.ownedMaterials.add(material);
-    this.ownedTextures.add(map);
-    (material as Material & { map: Texture }).map = map;
-    material.needsUpdate = true;
-    material.userData.worldSmashOriginalMaterial = original.originalMaterial;
-    material.userData.worldSmashLevel = level;
     const selectedSources = new Set(pair.map((f) => f.sourceFace));
     let patch: Patch;
     if (old) {
-      patch = { ...old, level, material };
-      for (const face of patch.faces) {
-        face.material = material;
-        face.collisionMode = authored.collisionMode ?? "solid";
-      }
+      patch = old;
     } else {
       const inside: Face[] = [],
         outside: Face[] = [];
@@ -864,14 +882,13 @@ export class WorldDestruction {
       }
       for (const face of inside) {
         face.material = material;
-        face.collisionMode = authored.collisionMode ?? "solid";
         for (const v of face.vertices)
           v.uv.set(
             (v.uv.x - bounds[0]) / (bounds[2] - bounds[0]),
             (v.uv.y - bounds[1]) / (bounds[3] - bounds[1]),
           );
       }
-      patch = { level, material, faces: inside, bounds };
+      patch = { level: 0, material, faces: inside, bounds };
       if (spec.mode === "decal") {
         const overlay = new Mesh();
         overlay.name = `smash decal ${spec.trigger.name}`;
@@ -902,31 +919,138 @@ export class WorldDestruction {
     data.patches.set(patchId, patch);
     if (spec.mode === "decal") {
       if (patch.decal) patch.decal.material = material;
-    } else this.rewrite(mesh, data);
-    const affectedFaceIndices = data.faces.flatMap((f, i) =>
-      f.patch === patchId ? [i] : [],
-    );
-    const collisionMode =
-      spec.mode === "decal" ? undefined : authored.collisionMode;
-    const change: WorldDestructionChange = {
-      actor: mesh,
-      spec,
-      mode: spec.mode,
-      level,
-      affectedFaceIndices,
-      geometryChanged: spec.mode !== "decal",
-      requiresRebuild: spec.mode !== "decal",
-      collisionMode,
-      connotations: authored.connotations,
-      // HW0x4ecd20 traverses crossed level flags but emits final-level data.
-      connotationRepeats: spec.levels
-        .slice(old?.level ?? 0, level)
-        .filter((l) => !(l.flags & 1) || level - (old?.level ?? 0) === 1)
-        .length,
-      decal: patch.decal,
+    } else if (!old) this.rewrite(mesh, data);
+    const captured: WorldSmashContact = {
+      ...contact,
+      point: contact.point?.clone(),
+      impacteeVelocity: contact.impacteeVelocity?.clone(),
+      impacteeTransform: contact.impacteeTransform?.clone(),
     };
-    if (collisionMode === "passthrough" || collisionMode === "edges")
+    const deferred = !!this.sharedSmashQueue;
+    const queue =
+      this.sharedSmashQueue ?? new NativeSmashQueue<WamSmashQueueContext>();
+    const status = queue.enqueue({
+      key: patch,
+      targetTier: level,
+      getReachedTier: () => patch.level,
+      getLevelCount: () => spec.levels.length + 1,
+      hasModel: () => !!(patch.decal ?? mesh).geometry,
+      context: {
+        execute: (targetTier, reachedTier, timeMs) => {
+          const result: WorldDestructionResult = deferred
+            ? { changed: false, changes: [], diagnostics: [] }
+            : out;
+          this.commitTexture(
+            mesh,
+            data,
+            patchId,
+            patch,
+            spec,
+            targetTier,
+            reachedTier,
+            { ...captured, timeMs },
+            result,
+          );
+          if (deferred) this.diagnostics.push(...result.diagnostics);
+        },
+      },
+    });
+    const authored = level > patch.level ? spec.levels[level - 1] : undefined;
+    if (
+      status !== "ignored" &&
+      spec.mode !== "decal" &&
+      (authored?.collisionMode === "passthrough" ||
+        authored?.collisionMode === "edges")
+    )
       out.threshold ??= authored.threshold;
-    this.record(change, contact, out);
+    // Geometry preparation is immediate even when the shared queue rejects
+    // the request. No tier, map selection or connotation is committed here.
+    if (this.sharedSmashQueue || status === "ignored")
+      this.record(
+        {
+          actor: mesh,
+          spec,
+          mode: spec.mode,
+          level: patch.level,
+          affectedFaceIndices: data.faces.flatMap((f, i) =>
+            f.patch === patchId ? [i] : [],
+          ),
+          geometryChanged: spec.mode !== "decal",
+          requiresRebuild: spec.mode !== "decal",
+          decal: patch.decal,
+        },
+        contact,
+        out,
+      );
+    if (!this.sharedSmashQueue)
+      queue.flush(
+        () => Math.round(contact.timeMs ?? this.timeMs) >>> 0,
+        (entry, timeMs) =>
+          entry.context.execute(entry.targetTier, entry.reachedTier, timeMs),
+      );
+  }
+  private commitTexture(
+    mesh: Mesh,
+    data: MeshData,
+    patchId: string,
+    patch: Patch,
+    spec: WorldSmashSpec,
+    level: number,
+    reachedTier: number,
+    contact: WorldSmashContact,
+    out: WorldDestructionResult,
+  ): void {
+    const authored = spec.levels[level - 1];
+    const name =
+        authored.pixelmaps[
+          Math.floor(this.random() * authored.pixelmaps.length)
+        ],
+      texture = lookup(this.assets.textures, name);
+    if (!texture) {
+      out.diagnostics.push(`Missing smash pixelmap '${name ?? ""}'`);
+      return;
+    }
+    const map = texture.clone();
+    map.matrixAutoUpdate = false;
+    map.matrix.identity();
+    map.needsUpdate = true;
+    this.ownedTextures.add(map);
+    const material = patch.material;
+    (material as Material & { map: Texture }).map = map;
+    material.needsUpdate = true;
+    material.userData.worldSmashLevel = level;
+    patch.level = level;
+    for (const face of patch.faces) {
+      face.material = material;
+      face.collisionMode = authored.collisionMode ?? "solid";
+    }
+    // The native flush resolves the actor's live model. An intervening model
+    // replacement must not resurrect geometry captured during preparation.
+    const liveGeometry =
+      spec.mode !== "decal" && data.geometry === mesh.geometry;
+    if (liveGeometry) this.rewrite(mesh, data);
+    this.record(
+      {
+        actor: mesh,
+        spec,
+        mode: spec.mode,
+        level,
+        affectedFaceIndices: data.faces.flatMap((f, i) =>
+          f.patch === patchId ? [i] : [],
+        ),
+        geometryChanged: liveGeometry,
+        requiresRebuild: liveGeometry,
+        collisionMode:
+          spec.mode === "decal" ? undefined : authored.collisionMode,
+        connotations: authored.connotations,
+        connotationRepeats: spec.levels
+          .slice(reachedTier, level)
+          .filter((l) => !(l.flags & 1) || level - reachedTier === 1).length,
+        decal: patch.decal,
+      },
+      contact,
+      out,
+      spec.mode !== "decal",
+    );
   }
 }

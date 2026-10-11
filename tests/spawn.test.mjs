@@ -21,6 +21,7 @@ import {
   startHullIntersectsSurface,
 } from "../src/physics/spawn.ts";
 import { SafeCarHistory } from "../src/physics/recovery.ts";
+import { NativeCrashRecord } from "../src/physics/crash-record.ts";
 import {
   applyVehicleForces,
   createMotionContext,
@@ -77,6 +78,7 @@ function synthetic(position = v(), heading = 0) {
     hulls: [buildBoxHull(v(-0.18, 0.04, -0.3), v(0.18, 0.17, 0.3))],
     poseEpoch: 0,
     recoveryHistory: new SafeCarHistory(state),
+    crashRecord: new NativeCrashRecord(),
   };
 }
 function assertClear(car, world) {

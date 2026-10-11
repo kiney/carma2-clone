@@ -6,6 +6,7 @@ import { decodeText } from "../src/formats.ts";
 import {
   parsePedAwards,
   parseRaceAwards,
+  parseCrashDamageAwards,
   PedAwardCounter,
   wastedCarCredits,
 } from "../src/race-awards.ts";
@@ -74,7 +75,30 @@ test("installed stock and Advanced GENERAL tables retain source reward triplets"
     const bytes = await assets.read(path);
     assert.ok(bytes, `installed GENERAL exists: ${path}`);
     assert.deepEqual(parseRaceAwards(decodeText(bytes)), expected, path);
+    assert.deepEqual(
+      parseCrashDamageAwards(decodeText(bytes)),
+      {
+        creditsPerDamage: [15, 13, 11],
+        secondsPerDamage: [1, 0.75, 0.5],
+      },
+      path,
+    );
   }
+});
+
+test("damage award tables accept fractional authored rates and reject malformed input", () => {
+  const text =
+    "// Seconds per unit car damage for each skill level\n1,.75,.5\n15,13,11 // Credits per unit car damage for each skill level";
+  assert.deepEqual(parseCrashDamageAwards(text), {
+    creditsPerDamage: [15, 13, 11],
+    secondsPerDamage: [1, 0.75, 0.5],
+  });
+  assert.throws(() => parseCrashDamageAwards(""), /missing damage award/);
+  for (const rates of ["1,2", "1,nope,3", "-1,2,3", "1e100,2,3"])
+    assert.throws(
+      () => parseCrashDamageAwards(text.replace("1,.75,.5", rates)),
+      /invalid damage award/,
+    );
 });
 
 test("ped award counter includes the 1000ms boundary, caps combo, and resets after a gap", () => {

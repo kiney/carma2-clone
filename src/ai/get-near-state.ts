@@ -1,3 +1,10 @@
+import {
+  NativeFollowLifecycle,
+  NativeObjectiveFollowBridge,
+  type NativeFollowLifecycleHooks,
+  type NativeFollowLifecycleResult,
+  type NativeObjectiveFollowQuery,
+} from "./follow-lifecycle";
 import { Vector3 } from "three";
 import type { TrackPathSection } from "../config";
 import {
@@ -19,6 +26,8 @@ export type NativeGetNearPlayerQuery = Omit<
   actorRow2: Vector3;
   targetPosition: Vector3;
   cheating: boolean;
+  physical?: boolean;
+  followHooks?: NativeFollowLifecycleHooks;
   strength: number;
   /** Packed opponent flags supply the native adjacent-slot read. */
   opponentFlags: number;
@@ -29,6 +38,8 @@ export interface NativeGetNearPlayerResult {
   targetCache: NativeTargetSectionCache;
   route: readonly ProjectedPathSection[];
   follower?: NativePhysicalPathResult;
+  follow?: NativeFollowLifecycleResult;
+  rawStatus?: 0 | 1 | 2;
 }
 
 function acquisitionQuery(query: NativeGetNearPlayerQuery, force: boolean) {
@@ -47,7 +58,7 @@ function acquisitionQuery(query: NativeGetNearPlayerQuery, force: boolean) {
 
 function physicalQuery(
   query: NativeGetNearPlayerQuery,
-): NativePhysicalPathQuery {
+): NativeObjectiveFollowQuery {
   return {
     position: query.position,
     velocity: query.velocity,
@@ -62,22 +73,25 @@ function physicalQuery(
     neverStruggle: false,
     pursuit: false,
     currentCurvature: query.currentCurvature,
+    cheating: query.cheating,
+    physical: query.physical,
+    followHooks: query.followHooks,
   };
 }
 
 /** Regular-opponent ProcessGetNearPlayer coordinator around the independently
- * reconstructed acquisition and physical-follower components.
+ * reconstructed acquisition and shared Follow lifecycle.
  *
  * The caller owns the player-shared target cache, packed opponent flags,
- * objective dispatch, physics force application, and any cheaty follower.
- * Cheaty following is not implemented by this coordinator.
- * `onPathEnd` is for an explicit native result-1 notification; this physical
- * follower never infers path end from distance or route geometry. */
+ * objective dispatch and physical/nonphysical movement hooks.
+ * Result1 comes from cheaty following or an explicit `onPathEnd` notification;
+ * physical following never infers path end from distance or route geometry. */
 export class NativeGetNearPlayerState {
   private readonly acquisition: NativeTargetAcquisition;
   private readonly random: () => number;
   private followSlot = 0;
   private started = false;
+  private readonly follower: NativeObjectiveFollowBridge;
 
   constructor(
     private readonly nodes: readonly Vector3[],
@@ -85,10 +99,11 @@ export class NativeGetNearPlayerState {
     /** Per-opponent backing shared with complete-race and pursuit objectives. */
     private readonly route: NativeProjectedRoute,
     /** Per-opponent Follow record shared across objective transitions. */
-    private readonly follower: NativePhysicalPathFollower,
+    follower: NativePhysicalPathFollower | NativeFollowLifecycle,
     random = Math.random,
     acquisition?: NativeTargetAcquisition,
   ) {
+    this.follower = new NativeObjectiveFollowBridge(follower);
     this.acquisition =
       acquisition ?? new NativeTargetAcquisition(nodes, sections);
     this.random = random;
@@ -116,7 +131,7 @@ export class NativeGetNearPlayerState {
       targetCache,
       this.random,
     );
-    this.follower.start(query.nowMs, 0);
+    this.follower.start(physicalQuery(query), 0);
     this.followSlot = 0;
     this.started = true;
     return {
@@ -126,23 +141,18 @@ export class NativeGetNearPlayerState {
     };
   }
 
-  /** Run the regular physical GetNearPlayer branch. Native result 2 requests
-   * PursuePlayer; result 1 is handled only by the explicit onPathEnd method. */
+  /** Native result2 requests PursuePlayer; result1 reacquires and restarts Follow. */
   run(
     query: NativeGetNearPlayerQuery,
     targetCache: NativeTargetSectionCache,
   ): NativeGetNearPlayerResult {
     if (!this.started) throw new Error("Get-near-player state has not started");
-    if (query.cheating)
-      throw new Error(
-        "Cheaty following is not implemented by this coordinator",
-      );
 
     // The installed outer freeze dispatcher prevents objective advancement.
     // Preserve the cursor and route if this adapter is nevertheless called in
     // that state; the follower emits the native braking force without stepping.
     if (Math.fround(query.factor) === 0) {
-      const follower = this.follower.run(
+      const result = this.follower.run(
         this.nodes,
         this.sections,
         this.route.entries,
@@ -153,7 +163,7 @@ export class NativeGetNearPlayerState {
         transition: "continue",
         targetCache: { ...targetCache },
         route: this.route.entries,
-        follower,
+        ...result,
       };
     }
 
@@ -174,19 +184,21 @@ export class NativeGetNearPlayerState {
       );
     }
 
-    const follower = this.follower.run(
+    const result = this.follower.run(
       this.nodes,
       this.sections,
       this.route.entries,
       physicalQuery(query),
       this.random,
     );
-    this.followSlot = follower.geometry.sectionSlot;
+    this.followSlot = result.sectionSlot;
+    if (result.rawStatus === 1)
+      return { ...this.onPathEnd(query, updatedCache), ...result };
     return {
-      transition: follower.kind === "given-up" ? "pursue" : "continue",
+      transition: result.rawStatus === 2 ? "pursue" : "continue",
       targetCache: updatedCache,
       route: this.route.entries,
-      follower,
+      ...result,
     };
   }
 
@@ -206,7 +218,15 @@ export class NativeGetNearPlayerState {
       targetCache,
       this.random,
     );
-    this.follower.start(query.nowMs, 0);
+    const followQuery = physicalQuery(query);
+    // The legacy physical adapter receives an external end notification;
+    // its external movement owner retains responsibility for mode changes.
+    this.follower.start(
+      this.follower.supportsModeTransitions
+        ? followQuery
+        : { ...followQuery, cheating: false, physical: true },
+      0,
+    );
     this.followSlot = 0;
     return {
       transition: "restarted",

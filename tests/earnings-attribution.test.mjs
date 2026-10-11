@@ -205,6 +205,7 @@ test("already-wasted cars keep their original culprit when hit by the player", a
   const player = await originalEagle(t, true);
   if (!player) return;
   target.damage.componentLevels[0] = 99;
+  target.knackered = true;
   target.wastedByPlayer = false;
   const simulation = new VehicleSimulation({}, new Group());
   simulation.crashClock = () => 1000;

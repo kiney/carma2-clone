@@ -1,3 +1,10 @@
+import {
+  NativeFollowLifecycle,
+  NativeObjectiveFollowBridge,
+  type NativeFollowLifecycleHooks,
+  type NativeFollowLifecycleResult,
+  type NativeObjectiveFollowQuery,
+} from "./follow-lifecycle";
 import { Vector3 } from "three";
 import type { TrackPathSection } from "../config";
 import { findNativeTrailSection } from "./trail-nearest";
@@ -29,8 +36,11 @@ export interface NativePursuitQuery
   grudge: number;
   personality: number;
   playerInView: boolean;
-  physical: boolean;
   cheating: boolean;
+  physical?: boolean;
+  followHooks?: NativeFollowLifecycleHooks;
+  /** Bind local route slots to the active direct/trail virtual section IDs. */
+  followHooksForView?: (view: NativePathView) => NativeFollowLifecycleHooks;
   /** Explicit result1 notification; physical follower does not infer arrival. */
   pathEnded: boolean;
 }
@@ -51,6 +61,8 @@ export interface NativePursuitResult {
   snapshot: NativePursuitSnapshot;
   view?: NativePathView;
   follower?: NativePhysicalPathResult;
+  follow?: NativeFollowLifecycleResult;
+  rawStatus?: 0 | 1 | 2;
   forces?: { curvature: number; accForce: number; brakeForce: number };
 }
 
@@ -65,7 +77,7 @@ function time(value: number): void {
 
 /** Independent installed ProcessPursueAndTwat4aaf30 physical dispatcher.
  * The caller owns the shared follower, trail recorder and objective changes.
- * Cheating/rematerialization require the separate native coordinator. */
+ * The shared Follow lifecycle handles physical/cheaty dispatch and placement. */
 export class NativePursuitState {
   private data: NativePursuitSnapshot = {
     state: 0,
@@ -79,7 +91,10 @@ export class NativePursuitState {
   };
   private initialized = false;
 
-  constructor(private readonly follower: NativePhysicalPathFollower) {}
+  private readonly follower: NativeObjectiveFollowBridge;
+  constructor(follower: NativePhysicalPathFollower | NativeFollowLifecycle) {
+    this.follower = new NativeObjectiveFollowBridge(follower);
+  }
 
   get snapshot(): NativePursuitSnapshot {
     return { ...this.data };
@@ -123,9 +138,12 @@ export class NativePursuitState {
   ): NativePursuitResult {
     if (!this.initialized) throw new Error("Native pursuit has not started");
     time(query.nowMs);
-    if (!query.physical || query.cheating)
+    if (
+      !this.follower.supportsModeTransitions &&
+      (query.cheating || query.physical === false)
+    )
       throw new Error(
-        "Native nonphysical pursuit requires the cheating coordinator",
+        "Native nonphysical pursuit requires NativeFollowLifecycle",
       );
     if (Math.fround(query.factor) === 0)
       throw new Error("Native frozen opponents must bypass pursuit dispatch");
@@ -184,7 +202,17 @@ export class NativePursuitState {
           if (this.data.state !== 2) {
             this.data.state = 2;
             this.data.currentSection = 10000;
-            this.follower.start(now, 0);
+            const prediction = nativePursuitPrediction(
+              query.position,
+              query.targetPosition,
+              query.velocity,
+              query.targetVelocity,
+            );
+            const view = NativePathView.direct(
+              prediction.start,
+              prediction.finish,
+            );
+            this.follower.start(this.followQuery(query, view, true, false), 0);
           }
         } else {
           if (query.targetTrail.length < 2)
@@ -244,38 +272,41 @@ export class NativePursuitState {
           )
             return this.result("get-near-player");
           this.data.currentSection = nearest.section;
-          this.follower.start(now, nearest.sectionSlot);
+          this.follower.start(
+            this.followQuery(query, view, false, false),
+            nearest.sectionSlot,
+          );
         }
       }
     } else
       throw new Error("Native pursuit classification did not select a path");
-    const follower = this.follower.run(
+    const result = this.follower.run(
       view.nodes,
       view.sections,
       view.route,
-      {
-        ...query,
-        pursuit: true,
-        ignoreEnd: this.data.state === 2,
-        neverStruggle,
-      },
+      this.followQuery(query, view, this.data.state === 2, neverStruggle),
       random,
     );
-    this.data.currentSection = view.nativeId(follower.geometry.sectionSlot);
+    this.data.currentSection =
+      result.sectionSlot < 0 ? -1 : view.nativeId(result.sectionSlot);
     if (
       this.data.state === 1 &&
-      (follower.kind === "given-up" || query.pathEnded)
+      (result.rawStatus === 1 || result.rawStatus === 2 || query.pathEnded)
     )
-      return { ...this.result("get-near-player"), view, follower };
+      return { ...this.result("get-near-player"), view, ...result };
     return {
       ...this.result("driving"),
       view,
-      follower,
-      forces: {
-        curvature: follower.curvature,
-        accForce: follower.accForce,
-        brakeForce: follower.brakeForce,
-      },
+      ...result,
+      ...(result.follower
+        ? {
+            forces: {
+              curvature: result.follower.curvature,
+              accForce: result.follower.accForce,
+              brakeForce: result.follower.brakeForce,
+            },
+          }
+        : {}),
     };
   }
 
@@ -297,8 +328,27 @@ export class NativePursuitState {
     );
     if (!nearest || nearest.distance > 20) return false;
     this.data.currentSection = nearest.section;
-    this.follower.start(now, nearest.sectionSlot);
+    this.follower.start(
+      this.followQuery(query, view, false, false),
+      nearest.sectionSlot,
+    );
     return true;
+  }
+
+  private followQuery(
+    query: NativePursuitQuery,
+    view: NativePathView,
+    ignoreEnd: boolean,
+    neverStruggle: boolean,
+  ): NativeObjectiveFollowQuery {
+    return {
+      ...query,
+      pursuit: true,
+      ignoreEnd,
+      neverStruggle,
+      routeCapacity: view.kind === "trail" ? 24 : 12,
+      followHooks: query.followHooksForView?.(view) ?? query.followHooks,
+    };
   }
 
   private visible(from: Vector3, to: Vector3, ray: NativePursuitRay): boolean {

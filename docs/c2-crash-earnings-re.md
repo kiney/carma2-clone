@@ -1,7 +1,8 @@
 # Crash earnings: verified selection and live integration
 
 Evidence: read-only installed HW, hashes in the physics notes; rec2 is a symbol
-map. Installed `DoCrashEarnings` is0x440550. The browser implements base waste awards and the offline pair selector below
+map. Installed `DoCrashEarnings` is0x440550. The browser implements base waste
+and damage awards, component redistribution and the offline pair selector below
 in the ordered damage dispatcher. Native row grouping and non-car ownership
 are integrated. Remaining primitive/vector precision, AI reaction binding and
 secondary reward branches are still RAC-04/AI-01 work;
@@ -128,8 +129,67 @@ mines and free parts have separate explicit ownership stores and can overwrite.
 Final reward requires new wasting, local-human attacker and no prior award;
 final-goal completion occurs before ordinary EarnCredits/AddTime. Front/front
 speeds>0.001 and direction dot<-0.7 set a separate head-on multiplier0x4411e1,
-which does not change pair selection. Damage/rolling award branches remain
-additional RAC-04 work.
+which does not change pair selection. Damage awards are bound as described
+below; stunt consumers and global earned-credit multiplication remain RAC-04.
+
+## Component redistribution and damage awards
+
+Installed0x440ce5–440d68 runs after the crash-reaction callback, before the
+local-human award guard. For each increasing victim component:
+`current=min(99,trunc(last+2*(current-last)))`; sum resulting `current-last`.
+For each increasing attacker component:
+`current=max(0,trunc(last+.1*(current-last)))`. Decreases and equalities are
+untouched. This changes functional damage, not just credits. Original
+`RecordLastDamage` copies all twelve current levels into their baselines every
+outer frame (0x43f8ef–f8); unpaid damage does not carry between outer frames.
+Full repair zeroes both arrays. Native reaction observes the raw components
+and accumulator before redistribution.
+
+Initial component programs call CheckDamage0x43f620 before physical crush.
+Wasting is persistent even if attacker attenuation then lowers its levels.
+The additional post-redistribution check0x440df1 is past the human guard:
+ordinary AI selections redistribute but do not immediately check wasting.
+The live adapter preserves this distinction until a later native damage-check
+boundary, including eligible filtered mine increments whose small finishing
+increment is discarded. Wasting/completion dispatch precedes ordinary awards.
+
+Damage award equations at0x440fd2–4410e4 use the original GENERAL tables:
+`damage=trunc(componentDelta*(double(.7)/F32(softness)))`;
+`rawCredits=100*trunc((F32(creditsRate)*F32(damage)*min(multiplier,8)+F32(50))*F32(.01))`;
+`seconds=min(5*trunc((F32(secondsRate)*F32(damage)+2.5)*.2),90)`.
+Credits are capped at2000 before EarnCredits. A knackered victim gets no
+additional damage award. A nonknackered zero-credit path skips both time and
+baseline advancement; otherwise the victim baseline advances within the frame.
+Immunity bypasses the damage-award branch.
+
+The pair multiplier starts1. Original normalized A/B front sectors, both
+pre-speeds strictly above F32(.001), and their stored direction dot strictly
+below F32(-.7) set2 (0x4411d1–441224). Victim **body-local** omega exceeding
+4/6/4 on X/Y/Z doubles it again (0x440f19–4d), without changing awarded time.
+Direction is a persistent Float32 cache: above the clamped speed epsilon,
+normalize full world velocity with a live length/reciprocal; otherwise retain
+the previous hemisphere along current actor K. The viewed-car override uses
+the starting velocity of the last40ms substep, copied by APTCPreCollision
+0x4158b0, and live interpolation at0x4167c1–4168d8. The browser binds both
+cache paths and snapshots direction before the next outer frame.
+
+The loaded rolling-credit/time tables have no direct references beyond their
+load sites in the checked installed executable; do not invent a standalone
+rolling reward from those tables. Cunning-stunt consumers remain separate.
+Global earned-credit multiplication belongs to Drink Driving action48:
+SetPissed0x4df040 stores integer parameter0, ResetPissed0x4df120 stores0.
+EarnCredits2 at0x44b960 applies signed wrapping IMUL when nonzero; zero means
+identity. Completion and remaining-time payouts add directly, bypassing this
+global. Action48's control reversal/intoxication and the live global earned-
+credit path remain unimplemented; these are explicit RAC-04/PUP-12 gaps.
+
+Tests cover numerical component baselines, attenuation, persistent wasting,
+local omega on a rolled car, thresholds, caps and callback order. Production
+Chromium's W-driven original green Eagle/Diablo head-on and oblique cases
+produce localized crush, component changes, normal damage credits/time and
+reverse escape with no fatal console/network/WebGL errors. Chrome DevTools
+MCP is unavailable in this session; the repository's actual Chromium harness
+provides the runtime evidence, not a claim that MCP was exercised.
 
 ## Regular opponent crash reactions
 
