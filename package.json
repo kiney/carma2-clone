@@ -36,7 +36,10 @@
     "test:combat-powerups": "npm run build && node tests/browser-combat-powerups.mjs",
     "test:native-rewards": "npm run build && node tests/browser-native-rewards.mjs",
     "test:skidmarks": "npm run build && node tests/browser-skidmarks.mjs",
-    "test:crash-effects": "npm run build && node tests/browser-crash-effects.mjs"
+    "test:crash-effects": "npm run build && node tests/browser-crash-effects.mjs",
+    "test:component-smoke": "npm run build && node tests/browser-component-smoke.mjs",
+    "test:ghosts": "npm run build && node tests/browser-ghosts.mjs",
+    "test:noncar-debris": "npm run build && node tests/browser-noncar-debris.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

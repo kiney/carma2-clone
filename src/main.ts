@@ -108,6 +108,15 @@ import { WorldDestruction, type WorldSmashContact } from "./world-destruction";
 import { chooseSmashAudio, nativeSmashStartingVelocity } from "./smash-effects";
 import { ShardRuntime } from "./smash-shards";
 import { loadGhostAssets, type GhostAssetSet } from "./ghost-assets";
+import {
+  loadNonCarDebrisAssets,
+  type NonCarDebrisAssetSet,
+} from "./noncar-debris-assets";
+import {
+  NativeNonCarDebrisRuntime,
+  type NativeNonCarBodySlot,
+} from "./noncar-debris";
+import type { NonCarBody } from "./physics/noncar-body";
 import type { SmashShrapnel } from "./world-smash";
 import { nativeDirectSmashSeed, prepareNativeGhostFrame } from "./ghost-frame";
 import { MissionVariables } from "./mission-variables";
@@ -239,6 +248,8 @@ let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
 let shards: ShardRuntime | undefined;
 let ghostTemplateLibrary: THREE.Group | undefined;
+let noncarDebris: NativeNonCarDebrisRuntime | undefined;
+let noncarDebrisActors: THREE.Group | undefined;
 let smoke: SmokeSystem | undefined;
 const tyreEffects = new NativeTyreEffects<SimulatedCar>({
   isPlaying: (tag) => audio.isSoundPlaying(tag),
@@ -302,6 +313,9 @@ const debug = {
   audio,
   get shards() {
     return shards;
+  },
+  get noncarDebris() {
+    return noncarDebris;
   },
   get opponentFleet() {
     return opponentFleet;
@@ -391,6 +405,10 @@ const debug = {
   },
   get scene() {
     return scene;
+  },
+  /** Diagnostic captures use the same renderer; no second WebGL context. */
+  get renderer() {
+    return renderer;
   },
   get collision() {
     return collision;
@@ -882,6 +900,7 @@ async function loadRace() {
         }
       },
     );
+    const originalNonCarActorCount = nonCarActors(world.group).length;
     const loadedGrooves = new WorldGrooveRuntime(world.group, trackText);
     const movingWorld = [...loadedGrooves.actors]
       .filter((actor) => !noncarBodies.some((body) => body.actor === actor))
@@ -915,6 +934,32 @@ async function loadRace() {
       ghostAssets.set(worldShrapnelSpecs[index], entry);
       assets.warnings.push(...entry.diagnostics);
     }
+    const loadedNonCarDebrisAssets = await loadNonCarDebrisAssets(
+      worldShrapnelSpecs,
+      async (name) => {
+        const path = assets.resolve(`${dirOf(currentTrack)}/${name}`);
+        if (!path)
+          throw new Error(
+            `Missing noncar debris ACT '${name}' in ${dirOf(currentTrack)}`,
+          );
+        const actors = await world.loadActorFile(path);
+        newGhostLibrary.add(actors);
+        return actors;
+      },
+      async (name) => {
+        const path =
+          assets.resolve(`${dataRoot}/NONCARS/${name}`) ??
+          assets.resolve(`data/NONCARS/${name}`);
+        if (!path) throw new Error(`Missing noncar debris mechanics '${name}'`);
+        return parseNonCarMechanics(await assets.text(path), path);
+      },
+    );
+    const noncarDebrisAssets = new Map<SmashShrapnel, NonCarDebrisAssetSet>();
+    for (const [index, entry] of loadedNonCarDebrisAssets) {
+      noncarDebrisAssets.set(worldShrapnelSpecs[index], entry);
+      assets.warnings.push(...entry.diagnostics);
+    }
+    let loadedDebrisRuntime: NativeNonCarDebrisRuntime | undefined;
     const loadedDestruction = new WorldDestruction(
       world.group,
       worldSmashSpecs,
@@ -985,6 +1030,28 @@ async function loadRace() {
                     ),
                   visible,
                 });
+              } else if (spec.kind === "noncars") {
+                const templates = noncarDebrisAssets.get(spec);
+                if (!templates?.templates.length || !loadedDebrisRuntime)
+                  continue;
+                if (!contact.point) {
+                  assets.warnings.push(
+                    "Noncar debris requires the native smash point",
+                  );
+                  continue;
+                }
+                contact.actor.updateWorldMatrix(true, false);
+                const { frame } = prepareNativeGhostFrame(
+                  contact.ghostQuad ?? null,
+                  contact.actor.matrixWorld,
+                );
+                loadedDebrisRuntime.spawn(spec, templates, {
+                  frame,
+                  point: contact.point.clone(),
+                  impacteeVelocity:
+                    contact.smashStartingVelocity?.clone() ??
+                    new THREE.Vector3(0, 1, 0),
+                });
               }
           }),
       },
@@ -1014,6 +1081,9 @@ async function loadRace() {
     noncarRenderBatch?.dispose();
     for (const body of simulation?.cars ?? []) tyreEffects.stopOwner(body);
     simulation?.dispose();
+    noncarDebrisActors?.removeFromParent();
+    noncarDebrisActors?.clear();
+    noncarDebris = undefined;
     explosions?.dispose();
     shards?.dispose();
     if (ghostTemplateLibrary) disposeGroup(ghostTemplateLibrary);
@@ -1370,6 +1440,80 @@ async function loadRace() {
       );
       simulation.addNonCar(body);
     }
+    const debrisSimulation = simulation;
+    const debrisActorGroup = new THREE.Group();
+    debrisActorGroup.name = "C2 physical noncar debris";
+    scene.add(debrisActorGroup);
+    noncarDebrisActors = debrisActorGroup;
+    let noncarActorCount = originalNonCarActorCount;
+    const bodySlots = new Map<string, NonCarBody>();
+    const assignedBodies = new Set<NonCarBody>();
+    const slotKey = (slot: NativeNonCarBodySlot) =>
+      slot.kind === "dedicated"
+        ? `dedicated:${slot.mechanicsIndex}`
+        : `extra:${slot.index}`;
+    // Existing props still have private browser bodies. First observation in
+    // registration order is a provisional bridge, not original PHIL allocation
+    // order. Native driver/ec admission and reclaim remain lifecycle gaps.
+    const retainPulledWorldBodies = () => {
+      for (const body of debrisSimulation.noncars) {
+        if (assignedBodies.has(body) || !body.actor.userData.noncarPulled)
+          continue;
+        let slot: NativeNonCarBodySlot | undefined = {
+          kind: "dedicated",
+          mechanicsIndex: body.mechanics.index,
+        };
+        if (bodySlots.has(slotKey(slot))) {
+          slot = undefined;
+          for (let index = 0; index < 40; index++) {
+            const candidate: NativeNonCarBodySlot = { kind: "extra", index };
+            if (!bodySlots.has(slotKey(candidate))) {
+              slot = candidate;
+              break;
+            }
+          }
+        }
+        if (!slot) {
+          assets.warnings.push(
+            "Native noncar physical slots exhausted by world props",
+          );
+          continue;
+        }
+        bodySlots.set(slotKey(slot), body);
+        assignedBodies.add(body);
+      }
+    };
+    loadedDebrisRuntime = new NativeNonCarDebrisRuntime({
+      originalActorCount: originalNonCarActorCount,
+      readActorCount: () => noncarActorCount,
+      addActor: (actor) => {
+        debrisActorGroup.add(actor);
+        noncarActorCount++;
+      },
+      removeActor: (actor) => {
+        actor.removeFromParent();
+        noncarActorCount--;
+      },
+      isBodySlotOccupied: (slot) => {
+        retainPulledWorldBodies();
+        return bodySlots.has(slotKey(slot));
+      },
+      registerBody: (body, slot) => {
+        bodySlots.set(slotKey(slot), body);
+        assignedBodies.add(body);
+        body.actor.userData.noncarPulled = true;
+        body.actor.userData.nativeDebrisSlot = slotKey(slot);
+        registerShrapnelMaterials(
+          body.actor,
+          body.mechanics.shrapnelMaterials,
+          5,
+        );
+        debrisSimulation.addNonCar(body);
+      },
+      addSmokeColumn: (source) => void smoke?.spawnColumn(source),
+      diagnose: (text) => assets.warnings.push(text),
+    });
+    noncarDebris = loadedDebrisRuntime;
     noncarRenderBatch = new NonCarRenderBatch(noncarBodies, scene);
     simulation.onRepair = (body, cost, finished) => {
       if (body.human && finished) repairControl.autoRepair = false;

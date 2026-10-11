@@ -125,6 +125,17 @@ Run `npm test` for parsers, assets and deterministic motion/contact/crush/compon
 
 `npm run test:crash-matrix` checks four Stock/Advanced cars with real driving input, severe crash chains, simultaneous Eagle bumper joints, native Porker2 splitting and repair. Controlled impact setups are recorded separately from driven collisions. Reports and screenshots stay in ignored `artifacts/`.
 
+`npm run test:component-smoke` drives original Eagle/Buggy collisions and checks
+component smoke, wasting order and held/full repair. Its report distinguishes
+unreached smoke tiers. `npm run test:ghosts` checks original Stock/Advanced
+Newcity and Airport ghost fragments, borrowed ACT geometry/textures, motion,
+group expiry and material replacement. These ghost contacts are controlled
+fixtures, separately labelled from driven crashes. `npm run test:noncar-debris`
+checks authored Stock/Advanced city pump and Carrier gun debris: original
+mechanics, collision hulls, physical motion, fire columns and race cleanup.
+Native slot admission/reclaim and positive-material preparation order still
+have documented integration gaps.
+
 ## Asset and license notes
 
 Use an installation you are entitled to use. Assets are read from that directory at runtime and are not copied into this repository or included in its license. Independently written project code is MIT licensed; see [LICENSE](LICENSE). The runtime depends on Three.js (MIT), UTIF (MIT), and UTIF's dependency pako (MIT and Zlib). UTIF also embeds a PDF.js/jpgjs JPEG decoder (Apache-2.0). Their copyright notices and license texts are included in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).
