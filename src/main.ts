@@ -69,6 +69,8 @@ import { SmokeSystem, type SmokeRigid } from "./smoke";
 import type { SmokeCar } from "./smoke";
 import { prepareCarSmokeSampler, parseNativeDriverZOffset } from "./car-smoke";
 import { createNativeWreckColumns } from "./wreck-smoke";
+import { initializeNativeFireVertices, parseCarFireVertices } from "./car-fire";
+import { dispatchNativeDamageSmoke } from "./component-smoke";
 import { NativeTyreEffects } from "./physics/tyre-smoke";
 import { SkidMarkSystem } from "./skidmarks";
 import { SkidMaterialLibrary } from "./skid-materials";
@@ -105,6 +107,9 @@ import { NonCarRenderBatch } from "./noncar-render";
 import { WorldDestruction, type WorldSmashContact } from "./world-destruction";
 import { chooseSmashAudio, nativeSmashStartingVelocity } from "./smash-effects";
 import { ShardRuntime } from "./smash-shards";
+import { loadGhostAssets, type GhostAssetSet } from "./ghost-assets";
+import type { SmashShrapnel } from "./world-smash";
+import { nativeDirectSmashSeed, prepareNativeGhostFrame } from "./ghost-frame";
 import { MissionVariables } from "./mission-variables";
 import { RacePayout } from "./race-payout";
 import {
@@ -233,6 +238,7 @@ let noncarRenderBatch: NonCarRenderBatch | undefined;
 let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
 let shards: ShardRuntime | undefined;
+let ghostTemplateLibrary: THREE.Group | undefined;
 let smoke: SmokeSystem | undefined;
 const tyreEffects = new NativeTyreEffects<SimulatedCar>({
   isPlaying: (tag) => audio.isSoundPlaying(tag),
@@ -246,7 +252,11 @@ const tyreEffects = new NativeTyreEffects<SimulatedCar>({
 });
 const carSmokeSources = new WeakMap<
   SimulatedCar,
-  { car: SmokeCar; sample: ReturnType<typeof prepareCarSmokeSampler>["sample"] }
+  {
+    car: SmokeCar;
+    fireVertices?: Uint16Array;
+    sample: ReturnType<typeof prepareCarSmokeSampler>["sample"];
+  }
 >();
 let skidmarks: SkidMarkSystem | undefined;
 let skidMaterials: SkidMaterialLibrary | undefined;
@@ -581,7 +591,15 @@ function registerCarSmoke(body: SimulatedCar, carText: string) {
       return !!plane && plane.normal.dot(local) - plane.constant < 0;
     },
   };
-  carSmokeSources.set(body, { car, sample: sampler.sample });
+  const authoredFire = parseCarFireVertices(carText);
+  if (!authoredFire)
+    assets.warnings.push(
+      `Original component smoke vertex table missing: ${body.group.name}`,
+    );
+  const fireVertices = authoredFire
+    ? initializeNativeFireVertices(authoredFire, sampler.sourceVertexIndices)
+    : undefined;
+  carSmokeSources.set(body, { car, fireVertices, sample: sampler.sample });
 }
 
 async function initializeShrapnel() {
@@ -871,9 +889,35 @@ async function loadRace() {
         actor.userData.dynamicBody = true;
         return createMovingWorldBody(actor);
       });
+    const worldSmashSpecs = parseTrackSmashables(trackText, currentTrack);
+    const worldShrapnelSpecs = worldSmashSpecs.flatMap((spec) =>
+      [
+        spec.connotations,
+        ...spec.levels.map((level) => level.connotations),
+      ].flatMap((connotations) => connotations?.shrapnel ?? []),
+    );
+    const newGhostLibrary = new THREE.Group();
+    const loadedGhostAssets = await loadGhostAssets(
+      worldShrapnelSpecs,
+      async (name) => {
+        const path = assets.resolve(`${dirOf(currentTrack)}/${name}`);
+        if (!path)
+          throw new Error(
+            `Missing ghost ACT '${name}' in ${dirOf(currentTrack)}`,
+          );
+        const actors = await world.loadActorFile(path);
+        newGhostLibrary.add(actors);
+        return actors;
+      },
+    );
+    const ghostAssets = new Map<SmashShrapnel, GhostAssetSet>();
+    for (const [index, entry] of loadedGhostAssets) {
+      ghostAssets.set(worldShrapnelSpecs[index], entry);
+      assets.warnings.push(...entry.diagnostics);
+    }
     const loadedDestruction = new WorldDestruction(
       world.group,
-      parseTrackSmashables(trackText, currentTrack),
+      worldSmashSpecs,
       {
         models: world.models,
         textures: world.textures,
@@ -884,6 +928,64 @@ async function loadRace() {
             for (const spec of data.shrapnel)
               if (spec.kind === "abstract")
                 spawnAbstractShrapnel(spec, contact, world.materials);
+              else if (spec.kind === "ghostparts") {
+                const templates = ghostAssets.get(spec);
+                if (!templates?.templates.length || !shards) continue;
+                if (!contact.point) {
+                  assets.warnings.push(
+                    "Ghost debris requires the native smash point",
+                  );
+                  continue;
+                }
+                camera.updateWorldMatrix(true, false);
+                const cameraMatrix = camera.matrixWorld.elements;
+                const visible = nativePointVisible(
+                  contact.point,
+                  Math.fround(camera.far * camera.far),
+                  {
+                    camera: {
+                      position: new THREE.Vector3(
+                        cameraMatrix[12],
+                        cameraMatrix[13],
+                        cameraMatrix[14],
+                      ),
+                      backwards: new THREE.Vector3(
+                        cameraMatrix[8],
+                        cameraMatrix[9],
+                        cameraMatrix[10],
+                      ),
+                      yon: camera.far,
+                    },
+                  },
+                );
+                contact.actor.updateWorldMatrix(true, false);
+                const { frame, tinyFace } = prepareNativeGhostFrame(
+                  contact.ghostQuad ?? null,
+                  contact.actor.matrixWorld,
+                  [templates.boundsDX, templates.boundsDY, 0],
+                );
+                shards.spawnGhosts(spec, {
+                  templates: templates.templates.map((template) => ({
+                    name: template.name,
+                    matrix: template.matrix,
+                    geometry: template.model.geometry,
+                    material: template.model.material,
+                  })),
+                  frame,
+                  tinyFace,
+                  point: contact.point.clone(),
+                  impacteeVelocity:
+                    contact.smashStartingVelocity?.clone() ??
+                    new THREE.Vector3(0, 1, 0),
+                  timeMs: Math.round(contact.timeMs ?? stats.gameTimeMs) >>> 0,
+                  seed:
+                    contact.shrapnelSeed ??
+                    nativeDirectSmashSeed(
+                      contact.effectForce ?? new THREE.Vector3(),
+                    ),
+                  visible,
+                });
+              }
           }),
       },
     );
@@ -914,6 +1016,8 @@ async function loadRace() {
     simulation?.dispose();
     explosions?.dispose();
     shards?.dispose();
+    if (ghostTemplateLibrary) disposeGroup(ghostTemplateLibrary);
+    ghostTemplateLibrary = newGhostLibrary;
     smoke?.dispose();
     skidmarks?.dispose();
     skidMaterials?.dispose();
@@ -950,6 +1054,7 @@ async function loadRace() {
     await smoke.loadTextures();
     shards = new ShardRuntime(scene, world.materials, {
       random: sharedNativeRandom.random,
+      seed: sharedNativeRandom.seed,
       gravity: () => simulation?.gravityMultiplier ?? defaultGravityMultiplier,
     });
     explosions = new ExplosionRuntime(
@@ -1295,6 +1400,69 @@ async function loadRace() {
       const source = carSmokeSources.get(body);
       if (source) smoke?.shortenCarColumns(source.car, 2000);
     };
+    simulation.onStopCarSmoke = simulation.onWetSmoke;
+    simulation.onDamageSmoke = (body) => {
+      const source = carSmokeSources.get(body);
+      dispatchNativeDamageSmoke({
+        driver: body.state.driver ?? (body.human ? 8 : 6),
+        current: body.damage.componentLevels,
+        smokeLast: body.smokeLastComponentLevels,
+        shortenExisting: () => {
+          if (source) smoke?.shortenCarColumns(source.car, 2000);
+        },
+        setSmoke: (component, colour) => {
+          if (!source?.fireVertices || !smoke) return;
+          smoke.spawnComponentColumn({
+            mode: 1,
+            actor: body.group,
+            car: source.car,
+            rigid: {
+              get velocity() {
+                return body.state.velocity;
+              },
+              get omega() {
+                return body.state.angularVelocity;
+              },
+              actor: body.group,
+            },
+            driver: body.state.driver ?? (body.human ? 8 : 6),
+            knackered: body.knackered,
+            volumeGravity: body.specialVolume?.volume?.gravityMultiplier,
+            colour,
+            vertex: source.fireVertices[component],
+            lifetimeMs: 10000000,
+            sampleVertex: source.sample,
+          });
+        },
+      });
+    };
+    simulation.onKnackeredSmoke = (body) => {
+      const source = carSmokeSources.get(body);
+      if (smoke && source)
+        createNativeWreckColumns({
+          networkMode: 0,
+          knackered: body.knackered,
+          volumeGravity: body.specialVolume?.volume?.gravityMultiplier,
+          shortenExisting: (maximum) =>
+            smoke!.shortenCarColumns(source.car, maximum),
+          spawn: (packet) =>
+            smoke!.spawnColumn({
+              ...packet,
+              actor: body.group,
+              car: source.car,
+              rigid: {
+                get velocity() {
+                  return body.state.velocity;
+                },
+                get omega() {
+                  return body.state.angularVelocity;
+                },
+                actor: body.group,
+              },
+              sampleVertex: source.sample,
+            }),
+        });
+    };
     simulation.onWasted = (body) => {
       const rival = rivals.find((r) => r.body === body);
       if (body.human && race) race.awardsClosed = true;
@@ -1321,31 +1489,6 @@ async function loadRace() {
         undefined,
         body.state.orientation,
       );
-      const source = carSmokeSources.get(body);
-      if (smoke && source)
-        createNativeWreckColumns({
-          networkMode: 0,
-          knackered: body.knackered,
-          volumeGravity: body.specialVolume?.volume?.gravityMultiplier,
-          shortenExisting: (maximum) =>
-            smoke!.shortenCarColumns(source.car, maximum),
-          spawn: (packet) =>
-            smoke!.spawnColumn({
-              ...packet,
-              actor: body.group,
-              car: source.car,
-              rigid: {
-                get velocity() {
-                  return body.state.velocity;
-                },
-                get omega() {
-                  return body.state.angularVelocity;
-                },
-                actor: body.group,
-              },
-              sampleVertex: source.sample,
-            }),
-        });
     };
     car.position.copy(start);
     car.quaternion.copy(vehicle.orientation);

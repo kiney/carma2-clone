@@ -3,6 +3,7 @@ import {
   BufferGeometry,
   Float32BufferAttribute,
   Material,
+  Matrix3,
   Matrix4,
   Mesh,
   Object3D,
@@ -19,6 +20,11 @@ import {
 } from "./world-followup";
 import type { WorldActivationContact } from "./world-activation";
 import { createModelGeometry } from "./render-geometry";
+import {
+  captureNativeGhostQuad,
+  type NativeGhostQuad,
+  type NativeGhostTriangle,
+} from "./ghost-frame";
 import { NativeSmashQueue } from "./smash-queue";
 import type { WamSmashQueueContext } from "./damage";
 import {
@@ -56,6 +62,10 @@ export interface WorldSmashContact {
   /** Runtime decal/texture identity scopes its per-level award latch. */
   effectIdentity?: object;
   impacteeTransform?: Matrix4;
+  /** Source UV-ordered MODEL-space quad/normal retained before patch rewrite. */
+  ghostQuad?: NativeGhostQuad;
+  /** Queued native identity XOR sampled game time; direct events use force XOR. */
+  shrapnelSeed?: number;
   point?: Vector3;
   timeMs?: number;
 }
@@ -405,6 +415,8 @@ export class WorldDestruction {
   private ownedTextures = new Set<Texture>();
   private decals = new Set<Mesh>();
   private sharedSmashQueue?: NativeSmashQueue<WamSmashQueueContext>;
+  private nextSmashIdentity = 1;
+  private readonly smashIdentities = new WeakMap<object, number>();
   configureSmashQueue(queue?: NativeSmashQueue<WamSmashQueueContext>): void {
     this.sharedSmashQueue = queue;
   }
@@ -1089,6 +1101,14 @@ export class WorldDestruction {
     if (spec.mode === "decal") {
       if (patch.decal) patch.decal.material = material;
     } else if (!old) this.rewrite(mesh, data);
+    mesh.updateWorldMatrix(true, false);
+    const ghostTriangle = (face: Face): NativeGhostTriangle => {
+      const vertices = face.vertices.map((vertex) => ({
+        position: vertex.position,
+        uv: transformedUv(vertex, face.material),
+      }));
+      return [vertices[0], vertices[1], vertices[2]];
+    };
     const captured: WorldSmashContact = {
       ...contact,
       point: contact.point?.clone(),
@@ -1099,7 +1119,31 @@ export class WorldDestruction {
       ),
       effectIdentity: patch,
       impacteeTransform: contact.impacteeTransform?.clone(),
+      effectForce: contact.effectForce?.clone(),
+      ghostQuad: captureNativeGhostQuad(
+        [ghostTriangle(pair[0]), ghostTriangle(pair[1])],
+        bounds,
+        // Native ModelPickBox applies the actor's upper 3x3 directly. The
+        // face basis remains model-coordinate data, even for nonidentity ACTs.
+        new Triangle(
+          ...(original.vertices.map((v) => v.position) as [
+            Vector3,
+            Vector3,
+            Vector3,
+          ]),
+        )
+          .getNormal(new Vector3())
+          .applyMatrix3(new Matrix3().setFromMatrix4(mesh.matrixWorld)),
+      ),
     };
+    // Native uses the runtime spec pointer. JS objects have no exposed address;
+    // this stable scene identity preserves identity/time seeding without claiming
+    // reproduction of Windows heap placement or its particular random episode.
+    let smashIdentity = this.smashIdentities.get(patch);
+    if (smashIdentity === undefined) {
+      smashIdentity = this.nextSmashIdentity++;
+      this.smashIdentities.set(patch, smashIdentity);
+    }
     const deferred = !!this.sharedSmashQueue;
     const queue =
       this.sharedSmashQueue ?? new NativeSmashQueue<WamSmashQueueContext>();
@@ -1122,7 +1166,11 @@ export class WorldDestruction {
             spec,
             targetTier,
             reachedTier,
-            { ...captured, timeMs },
+            {
+              ...captured,
+              timeMs,
+              shrapnelSeed: (smashIdentity! ^ timeMs) >>> 0,
+            },
             result,
           );
           if (deferred) this.diagnostics.push(...result.diagnostics);

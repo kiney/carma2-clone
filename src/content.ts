@@ -266,6 +266,9 @@ export class Assets {
         0,
         1,
       );
+      // Debris templates need the full authored matrix, including any shear;
+      // later render animation may update the decomposed visual transform.
+      object.userData.c2ActorMatrix = object.matrix.clone();
       object.matrix.decompose(object.position, object.quaternion, object.scale);
       const mat = node.material ?? inheritedMaterial,
         style = node.renderStyle || inheritedStyle;
@@ -290,6 +293,16 @@ export class Assets {
     group.updateMatrixWorld(true);
     return {
       group,
+      /** Additional authored ACTs share this scene's immutable DAT/MAT/PIX
+       * resources. Debris loading must not reload every texture library. */
+      loadActorFile: async (path: string): Promise<THREE.Group> => {
+        const extra = new THREE.Group();
+        extra.name = path.split("/").pop() ?? path;
+        for (const root of parseAct(await this.bytes(path)))
+          extra.add(actor(root));
+        extra.updateMatrixWorld(true);
+        return extra;
+      },
       textures: local,
       models,
       materials,

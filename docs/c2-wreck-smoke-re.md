@@ -36,11 +36,14 @@ wasted transition, not repeatedly from render frames or a global armour bar.
 
 ## Repair and water
 
-StopCarSmoking caps every matching active source's remaining lifetime without
+StopCarSmoking caps every matching owner's remaining lifetime, including
+inactive slots whose native owner record is retained, without
 changing the ring cursor, allocation state or another car's columns.
 StopCarSmokingInstantly writes remaining lifetime zero; the next column pass
 performs retirement. Full repair invokes this before repairing bodywork. Held
-incremental repair is not automatically treated as that full-repair call.
+incremental repair separately copies the component-smoke baseline and calls
+StopCarSmoking at `0x4434f7`, shortening matching columns to 2000 ms. It does not
+use instant retirement. See [component smoke](c2-component-smoke-re.md).
 
 The volume routine repeats its gravity-below-one test on every update, including
 an unchanged volume. If the car has smoke, it shortens those columns to 2000 ms.
@@ -65,7 +68,7 @@ Chromium verifies the ordinary wreck path produces the two authored durations
 and visible flames after impact explosions expire. The browser harness records
 controlled impact placement separately from driven crashes.
 
-This implements the wasted producer and lifecycle, not every component-damage
-smoke tier. Other source producers, native material allocation order for cars
+This implements the wasted producer and lifecycle; the separate component-damage
+tiers are documented above. Other source producers, native material allocation order for cars
 without a NULL group, complete random-consumer chronology and positional audio
 remain tracked separately; this note does not claim full effect parity.

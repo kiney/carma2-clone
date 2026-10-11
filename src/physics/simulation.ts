@@ -1,5 +1,6 @@
 import { CameraContactFrame } from "../camera/contact-frame";
 import { applyWorldPinball } from "./pinball";
+import { nativeCrashSmokeReturn } from "./crash-smoke";
 import { planPhysicsFrameWindow } from "./frame-window";
 import { NativeCarCrushQueue } from "./crush-queue";
 import { NativeSpamQueue } from "./spam-queue";
@@ -208,6 +209,8 @@ export interface BodyVolumeState {
   waterNormal?: Vector3;
 }
 export interface SimulatedCar extends RigidBody {
+  /** Native +4e8, separate from +4e4 crash-earnings baselines. */
+  smokeLastComponentLevels: Uint8Array;
   /** MungeEngineNoise's retained car+13cc world velocity, used next frame. */
   cachedSoundVelocity: Vector3;
   state: SimulatedVehicleState;
@@ -391,6 +394,7 @@ export function createSimulatedCar(
     hull.vertices.map((point) => point.clone()),
   );
   const car: SimulatedCar = {
+    smokeLastComponentLevels: new Uint8Array(12),
     state,
     group,
     mechanics,
@@ -553,9 +557,14 @@ export class VehicleSimulation {
   >();
   /** AI earnings redistribution alone does not invoke native CheckDamage. */
   private readonly deferredCrashWastage = new WeakSet<SimulatedCar>();
+  private readonly wreckSmokeStarted = new WeakSet<SimulatedCar>();
   onWasted?: (car: SimulatedCar) => void;
+  /** CheckDamage's immediate column producer, before crash attribution. */
+  onKnackeredSmoke?: (car: SimulatedCar) => void;
   onFullRepair?: (car: SimulatedCar) => void;
   onWetSmoke?: (car: SimulatedCar) => void;
+  onDamageSmoke?: (car: SimulatedCar) => void;
+  onStopCarSmoke?: (car: SimulatedCar) => void;
   onWorldGeometryChanged?: () => void;
   settings?: UpgradeSettings;
   skill: 0 | 1 | 2 = 0;
@@ -631,7 +640,10 @@ export class VehicleSimulation {
     };
     car.damage.onWastageCheck = () => {
       this.deferredCrashWastage.delete(car);
-      if (car.damage.wasted) car.knackered = true;
+      if (car.damage.wasted) {
+        car.knackered = true;
+        this.startWreckSmoke(car);
+      }
     };
     car.damage.configureDetachmentScheduling(this.detachmentScheduling);
     this.crashCars.set(car.group.uuid, car);
@@ -1717,6 +1729,7 @@ export class VehicleSimulation {
   repair(car: SimulatedCar) {
     this.onFullRepair?.(car);
     car.damage.repair();
+    car.smokeLastComponentLevels.fill(0);
     this.syncStructuralState(car);
     resetMotionSuspension(car.motion);
   }
@@ -1911,6 +1924,7 @@ export class VehicleSimulation {
     for (const car of this.cars) {
       if (!this.isCarPhysicsActive(car)) continue;
       if (car.state.slipping === 0) this.onStopTyreEffects?.(car);
+      car.smokeLastComponentLevels.set(car.damage.componentLevels);
       car.damage.lastComponentLevels.set(car.damage.componentLevels);
       car.crashRecord.beginFrame(
         car.knackered,
@@ -3069,6 +3083,29 @@ export class VehicleSimulation {
         receiver.crashHistory.lastMs = now;
       }
     }
+    // CrashEarnings440530 tests DoCrashEarnings' return value, not whether an
+    // attacker was selected. Snapshot its separate saved-damage channel before
+    // attribution refreshes history and clears the live accumulators.
+    const smokeCar = (car: SimulatedCar) => ({
+      frameKnackered: car.crashRecord.frameKnackered,
+      accumulatorF32: car.crashRecord.accumulator,
+      lastAttackerMs: car.crashHistory.lastMs,
+    });
+    const damageSmoke = nativeCrashSmokeReturn({
+      originalFirst: {
+        driver: this.nativeCrashDriver(first) ?? 0,
+        accumulatorF32: a?.crashRecord.accumulator ?? 0,
+      },
+      originalSecond: second
+        ? {
+            driver: this.nativeCrashDriver(second) ?? 0,
+            accumulatorF32: b?.crashRecord.accumulator ?? 0,
+          }
+        : null,
+      normalizedFirst: smokeCar(receiver),
+      normalizedSecond: a && b ? smokeCar(b) : null,
+      nowMs: now,
+    });
     selectNativeCrashAttribution(
       this.nativeCrashView(receiver),
       a && b ? this.nativeCrashView(b) : null,
@@ -3090,7 +3127,7 @@ export class VehicleSimulation {
         // Offline AI selections redistribute components but skip the additional
         // CheckDamage43f620 at440df1, which is past the local-human guard.
         if (source.human && !target.knackered && target.damage.wasted) {
-          target.knackered = true;
+          target.damage.onWastageCheck?.();
           newlyWasted.add(target);
         }
         if (!source.human && !target.knackered && target.damage.wasted)
@@ -3101,6 +3138,11 @@ export class VehicleSimulation {
         this.awardCrashDamage(source, target, a, b, delta);
       },
     );
+    if (damageSmoke) {
+      // The wrapper retains ORIGINAL argument order after normalization.
+      if (a) this.onDamageSmoke?.(a);
+      if (b) this.onDamageSmoke?.(b);
+    }
     for (const car of [a, b]) {
       if (!car) continue;
       const history = car.crashHistory;
@@ -3151,10 +3193,16 @@ export class VehicleSimulation {
       );
     victim.damage.lastComponentLevels.set(victim.damage.componentLevels);
   }
+  private startWreckSmoke(car: SimulatedCar): void {
+    if (this.wreckSmokeStarted.has(car)) return;
+    this.wreckSmokeStarted.add(car);
+    this.onKnackeredSmoke?.(car);
+  }
   private finishWastage(car: SimulatedCar): void {
     if (car.wastedAt !== undefined) return;
     car.wastedAt = this.elapsed;
     car.knackered = true;
+    this.startWreckSmoke(car);
     this.onWasted?.(car);
   }
   private processNonCarContacts(
@@ -3259,6 +3307,8 @@ export class VehicleSimulation {
             ? skillValue(this.settings.repairCost, { skill: this.skill })
             : 10,
         );
+        car.smokeLastComponentLevels.set(car.damage.componentLevels);
+        this.onStopCarSmoke?.(car);
         car.repairAwaitingShapeSwap =
           repair.bodyworkRepair > 0 && !!(car.damage.pendingShapeSwapFlags & 1);
         this.onRepair?.(

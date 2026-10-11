@@ -312,6 +312,7 @@ export function prepareCarSmokeSampler(
   const principal = options.principalActor ?? mesh.parent ?? actor;
   return {
     count: indices.length,
+    sourceVertexIndices: indices.map((index) => sources?.[index] ?? index),
     materialOrder,
     firstGroupCount,
     remainingMaterialOrder,

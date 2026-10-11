@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { prepareNativeComponentColumn } from "./component-smoke";
 import type { Assets } from "./content";
 import { NativeRandom, sharedNativeRandom } from "./native-random";
 
@@ -480,18 +481,54 @@ export class SmokeSystem {
     return index;
   }
 
-  /** StopCarSmoking4fc7d0 shortens existing matching car columns without
+  /** StopCarSmoking4fc7d0 shortens matching retained car columns without
    * deleting them, changing their cursor or touching free/pedestrian sources. */
   shortenCarColumns(car: SmokeCar, maximumMs: number): void {
     uint(maximumMs, "maximum column lifetime");
     for (const column of this.columns)
-      if (column.active && column.source?.car === car)
+      if (column.source?.car === car)
         column.remaining = Math.min(column.remaining, maximumMs);
   }
 
   /** StopCarSmokingInstantly4fc800 leaves retirement to the next column pass. */
   expireCarColumns(car: SmokeCar): void {
     this.shortenCarColumns(car, 0);
+  }
+
+  /** SetCarSmoke4fc840 preserves ring-order mutations before quality rejection. */
+  spawnComponentColumn(
+    source: SmokeColumnSource & {
+      car: SmokeCar;
+      driver: number;
+      knackered: boolean;
+      volumeGravity?: number;
+    },
+  ): number | null {
+    if (
+      source.volumeGravity !== undefined &&
+      !Number.isFinite(f32(source.volumeGravity))
+    )
+      throw new Error("Invalid component smoke volume gravity");
+    const colour = prepareNativeComponentColumn({
+      driver: source.driver,
+      colour: source.colour,
+      columns: this.columns.map((column) => ({
+        active: column.active,
+        matchingCar: column.source?.car === source.car,
+        colour: column.source?.colour ?? 0,
+        remaining: column.remaining,
+      })),
+      writeRemaining: (slot, remaining) => {
+        this.columns[slot].remaining = remaining;
+      },
+    });
+    if (
+      colour === undefined ||
+      (source.volumeGravity !== undefined && f32(source.volumeGravity) < 1)
+    )
+      return null;
+    if (source.knackered) this.integer(0, 11);
+    return this.spawnColumn({ ...source, colour, lifetimeMs: 10000000 });
   }
 
   spawnPuff(source: SmokePuffSource): number | null {
@@ -904,7 +941,7 @@ export class SmokeSystem {
 
   private deactivateColumn(column: Column) {
     column.active = false;
-    column.source = null;
+    // Native retirement clears the active bit but retains owner/colour storage.
     column.group.visible = false;
     column.glow.visible = false;
     for (const flame of column.flames) {
@@ -914,15 +951,16 @@ export class SmokeSystem {
   }
   stopObject(rigid: SmokeRigid) {
     for (const column of this.columns)
-      if (column.active && column.source?.rigid === rigid) column.remaining = 0;
+      if (column.source?.rigid === rigid) column.remaining = 0;
   }
   stopCar(car: SmokeCar) {
-    for (const column of this.columns)
-      if (column.active && column.source?.car === car)
-        column.remaining = Math.min(2000, column.remaining);
+    this.shortenCarColumns(car, 2000);
   }
   clear() {
-    for (const column of this.columns) this.deactivateColumn(column);
+    for (const column of this.columns) {
+      this.deactivateColumn(column);
+      column.source = null;
+    }
     for (const puff of this.puffs) {
       puff.active = false;
       puff.sprite.visible = false;

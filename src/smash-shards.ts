@@ -12,7 +12,8 @@ import {
   Vector2,
   Vector3,
 } from "three";
-import type { SmashInitialSpeed, SmashShrapnel } from "./world-smash";
+import type { SmashShrapnel } from "./world-smash";
+import { nativeShrapnelMovement } from "./shrapnel-movement";
 
 /** Source positions and UVs are current model geometry, in BRender model units.
  * The transform maps them into scene world space. Velocity is the native raw
@@ -34,12 +35,40 @@ export interface ShardSpawnSource {
 export interface ShardRuntimeOptions {
   gravity?: number | (() => number);
   random?: () => number;
+  /** Native srand; ghost production reseeds the SAME shared CRT stream. */
+  seed?: (value: number) => void;
+}
+export interface GhostFragmentTemplate {
+  geometry: BufferGeometry;
+  material: Material | Material[];
+  /** Selected ACT's authored local matrix, including its translation. */
+  matrix: Matrix4;
+  name: string;
+}
+export interface GhostSpawnSource {
+  templates: readonly GhostFragmentTemplate[];
+  /** Captured actor/face frame, including any native container face scaling. */
+  frame: Matrix4;
+  point: Vector3;
+  impacteeVelocity: Vector3;
+  timeMs: number;
+  groupId?: number;
+  seed: number;
+  visible: boolean;
+  /** Container scaling's tiny-face exit occurs after seed/count, WITHOUT restore. */
+  tinyFace?: boolean;
 }
 export interface ShardSpawnResult {
   created: number;
   triangles: number;
   sourceTruncated: boolean;
-  reason?: "unsupported" | "missing-material" | "empty-geometry" | "pool-full";
+  reason?:
+    | "unsupported"
+    | "missing-material"
+    | "empty-geometry"
+    | "pool-full"
+    | "tiny-face"
+    | "not-visible";
 }
 interface Vertex {
   position: Vector3;
@@ -47,7 +76,11 @@ interface Vertex {
 }
 type Face = [number, number, number];
 interface Fragment {
-  mesh: Mesh<BufferGeometry, Material>;
+  slot: number;
+  priority: number;
+  ownsGeometry: boolean;
+  mesh: Mesh<BufferGeometry, Material | Material[]>;
+  fullMatrix: boolean;
   velocity: Vector3;
   spin: Vector3;
   startMs: number;
@@ -65,6 +98,7 @@ const ROTATION_EPSILON = 0.0001;
  * remain externally owned. There is no source ground contact or alpha fade. */
 export class ShardRuntime {
   private readonly fragments: Fragment[] = [];
+  private readonly slots: (Fragment | undefined)[] = Array(CAPACITY);
   private readonly ownedMaterials = new Map<Material, Material>();
   private readonly ownedTextures = new Set<Texture>();
   private readonly random: () => number;
@@ -161,7 +195,8 @@ export class ShardRuntime {
     result.triangles = faces.length;
     for (const face of faces) {
       // Native priority3 cannot replace another priority3 shard in the pool.
-      if (this.fragments.length >= CAPACITY) {
+      const slot = this.reserveSlot(3);
+      if (slot === undefined) {
         result.reason = "pool-full";
         break;
       }
@@ -189,12 +224,14 @@ export class ShardRuntime {
           i,
           position.getComponent(i) + this.signed(jitter),
         );
-      const { velocity, spin } = this.movement(
-        spec.speed,
-        source.impacteeVelocity,
+      const { velocity, spin } = nativeShrapnelMovement({
+        speed: spec.speed,
+        impacteeVelocity: source.impacteeVelocity,
         normal,
-        factor,
-      );
+        sizeFactor: factor,
+        // Shard callers supply NULL towards endpoints in the original.
+        random: this.random,
+      });
       const visibleMs = minMs + Math.floor(this.draw() * (maxMs - minMs + 1));
       const geometry = new BufferGeometry();
       geometry.setAttribute(
@@ -219,7 +256,11 @@ export class ShardRuntime {
       mesh.position.copy(position);
       mesh.visible = source.timeMs < source.timeMs + visibleMs;
       this.scene.add(mesh);
-      this.fragments.push({
+      this.insert({
+        slot,
+        priority: 3,
+        ownsGeometry: true,
+        fullMatrix: false,
         mesh,
         velocity,
         spin,
@@ -232,6 +273,119 @@ export class ShardRuntime {
       result.created++;
       this.totalCreated++;
     }
+    return result;
+  }
+
+  /** Installed ghost branch4eb7ba. Placement frames/template order/visibility
+   * are explicit source providers; never synthesize a radial particle cloud. */
+  spawnGhosts(spec: SmashShrapnel, source: GhostSpawnSource): ShardSpawnResult {
+    if (this.disposed) throw new Error("Shard runtime is disposed");
+    const result: ShardSpawnResult = {
+      created: 0,
+      triangles: 0,
+      sourceTruncated: false,
+    };
+    if (
+      spec.kind !== "ghostparts" ||
+      spec.position?.kind !== "actorbased" ||
+      !spec.speed ||
+      !spec.amount ||
+      !spec.lifetimeSeconds
+    )
+      return { ...result, reason: "unsupported" };
+    if (!source.visible) return { ...result, reason: "not-visible" };
+    if (!this.options.seed)
+      throw new Error("Ghost production requires shared native srand");
+    const amount = spec.amount,
+      lifetime = spec.lifetimeSeconds;
+    if (
+      !source.templates.length ||
+      source.templates.length > 2048 ||
+      !amount.every(Number.isInteger) ||
+      (amount[0] >= 0 &&
+        (amount.length !== 2 || amount[1] < amount[0] || amount[1] > 100000)) ||
+      ![
+        ...lifetime,
+        ...source.frame.elements,
+        ...source.point.toArray(),
+        ...source.impacteeVelocity.toArray(),
+        source.timeMs,
+        source.seed,
+      ].every(Number.isFinite) ||
+      lifetime[0] < 0 ||
+      lifetime[1] < lifetime[0] ||
+      !Number.isInteger(source.timeMs) ||
+      source.timeMs < 0 ||
+      source.timeMs > 0xffffffff ||
+      !Number.isInteger(source.seed) ||
+      source.seed < 0 ||
+      source.seed > 0xffffffff ||
+      source.templates.some(
+        (template) => !template.matrix.elements.every(Number.isFinite),
+      )
+    )
+      throw new Error("Invalid native ghost specification or providers");
+    const savedRand = Math.floor(this.draw() * 32768);
+    this.options.seed(source.seed);
+    const count =
+      amount[0] < 0
+        ? source.templates.length
+        : amount[0] + Math.floor(this.draw() * (amount[1]! - amount[0] + 1));
+    if (source.tinyFace) return { ...result, reason: "tiny-face" };
+    const groupId = source.groupId ?? this.nextGroupId++;
+    const minMs = Math.trunc(lifetime[0] * 1000),
+      maxMs = Math.trunc(lifetime[1] * 1000);
+    for (let piece = 0; piece < count; piece++) {
+      const template =
+        source.templates[
+          amount[0] < 0
+            ? piece
+            : Math.floor(this.draw() * source.templates.length)
+        ];
+      const slot = this.reserveSlot(4);
+      if (slot === undefined) {
+        result.reason = "pool-full";
+        break;
+      }
+      const mesh = new Mesh(template.geometry, template.material);
+      mesh.name = `C2 ghost: ${template.name}`;
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.multiplyMatrices(source.frame, template.matrix);
+      mesh.matrix.elements.forEach(
+        (value, index, elements) => (elements[index] = Math.fround(value)),
+      );
+      mesh.position.setFromMatrixPosition(mesh.matrix);
+      const { velocity, spin } = nativeShrapnelMovement({
+        speed: spec.speed,
+        impacteeVelocity: source.impacteeVelocity,
+        normal: new Vector3(),
+        sizeFactor: 1,
+        towardsPosition: source.point,
+        piecePosition: mesh.position,
+        random: this.random,
+      });
+      const visibleMs = minMs + Math.floor(this.draw() * (maxMs - minMs + 1));
+      mesh.visible = source.timeMs < (source.timeMs + visibleMs) >>> 0;
+      this.scene.add(mesh);
+      this.insert({
+        slot,
+        priority: 4,
+        ownsGeometry: false,
+        fullMatrix: true,
+        mesh,
+        velocity,
+        spin,
+        startMs: source.timeMs,
+        visibleUntilMs: (source.timeMs + visibleMs) >>> 0,
+        endMs: (source.timeMs + maxMs) >>> 0,
+        groupId,
+        firstUpdate: true,
+      });
+      result.created++;
+      this.totalCreated++;
+    }
+    // Native restores a rand OUTPUT, not the complete previous RNG state.
+    this.options.seed(savedRand);
     return result;
   }
 
@@ -415,44 +569,6 @@ export class ShardRuntime {
     }
   }
 
-  private movement(
-    speed: SmashInitialSpeed,
-    inherited: Vector3,
-    normal: Vector3,
-    factor: number,
-  ): { velocity: Vector3; spin: Vector3 } {
-    const velocity = inherited
-      .clone()
-      .multiplyScalar(speed.impacteeVelocityFactor);
-    const spin = new Vector3();
-    // Shards pass NULL towards endpoints, so authored towards fields are unused.
-    for (let i = 0; i < 3; i++) {
-      velocity.setComponent(
-        i,
-        (velocity.getComponent(i) + this.signed(speed.randomVelocityMax)) *
-          factor,
-      );
-      spin.setComponent(i, this.sample(0, 1));
-    }
-    velocity.y += this.sample(0, speed.randomUpVelocityMax);
-    for (let i = 0; i < 3; i++)
-      velocity.setComponent(
-        i,
-        velocity.getComponent(i) +
-          normal.getComponent(i) *
-            this.sample(0, speed.randomNormalVelocityMax),
-      );
-    if (spin.length() <= EPSILON) spin.set(1, 0, 0);
-    else spin.normalize();
-    for (let i = 0; i < 3; i++)
-      spin.setComponent(
-        i,
-        spin.getComponent(i) *
-          this.signed(speed.randomSpinRateMax * 0.1 * factor),
-      );
-    return { velocity, spin };
-  }
-
   update(timeMs: number): void {
     if (this.disposed) return;
     if (!Number.isFinite(timeMs)) throw new Error("Invalid shard update time");
@@ -473,15 +589,14 @@ export class ShardRuntime {
       throw new Error("Invalid shard gravity");
     const gravity = Math.fround(suppliedGravity);
     this.previousTimeMs = now;
-    const expiredGroups = new Set(
-      this.fragments
-        .filter((fragment) => now < fragment.startMs || now >= fragment.endMs)
-        .map((fragment) => fragment.groupId),
-    );
-    for (let i = this.fragments.length - 1; i >= 0; i--) {
-      const fragment = this.fragments[i];
-      if (expiredGroups.has(fragment.groupId)) {
-        this.remove(i);
+    // Installed 4efed0 visits physical records upward. Expiry removes a whole
+    // group immediately, before the next record is visited.
+    for (let slot = 0; slot < CAPACITY; slot++) {
+      const fragment = this.slots[slot];
+      if (!fragment) continue;
+      if (now < fragment.startMs || now >= fragment.endMs) {
+        for (const member of this.slots)
+          if (member?.groupId === fragment.groupId) this.removeFragment(member);
         continue;
       }
       if (dt && !fragment.firstUpdate) {
@@ -503,18 +618,30 @@ export class ShardRuntime {
         );
         const { x, y, z } = fragment.spin;
         const omega = Math.sqrt(y * y + z * z + x * x);
-        if (Math.abs(omega * dt) >= ROTATION_EPSILON)
-          fragment.mesh.quaternion.premultiply(
-            new Quaternion().setFromAxisAngle(
-              new Vector3(
-                Math.fround(x / omega),
-                Math.fround(y / omega),
-                Math.fround(z / omega),
-              ),
-              (Math.trunc((omega * dt * 65536) / (2 * Math.PI)) * 2 * Math.PI) /
-                65536,
+        if (Math.abs(omega * dt) >= ROTATION_EPSILON) {
+          const rotation = new Quaternion().setFromAxisAngle(
+            new Vector3(
+              Math.fround(x / omega),
+              Math.fround(y / omega),
+              Math.fround(z / omega),
             ),
+            (Math.trunc(omega * dt * 10430.378350470453) * 2 * Math.PI) / 65536,
           );
+          if (fragment.fullMatrix) {
+            fragment.mesh.matrix.setPosition(0, 0, 0);
+            fragment.mesh.matrix.premultiply(
+              new Matrix4().makeRotationFromQuaternion(rotation),
+            );
+            fragment.mesh.matrix.elements.forEach(
+              (value, index, elements) =>
+                (elements[index] = Math.fround(value)),
+            );
+          } else fragment.mesh.quaternion.premultiply(rotation);
+        }
+        if (fragment.fullMatrix) {
+          fragment.mesh.matrix.setPosition(fragment.mesh.position);
+          fragment.mesh.matrixWorldNeedsUpdate = true;
+        }
       }
       fragment.firstUpdate = false;
       fragment.mesh.visible = now < fragment.visibleUntilMs;
@@ -529,8 +656,13 @@ export class ShardRuntime {
         .length,
       totalCreated: this.totalCreated,
       fragments: this.fragments.map((fragment) => ({
+        slot: fragment.slot,
+        priority: fragment.priority,
         position: fragment.mesh.position.toArray(),
         quaternion: fragment.mesh.quaternion.toArray(),
+        matrix: fragment.fullMatrix
+          ? fragment.mesh.matrix.elements.slice()
+          : undefined,
         velocity: fragment.velocity.toArray(),
         spin: fragment.spin.toArray(),
         startMs: fragment.startMs,
@@ -540,13 +672,40 @@ export class ShardRuntime {
       })),
     };
   }
-  private remove(index: number): void {
-    const [fragment] = this.fragments.splice(index, 1);
+  /** GetNextShrapnel4eade0: first inactive record, otherwise the first strictly
+   * lowest priority, replaced only by a strictly higher requested priority. */
+  private reserveSlot(priority: number): number | undefined {
+    let lowest = Infinity,
+      selected: number | undefined;
+    for (let slot = 0; slot < CAPACITY; slot++) {
+      const fragment = this.slots[slot];
+      if (!fragment) return slot;
+      if (fragment.priority < lowest) {
+        lowest = fragment.priority;
+        selected = slot;
+      }
+    }
+    if (selected === undefined || lowest >= priority) return;
+    this.removeFragment(this.slots[selected]!);
+    return selected;
+  }
+  private insert(fragment: Fragment): void {
+    if (this.slots[fragment.slot]) throw new Error("Occupied shrapnel slot");
+    this.slots[fragment.slot] = fragment;
+    this.fragments.push(fragment);
+    this.fragments.sort((a, b) => a.slot - b.slot);
+  }
+  private removeFragment(fragment: Fragment): void {
+    const index = this.fragments.indexOf(fragment);
+    if (index < 0 || this.slots[fragment.slot] !== fragment)
+      throw new Error("Invalid shrapnel pool membership");
+    this.fragments.splice(index, 1);
+    this.slots[fragment.slot] = undefined;
     fragment.mesh.removeFromParent();
-    fragment.mesh.geometry.dispose();
+    if (fragment.ownsGeometry) fragment.mesh.geometry.dispose();
   }
   clear(): void {
-    for (let i = this.fragments.length - 1; i >= 0; i--) this.remove(i);
+    for (const fragment of [...this.fragments]) this.removeFragment(fragment);
   }
   dispose(): void {
     this.clear();
