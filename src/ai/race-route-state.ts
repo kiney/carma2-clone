@@ -13,7 +13,9 @@ export interface RaceRoutePreparation {
 /** Coordinates the installed complete-race route shift and replenishment
  * branches around NativeProjectedRoute. Follower success remains external. */
 export class NativeRaceRouteState {
-  private readonly route: NativeProjectedRoute;
+  /** Original objectives share one per-opponent projected backing store.
+   * GetNear acquisition must receive this same object when taking over. */
+  readonly route: NativeProjectedRoute;
   private readonly random: () => number;
   private state: RaceRouteState = {
     foundRaceSection: false,

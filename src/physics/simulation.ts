@@ -397,6 +397,7 @@ export class VehicleSimulation {
   accumulator = 0;
   elapsed = 0;
   private frameWindowActive = false;
+  private inactiveCars = new WeakSet<SimulatedCar>();
   gravityMultiplier = 1;
   pinballFactor = 0;
   onPinball?: (body: RigidBody) => void;
@@ -434,6 +435,40 @@ export class VehicleSimulation {
     car.damage.configureDetachmentScheduling(this.detachmentScheduling);
     this.cars.push(car);
     this.sync(car);
+  }
+  isCarPhysicsActive(car: SimulatedCar): boolean {
+    return !this.inactiveCars.has(car);
+  }
+  /** Collision activity subset of native TurnOpponentPhysicsOff. Call between
+   * physics steps; objective/matrix placement and active-list rendering belong
+   * to the AI dispatcher. Keep drivetrain and permanent damage untouched. */
+  setCarPhysicsActive(car: SimulatedCar, active: boolean): void {
+    if (!this.cars.includes(car))
+      throw new Error("Cannot change physics activity for an unregistered car");
+    if (active) {
+      this.inactiveCars.delete(car);
+      return;
+    }
+    this.inactiveCars.add(car);
+    car.input.throttle = 0;
+    car.input.steer = 0;
+    car.input.brake = 0;
+    car.input.handbrake = false;
+    car.state.velocity.set(0, 0, 0);
+    car.state.angularVelocity.set(0, 0, 0);
+    car.state.curvature = 0;
+    car.state.speed = 0;
+    car.state.accForce = 0;
+    car.state.brakeForce = 0;
+    car.state.predictedPosition = undefined;
+    car.state.predictedOrientation = undefined;
+    car.overlapDetected = false;
+    car.worldOverlapDetected = false;
+    this.contactSurfaces.delete(car);
+    this.lastImpacts = this.lastImpacts.filter(
+      (impact) => impact.a !== car && impact.b !== car,
+    );
+    this.cameraContacts.bodies.delete(car);
   }
   addNonCar(body: NonCarBody) {
     const definition = body.mechanics.worldJoint;
@@ -510,9 +545,12 @@ export class VehicleSimulation {
   }
   private allBodies(): SimulationBody[] {
     return [
-      ...this.cars,
-      ...this.debris,
-      ...this.noncars.filter((body) => !this.disabledWorldActor(body)),
+      ...this.cars.filter((car) => this.isCarPhysicsActive(car)),
+      ...this.debris.filter((body) => !this.attachedToInactiveCar(body)),
+      ...this.noncars.filter(
+        (body) =>
+          !this.disabledWorldActor(body) && !this.attachedToInactiveCar(body),
+      ),
       ...this.mineBodies.filter(
         (body) => !(body.mine.flags & MINE_FLAGS.exploded),
       ),
@@ -540,7 +578,7 @@ export class VehicleSimulation {
     return { kind: "other", object: body };
   }
   launchMine(car: SimulatedCar, parameters: MineParameters, powerupIndex = 0) {
-    if (!this.mineFactory) return false;
+    if (!this.mineFactory || !this.isCarPhysicsActive(car)) return false;
     const mine = this.mines.spawn(
       this.mineCar(car),
       { ...car.state, bounds: hullsBounds(car.hulls) },
@@ -608,6 +646,7 @@ export class VehicleSimulation {
     return true;
   }
   hitMine(car: SimulatedCar, impulses: readonly number[]) {
+    if (!this.isCarPhysicsActive(car)) return;
     hitMineReaction(
       this.mineCar(car),
       impulses,
@@ -692,8 +731,24 @@ export class VehicleSimulation {
   }
   private allJoints(): RigidJoint[] {
     return [...this.debris, ...this.noncars].flatMap((b) =>
-      b.joint && !b.properties.immovable ? [b.joint] : [],
+      b.joint && !b.properties.immovable && !this.attachedToInactiveCar(b)
+        ? [b.joint]
+        : [],
     );
+  }
+  private attachedToInactiveCar(body: DetachedBody | NonCarBody): boolean {
+    let parent: RigidBody | undefined = body.joint?.parent;
+    const seen = new Set<RigidBody>();
+    while (parent && !seen.has(parent)) {
+      if (
+        "damage" in parent &&
+        !this.isCarPhysicsActive(parent as SimulatedCar)
+      )
+        return true;
+      seen.add(parent);
+      parent = (parent as DetachedBody | NonCarBody).joint?.parent;
+    }
+    return false;
   }
   sync(car: SimulatedCar) {
     car.group.position.copy(car.state.position);
@@ -1401,7 +1456,10 @@ export class VehicleSimulation {
       car.state.orientation,
     );
     if (worldDirection) return worldDirection;
-    for (const other of [...this.cars, ...this.debris]) {
+    for (const other of [
+      ...this.cars.filter((candidate) => this.isCarPhysicsActive(candidate)),
+      ...this.debris.filter((body) => !this.attachedToInactiveCar(body)),
+    ]) {
       if (other === car || ("joint" in other && other.joint?.parent === car))
         continue;
       const otherHulls = transformHulls(other, other.hulls);
@@ -2025,7 +2083,8 @@ export class VehicleSimulation {
           car.wastedByPlayer = !!awardAttacker?.human;
         this.onImpact?.(car, impact.severity);
       }
-    for (const car of this.cars) this.syncStructuralState(car);
+    for (const car of this.cars)
+      if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
   }
   private processNonCarContacts(
     impacts: ContactImpact[],
@@ -2100,9 +2159,12 @@ export class VehicleSimulation {
     this.world.refreshDynamic?.();
     this.oil?.update(this.elapsed * 1000, this.projectOil.bind(this));
     const previousVelocities = new Map(
-      this.cars.map((car) => [car, car.state.velocity.clone()]),
+      this.cars
+        .filter((car) => this.isCarPhysicsActive(car))
+        .map((car) => [car, car.state.velocity.clone()]),
     );
     for (const car of this.cars) {
+      if (!this.isCarPhysicsActive(car)) continue;
       if (!(car.damage.pendingShapeSwapFlags & 1))
         car.repairAwaitingShapeSwap = false;
       if (
@@ -2181,6 +2243,7 @@ export class VehicleSimulation {
       }
     }
     this.debris = this.debris.filter((body) => {
+      if (this.attachedToInactiveCar(body)) return true;
       if (body.splitRevision !== undefined) {
         if (body.owner.damage.splitRuntime?.actor !== body.actor) return false;
         this.applyFreeBodyForces(body);
@@ -2211,7 +2274,8 @@ export class VehicleSimulation {
       return true;
     });
     for (const body of this.noncars) {
-      if (this.disabledWorldActor(body)) continue;
+      if (this.disabledWorldActor(body) || this.attachedToInactiveCar(body))
+        continue;
       finalizeNonCarRelease(body);
       if (body.motor.sleeping && body.motor.pauseUntilMs === 0) continue;
       const environment = this.updateSpecialVolume(body);
@@ -2278,7 +2342,8 @@ export class VehicleSimulation {
       }
     };
     resolveRestarts();
-    for (const car of this.cars) this.syncStructuralState(car);
+    for (const car of this.cars)
+      if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
     // Recollect after impulses, rather than advancing an unchecked trajectory.
     // The bounded final sweep conservatively stops at the actual triangle;
     // it neither assumes an infinite floor nor changes authored body shapes.
@@ -2473,6 +2538,7 @@ export class VehicleSimulation {
       }
     }
     for (const car of this.cars) {
+      if (!this.isCarPhysicsActive(car)) continue;
       const forward = new Vector3(0, 0, -1).applyQuaternion(
         car.state.orientation,
       );
@@ -2696,5 +2762,6 @@ export class VehicleSimulation {
     for (const body of this.movingWorld) this.world.removeDynamic(body);
     this.movingWorld = [];
     this.cars = [];
+    this.inactiveCars = new WeakSet();
   }
 }

@@ -125,6 +125,18 @@ export class NativePhysicalPathFollower {
     this.geometry = { ...this.geometry, sectionSlot };
   }
 
+  /** Native forces live on the car, shared with reverse, freeze and wheel
+   * processing. Borrowed-time result2 preserves those current car fields;
+   * copying them must not change PID history or objective timing. */
+  syncCarForces(accForce: number, brakeForce: number): void {
+    const acceleration = Math.fround(accForce);
+    const braking = Math.fround(brakeForce);
+    if (![acceleration, braking].every(Number.isFinite))
+      throw new Error("Invalid native shared car forces");
+    this.accForce = acceleration;
+    this.brakeForce = braking;
+  }
+
   run(
     nodes: readonly Vector3[],
     sections: readonly TrackPathSection[],

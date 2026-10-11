@@ -8,21 +8,21 @@ The current `RoadNavigator` is a temporary undirected graph and steering heurist
 
 Installed addresses below differ from several rec2 annotations:
 
-| Function | Installed HW | Evidence |
-| --- | --- | --- |
-| FindNearestGeneralSection | `0x4a8070` | Binary verified, including inlined weighted selection |
-| TopUpRandomRoute | `0x4a9160` | Binary verified; rec2 stub |
-| CalcRaceRoute | `0x4aabc0` | Binary verified; reconstructed rec2 has reverse-direction error |
-| Shift / Add projected route | `0x4aaea0` / `0x4aaef0` | Standalone binary boolean returns and capacity verified |
-| GetNextSection | `0x4ae7d0` | Binary verified, including suspicious section-type indexing |
-| GetSectionStart / Finish | `0x4ae930` / `0x4ae9e0` | Binary verified |
-| GetSectionWidth | `0x4aea80` | Binary verified |
-| GetSectionMin / MaxSpeed | `0x4aeaf0` / `0x4aeb90` | Binary verified |
-| ProcessFollowPath | `0x4af700` | Binary verified selected steering and force branches |
-| GetStraight | `0x4b1170` | Binary verified; rec2 stub |
-| CalcCorners | `0x4b1300` | Binary equations, iteration and Float32 stores verified; rec2 stub |
-| SetMaxSpeedFromSOCs | `0x4b1650` | Binary traversal/braking equations verified; rec2 stub |
-| CalcSOCs | `0x4b1850` | Binary constraint traversal and speed caps verified; rec2 stub |
+| Function                    | Installed HW            | Evidence                                                           |
+| --------------------------- | ----------------------- | ------------------------------------------------------------------ |
+| FindNearestGeneralSection   | `0x4a8070`              | Binary verified, including inlined weighted selection              |
+| TopUpRandomRoute            | `0x4a9160`              | Binary verified; rec2 stub                                         |
+| CalcRaceRoute               | `0x4aabc0`              | Binary verified; reconstructed rec2 has reverse-direction error    |
+| Shift / Add projected route | `0x4aaea0` / `0x4aaef0` | Standalone binary boolean returns and capacity verified            |
+| GetNextSection              | `0x4ae7d0`              | Binary verified, including suspicious section-type indexing        |
+| GetSectionStart / Finish    | `0x4ae930` / `0x4ae9e0` | Binary verified                                                    |
+| GetSectionWidth             | `0x4aea80`              | Binary verified                                                    |
+| GetSectionMin / MaxSpeed    | `0x4aeaf0` / `0x4aeb90` | Binary verified                                                    |
+| ProcessFollowPath           | `0x4af700`              | Binary verified selected steering and force branches               |
+| GetStraight                 | `0x4b1170`              | Binary verified; rec2 stub                                         |
+| CalcCorners                 | `0x4b1300`              | Binary equations, iteration and Float32 stores verified; rec2 stub |
+| SetMaxSpeedFromSOCs         | `0x4b1650`              | Binary traversal/braking equations verified; rec2 stub             |
+| CalcSOCs                    | `0x4b1850`              | Binary constraint traversal and speed caps verified; rec2 stub     |
 
 ## Authored sections and route storage
 
@@ -52,7 +52,7 @@ Complete-race objective processing is inlined in the `0x4aa6a0` dispatcher. Star
 
 Run-away initialization differs: choose the nearest section and seed direction 0 when the cached vehicle travel direction dotted with the section direction is negative, otherwise 1, then random-top-up to capacity. There is no universal route initialization rule independent of the native objective.
 
-`GetNextSection` returns -1 at the end of the projected route. Its non-cheating type-2 check indexes global section metadata using the next projected *slot*, rather than the entry's actual section ID (`0x4ae7f1–0x4ae802`); both installed code and rec2 expose this suspicious indexing. The route-count guard precedes this type check, and cheating skips it. Any intentional browser correction must be documented instead of presented as native behavior.
+`GetNextSection` returns -1 at the end of the projected route. Its non-cheating type-2 check indexes global section metadata using the next projected _slot_, rather than the entry's actual section ID (`0x4ae7f1–0x4ae802`); both installed code and rec2 expose this suspicious indexing. The route-count guard precedes this type check, and cheating skips it. Any intentional browser correction must be documented instead of presented as native behavior.
 
 ## Nearest authored section
 
@@ -116,10 +116,10 @@ The normalized cosine, signed sine and half-angle ratio remain x87 register valu
 
 With zero junction and widths `float32(0.7),float32(1.3)`, independently evaluated installed blocks produce:
 
-| Backward incoming A | Outgoing B | Stored reach | Stored radius | Stored center |
-| --- | --- | --- | --- | --- |
-| (-31,3) | (11,29) | 3.6443369388580322 | 4.770451545715332 | (-3.1678807735443115,5.099306583404541) |
-| (-40,3) | (11,35) | 3.5889830589294434 | 4.524764537811279 | (-3.2405245304107666,4.780511856079102) |
+| Backward incoming A | Outgoing B | Stored reach       | Stored radius     | Stored center                           |
+| ------------------- | ---------- | ------------------ | ----------------- | --------------------------------------- |
+| (-31,3)             | (11,29)    | 3.6443369388580322 | 4.770451545715332 | (-3.1678807735443115,5.099306583404541) |
+| (-40,3)             | (11,35)    | 3.5889830589294434 | 4.524764537811279 | (-3.2405245304107666,4.780511856079102) |
 
 These cases expose one-ULP differences hidden by perpendicular or simple 3-4-5 cases when a browser implementation rounds only its final outputs.
 
@@ -178,7 +178,7 @@ On stop, clear made-it, set borrowed start=now, clear struggle timer, set lastFi
 
 ### Direct-force Float32 boundaries
 
-Installed `0x4b03bd–0x4b0525` uses Float32 category factor, desired speed, damage constants and mass. Capacity starts at max(factor,1), loses `(engineDamage-50)*float32(0.0125)` for 51–97 or Float32 0.6 for 98, and `(transmissionDamage-50)*float32(0.00625)` for 51–97 or Float32 0.3 for 98; either damage at least 99 sets capacity zero. Multiply by 12 and store maximum acceleration Float32 (`0x4b049e`). Error is the live desired*factor minus stored 3D speed. Store error Float32 (`0x4b048c`) but retain its live value for derivative subtraction. Candidate acceleration is `((liveError-previousError)*1000/dtMs)*float32(0.1) + storedError + previousAcceleration`, in that addition order; contracting the derivative coefficient to 100 loses the original constant/storage semantics. Clamp against stored maximum, save acceleration/error histories Float32 (`0x4b04f0/0x4b04f6`), and multiply the live clamped acceleration by mass before storing force Float32 (`0x4b050f/0x4b051f`).
+Installed `0x4b03bd–0x4b0525` uses Float32 category factor, desired speed, damage constants and mass. Capacity starts at max(factor,1), loses `(engineDamage-50)*float32(0.0125)` for 51–97 or Float32 0.6 for 98, and `(transmissionDamage-50)*float32(0.00625)` for 51–97 or Float32 0.3 for 98; either damage at least 99 sets capacity zero. Multiply by 12 and store maximum acceleration Float32 (`0x4b049e`). Error is the live desired*factor minus stored 3D speed. Store error Float32 (`0x4b048c`) but retain its live value for derivative subtraction. Candidate acceleration is `((liveError-previousError)*1000/dtMs)\*float32(0.1) + storedError + previousAcceleration`, in that addition order; contracting the derivative coefficient to 100 loses the original constant/storage semantics. Clamp against stored maximum, save acceleration/error histories Float32 (`0x4b04f0/0x4b04f6`), and multiply the live clamped acceleration by mass before storing force Float32 (`0x4b050f/0x4b051f`).
 
 ## Objective and cheating interruptions of physical struggles
 
@@ -202,7 +202,11 @@ For a regular opponent when forced choice reaches its final branch (`0x4ad4da–
 1. If it has ever moved (opponent bit `0x100`), personality `+0xb4` equal to 1 selects CompleteRace, 2 selects GetNearPlayer, and 3 selects PursuePlayer. Otherwise choose GetNearPlayer with percentage `trunc(storedPlayerDistance)-15`, else CompleteRace. Both outcomes call NewObjective, including an unchanged type.
 2. If it has not moved, pursue-from-start bit `0x10` selects PursuePlayer and raises grudge to `trunc(min(100,max(grudge,20)+20+40*nastiness))`; otherwise select CompleteRace. Pursue-from-start is cleared for normal racers at initialization and set for the challenger if present, rather than inferred from model strength.
 
-InitOpponents sets grudge 10 and stores nastiness Float32 as `(authoredRaceNastiness + skill/2 + (opponentStrength-1)/4)/3 * gOpponent_nastyness_frigger` (`0x4addab–0x4addf3`). The negative double coefficients -0.25/-0.5 in installed instructions are subtracted, giving these positive contributions. Rec2 additionally reconstructs personality assignment of approximately 60% type 2 and 20% type 1 when race nastiness is below 10; that population-selection loop requires its own full numerical/RNG verification before porting as exact behavior.
+InitOpponents sets grudge 10 and stores nastiness Float32 as `(authoredRaceNastiness - ((opponentStrength-1)*(-.25) + skill*(-.5))) * double(1/3) * gOpponent_nastyness_frigger` (`0x4addab–0x4addf3`). The negative double coefficients are subtracted, giving positive contributions. The destination is opponent **+0x0c**: ESI points to opponent+0x5c, and the final instruction writes `[esi-0x50]`. The signed strength decrement occurs before integer-to-floating conversion. Race and global multiplier are Float32 inputs; only the final opponent value is stored Float32.
+
+The independently verified personality loop (`0x4adf79–0x4ae0ea`) clears regular instance slots. Race nastiness at least Float32 10 assigns type 3 to every slot without RNG. Otherwise it assigns type 2 to `trunc(double(.6)*N)` instances, then type 1 to `trunc(double(.2)*N)` instances. Each quota draws an inclusive integer: type-2 draw i uses `[0,N-1-i]`, type-1 draw i uses `[0,N-quota2-1-i]`. Starting at that raw instance slot, scan forward over occupied slots and wrap at N. This is not uniform rank selection among free slots; duplicate catalog IDs remain separate instances. Constants at `0x5895d8/e0` are doubles .6/.2. `src/ai/personality.ts` preserves this ordering and consumes one 15-bit draw per assignment.
+
+Installed LoadRaces (`0x48c4c9–0x48c4ff`) reads scalar nastiness and replaces authored values **at or below 2^-22**, including small positive values. Interpolation is `first + (last-first)*(raceIndex/(raceCount-1))`, using Float32 endpoint inputs and a final Float32 store. The scalar parser previously truncated fractions; it now preserves them. The resolver declines a single-race denominator-zero interpolation rather than propagating native NaN. Runtime opponent decisions still need to consume these recovered personality/nastiness fields.
 
 Pursuit can also preempt this final forced-choice branch after the first frame: fresh player sighting, collision/grudge, or scary-bang conditions run first. For regular fresh sighting, if pursuing population is below skill+3, chance is `trunc(grudge-20+30*nastiness)`, else zero; a verified head-on test adds 50 before the percentage call (`0x4ad2eb–0x4ad42e`). Selection raises grudge by the general increment `trunc(40*nastiness+10)` with min/max 20/100 and starts pursuit. The complete pursuit/get-near routing, visibility geometry and cheating/rematerialisation consumer remain separate unresolved objective scope; a forced-choice scaffold does not constitute their implementation.
 
@@ -249,3 +253,7 @@ Acquisition appends returned entries excluding seed, limited by remaining twelve
 These primitives are sufficient to specify the ordinary fresh-seed/search path independently. The standalone `src/ai/target-acquisition.ts` now composes cache refresh, reseeding, bounded DFS, explicit packed-flags reads, detours and fallback with numerical tests. Fresh-seed dot uses live displacement differences and `(dx*row2.x + dz*row2.z) + dy*row2.y`, verified at `0x4ac9f3–0x4aca55`; a cancellation fixture distinguishes this from generic Vector3.dot. ACT row2 is the world backward row of the master actor, not a COM or local-velocity direction. Live objective integration and cheaty/pursuit consumers remain explicit implementation boundaries; replacing them with undirected shortest routing would not complete native parity.
 
 Implementation checkpoint: `src/ai/target-search.ts` ports the bounded authored-order DFS, with strict Float32 costs, early returns and resetting of residual visited marks. Numerical tests cover the second-improvement stop, depth capacity, seed reversal, incidence limits, one-way/type restrictions and ties; optional local-installation tests validate connected directed results on Stock Newcity1 and Advanced AcidReign. `NativeProjectedRoute` now retains all twelve native backing records when cleared or shifted. These components are not yet the live opponent dispatcher.
+
+`src/ai/get-near-state.ts` now composes regular physical GetNear start/run/result handling over the caller-shared route, follower and acquisition records. Factor-zero calls preserve route/cache state; external cursor advancement is synchronized before prefix shifting. A native result2 requests pursuit; explicit result1 notification forces acquisition/restart, including when reported by an external cheaty follower. No geometric physical-arrival heuristic is added. Seven numerical scenarios cover this coordination.
+
+Nonphysical movement, its strict endpoint comparisons and Float32 stores are ported separately in `src/ai/cheaty-path.ts`; mode switching and materialisation still belong to the pending live dispatcher. See [cheaty movement evidence](c2-ai-cheating-re.md) and [pursuit/trail evidence](c2-ai-pursuit-re.md). Direct pursuit prediction and ordered reverse/brake deadlines now have standalone numerical tests in `src/ai/pursuit-motion.ts`, including preserved curvature and deadlines straddling Uint32 wrap. These additions do not yet replace live RoadNavigator or establish AI-01/AI-02 completion.

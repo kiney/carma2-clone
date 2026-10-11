@@ -229,6 +229,20 @@ test("borrowed-time uses an unbounded 3D line, strict timer edges, and leaves fo
   assert.equal(timedOut.kind, "given-up");
   assert.equal(timedOut.accForce, forces.accForce);
   assert.equal(timedOut.brakeForce, forces.brakeForce);
+  // Reverse/freeze/wheel processing writes the same native car fields, not
+  // the PID history. A later borrowed-time failure preserves those writes.
+  failed.syncCarForces(-123.4, 15000);
+  const afterExternalWrite = failed.run(
+    nodes,
+    sections,
+    route,
+    query(failureStopAt + 10003, { ignoreEnd: true }),
+  );
+  assert.equal(afterExternalWrite.kind, "given-up");
+  assert.equal(afterExternalWrite.accForce, Math.fround(-123.4));
+  assert.equal(afterExternalWrite.brakeForce, 15000);
+  assert.deepEqual(afterExternalWrite.geometry, timedOut.geometry);
+  assert.throws(() => failed.syncCarForces(3.5e38, 0), /shared car forces/);
 });
 
 test("new struggle continues through geometry, active struggle returns before PID, and stop resumes PID", () => {

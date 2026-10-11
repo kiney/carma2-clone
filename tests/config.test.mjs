@@ -267,7 +267,7 @@ Done
 2
 7
 1
-1
+1.75
 -1
 0
 0
@@ -289,6 +289,7 @@ END`;
   assert.equal(parsed.races[0].laps, 4);
   assert.deepEqual(parsed.races[0].initialTimer, [120, 90, 60]);
   assert.equal(parsed.races[1].raceType, "cars");
+  assert.equal(parsed.races[1].opponentNastinessLevel, 1.75);
   assert.deepEqual(parsed.races[1].explicitOpponents, [7, 1]);
   assert.deepEqual(parsed.races[1].opponentsToKill, [7]);
 });

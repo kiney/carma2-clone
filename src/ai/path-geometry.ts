@@ -45,73 +45,112 @@ function checkedSectionNodes(
   return { section, start, finish };
 }
 
-/** FindNearestGeneralSection's installed weighted selection, expressed in
- * world coordinates. Y is doubled only for choosing a candidate; returned
- * intersection, unit direction, and distance retain original 3D units. */
+/** Installed FindNearestGeneralSection4a8070 with a null/global selector.
+ * Weighted selection stores native Float32 candidates/scores/parameter; final
+ * intersection, normalized direction and distance use original 3D units. */
 export function findNearestPathSection(
   position: Vector3,
   nodes: readonly Vector3[],
   sections: readonly TrackPathSection[],
 ): NearestPathSection | undefined {
-  if (!finiteVector(position) || nodes.some((node) => !finiteVector(node)))
+  const f = Math.fround;
+  const stored = (v: Vector3) => new Vector3(f(v.x), f(v.y), f(v.z));
+  const actor = stored(position);
+  const points = nodes.map(stored);
+  if (!finiteVector(actor) || points.some((node) => !finiteVector(node)))
     throw new Error("Invalid opponent path query geometry");
-
+  if (!sections.length) return undefined;
+  const mixedSquare = (x: number, y: number, z: number) =>
+    x * f(x) + y * f(y) + z * z;
   let endpointSection = -1;
-  let endpoint = new Vector3();
-  let endpointScore = Infinity;
+  let endpointNode = -1;
+  let endpointScore = f(3.4028234663852886e38);
   let projectedSection = -1;
-  let projection = new Vector3();
-  let projectionScore = Infinity;
-
-  const weighted = (point: Vector3) =>
-    new Vector3(point.x, point.y * 2, point.z);
-  const weightedPosition = weighted(position);
+  let projectionScore = f(3.4028234663852886e38);
+  let projectionT = 0;
   for (let index = 0; index < sections.length; index++) {
-    const { start, finish } = checkedSectionNodes(nodes, sections, index);
-    for (const point of [finish, start]) {
-      const score = weighted(point).distanceToSquared(weightedPosition);
-      if (score < endpointScore) {
-        endpointScore = score;
-        endpointSection = index;
-        endpoint.copy(point);
-      }
+    const { section, start, finish } = checkedSectionNodes(
+      points,
+      sections,
+      index,
+    );
+    const ax = f(finish.x - start.x);
+    const ay = f((finish.y - start.y) * 2);
+    const az = f(finish.z - start.z);
+    const livePX = actor.x - start.x;
+    const livePY = (actor.y - start.y) * 2;
+    const livePZ = actor.z - start.z;
+    const px = f(livePX),
+      py = f(livePY),
+      pz = f(livePZ);
+    const finishScore = mixedSquare(livePX - ax, livePY - ay, livePZ - az);
+    if (finishScore < endpointScore) {
+      endpointScore = f(finishScore);
+      endpointSection = index;
+      endpointNode = section.nodeIndices[1]; //4a818a: GLOBAL finish node.
     }
-
-    const direction = finish.clone().sub(start);
-    const weightedDirection = weighted(direction);
-    const lengthSquared = weightedDirection.lengthSq();
-    if (lengthSquared < Math.fround(0.0001)) continue;
-    const weightedOffset = weighted(position.clone().sub(start));
-    const t = weightedOffset.dot(weightedDirection) / lengthSquared;
+    const startScore = px * px + py * py + pz * pz;
+    if (startScore < endpointScore) {
+      endpointScore = f(startScore);
+      endpointSection = index;
+      endpointNode = section.nodeIndices[0]; //4a81d0: GLOBAL start node.
+    }
+    const lengthSquared = ax * ax + ay * ay + az * az;
+    if (lengthSquared < f(0.0001)) continue;
+    const t = f((px * ax + py * ay + pz * az) / lengthSquared);
     if (t < 0 || t > 1) continue;
-    const weightedHit = weighted(start).addScaledVector(weightedDirection, t);
-    const score = weightedHit.distanceToSquared(weightedPosition);
+    const score = mixedSquare(px - ax * t, py - ay * t, pz - az * t);
     if (score < projectionScore) {
-      projectionScore = score;
+      projectionScore = f(score);
       projectedSection = index;
-      projection.copy(start).addScaledVector(direction, t);
+      projectionT = t;
     }
   }
-
-  if (endpointSection < 0) return undefined;
-  const projectionWins =
-    projectedSection >= 0 && projectionScore <= endpointScore;
-  const selectedSection = projectionWins ? projectedSection : endpointSection;
-  const intersection = projectionWins ? projection : endpoint;
+  const endpointWins = endpointScore < projectionScore;
+  const selectedSection = endpointWins ? endpointSection : projectedSection;
+  if (selectedSection < 0)
+    throw new Error("Native nearest path candidate exceeds Float32 bounds");
   const { start, finish } = checkedSectionNodes(
-    nodes,
+    points,
     sections,
     selectedSection,
   );
-  const direction = finish.clone().sub(start);
-  if (direction.lengthSq() > 0) direction.normalize();
-  else direction.set(0, 0, 0);
-  return {
-    section: selectedSection,
-    intersection: intersection.clone(),
-    direction,
-    distance: intersection.distanceTo(position),
-  };
+  const dx = finish.x - start.x,
+    dy = finish.y - start.y,
+    dz = finish.z - start.z;
+  const intersection = endpointWins
+    ? points[endpointNode].clone()
+    : new Vector3(
+        f(start.x + dx * projectionT),
+        f(start.y + f(dy * projectionT)),
+        f(start.z + f(dz * projectionT)),
+      );
+  //4a8490–4a84d1 retains the unweighted delta and live length. Native
+  // division by zero has undefined direction; explicitly return zero for a
+  // degenerate authored section rather than exposing NaN to route callers.
+  const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const inverse = length === 0 ? 0 : 1 / length;
+  const direction = new Vector3(
+    f(dx * inverse),
+    f(dy * inverse),
+    f(dz * inverse),
+  );
+  const distance = f(
+    Math.sqrt(
+      mixedSquare(
+        actor.x - intersection.x,
+        actor.y - intersection.y,
+        actor.z - intersection.z,
+      ),
+    ),
+  );
+  if (
+    !finiteVector(intersection) ||
+    !finiteVector(direction) ||
+    !Number.isFinite(distance)
+  )
+    throw new Error("Native nearest path result exceeds Float32 bounds");
+  return { section: selectedSection, intersection, direction, distance };
 }
 
 function horizontal(point: Vector3): Vector2 {

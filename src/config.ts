@@ -807,7 +807,10 @@ export function parseRaceCatalog(text: string): RaceCatalog {
     const explicitOpponents: number[] = [];
     for (let i = 0; i < Math.max(0, Math.min(explicitCount, 1000)); i++)
       explicitOpponents.push(parseIntLine(lines, cursor));
-    const opponentNastinessLevel = parseIntLine(lines, cursor);
+    // Installed LoadRaces reads this field as a scalar, not an integer.
+    const opponentNastinessLevel = Math.fround(Number(lines[cursor.value++]));
+    if (!Number.isFinite(opponentNastinessLevel))
+      throw new Error("RACES.TXT: invalid opponent nastiness level");
     const exclusionLine = lines[cursor.value++] ?? "";
     const powerupExclusions = parsePowerupExclusions(exclusionLine);
     const disableTimeAwards = parseIntLine(lines, cursor) !== 0;

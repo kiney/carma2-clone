@@ -1807,7 +1807,11 @@ function animate(now: number) {
     if (simulation) {
       noncarRenderBatch?.update();
       for (const body of simulation.cars)
-        renderPoses.apply(body, body.group, renderAlpha);
+        renderPoses.apply(
+          body,
+          body.group,
+          simulation.isCarPhysicsActive(body) ? renderAlpha : 1,
+        );
       for (const body of simulation.debris)
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.movingWorld)

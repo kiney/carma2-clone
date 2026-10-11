@@ -24,7 +24,7 @@ test("nearest-section selection doubles Y and preserves authored endpoint ties",
     [section(0, 1), section(2, 3)],
   );
   assert.equal(weighted.section, 1);
-  assert.deepEqual(weighted.intersection.toArray(), [0.3, 0, 0]);
+  assert.deepEqual(weighted.intersection.toArray(), [Math.fround(0.3), 0, 0]);
 
   const tie = findNearestPathSection(
     v(),
@@ -56,8 +56,8 @@ test("nearest section returns an unweighted 3D projection, direction, and distan
   );
   assert.equal(result.section, 0);
   assert.deepEqual(result.intersection.toArray(), [1.5, 3, 0]);
-  assert.ok(Math.abs(result.direction.x - 3 / Math.sqrt(13)) < 1e-12);
-  assert.ok(Math.abs(result.direction.y - 2 / Math.sqrt(13)) < 1e-12);
+  assert.equal(result.direction.x, Math.fround(3 / Math.sqrt(13)));
+  assert.equal(result.direction.y, Math.fround(2 / Math.sqrt(13)));
   assert.equal(result.direction.z, 0);
   assert.equal(result.distance, 4);
 
@@ -77,15 +77,23 @@ test("nearest-section projection skips squared lengths below the native cutoff s
   assert.deepEqual(result.direction.toArray(), [1, 0, 0]);
   assert.ok(Number.isFinite(result.distance));
 
-  // A sub-cutoff segment has no interior candidate. With the query exactly
-  // midway, native finish-before-start endpoint scanning and strict ties keep
-  // the finish endpoint.
+  // A decimal midpoint is not an exact score tie: the finish score rounds
+  // upward when stored, so the live start score strictly improves it.
   const midpoint = findNearestPathSection(
     v(0.0025),
     [v(0), v(0.005)],
     [section(0, 1)],
   );
-  assert.deepEqual(midpoint.intersection.toArray(), [0.005, 0, 0]);
+  const score = Math.fround(0.0025) ** 2;
+  assert.ok(score < Math.fround(score));
+  assert.deepEqual(midpoint.intersection.toArray(), [0, 0, 0]);
+  // Binary-exact scores really tie, preserving the first (finish) endpoint.
+  const exact = findNearestPathSection(
+    v(2 ** -9),
+    [v(), v(2 ** -8)],
+    [section(0, 1)],
+  );
+  assert.deepEqual(exact.intersection.toArray(), [2 ** -8, 0, 0]);
   assert.deepEqual(midpoint.direction.toArray(), [1, 0, 0]);
 });
 
@@ -197,15 +205,27 @@ test("geometry APIs reject nonfinite and invalid references without emitting NaN
   );
 });
 
-test("nearest projection admits the installed Float32 squared-length threshold", () => {
-  // Between the native single-precision constant and decimal 0.0001.
-  const squaredLength = (Math.fround(0.0001) + 0.0001) / 2;
-  const length = Math.sqrt(squaredLength);
-  const nodes = [v(0, 0, 0), v(length, 0, 0)];
-  const query = v(length / 2, 0, 0);
-  const hit = findNearestPathSection(query, nodes, [section(0, 1)]);
-  assert.equal(hit.distance, 0);
-  assert.deepEqual(hit.intersection, query);
+test("nearest projection uses stored Float32 lengths at the native cutoff", () => {
+  const cutoff = Math.fround(0.0001);
+  const below = Math.fround(Math.sqrt(cutoff));
+  const above = below + 2 ** -30; // Adjacent Float32 length.
+  assert.equal(Math.fround(above), above);
+  assert.ok(below ** 2 < cutoff);
+  assert.ok(above ** 2 > cutoff);
+  const low = findNearestPathSection(
+    v(below / 2),
+    [v(), v(below)],
+    [section(0, 1)],
+  );
+  assert.deepEqual(low.intersection.toArray(), [0, 0, 0]);
+  assert.equal(low.distance, below / 2);
+  const high = findNearestPathSection(
+    v(above / 2),
+    [v(), v(above)],
+    [section(0, 1)],
+  );
+  assert.deepEqual(high.intersection.toArray(), [above / 2, 0, 0]);
+  assert.equal(high.distance, 0);
 });
 
 test("straight merging uses Float32 0.1 rather than the lower decimal cutoff", () => {
