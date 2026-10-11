@@ -120,3 +120,27 @@ errors. The command harness now intercepts the actual `updateFrame` boundary
 when checking instant handbrake before integration; its obsolete `update` hook
 previously timed out after the timebase migration. Debug grants, repeated input
 edges, voucher recovery, jump velocity and ordinary driving remain checked.
+
+### Icon transition evidence boundary (PUP-16/UI-01)
+
+Community reconstruction names three image variants `CIRCLES`, `SQUARES` and
+`DIAMONDS`, loaded from the configured graphics directory's POWERUPS package.
+The local Stock/Advanced installations provide POWERUPS.TWT at both graphics
+resolutions. Nonnegative authored fizzle types are0–2; command definitions also
+use−1. Negative type alone is **not** evidence that an icon is inactive or
+unsupported. Exact negative-type drawing remains unverified.
+
+Rec2's reconstructed DrawPowerupIcons2 advances incoming stages every150ms,
+clamping at4; outgoing stages run3 down to below0 over600ms. Its inspected
+DrawSinglePowerupIcon selects the fizzle image's width for layout, then renders
+the billboard actor with animated scale, rotation and opacity. A four-row image
+height does not prove that this path draws atlas frames: no row draw was found
+there. These are reconstruction observations, not a verified asset-overlay
+specification. Installed HW icon-list assignments separately establish incoming
+stage0/direction+1 and outgoing stage3/direction−1 with a stored clock. The
+installed function/global layout differs from rec2 annotations; exact native
+negative-type handling and image-rendering call order require further tracing.
+None of those visual states establishes a command cooldown or activation
+probability. The browser HUD remains an independent presentation; its missing
+active-icon transitions are explicitly PUP-16/UI-01, rather than a hidden
+condition for the native command charge contract completed under PUP-15.

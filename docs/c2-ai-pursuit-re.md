@@ -149,3 +149,40 @@ The successful-placement call at `0x4a8f04–1b` is **ResetCarSpecialVolume** `0
 `findNearestPathSection` in `src/ai/path-geometry.ts` now independently implements installed NULL/global `FindNearestGeneralSection` `0x4a8070`, rather than ordinary double-precision vector projection. Actor/node inputs, weighted candidate components, endpoint/projection saved scores, projection parameter, intersection, normalized direction and final distance retain native Float32 stores. Strict candidate improvements compare a live score against the stored best score, so an apparent exact geometric endpoint tie can still replace the earlier candidate after the first score is rounded. Unlike the trail selector's swapped indices, GLOBAL finish/start endpoint winners correctly copy authored node1/node0 (`0x4a818a`, `0x4a81d0`). Projection ties win, and global finalization uses the selected section's own start node.
 
 Direction uses the unweighted LIVE difference of stored authored nodes and live `sqrt(dx²+dy²+dz²)` reciprocal, then Float32 component stores (`0x4a8490–0x4a84d1`), with no normalizer threshold or initial delta store. An explicit robustness deviation returns zero direction for an authored zero-length section; the original divides by zero. Empty graphs return no result and unrepresentable Float32 candidates/results raise a bounded error. Other straight/endpoint helpers are unchanged. Scoped validation: all13 target-acquisition tests and all10 nearest/straight geometry tests pass. The nearest fixtures now distinguish live-score comparisons from stored best scores, include binary-exact endpoint ties, and bracket the projection cutoff with adjacent Float32 node lengths rather than unstored double inputs. TypeScript passes.
+
+### Per-attempt reset and lifecycle order
+
+Further installed-binary tracing of `RematerialiseOpponent4a8540` establishes
+that yaw is computed once from the incoming row2 before the already-physical
+shortcut. A nonphysical caller saves the entire original ACT matrix, sets
+collision flag0x100 at+0x19c, render style0, pipes render-enable, sets opponent
+physical bit8, and immediately rebuilds the active list **before** placement.
+Each attempt replaces orientation with the saved yaw, applies ground alignment,
+then resets velocity from that attempt's **aligned row2**. Retry displacement
+instead uses the **saved original row2**, after restoring the whole matrix.
+Using the retry heading for velocity loses the recovered slope response.
+
+Before every sensible-place test, the binary zeros omega, curvature, gear and
+revs; copies the aligned ACT matrix into collision.transform_matrix and
+car.old_frame_mat; sets all four old wheel deflections to susp_height[0]; sets
+traction_control1; writes box_face_ref=uint16(globalFaceNumber−2) and
+collision.disable_move_rotate0. Per-attempt acceleration and brake forces are
+**preserved**. The cached car direction is negative aligned row2. Cached car
+pos is transformed from COM with an additional Float32 inverse-unit multiplier
+both before and after actor translation is scaled back; this duplicate native
+cache write must not be mistaken for an extra translation of the visible actor.
+
+The test occurs at0x4a8bb4. A failed test restores the original full ACT matrix,
+then reads/increments retry index: old index0 through22 generate the documented
+retry pose, old index23 exits. Consequently the initial attempt plus23 retries
+perform exactly24 tests. Every retry repeats the ground alignment using the
+saved yaw. Success keeps the aligned/reset state, calls ResetCarSpecialVolume
+and returns1. Exhaustion restores the original actor matrix, zeros car forces,
+curvature/gear/revs and collision omega/velocity, clears physical bit8, sets
+render style1, pipes render-disable, rebuilds the active list, invokes nearest
+fallback and still returns1. Earlier cached wheel/matrix/traction reset writes
+are not generally rolled back by this exhausted branch.
+
+These lifecycle stores are verified evidence for the remaining live mode
+adapter; the existing scalar/ground helpers do not yet perform this whole
+sequence or resolve the engine's redundant native cached-coordinate fields.

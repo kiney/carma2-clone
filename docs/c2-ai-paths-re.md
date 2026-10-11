@@ -48,7 +48,10 @@ Complete-race objective processing is inlined in the `0x4aa6a0` dispatcher. Star
 
 - If follow section is strictly greater than 20000, shift by `section-20000`, then set follow section to 20000 regardless of the shift's boolean result (`0x4aa6d0–0x4aa6f4`).
 - Replenish only when count is at most 10 and finished-calculating is false (`0x4aa6f6–0x4aa706`). Count 11 does not replenish. Ordinary shifts/replenishment retain found/finished flags.
-- Empty route or follow result 1 (end) requests the get-near-player objective. Result 2 rebuilds/restarts. Result 0 (OK) returns without completing the objective (`0x4aa74d–0x4aa74f`), correcting rec2's misleading default `ObjectiveComplete` branch.
+- Follow result1 calls `NewObjective(GetNearPlayer=4)` at `0x4aa745`, then falls through with EDI still1 to inline `ObjectiveComplete` at `0x4aa75a–0x4aa798`. That completion sets the new-objective flag and decrements the **new current GetNearPlayer population**, after GetNear START has run. Preserve synchronous ordering: a deferred completion of the old CompleteRace objective is different behavior.
+- Follow result2 rebuilds/restarts the same route/follower at `0x4aa7d9` without `NewObjective`, deadline changes or deadline RNG. Apply returned car forces first: borrowed-time give-up preserves them, while struggle give-up explicitly zeros them. Restart resets made-it/timing/PID but preserves desired speed, packed struggle count and original persistent escape state.
+- Result0 (OK) returns without completing the objective (`0x4aa74d–0x4aa74f`), correcting rec2's misleading default `ObjectiveComplete` branch. Follower movement still accumulates the opponent-ever-moved flag; a local restart must not erase it.
+- **Empty-route undefined-state boundary:** `0x4aa728` loads EDI from `[esp+0xc]`, the first uninitialized local DWORD after the dispatcher allocates0x11c bytes and saves three registers. CompleteRace never writes it. Other dispatcher branches reuse this local as vector scratch; its value cannot be recovered from the caller's saved EDI. The branch starts GetNear, then dispatches this raw status: zero returns,2 clears/rebuilds the race route and starts the shared follower again under the new GetNear objective, all other values complete GetNear. A deterministic adapter must require explicit raw-status provenance or label a chosen robustness deviation; it must not claim an inferred constant is verified C2 behavior. DIE returns without clearing forces, changing timers or calling follower DIE.
 
 Run-away initialization differs: choose the nearest section and seed direction 0 when the cached vehicle travel direction dotted with the section direction is negative, otherwise 1, then random-top-up to capacity. There is no universal route initialization rule independent of the native objective.
 
@@ -257,3 +260,17 @@ Implementation checkpoint: `src/ai/target-search.ts` ports the bounded authored-
 `src/ai/get-near-state.ts` now composes regular physical GetNear start/run/result handling over the caller-shared route, follower and acquisition records. Factor-zero calls preserve route/cache state; external cursor advancement is synchronized before prefix shifting. A native result2 requests pursuit; explicit result1 notification forces acquisition/restart, including when reported by an external cheaty follower. No geometric physical-arrival heuristic is added. Seven numerical scenarios cover this coordination.
 
 Nonphysical movement, its strict endpoint comparisons and Float32 stores are ported separately in `src/ai/cheaty-path.ts`; mode switching and materialisation still belong to the pending live dispatcher. See [cheaty movement evidence](c2-ai-cheating-re.md) and [pursuit/trail evidence](c2-ai-pursuit-re.md). Direct pursuit prediction and ordered reverse/brake deadlines now have standalone numerical tests in `src/ai/pursuit-motion.ts`, including preserved curvature and deadlines straddling Uint32 wrap. These additions do not yet replace live RoadNavigator or establish AI-01/AI-02 completion.
+
+### Complete-race physical coordination status
+
+`src/ai/complete-race-state.ts` composes a caller-owned shared race-route backing
+and physical follower. Tests exercise native three-false follow options,
+prefix shifting/refill, freeze without route advancement, persistent ever-moved,
+borrowed give-up preserving forces, struggle give-up clearing them, local
+restart and synchronous GetNear/ObjectiveComplete hook mutation. Explicit
+native result1 is supplied externally; no physical-arrival heuristic is added.
+An empty route requires an explicit unsigned raw status, preserving the
+installed undefined-local boundary instead of asserting an invented constant.
+DIE is a no-op. The outer native objective/mode adapter still must connect this
+coordinator to live cars; the existing RoadNavigator has not been declared
+source-faithful or replaced merely by adding this component.

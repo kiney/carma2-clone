@@ -133,6 +133,7 @@ import "./path-corner.test.mjs";
 import "./path-constraints.test.mjs";
 import "./race-path-route.test.mjs";
 import "./race-route-state.test.mjs";
+import "./complete-race-state.test.mjs";
 import "./path-follow-geometry.test.mjs";
 import "./path-struggle.test.mjs";
 import "./ai-objective.test.mjs";
