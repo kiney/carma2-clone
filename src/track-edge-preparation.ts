@@ -25,12 +25,19 @@ export function prepareNativeTrackSceneEdges(scene: {
   models: ReadonlyMap<string, DatModel>;
   sourceMaterials: ReadonlyMap<string, MatMaterial>;
   sourceModelGeometries: ReadonlyMap<DatModel, BufferGeometry>;
+  findSourceMaterial?: (identifier: string) => MatMaterial | undefined;
+  sourceModelStorage?: readonly DatModel[];
 }): NativeTrackSceneEdgePreparation {
   const missing = new Set<string>(),
     prepared = new Map<DatModel, NativeTrackEdgeFlags>();
   let appliedGeometries = 0,
     changedFaces = 0;
-  for (const model of new Set(scene.models.values())) {
+  // The registry lookup map can hide duplicate MODEL identifiers. Native
+  // track storage admits every MODEL, and all of them receive this pass.
+  const storage =
+    scene.sourceModelStorage ??
+    new Set([...scene.models.values(), ...scene.sourceModelGeometries.keys()]);
+  for (const model of storage) {
     const geometry = scene.sourceModelGeometries.get(model);
     if (!geometry) {
       missing.add(`native-track-edge-MODEL-geometry:${model.name}`);
@@ -49,7 +56,11 @@ export function prepareNativeTrackSceneEdges(scene: {
       const material =
         face.material === 0
           ? null
-          : scene.sourceMaterials.get(key(model.materials[face.material - 1]));
+          : scene.findSourceMaterial
+            ? scene.findSourceMaterial(model.materials[face.material - 1])
+            : scene.sourceMaterials.get(
+                key(model.materials[face.material - 1]),
+              );
       if (material === undefined) {
         missing.add(
           `native-track-edge-raw-MAT:${model.materials[face.material - 1]}`,

@@ -140,6 +140,8 @@ try {
           bloodModule,
           slickMaterialsModule,
           recoveryModule,
+          processModule,
+          rulesModule,
         ] = await Promise.all([
           import("/src/ped-native-assets.ts"),
           import("/src/ped-native-runtime.ts"),
@@ -156,6 +158,8 @@ try {
           import("/src/ped-blood.ts"),
           import("/src/ped-slick-materials.ts"),
           import("/src/ped-recovery-effects.ts"),
+          import("/src/ped-process-cache.ts"),
+          import("/src/ped-rules.ts"),
         ]);
         const assets = await assetsModule.loadNativePedAssets(
           c.assets,
@@ -200,6 +204,13 @@ try {
         const moveTable = fsmModule.readNativePedMoveFSM(
           await c.assets.bytes("carma2_HW.exe"),
         );
+        // These controlled enrolled fixtures explicitly select authored movement
+        // row0; normal track placement/personality mapping remains separate.
+        const processMovement = rulesModule.parsePedSettings(
+          await c.assets.text(`${dataRoot}/PEDS/settings.txt`),
+        ).movements[0];
+        if (!processMovement)
+          throw new Error("Original process movement row absent");
         const rng = randomModule.sharedNativeRandom;
         const owner = { label: `Blokebl-${dataRoot}` };
         const events = [];
@@ -399,6 +410,30 @@ try {
           hooks: gameplay.hooks,
         });
         gameplay.bindRuntime(runtime);
+        const processPool = new processModule.NativePedProcessCachePool({
+          readCache: (owner) => gameplay.state(owner).cache,
+          writeCache: (owner, cache) => {
+            gameplay.state(owner).cache = cache;
+            cacheByOwner.set(owner, cache);
+          },
+          randomTurnInterval: (min, max) =>
+            rulesModule.pedRandomInteger(rng.random, min, max),
+        });
+        runtime.hooks.beforePose = (context) => {
+          const result = processPool.visit(context.owner, {
+            timeMs: context.timeMs,
+            replay: globals.replay,
+            minTurnIntervalMs: processMovement.minTurnMs,
+            maxTurnIntervalMs: processMovement.maxTurnMs,
+            spurtingPeriodMs: bloodSettings.spurtingPeriodMs >>> 0,
+          });
+          return {
+            status: result.status,
+            requiredProviders: result.requiredProviders,
+            processedFrames: 0,
+            completedMove: false,
+          };
+        };
         const moved = runtime.moved.bind(runtime);
         runtime.moved = (record, period) => {
           try {
@@ -464,14 +499,7 @@ try {
         });
         const gameplayState = gameplay.enroll(owner, {
           action: 0,
-          cache: {
-            retryCount: 2,
-            flags: 0,
-            stumpCounters: new Uint8Array(assets.form.bones.length),
-            directionInterpolationMs: 50,
-            killer: null,
-            napalmDeadlineMs: 0,
-          },
+          cache: null,
         });
         cacheByOwner.set(owner, gameplayState.cache);
         const frameSettings = poolModule.createNativePedPoolSettings(100, 0);
@@ -548,14 +576,7 @@ try {
         });
         const releaseState = gameplay.enroll(releaseOwner, {
           action: 0,
-          cache: {
-            retryCount: 0,
-            flags: 0,
-            stumpCounters: new Uint8Array(assets.form.bones.length),
-            directionInterpolationMs: 50,
-            killer: null,
-            napalmDeadlineMs: 0,
-          },
+          cache: null,
         });
         const initialVisits = prepare();
         const allocation = runtime.allocation(owner);
@@ -640,7 +661,8 @@ try {
         });
         const controlReleaseVisit = prepare();
         const controlReleased = !runtime.allocation(releaseOwner);
-        if (controlReleased) gameplay.release(releaseOwner);
+        // Ordinary offscreen/render release retains Ped process/gameplay state;
+        // only the admitted visit refreshes its bounded process timestamp.
         let running = true;
         const frameTick = () => {
           if (!running) return;
@@ -692,6 +714,20 @@ try {
               friction: [...spill.friction],
               material: spill.mesh.children[0]?.material?.name ?? null,
             })),
+          processCache: {
+            capacity: processPool.slots.length,
+            used: processPool.slots.filter((cache) => cache.owner !== null)
+              .length,
+            index: gameplayState.cache?.index ?? null,
+            lastUsedTimeMs: gameplayState.cache?.lastUsedTimeMs ?? null,
+            spurtingPeriodMs: gameplayState.cache?.spurtingPeriodMs ?? null,
+            turnInterval: [
+              processMovement.minTurnMs,
+              processMovement.maxTurnMs,
+            ],
+            scope:
+              "original row0 controlled fixtures; bounded allocation on admitted beforePose visits",
+          },
           gameTimeMs: c.stats.gameTimeMs,
           runtimeTimeMs: runtime.currentTimeMs,
           nativeClock: character.instance
@@ -779,7 +815,7 @@ try {
           const released = !runtime.allocation(owner);
           if (released && !gameplayReleased) {
             gameplayReleased = true;
-            gameplay.release(owner);
+            // Resource release does not delete the source Ped+0c owner.
           }
           const releaseHaltInputs = events
             .slice(releaseEventStart)
@@ -855,14 +891,7 @@ try {
           });
           const controlledGameplay = gameplay.enroll(controlledOwner, {
             action: 0,
-            cache: {
-              retryCount: 2,
-              flags: 0,
-              stumpCounters: new Uint8Array(assets.form.bones.length),
-              directionInterpolationMs: 50,
-              killer: null,
-              napalmDeadlineMs: 0,
-            },
+            cache: null,
           });
           cacheByOwner.set(controlledOwner, controlledGameplay.cache);
           prepare();
@@ -964,6 +993,31 @@ try {
     await page.keyboard.down("KeyW");
     await page.waitForTimeout(7000);
     await page.keyboard.up("KeyW");
+    // Quieting is a physical velocity/contact gate, not a fixed seven-second
+    // deadline. Keep InitPedProcessCache's authentic retry0 and wait for the
+    // original contacted body before pausing the scene for a closeup.
+    let quietWaitCompleted = true;
+    await page
+      .waitForFunction(
+        () => {
+          const state = window.__pedNativeSnapshot?.();
+          return (
+            state?.character.body?.philState === 1 &&
+            state.nativeClock?.periodMs === 0
+          );
+        },
+        null,
+        { timeout: 10000, polling: "raf" },
+      )
+      .catch(() => {
+        quietWaitCompleted = false;
+      });
+    report.cases.at(-1).quietWait = {
+      completed: quietWaitCompleted,
+      timeoutMs: 10000,
+      criterion:
+        "original contacted corpse PHIL1 and stopped native animation clock",
+    };
     const controlledSever = await page.evaluate(
       () => window.__pedNativeControlledSever?.() ?? null,
     );

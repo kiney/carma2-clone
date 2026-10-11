@@ -221,13 +221,26 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
         visit(child, childActors[childIndex], childIndex),
       );
     };
-    const expectedMaterials = new Map();
+    const expectedMaterials = new Map(),
+      admittedNames = new Set(),
+      expectedStorage = [];
     for (const path of assets.files(dir, /^[^/]+\.mat$/i))
-      for (const mat of parseMat(await assets.bytes(path)))
+      for (const mat of parseMat(await assets.bytes(path))) {
+        if (admittedNames.has(mat.name)) continue;
+        admittedNames.add(mat.name);
+        expectedStorage.push(mat);
         expectedMaterials.set(
           mat.name.replace(/\.(pix|mat|dat|act|tif|tiff)$/i, "").toLowerCase(),
           mat,
         );
+      }
+    assert.deepEqual(scene.sourceMaterialStorage, expectedStorage);
+    assert.equal(scene.materialArena.liveCount, expectedStorage.length);
+    for (const episode of scene.sourceMaterialEpisodes)
+      assert.equal(
+        scene.materialArena.materialAddress(episode.material).resolved,
+        episode.accepted,
+      );
     assert.deepEqual(scene.sourceMaterials, expectedMaterials);
     assert.equal(scene.sourceMaterials.size, scene.materials.size);
     for (const [key, mat] of scene.sourceMaterials) {

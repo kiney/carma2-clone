@@ -14,6 +14,8 @@ import {
 export function captureNativeTrackSceneLayout(scene: {
   sourceActors: readonly ActNode[];
   models: ReadonlyMap<string, DatModel>;
+  findSourceModel?: (identifier: string) => DatModel | undefined;
+  sourceModelStorage?: readonly DatModel[];
 }): NativeTrackLayoutResult {
   if (scene.sourceActors.length !== 1)
     throw new Error(
@@ -23,13 +25,15 @@ export function captureNativeTrackSceneLayout(scene: {
     name.replace(/\.(pix|mat|dat|act|tif|tiff)$/i, "").toLowerCase();
   const state = createNativeActorOrder(scene.sourceActors, {
     model: (name) => {
-      const model = scene.models.get(key(name));
+      const model = scene.findSourceModel
+        ? scene.findSourceModel(name)
+        : scene.models.get(key(name));
       return model
         ? knownNativeActorValue(model)
         : { resolved: false, requiredProvider: `native source MODEL:${name}` };
     },
   });
-  const models = new Set(scene.models.values());
+  const models = new Set(scene.sourceModelStorage ?? scene.models.values());
   return extractNativeTrackLayout(state.roots[0], {
     defaultModel: {
       resolved: false,

@@ -18,6 +18,7 @@ import { Assets } from "../src/content.ts";
 import { createAssetStore } from "../server/assets.mjs";
 import { loadNativePedAssets } from "../src/ped-native-assets.ts";
 import { NativePedProcessCachePool } from "../src/ped-process-cache.ts";
+import { rescanNativePedProximity } from "../src/ped-native-proximity.ts";
 const f = Math.fround,
   identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 function assetsFixture(name = "first", capacities = {}) {
@@ -326,6 +327,105 @@ function canonicalHost({ overrides = {}, ...options } = {}) {
     });
   return { ...h, processPool, links, releases, acquire };
 }
+
+test("canonical grounding publishes the actual borrowed slot before native proximity mutates its process and two-sided wall", () => {
+  const mat = {},
+    model = {},
+    assets = assetsFixture(),
+    authoredFloor = {
+      ...floor(),
+      constant: 0,
+      material: mat,
+      materialFlags: 1,
+      nativeGroup: -1,
+      nativeFace: 0,
+    },
+    authoredWall = {
+      ...authoredFloor,
+      id: "wall",
+      a: [2, -1, -1],
+      b: [2, 1, -1],
+      c: [2, 1, 1],
+      normal: [1, 0, 0],
+      constant: 2,
+      materialFlags: 0x1000,
+      nativeFace: 1,
+    };
+  let h, scan;
+  h = canonicalHost({
+    assets,
+    faces: [authoredFloor, authoredWall],
+    overrides: {
+      queryFace: (ctx, face, query) =>
+        face.id === "floor"
+          ? { parameter: 0.2, point: [query.origin[0], 0, query.origin[2]] }
+          : null,
+      proximityRescan: (ctx, result) => {
+        const process = h.links.get(ctx.owner);
+        assert.equal(process.faceCache, result.cache.identity);
+        assert.equal(process.faceCache.selectedFace, result.hit.face);
+        scan = rescanNativePedProximity({
+          process,
+          rootPosition: [...ctx.instance.rootPose.slice(9, 12)],
+          direction: null,
+          characterDirection: ctx.instance.direction,
+          personalityBoundsMaxX: assets.profile.bounds.max[0],
+          cosMaxSlope: 0.8,
+          action: 0,
+          suicidal: false,
+          exclusionSpec: null,
+          readIndexedFace: (face) => ({
+            kind: "indexed",
+            value: {
+              model,
+              group: face.nativeGroup,
+              indices: face.id === "floor" ? [0, 1, 2] : [3, 4, 5],
+            },
+          }),
+        });
+        return { requiredProviders: scan.requiredProviders };
+      },
+    },
+  });
+  const owner = {};
+  h.enroll(owner);
+  h.runtime.prepareFrame(frame());
+  const process = h.acquire(owner).cache;
+  process.floorNormal = [9, 8, 7];
+  process.retainedDirection = [0, 0, -1];
+  const visit = h.bridge.advance(h.context(owner));
+  assert.equal(visit.completion.status, "complete");
+  assert.equal(scan.distance, 2);
+  assert.equal(scan.state.flags, 2, "proximity flags are BYTE+18");
+  assert.equal(process.processFlags, 0, "unrelated DWORD+c4 remains unchanged");
+  assert.deepEqual(process.floorNormal, [0, 1, 0]);
+  assert.deepEqual(
+    h.bridge.state(owner).processFloorNormal,
+    process.floorNormal,
+  );
+  assert.deepEqual(process.retainedDirection, [1, 0, 0]);
+  assert.deepEqual(scan.state.position, [2, f(0.25), 0]);
+  const cachedWall = process.faceCache.faces[1];
+  assert.equal(scan.mutatedFaces[0], cachedWall);
+  assert.deepEqual(cachedWall.normal, [-1, -0, -0]);
+  assert.equal(cachedWall.constant, -2);
+  assert.equal(
+    authoredWall.constant,
+    2,
+    "cache mutation leaves authored source unchanged",
+  );
+  assert.deepEqual(authoredWall.normal, [1, 0, 0]);
+  const selected = process.faceCache.selectedFace;
+  h.bridge.releaseFaceCache(owner);
+  assert.equal(process.faceCache, null);
+  assert.deepEqual(
+    process.floorNormal,
+    [0, 1, 0],
+    "releasing the borrowed list preserves canonical retained vectors",
+  );
+  assert.deepEqual(process.retainedDirection, [1, 0, 0]);
+  assert.equal(selected.constant, 0);
+});
 
 test("raw support hit adds current clearance once, uses actual FORM slot0, and does not advance BON", () => {
   const h = host(),

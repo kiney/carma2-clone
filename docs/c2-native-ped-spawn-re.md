@@ -1,0 +1,33 @@
+# Native pedestrian face spawning
+
+## Evidence and scope
+
+This note separates direct inspection of the installed HW executable from rec2's reconstructed source. The installed executable is `carma2_HW.exe`, SHA-256 `698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c` (PE32 i386, image base `0x400000`). The addresses below are installed addresses. No numerical spawn capture has been made; RNG chronology and formulas below are static analysis, not experimentally captured output.
+
+The caller path is installed `ProcessModelsCB` at `0x40cf10` → `MungeFaces` at `0x40d530` → `SpawnPedsOnFace` at `0x4d2a80`. `ProcessModelsCB` selects the actor's local MODEL when it exists and global `0x689fbc` is zero. Otherwise it scans children, skips identifiers beginning with `&`, and selects the first remaining child. `MungeFaces` visits model faces in order and calls `SpawnPedsOnFace(face, model)` before checking whether a face must be made updateable. It adjusts its face index after removing a face, so the next face remains visited.
+
+## Installed eligibility and inputs
+
+The installed `SpawnPedsOnFace` checks, in order, that network mode is off (`0x68a058`), the face normal's Y component is above the maximum-slope cosine, the face has a material and its identifier is non-NULL, `strlen(identifier) - 4 > 7`, `identifier[7] == '?'`, and the global pedestrian count is below 2,000. The byte check is `cmp [esi+7],0x3f; jne exit` at `0x4d2ade–0x4d2ae2`: identifiers with any other byte there are rejected.
+
+The face's three vertex indices address the selected model's vertex array. The callee reads each vertex's authored model-space position; it is invoked before track face migration. It receives the face and model, not an ACT actor or world transform. Therefore the source triangle is raw MODEL geometry, and any ACT transform application must be established by another native caller/context rather than inferred from the callee.
+
+Spawn specs are scanned in their configured order and matched by material pointer identity, not by identifier text. In the original loader, spawn and exclusion materials are resolved to BRender material pointers; a same-named but distinct material is not equivalent. Spec fields used here are movement row, group, density and per-spec fractional carry. The caller's precise source resource/identity mapping must be preserved through track preparation to reproduce this behavior.
+
+## Density, cap, movement, and mission behavior
+
+For density `d >= 0`, installed code computes `carry + WORLD_SCALE² * area * d / 1000`, floors the result, and stores its fractional remainder after processing the face. The XZ triangle area is the absolute shoelace area divided by two; the installed constant corresponding to `WORLD_SCALE` is 6.9. For negative density, the candidate count is `-d`. The carry is stored on the matched spawn spec, so it continues across its faces. If the global capacity is reached during the spawn loop, the function returns before writing the new remainder. Capacity is 2,000 and is checked both on entry and before each pedestrian.
+
+The per-candidate sequence in the installed disassembly is group-member selection, animal exclusion check, two `SRandomPosNeg(1)` calls for X/Z direction components, then triangle-point generation, followed by pedestrian construction. `SRandomPosNeg(1)` produces signed floating-point samples; these are not discrete `+1/-1` signs. An excluded animal consumes the group-selection draw but skips direction, point, construction and pedestrian-count increment. The triangle point uses two random coefficients in `[0.1, 0.9)`, reflecting both when their sum exceeds one, then derives the third barycentric coefficient. BuildPedestrian receives the configured movement row. rec2's reconstruction shows the row's max walk-speed factor being sampled as an integer when nonzero, then passed into movement setup; zero chooses move 0. Exact parity of that reconstruction with the installed build path has not been confirmed by a numerical capture.
+
+After successful construction, installed race-type handling assigns objective ownership. For race type 5 (`SmashNPed`), pedestrians in the selected group get flag `0x200` and are registered through `AddSmashableRaceTarget` (`0x497640`). For race type 2 (`Peds`), a negative target count marks all spawned pedestrians; otherwise only configured target-group matches increment the initial target total and receive flag `0x200`. These flags and registrations are part of population creation, not merely hit-time score accounting.
+
+## RNG evidence and current implementation
+
+Installed helper addresses are `IRandomBetween` `0x512f00`, `SRandomBetween` `0x513000`, and `SRandomPosNeg` `0x513030`. The static call order above is from installed HW disassembly. The current clone does not yet establish the same shared CRT stream for population generation; its default population random source is private. rec2's `SpawnPedsOnFace` at its differently revised address (`0x4d2cc0`) and `BuildPedestrian` at `0x407990` are useful reconstruction maps, not proof that every implementation detail matches this installed binary. The `newcommon/61-pedestrn.c` version contains stubs for these routines.
+
+Current `src/pedestrians.ts` parses the commented spawn specs and groups, then `collectPedSurfaces` traverses rendered scene meshes. It reconstructs source-face order where `sourceFaces` metadata exists, maps material names, applies each mesh's `matrixWorld` to triangle positions, computes slope from the rendered triangle cross product, and calculates population from that area. Population selection currently draws a group choice, point coefficients, heading, and walk period using the pedestrian system RNG. It therefore differs from native input ownership (raw selected MODEL before migration), MAT pointer identity, face-normal slope, continuous signed direction components, RNG chronology/stream, animal exclusion, native movement-factor selection, and objective initialization. It also skips zero-density specs before fractional carry processing.
+
+## Remaining evidence needed
+
+To integrate this faithfully, track loading must retain and expose the actual source actor/MODEL traversal order, raw face indices and normal, and live MAT identity through destructive face preparation. Population creation needs access to the installed-equivalent shared CRT stream and race/network/animal/objective state. A numerical probe should then compare candidate count, RNG state and resulting pedestrian data against an independently authored fixture. Until those are available, rendered-scene population is an approximation and no exact native spawn capture is claimed.

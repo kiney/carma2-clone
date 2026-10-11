@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAssetStore } from "../server/assets.mjs";
-import { parseDat, parseMat } from "../src/formats.ts";
+import { Assets } from "../src/content.ts";
 import { knownNativeActorValue as known } from "../src/native-actor-order.ts";
 import {
   createNativeTrackModelResource,
@@ -375,7 +375,12 @@ test("Stock and Advanced multi-MAT models prepare using actual parsed identity a
     }
     throw error;
   }
-  const key = (s) => s.replace(/\.(mat|dat)$/i, "").toLowerCase();
+  const assets = new Assets();
+  assets.manifest = store.manifest;
+  assets.lookup = new Map(
+    store.manifest.map(({ path }) => [path.toLowerCase(), path]),
+  );
+  assets.bytes = async (path) => store.read(path);
   for (const root of ["data", "adv_data"]) {
     const prefix = `${root}/races/newcity1/`;
     const files = store.manifest.filter(
@@ -387,16 +392,9 @@ test("Stock and Advanced multi-MAT models prepare using actual parsed identity a
       t.diagnostic(`${root} Newcity original resources unavailable`);
       continue;
     }
-    const arena = new NativeResourceArena(),
-      mats = new Map(),
-      models = [];
-    for (const entry of files.filter((e) => /\.mat$/i.test(e.path)))
-      for (const mat of parseMat(await store.read(entry.path))) {
-        arena.allocateMaterial(mat);
-        mats.set(key(mat.name), mat);
-      }
-    for (const entry of files.filter((e) => /\.dat$/i.test(e.path)))
-      models.push(...parseDat(await store.read(entry.path)));
+    const scene = await assets.scene(`${root}/RACES/newcity1`, "newcity1"),
+      arena = scene.materialArena,
+      models = scene.sourceModelStorage;
     let checked = 0;
     for (const model of models) {
       const used = new Set(
@@ -406,8 +404,9 @@ test("Stock and Advanced multi-MAT models prepare using actual parsed identity a
       const made = createNativeTrackModelResource(
         model,
         (name) => {
-          assert.ok(mats.has(key(name)), `actual source MAT ${name}`);
-          return known(mats.get(key(name)));
+          const mat = scene.findSourceMaterial(name);
+          assert.ok(mat, `actual accepted source MAT ${name}`);
+          return known(mat);
         },
         4,
       );

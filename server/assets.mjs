@@ -79,8 +79,10 @@ export async function createAssetStore(root = path.resolve("carma2_orig")) {
     candidate === rootPath || candidate.startsWith(rootPath + path.sep);
 
   async function walk(directory, relative = "") {
-    const names = (await readdir(directory)).sort((a, b) => a.localeCompare(b));
-    for (const name of names) {
+    // Retain the host directory's enumeration rather than claiming sorted
+    // filenames reproduce Windows FindFirst/FindNext.
+    const names = await readdir(directory);
+    for (const [directoryEntryIndex, name] of names.entries()) {
       const absolute = path.join(directory, name);
       const rel = relative ? `${relative}/${name}` : name;
       const info = await lstat(absolute);
@@ -93,7 +95,13 @@ export async function createAssetStore(root = path.resolve("carma2_orig")) {
       if (!info.isFile()) continue;
       const normalized = relativeAssetPath(rel);
       if (normalized)
-        add({ path: normalized, size: info.size, kind: "file", absolute });
+        add({
+          path: normalized,
+          size: info.size,
+          kind: "file",
+          absolute,
+          enumeration: { kind: "host-directory", index: directoryEntryIndex },
+        });
       if (name.toLowerCase().endsWith(".twt")) {
         try {
           const bytes = await readFile(absolute);
@@ -101,7 +109,7 @@ export async function createAssetStore(root = path.resolve("carma2_orig")) {
           const parent = relative;
           const stem = name.slice(0, -4);
           const virtualDir = parent ? `${parent}/${stem}` : stem;
-          for (const entry of parsed.entries) {
+          for (const [archiveEntryIndex, entry] of parsed.entries.entries()) {
             const assetPath = relativeAssetPath(`${virtualDir}/${entry.name}`);
             if (assetPath)
               archives.push({
@@ -110,6 +118,11 @@ export async function createAssetStore(root = path.resolve("carma2_orig")) {
                 kind: "archive",
                 absolute,
                 offset: entry.offset,
+                enumeration: {
+                  kind: "archive-table",
+                  archive: rel,
+                  index: archiveEntryIndex,
+                },
               });
           }
         } catch (error) {
@@ -128,9 +141,20 @@ export async function createAssetStore(root = path.resolve("carma2_orig")) {
   }
 
   await walk(rootPath);
-  for (const asset of archives) add(asset);
+  for (const asset of archives) {
+    // A loose override changes bytes, not this mounted archive's enumeration.
+    // Extra loose files remain supported as a local mod workflow; they are
+    // explicitly identified as host-directory entries.
+    const override = byKey.get(asset.path.toLocaleLowerCase("en-US"));
+    if (override?.kind === "file") override.enumeration = asset.enumeration;
+    add(asset);
+  }
   const manifest = [...byKey.values()]
-    .map(({ path: assetPath, size }) => ({ path: assetPath, size }))
+    .map(({ path: assetPath, size, enumeration }) => ({
+      path: assetPath,
+      size,
+      enumeration,
+    }))
     .sort((a, b) => a.path.localeCompare(b.path));
 
   return {

@@ -1,4 +1,6 @@
 import { createModelGeometry } from "./render-geometry";
+import { NativeResourceRegistry } from "./native-resource-registry";
+import { NativeResourceArena } from "./native-resource-arena";
 import * as THREE from "three";
 import { parseDat, parseAct, parseMat, parsePix, decodeText } from "./formats";
 import { parseTiff } from "./tiff";
@@ -6,6 +8,9 @@ import type { DatModel, ActNode, MatMaterial, PixMap } from "./formats";
 export interface AssetEntry {
   path: string;
   size: number;
+  enumeration?:
+    | { kind: "archive-table"; archive: string; index: number }
+    | { kind: "host-directory"; index: number };
 }
 const key = (name: string) =>
   name.replace(/\.(pix|mat|dat|act|tif|tiff)$/i, "").toLowerCase();
@@ -52,6 +57,21 @@ export class Assets {
           e.path.toLowerCase().startsWith(prefix) &&
           pattern.test(e.path.slice(prefix.length)),
       )
+      .sort((a, b) => {
+        // PFForEveryFile walks raw mounted-TWT entry order. A loose install
+        // exposes the server's host enumeration, not an invented native order.
+        const left = a.enumeration,
+          right = b.enumeration;
+        if (!left || !right) return 0;
+        const sameDirectory =
+          a.path.slice(0, a.path.lastIndexOf("/")).toLowerCase() ===
+          b.path.slice(0, b.path.lastIndexOf("/")).toLowerCase();
+        if (!sameDirectory) return 0;
+        if (left.kind === "archive-table" && right.kind === "archive-table")
+          return left.archive === right.archive ? left.index - right.index : 0;
+        if (left.kind === right.kind) return left.index - right.index;
+        return left.kind === "archive-table" ? -1 : 1;
+      })
       .map((e) => e.path);
   }
   async pixelmaps(
@@ -155,55 +175,93 @@ export class Assets {
           }
         }),
       );
-    const models = new Map<string, DatModel>(),
-      materials = new Map<string, THREE.Material>();
-    const dat = this.files(dir, /^[^/]+\.dat$/i);
+    // Storage retains actual resource episodes separately from legacy name maps.
+    // Track AddMaterials rejects exact duplicate identifiers; registry lookup
+    // folds case and visits newest accepted first. MODEL storage flags0 admits
+    // every record, even repeated identifiers (500fe0 / 501e1a / 529300).
+    const modelRegistry = new NativeResourceRegistry<DatModel>(false),
+      materialRegistry = new NativeResourceRegistry<MatMaterial>(true),
+      models = new Map<string, DatModel>(),
+      materials = new Map<string, THREE.Material>(),
+      renderedMaterials = new Map<MatMaterial, THREE.Material>(),
+      sourceMaterials = new Map<string, MatMaterial>(),
+      materialArena = new NativeResourceArena();
+    const materialEpisodes: {
+      path: string;
+      recordIndex: number;
+      material: MatMaterial;
+      accepted: boolean;
+    }[] = [];
     const mats = this.files(dir, /^[^/]+\.mat$/i);
-    for (const p of dat) {
-      for (const model of parseDat(await this.bytes(p))) {
+    let missingTextures = 0;
+    for (const path of mats) {
+      const batch = parseMat(await this.bytes(path));
+      // BrMaterialLoadMany allocates the WHOLE file before AddMaterials can
+      // release rejected duplicates. Addresses describe our host arena only.
+      const handles = batch.map((mat) => materialArena.allocateMaterial(mat));
+      for (const [recordIndex, mat] of batch.entries()) {
+        const accepted = materialRegistry.add(mat);
+        materialEpisodes.push({ path, recordIndex, material: mat, accepted });
+        if (!accepted) {
+          materialArena.free(handles[recordIndex]);
+          continue;
+        }
+        sourceMaterials.set(key(mat.name), mat);
+        let texture = mat.texture ? local.get(key(mat.texture)) : undefined;
+        if (mat.texture && !texture) missingTextures++;
+        if (texture) {
+          texture = texture.clone();
+          const uv = mat.uvTransform;
+          texture.matrixAutoUpdate = false;
+          texture.matrix.set(uv[0], uv[2], uv[4], uv[1], uv[3], uv[5], 0, 0, 1);
+          texture.needsUpdate = true;
+        }
+        const colour = texture
+          ? 0xffffff
+          : new THREE.Color(
+              mat.rgba[0] / 255,
+              mat.rgba[1] / 255,
+              mat.rgba[2] / 255,
+            );
+        const opacity = mat.rgba[3] / 255;
+        const material = new THREE.MeshLambertMaterial({
+          color: colour,
+          map: texture ?? null,
+          side: mat.flags & 0x1800 ? THREE.DoubleSide : THREE.FrontSide,
+          transparent: opacity < 0.99,
+          opacity,
+          alphaTest: texture ? 0.15 : 0,
+          depthWrite: opacity >= 0.99,
+        });
+        material.name = mat.name;
+        material.userData.c2Flags = mat.flags;
+        renderedMaterials.set(mat, material);
+        materials.set(key(mat.name), material);
+      }
+    }
+    const modelEpisodes: {
+      path: string;
+      recordIndex: number;
+      model: DatModel;
+    }[] = [];
+    for (const path of this.files(dir, /^[^/]+\.dat$/i)) {
+      for (const [recordIndex, model] of parseDat(
+        await this.bytes(path),
+      ).entries()) {
+        modelRegistry.add(model);
+        modelEpisodes.push({ path, recordIndex, model });
         models.set(key(model.name), model);
         this.warnings.push(...(model.warnings ?? []));
       }
     }
-    const parsedMaterials: MatMaterial[] = [];
-    for (const p of mats) {
-      parsedMaterials.push(...parseMat(await this.bytes(p)));
-    }
-    const sourceMaterials = new Map<string, MatMaterial>();
-    let missingTextures = 0;
-    for (const mat of parsedMaterials) {
-      sourceMaterials.set(key(mat.name), mat);
-      let texture = mat.texture ? local.get(key(mat.texture)) : undefined;
-      if (mat.texture && !texture) missingTextures++;
-      if (texture) {
-        texture = texture.clone();
-        const uv = mat.uvTransform;
-        texture.matrixAutoUpdate = false;
-        texture.matrix.set(uv[0], uv[2], uv[4], uv[1], uv[3], uv[5], 0, 0, 1);
-        texture.needsUpdate = true;
-      }
-      const colour = texture
-        ? 0xffffff
-        : new THREE.Color(
-            mat.rgba[0] / 255,
-            mat.rgba[1] / 255,
-            mat.rgba[2] / 255,
-          );
-      const opacity = mat.rgba[3] / 255;
-      // ALWAYS_VISIBLE disables BRender culling, as does TWO_SIDED.
-      const material = new THREE.MeshLambertMaterial({
-        color: colour,
-        map: texture ?? null,
-        side: mat.flags & 0x1800 ? THREE.DoubleSide : THREE.FrontSide,
-        transparent: opacity < 0.99,
-        opacity,
-        alphaTest: texture ? 0.15 : 0,
-        depthWrite: opacity >= 0.99,
-      });
-      material.name = mat.name;
-      material.userData.c2Flags = mat.flags;
-      materials.set(key(mat.name), material);
-    }
+    const findSourceMaterial = (identifier: string) =>
+      materialRegistry.find(identifier);
+    const findSourceModel = (identifier: string) =>
+      modelRegistry.find(identifier);
+    const findRenderedMaterial = (identifier: string) => {
+      const source = findSourceMaterial(identifier);
+      return source ? renderedMaterials.get(source) : undefined;
+    };
     const fallback = new THREE.MeshLambertMaterial({
       color: 0xaaaaaa,
       side: THREE.DoubleSide,
@@ -214,7 +272,7 @@ export class Assets {
     defaultMaterial.name = "C2 default material";
     defaultMaterial.userData.c2Flags = 1;
     const geometries = new Map<
-      string,
+      DatModel,
       {
         geometry: THREE.BufferGeometry;
         materials: THREE.Material[];
@@ -222,16 +280,17 @@ export class Assets {
       }
     >();
     const sourceModelGeometries = new Map<DatModel, THREE.BufferGeometry>();
-    for (const [name, model] of models) {
+    for (const model of modelRegistry.accepted) {
       const geometry = createModelGeometry(model);
       sourceModelGeometries.set(model, geometry);
       const slots = [...new Set(model.faces.map((f) => f.material))];
       const used = slots.map((index) =>
         index === 0
           ? defaultMaterial
-          : (materials.get(key(model.materials[index - 1] || "")) ?? fallback),
+          : (findRenderedMaterial(model.materials[index - 1] || "") ??
+            fallback),
       );
-      geometries.set(name, { geometry, materials: used, slots });
+      geometries.set(model, { geometry, materials: used, slots });
     }
     const act =
       this.resolve(`${dir}/${stem}.act`) ??
@@ -294,9 +353,10 @@ export class Assets {
         style = node.renderStyle || inheritedStyle;
       object.userData.c2ActorMaterialName = mat ?? null;
       if (node.model && style !== 1) {
-        const data = geometries.get(key(node.model));
+        const sourceModel = findSourceModel(node.model);
+        const data = sourceModel ? geometries.get(sourceModel) : undefined;
         if (data) {
-          const override = mat ? materials.get(key(mat)) : undefined;
+          const override = mat ? findRenderedMaterial(mat) : undefined;
           const mesh = new THREE.Mesh(
             data.geometry,
             data.materials.map((material, index) =>
@@ -342,9 +402,17 @@ export class Assets {
         ActNode,
         THREE.Group
       >,
-      /** Authored MAT resources, with the same last-loaded lookup semantics as
-       * rendered materials; native identity must not use renderer fallbacks. */
+      /** Compatibility name maps; native consumers use exact registry lookup
+       * and ordered storage identities below, never extension-normalized keys. */
       sourceMaterials,
+      findSourceMaterial,
+      findSourceModel,
+      sourceMaterialStorage:
+        materialRegistry.accepted as readonly MatMaterial[],
+      sourceModelStorage: modelRegistry.accepted as readonly DatModel[],
+      sourceMaterialEpisodes: materialEpisodes,
+      sourceModelEpisodes: modelEpisodes,
+      materialArena,
       /** Actual MODEL-to-geometry ownership, before cloning or render batching. */
       sourceModelGeometries: sourceModelGeometries as ReadonlyMap<
         DatModel,
@@ -363,8 +431,11 @@ export class Assets {
       models,
       materials,
       stats: {
-        models: models.size,
-        materials: materials.size,
+        models: modelRegistry.accepted.length,
+        materials: materialRegistry.accepted.length,
+        rejectedMaterials: materialEpisodes.filter(
+          (episode) => !episode.accepted,
+        ).length,
         missingTextures,
         missingModels,
       },
