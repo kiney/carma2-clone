@@ -23,8 +23,8 @@ import type { NativePedMoveCallbackState } from "./physics/ped-active-move";
 /** Gameplay/process-cache fields not owned by the character/resource core. */
 export interface NativePedGroundingInput {
   action: number;
-  /** Actual process-cache floor normal; used only when this owner is first seen. */
-  processFloorNormal: PedVector;
+  /** Standalone fallback only. A live readProcessCache binding takes precedence. */
+  processFloorNormal?: PedVector;
   cosMaxSlope: number;
   direction: PedVector;
   smoothTurnTarget: PedVector | null;
@@ -44,6 +44,15 @@ export interface NativePedGroundingProximityResult
   extends NativePedGroundingOutletResult {
   /** Only an actual process-cache writer may replace this retained normal. */
   processFloorNormal?: PedVector;
+  /** Actual RescanPedProximity stores at process+0c/+10/+14. */
+  processRetainedDirection?: PedVector;
+}
+/** Structural view of the actual currently acquired process record. The stable
+ * Ped remains the face slot owner; a reused process record is not a Ped snapshot. */
+export interface NativePedGroundingProcess<F extends NativePedGroundFace> {
+  floorNormal: PedVector;
+  retainedDirection: PedVector;
+  faceCache: NativePedGroundCacheSlot<F> | null;
 }
 export interface NativePedGroundingOptions<
   Owner extends object,
@@ -52,6 +61,9 @@ export interface NativePedGroundingOptions<
   readInput: (
     context: NativePedRuntimeCallback<Owner>,
   ) => NativePedGroundingInput;
+  /** Canonical mode: read the actual Ped+0c on every access. NULL is explicit
+   * missing ownership, never a request to resurrect the standalone fallback. */
+  readProcessCache?: (owner: Owner) => NativePedGroundingProcess<F> | null;
   collectFaces?: (
     context: NativePedRuntimeCallback<Owner>,
     request: NativePedGroundCollectRequest,
@@ -132,10 +144,19 @@ export class NativePedGrounding<
     private readonly runtime: NativePedRuntime<Owner>,
     private readonly options: NativePedGroundingOptions<Owner, F>,
   ) {
-    this.pool = new NativePedGroundCachePool((owner) => {
+    this.pool = new NativePedGroundCachePool((owner, slot) => {
       //4d1fe9 clears the old process's pointer before the slot is overwritten.
-      const previous = this.states.get(owner as Owner);
-      if (previous) previous.cache = null;
+      if (this.options.readProcessCache) {
+        const process = this.process(owner as Owner);
+        if (process.faceCache !== slot)
+          throw new Error(
+            "Native grounding evicted process face pointer changed",
+          );
+        process.faceCache = null;
+      } else {
+        const previous = this.states.get(owner as Owner);
+        if (previous) previous.cache = null;
+      }
     });
   }
   state(owner: Owner): NativePedGroundingState<F> | null {
@@ -146,25 +167,146 @@ export class NativePedGrounding<
     this.invalidated.add(owner);
   }
   private invalidated = new WeakSet<Owner>();
+  private process(owner: Owner): NativePedGroundingProcess<F> {
+    const process = this.options.readProcessCache?.(owner);
+    if (!process)
+      throw new Error(
+        "Native grounding requires the current process cache owner",
+      );
+    return process;
+  }
+  private cacheForProcess(
+    owner: Owner,
+    process: NativePedGroundingProcess<F>,
+  ): NativePedGroundCache<F, NativePedGroundCacheSlot<F>> | null {
+    const slot = process.faceCache;
+    if (!slot) {
+      if (this.pool.get(owner))
+        throw new Error("Native grounding process lost its borrowed face slot");
+      return null;
+    }
+    if (
+      slot.owner === null ||
+      this.pool.get(slot.owner) !== slot ||
+      (slot.selectedFace !== null &&
+        !this.pool.ownsFaceRecord(slot, slot.selectedFace))
+    )
+      throw new Error("Stale native grounding process face slot identity");
+    return {
+      identity: slot,
+      bounds: slot.bounds,
+      capacity: slot.capacity,
+      faces: slot.faces,
+      selectedFace: slot.selectedFace,
+    };
+  }
+  private createState(
+    owner: Owner,
+    input: NativePedGroundingInput,
+  ): NativePedGroundingState<F> {
+    if (!this.options.readProcessCache) {
+      if (!input.processFloorNormal)
+        throw new Error(
+          "Standalone native grounding requires its retained floor normal",
+        );
+      return {
+        cache: null,
+        processFloorNormal: vector(input.processFloorNormal),
+        lastResult: null,
+        requiredProviders: [],
+      };
+    }
+    const bridge = this;
+    return {
+      get cache() {
+        const process = bridge.options.readProcessCache!(owner);
+        return process ? bridge.cacheForProcess(owner, process) : null;
+      },
+      set cache(cache) {
+        const process = bridge.process(owner);
+        if (cache) {
+          const slot = cache.identity;
+          if (slot.owner !== owner || bridge.pool.get(owner) !== slot)
+            throw new Error(
+              "Native grounding cannot bind an unowned face slot",
+            );
+          if (
+            cache.selectedFace !== null &&
+            !slot.faces.includes(cache.selectedFace)
+          )
+            throw new Error(
+              "Native grounding selected face is outside its slot",
+            );
+          slot.selectedFace = cache.selectedFace;
+          process.faceCache = slot;
+        } else process.faceCache = null;
+      },
+      get processFloorNormal() {
+        return vector(bridge.process(owner).floorNormal);
+      },
+      set processFloorNormal(normal) {
+        bridge.process(owner).floorNormal = vector(normal);
+      },
+      lastResult: null,
+      requiredProviders: [],
+    };
+  }
   setProcessFloorNormal(owner: Owner, normal: PedVector): void {
+    if (this.options.readProcessCache) {
+      this.process(owner).floorNormal = vector(normal);
+      return;
+    }
     const state = this.states.get(owner);
     if (!state)
       throw new Error("Native grounding process owner is not initialized");
     state.processFloorNormal = vector(normal);
   }
+  setProcessRetainedDirection(owner: Owner, direction: PedVector): void {
+    this.process(owner).retainedDirection = vector(direction);
+  }
+  /** Source InitProcessData clears the specific borrowed slot owner after the
+   * old Ped+0c was cleared. The caller subsequently clears process+b0 itself. */
+  releaseBorrowedFaceSlot(slot: NativePedGroundCacheSlot<F>): void {
+    const owner = slot.owner;
+    this.pool.releaseSlot(slot);
+    if (!this.options.readProcessCache && owner !== null) {
+      const state = this.states.get(owner as Owner);
+      if (state?.cache?.identity === slot) state.cache = null;
+    }
+  }
   /** Installed CBMoveCompleted4cbfa3..4cbfa9 releases only the borrowed
    * face-list slot and process cache+b0, retaining the process and its normal. */
   releaseFaceCache(owner: Owner): void {
+    if (this.options.readProcessCache) {
+      const process = this.process(owner);
+      const slot = this.cacheForProcess(owner, process)?.identity;
+      if (slot) this.releaseBorrowedFaceSlot(slot);
+      process.faceCache = null;
+      return;
+    }
     this.pool.release(owner);
     const state = this.states.get(owner);
     if (state) state.cache = null;
   }
   release(owner: Owner): void {
-    this.pool.release(owner);
+    if (this.options.readProcessCache) {
+      if (this.options.readProcessCache(owner)) this.releaseFaceCache(owner);
+      else if (this.pool.get(owner))
+        throw new Error(
+          "Release the borrowed face slot before its process owner",
+        );
+    } else this.pool.release(owner);
     this.states.delete(owner);
     this.invalidated.delete(owner);
   }
   reset(): void {
+    if (this.options.readProcessCache)
+      for (const capacity of [5, 10, 40, 75] as const)
+        for (const slot of this.pool.order(capacity)) {
+          if (slot.owner === null) continue;
+          const process = this.options.readProcessCache(slot.owner as Owner);
+          if (process?.faceCache === slot) process.faceCache = null;
+        }
     this.pool.reset();
     this.states = new WeakMap();
     this.invalidated = new WeakSet();
@@ -196,13 +338,31 @@ export class NativePedGrounding<
       profile = instance.template.profile;
     let state = this.states.get(owner);
     if (!state) {
-      state = {
-        cache: null,
-        processFloorNormal: vector(input.processFloorNormal),
-        lastResult: null,
-        requiredProviders: [],
-      };
+      state = this.createState(owner, input);
       this.states.set(owner, state);
+    }
+    if (
+      this.options.readProcessCache &&
+      !this.options.readProcessCache(owner)
+    ) {
+      const ground: NativePedGroundResult<F, NativePedGroundCacheSlot<F>> = {
+        status: "provider-required",
+        cache: null,
+        hit: null,
+        needGround: false,
+        needProximityRescan: false,
+        rebuilt: false,
+        overflow: false,
+        attempts: 0,
+        flags: c.flags,
+        action: input.action,
+        effects: [],
+        missingProviders: [],
+      };
+      state.lastResult = ground;
+      state.requiredProviders = ["source-ground-current-process-cache-owner"];
+      c.diagnostics.add(state.requiredProviders[0]);
+      return { ground, completion: completion(state.requiredProviders) };
     }
     const slot0 = instance.template.form.moves[0],
       current = instance.move?.asset.personality;
@@ -242,12 +402,18 @@ export class NativePedGrounding<
         queryFace: this.options.queryFace
           ? (face, query) => this.options.queryFace!(ctx, face, query)
           : undefined,
-        acquireCache: (request) => this.pool.acquire(request),
+        acquireCache: (request) => {
+          const slot = this.pool.acquire(request);
+          //4d2093 publishes process+b0 before the finite support query.
+          if (this.options.readProcessCache)
+            this.process(owner).faceCache = slot;
+          return slot;
+        },
       },
     );
     // Kernel acquisition queried collector scratch. Native memcpy stores its
     // own records: rebind BOTH selected-face pointers to that stable slot copy.
-    if (result.cache) {
+    if (result.cache && result.status !== "bypassed") {
       const cache = result.cache,
         slot = cache.identity,
         selectedIndex = cache.selectedFace
@@ -267,10 +433,13 @@ export class NativePedGrounding<
         },
         hit: result.hit ? { ...result.hit, face: slot.faces[hitIndex] } : null,
       };
+      slot.selectedFace = result.cache!.selectedFace;
       if (hitIndex < 0 && result.hit)
         throw new Error("Native grounding hit is outside its retained list");
     }
-    state.cache = result.cache;
+    // Replay singleton aliases may observe another Ped's actual slot pointer.
+    // A bypass reads no support state and must not relink that borrowed slot.
+    if (result.status !== "bypassed") state.cache = result.cache;
     state.lastResult = result;
     const missing: string[] = result.missingProviders.map(
       (name) => `source-ground-${name}`,
@@ -364,6 +533,11 @@ export class NativePedGrounding<
         accept(outlet);
         if (outlet?.processFloorNormal)
           state.processFloorNormal = vector(outlet.processFloorNormal);
+        if (outlet?.processRetainedDirection)
+          this.setProcessRetainedDirection(
+            owner,
+            outlet.processRetainedDirection,
+          );
       }
     }
     state.requiredProviders = [...new Set(missing)];
@@ -372,6 +546,7 @@ export class NativePedGrounding<
       // visit's triangle-retention shortcut accept a root that was never fully
       // grounded/reoriented. Retain the actual allocated list for reselection.
       state.cache = { ...state.cache, selectedFace: null };
+      state.cache.identity.selectedFace = null;
     }
     for (const name of state.requiredProviders) c.diagnostics.add(name);
     return { ground: result, completion: completion(state.requiredProviders) };

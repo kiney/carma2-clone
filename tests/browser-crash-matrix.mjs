@@ -23,6 +23,7 @@ const server = spawn(process.execPath, ["server/dev.mjs", "--production"], {
 });
 let serverLog = "";
 let browser;
+let page;
 const report = { catalog: {}, cases: [], errors: [], failedRequests: [] };
 server.stdout.on("data", (data) => (serverLog += data));
 server.stderr.on("data", (data) => (serverLog += data));
@@ -50,7 +51,7 @@ try {
       "--use-angle=swiftshader",
     ],
   });
-  const page = await browser.newPage({
+  page = await browser.newPage({
     viewport: { width: 1280, height: 800 },
   });
   page.on("pageerror", (error) => report.errors.push(String(error)));
@@ -336,6 +337,7 @@ try {
     assert.ok(impact.imageReady, JSON.stringify(impact));
 
     const result = { impact, reverse: null, repair: null, severeChain: null };
+    report.currentCase = result;
     if (scenario.name === "stock-eagle3-headon") {
       await page.keyboard.press("c");
       await page.keyboard.press("c");
@@ -357,6 +359,7 @@ try {
           wasted: rival.knackered || rival.damage.wasted,
         };
       });
+      result.repairBefore = repairBefore;
       assert.ok(
         repairBefore.components.some((value) => value > 0),
         JSON.stringify(repairBefore),
@@ -1095,6 +1098,26 @@ try {
     JSON.stringify(report, null, 2),
   );
   console.log(JSON.stringify(report, null, 2));
+} catch (error) {
+  report.failure = String(error);
+  if (page && !page.isClosed())
+    report.failureState = await page
+      .evaluate(() => ({
+        cars: window.carma?.simulation.cars.map((car) => ({
+          name: car.group.name,
+          deformationRevision: car.damage.deformationRevision,
+          shapeRevision: car.revision,
+          shapes: car.shapeVertices.map((shape) =>
+            shape.map((point) => point.toArray()),
+          ),
+        })),
+      }))
+      .catch((captureError) => ({ captureError: String(captureError) }));
+  await writeFile(
+    "artifacts/browser-crash-matrix-failure.json",
+    JSON.stringify(report, null, 2),
+  );
+  throw error;
 } finally {
   if (browser) await browser.close();
   server.kill("SIGTERM");

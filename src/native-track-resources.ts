@@ -1,6 +1,7 @@
 /** Current native MODEL tables, separate from immutable DAT/render geometry.
  * Track mutation preserves resource identity and original face provenance. */
 import type { DatFace, DatModel, MatMaterial } from "./formats";
+import { prepareNativeTrackEdgeFlags } from "./native-track-edge-flags";
 import type { NativeActorValue, NativeActorBounds } from "./native-actor-order";
 import {
   migrateNativeTrackModel,
@@ -173,6 +174,31 @@ export function createNativeTrackModelResource(
     faces,
   };
   return { resolved: true, value: resource };
+}
+
+/** Actual LoadTrack edge pass, before column migration. Creating a resource
+ * alone remains a geometry-only operation for direct MODEL-pick callers. */
+export function mungeNativeTrackResourceEdges(
+  resource: NativeTrackModelResource,
+): void {
+  if (!resource.source || resource.revision !== 0)
+    throw new Error("Native track edge pass requires an initial loaded MODEL");
+  const model = resource.current,
+    faces = model.faces;
+  const edges = prepareNativeTrackEdgeFlags({
+    positions: Float32Array.from(model.vertices.flatMap((v) => v.position)),
+    modelFlags: model.flags,
+    faces: faces.map((face) => ({
+      indices: face.indices,
+      flags: face.payload.flags,
+      material: face.material,
+    })),
+  });
+  invalidateNativeTrackResource(resource);
+  model.flags = edges.modelFlags;
+  faces.forEach((face, index) => {
+    face.payload.flags = edges.faceFlags[index];
+  });
 }
 
 /** Every host mutation of current tables must invalidate the cached preparation. */

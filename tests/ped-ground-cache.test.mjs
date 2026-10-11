@@ -150,3 +150,82 @@ test("invalid capacity, bound, clock and owner do not mutate the cache ring", ()
   }
   assert.deepEqual(pool.order(5), before);
 });
+
+test("stable selected-face pointer belongs to copied slot records and survives release and repreparation", () => {
+  const pool = new NativePedGroundCachePool(),
+    owner = {};
+  const slot = pool.acquire(request(owner)),
+    selected = slot.faces[0],
+    records = slot.faces,
+    ring = pool.order(5);
+  assert.equal(slot.selectedFace, null);
+  slot.selectedFace = selected;
+  pool.releaseSlot(slot);
+  assert.equal(slot.owner, null);
+  assert.equal(slot.selectedFace, selected);
+  assert.equal(slot.faces, records);
+  assert.deepEqual(pool.order(5), ring);
+  assert.throws(() => pool.releaseSlot({ ...slot }), /Foreign/);
+  assert.equal(slot.selectedFace, selected);
+  const nextOwner = {};
+  const prepared = pool.acquire(request(nextOwner));
+  assert.equal(prepared.selectedFace, null);
+  const previousFaces = prepared.faces;
+  prepared.selectedFace = previousFaces[0];
+  assert.equal(pool.acquire(request(nextOwner, 5, 101, prepared)), prepared);
+  assert.equal(prepared.selectedFace, previousFaces[0]);
+  assert.equal(prepared.faces[0], previousFaces[0]);
+  assert.notEqual(prepared.faces, previousFaces);
+});
+
+test("eviction callback retains old slot owner while clearing that Ped's process link before reassignment", () => {
+  let pool;
+  const links = new WeakMap(),
+    observations = [];
+  pool = new NativePedGroundCachePool((owner, slot) => {
+    assert.equal(slot.owner, owner);
+    assert.equal(links.get(owner).faceCache, slot);
+    links.get(owner).faceCache = null;
+    observations.push([owner, slot]);
+  });
+  const owners = Array.from({ length: 6 }, () => ({}));
+  for (const owner of owners) {
+    const process = { faceCache: null };
+    links.set(owner, process);
+    process.faceCache = pool.acquire(request(owner, 75));
+  }
+  assert.equal(links.get(owners[0]).faceCache, null);
+  assert.equal(links.get(owners[5]).faceCache.owner, owners[5]);
+  assert.deepEqual(observations, [[owners[0], links.get(owners[5]).faceCache]]);
+});
+
+test("memcpy repreparation retains selected record addresses beyond the new face count until support selection", () => {
+  const pool = new NativePedGroundCachePool(),
+    owner = {},
+    initial = request(owner);
+  initial.faces = [
+    face(),
+    { ...face(), materialIdentifier: "old", normal: [1, 0, 0] },
+  ];
+  const slot = pool.acquire(initial),
+    selected = slot.faces[1],
+    first = slot.faces[0];
+  slot.selectedFace = selected;
+  const narrow = request(owner, 5, 101, slot);
+  narrow.faces[0].normal = [0, 0, 1];
+  pool.acquire(narrow);
+  assert.equal(slot.selectedFace, selected);
+  assert.equal(pool.ownsFaceRecord(slot, selected), true);
+  assert.equal(slot.faces.includes(selected), false);
+  assert.equal(slot.faces[0], first);
+  assert.deepEqual(first.normal, [0, 0, 1]);
+  const expand = request(owner, 5, 102, slot);
+  expand.faces = [face(), face()];
+  pool.acquire(expand);
+  assert.equal(slot.faces[1], selected);
+  assert.equal(slot.selectedFace, selected);
+  assert.deepEqual(selected.normal, [0, 1, 0]);
+  assert.equal("materialIdentifier" in selected, false);
+  slot.selectedFace = null; // Source query result overwrites +30.
+  assert.equal(pool.ownsFaceRecord({ ...slot }, selected), false);
+});

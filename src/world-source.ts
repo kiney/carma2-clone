@@ -51,6 +51,8 @@ export interface WorldSourceTriangle {
   readonly effectiveTrackModelFlags: number | null;
   /** Source-local equation before pivot subtraction or cached-world emission. */
   readonly nativeModelPlane: Readonly<NativePreparedFacePlane> | null;
+  /** Current load-time MungeTrackModel flag byte, separate from authored DAT. */
+  readonly nativeModelFaceFlags: number | null;
 }
 
 export interface WorldSourceSnapshot {
@@ -500,6 +502,9 @@ export function captureWorldSource(
           preparedGroupIndex: null,
           effectiveTrackModelFlags,
           nativeModelPlane,
+          nativeModelFaceFlags: geometry.userData.c2NativeTrackEdgeFlags
+            ? (geometry.userData.sourceFaceFlags?.[tri] ?? null)
+            : null,
         }),
       );
     }

@@ -21,6 +21,8 @@ export interface PedBloodSettings {
   randomUp: number;
   spin: number;
   lifetimeMs: [number, number];
+  /** Original signed gPed_spurting_period; cache+84 stores its DWORD bits. */
+  spurtingPeriodMs: number;
   sizes: PedGibSize[];
   clouds: SmashExplosion[][];
   slick: {
@@ -43,6 +45,21 @@ const clean = (s: string) =>
 export function parsePedBloodSettings(text: string): PedBloodSettings {
   const start = /\/\/\s*IMPACT GIBLETS\s*:/i.exec(text);
   if (!start) throw new Error("Missing pedestrian giblets");
+  const spurtMarker = /\/\/\s*SPURTING STUMP GIBLETS\s*:/i.exec(text);
+  if (!spurtMarker)
+    throw new Error("Missing pedestrian stump spurting settings");
+  const spurtPeriod = clean(
+    text.slice(spurtMarker.index + spurtMarker[0].length),
+  )[1];
+  if (spurtPeriod === undefined || !/^[+-]?\d+$/.test(spurtPeriod))
+    throw new Error("Invalid pedestrian stump spurting period");
+  const spurtingPeriodMs = Number(spurtPeriod);
+  if (
+    !Number.isInteger(spurtingPeriodMs) ||
+    spurtingPeriodMs < -0x80000000 ||
+    spurtingPeriodMs > 0x7fffffff
+  )
+    throw new Error("Invalid pedestrian stump spurting period");
   const lines = clean(text.slice(start.index + start[0].length));
   let at = 0;
   const row = () => {
@@ -115,8 +132,10 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
   });
   const slickMarker = /\/\/\s*GIB SLICK!/i.exec(text);
   if (!slickMarker) throw new Error("Missing pedestrian blood slick");
+  if (spurtMarker.index <= slickMarker.index)
+    throw new Error("Invalid pedestrian blood section order");
   const slickRows = clean(
-    text.slice(slickMarker.index + slickMarker[0].length),
+    text.slice(slickMarker.index + slickMarker[0].length, spurtMarker.index),
   );
   const slickRow = (index: number, count: number, label: string) => {
     const line = slickRows[index];
@@ -181,6 +200,7 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
     randomUp,
     spin,
     lifetimeMs,
+    spurtingPeriodMs,
     sizes,
     clouds,
     slick: {

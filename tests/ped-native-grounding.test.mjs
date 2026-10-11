@@ -17,6 +17,7 @@ import { createNativePedPoolSettings } from "../src/ped-body-pool.ts";
 import { Assets } from "../src/content.ts";
 import { createAssetStore } from "../server/assets.mjs";
 import { loadNativePedAssets } from "../src/ped-native-assets.ts";
+import { NativePedProcessCachePool } from "../src/ped-process-cache.ts";
 const f = Math.fround,
   identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 function assetsFixture(name = "first", capacities = {}) {
@@ -293,6 +294,37 @@ function host({
     context,
     enable: () => (enabled = true),
   };
+}
+
+/** Actual bounded source process records, separate from the real runtime/PHIL
+ * fixture's FORM resources. Extra selection-test owners need no fake bodies. */
+function canonicalHost({ overrides = {}, ...options } = {}) {
+  const links = new WeakMap(),
+    releases = [];
+  const h = host({
+    ...options,
+    overrides: {
+      ...overrides,
+      readProcessCache: (owner) => links.get(owner) ?? null,
+    },
+  });
+  const processPool = new NativePedProcessCachePool({
+    readCache: (owner) => links.get(owner) ?? null,
+    writeCache: (owner, cache) => links.set(owner, cache),
+    releaseFaceCache: (slot, cache, oldOwner) => {
+      releases.push({ slot, cache, oldOwner, oldLink: links.get(oldOwner) });
+      h.bridge.releaseBorrowedFaceSlot(slot);
+    },
+  });
+  const acquire = (owner, timeMs = 0, replay = false) =>
+    processPool.visit(owner, {
+      timeMs,
+      replay,
+      minTurnIntervalMs: 0,
+      maxTurnIntervalMs: 0,
+      spurtingPeriodMs: 100,
+    });
+  return { ...h, processPool, links, releases, acquire };
 }
 
 test("raw support hit adds current clearance once, uses actual FORM slot0, and does not advance BON", () => {
@@ -748,4 +780,306 @@ test("move completion releases only borrowed face-list ownership, retaining proc
   assert.equal(h.bridge.state(owner), state);
   h.bridge.release(owner);
   assert.equal(h.bridge.state(owner), null);
+});
+
+test("canonical grounding reads live process stores and publishes the actual slot before finite queries", () => {
+  let h;
+  const owner = {},
+    beforeRescan = [];
+  h = canonicalHost({
+    overrides: {
+      queryFace: (ctx, face, query) => {
+        const process = h.links.get(ctx.owner),
+          slot = h.bridge.pool.get(ctx.owner);
+        assert.equal(process.faceCache, slot);
+        assert.equal(slot.owner, ctx.owner);
+        assert.equal(slot.selectedFace, null);
+        assert.equal(h.bridge.state(ctx.owner).cache.identity, slot);
+        return { parameter: 0.2, point: [query.origin[0], 0, query.origin[2]] };
+      },
+      proximityRescan: (ctx, result) => {
+        beforeRescan.push(h.bridge.state(ctx.owner).processFloorNormal);
+        assert.equal(
+          h.links.get(ctx.owner).faceCache.selectedFace,
+          result.hit.face,
+        );
+        return {
+          processFloorNormal: [0.1, 0.8, -0.2],
+          processRetainedDirection: [0.2, 0, -0.9],
+        };
+      },
+    },
+  });
+  h.enroll(owner, [0, 0.25, 0]);
+  const process = h.acquire(owner).cache;
+  h.inputs.set(owner, { processFloorNormal: undefined });
+  h.bridge.setProcessFloorNormal(owner, [0, 0, 0]); // No WeakMap state is needed.
+  h.runtime.prepareFrame(frame());
+  assert.equal(
+    h.bridge.advance(h.context(owner)).completion.status,
+    "complete",
+  );
+  assert.deepEqual(beforeRescan, [[0, 0, 0]]);
+  assert.deepEqual(process.floorNormal, [f(0.1), f(0.8), f(-0.2)]);
+  assert.deepEqual(process.retainedDirection, [f(0.2), 0, f(-0.9)]);
+  assert.equal(process.faceCache.selectedFace, process.faceCache.faces[0]);
+  const state = h.bridge.state(owner);
+  process.floorNormal = [0, 0.6, 0.8];
+  h.inputs.set(owner, { processFloorNormal: [1, 0, 0] });
+  assert.deepEqual(state.processFloorNormal, [0, f(0.6), f(0.8)]);
+  assert.equal(
+    h.bridge.advance(h.context(owner, 40)).ground.status,
+    "retained",
+  );
+  assert.deepEqual(state.processFloorNormal, [0, f(0.6), f(0.8)]);
+  h.bridge.setProcessRetainedDirection(owner, [-1, 0, 0]);
+  assert.deepEqual(process.retainedDirection, [-1, 0, 0]);
+});
+
+test("canonical NULL process is explicit and never restores a standalone floor or borrowed list", () => {
+  const h = canonicalHost(),
+    owner = {};
+  h.enroll(owner);
+  h.runtime.prepareFrame(frame());
+  const ctx = h.context(owner),
+    flags = ctx.character.flags,
+    clock = { ...ctx.instance.clock };
+  const missing = h.bridge.advance(ctx);
+  assert.equal(missing.completion.status, "provider-required");
+  assert.deepEqual(missing.completion.requiredProviders, [
+    "source-ground-current-process-cache-owner",
+  ]);
+  assert.equal(missing.ground.cache, null);
+  assert.deepEqual(h.log, []);
+  assert.equal(ctx.character.flags, flags);
+  assert.deepEqual(ctx.instance.clock, clock);
+  assert.equal(h.bridge.state(owner).cache, null);
+  assert.throws(
+    () => h.bridge.state(owner).processFloorNormal,
+    /current process/,
+  );
+  assert.throws(() => h.bridge.releaseFaceCache(owner), /current process/);
+  const process = h.acquire(owner).cache;
+  process.floorNormal = [0.5, 0.5, 0];
+  h.bridge.advance(ctx);
+  assert.equal(h.bridge.state(owner).cache.identity, process.faceCache);
+});
+
+test("actual100-record eviction releases the borrowed Ped slot after its old cache link clears and rebinds recycled vectors", () => {
+  const h = canonicalHost({ overrides: { proximityRescan: () => undefined } }),
+    a = {},
+    b = {};
+  h.enroll(a);
+  h.enroll(b);
+  h.runtime.prepareFrame(frame());
+  const original = h.acquire(a, 100).cache;
+  original.floorNormal = [0.1, 0.8, -0.2];
+  original.retainedDirection = [0, 0, -1];
+  h.bridge.advance(h.context(a, 100));
+  const aState = h.bridge.state(a),
+    oldSlot = original.faceCache,
+    oldSelected = oldSlot.selectedFace,
+    oldFaces = oldSlot.faces,
+    oldRing = h.bridge.pool.order(5);
+  const others = Array.from({ length: 99 }, () => ({}));
+  others.forEach((o, i) => h.acquire(o, 101 + i));
+  h.processPool.slots[1].floorNormal = [0, -1, 0];
+  h.processPool.slots[1].retainedDirection = [1, 0, 0];
+  const reused = h.acquire(b, 1000);
+  assert.equal(reused.cache, original);
+  assert.equal(h.links.get(a), null);
+  assert.equal(h.links.get(b), original);
+  assert.equal(h.releases[0].oldOwner, a);
+  assert.equal(h.releases[0].oldLink, null);
+  assert.equal(h.releases[0].slot, oldSlot);
+  assert.equal(oldSlot.owner, null);
+  assert.equal(oldSlot.selectedFace, oldSelected);
+  assert.equal(oldSlot.faces, oldFaces);
+  assert.deepEqual(h.bridge.pool.order(5), oldRing);
+  assert.equal(original.faceCache, null);
+  assert.deepEqual(original.floorNormal, [f(0.1), f(0.8), f(-0.2)]);
+  assert.deepEqual(original.retainedDirection, [0, 0, -1]);
+  assert.equal(aState.cache, null);
+  h.log.length = 0;
+  assert.equal(
+    h.bridge.advance(h.context(a, 1000)).completion.status,
+    "provider-required",
+  );
+  assert.deepEqual(h.log, []);
+  h.bridge.advance(h.context(b, 1000));
+  assert.deepEqual(h.bridge.state(b).processFloorNormal, original.floorNormal);
+  assert.notEqual(original.faceCache, oldSlot);
+  const reacquired = h.acquire(a, 2000).cache;
+  assert.equal(reacquired, h.processPool.slots[1]);
+  assert.equal(h.bridge.state(a), aState);
+  assert.deepEqual(aState.processFloorNormal, [0, -1, 0]);
+  assert.equal(aState.cache, null);
+  h.bridge.advance(h.context(a, 2000));
+  assert.notEqual(reacquired.faceCache, oldSlot);
+  assert.notEqual(reacquired.faceCache, original.faceCache);
+  assert.deepEqual(aState.processFloorNormal, [0, -1, 0]);
+});
+
+test("finite ground-slot eviction clears the displaced Ped's current process pointer without clearing retained stores", () => {
+  const h = canonicalHost({ overrides: { proximityRescan: () => undefined } }),
+    owners = Array.from({ length: 41 }, () => ({}));
+  owners.forEach((owner, i) => {
+    h.enroll(owner, [i * 0.001, 0.4, 0]);
+    h.acquire(owner, 100 + i);
+  });
+  h.runtime.prepareFrame(frame());
+  const process = h.links.get(owners[0]);
+  process.floorNormal = [0.2, 0.9, -0.1];
+  process.retainedDirection = [0, 0, 1];
+  process.retryCount = 7;
+  process.headSequence = { address: 0x65d050, startTimeMs: 99, index: 2 };
+  h.bridge.advance(h.context(owners[0], 200));
+  const slot = process.faceCache,
+    state = h.bridge.state(owners[0]);
+  for (const owner of owners.slice(1)) h.bridge.advance(h.context(owner, 200));
+  assert.equal(process.faceCache, null);
+  assert.equal(state.cache, null);
+  assert.equal(slot.owner, owners[40]);
+  assert.equal(h.links.get(owners[40]).faceCache, slot);
+  assert.equal(slot.selectedFace, slot.faces[0]);
+  assert.deepEqual(process.floorNormal, [f(0.2), f(0.9), f(-0.1)]);
+  assert.deepEqual(process.retainedDirection, [0, 0, 1]);
+  assert.equal(process.retryCount, 7);
+  assert.equal(process.headSequence.address, 0x65d050);
+  assert.equal(process.headSequence.startTimeMs, 99);
+  assert.equal(process.headSequence.index, 2);
+});
+
+test("replay singleton reinitialization releases the exact old Ped slot and preserves shared scalar aliases", () => {
+  const h = canonicalHost({ overrides: { proximityRescan: () => undefined } }),
+    a = {},
+    b = {};
+  for (const owner of [a, b]) {
+    h.enroll(owner);
+    h.inputs.set(owner, { replay: true, replayOverride: true });
+  }
+  h.runtime.prepareFrame(frame());
+  const singleton = h.acquire(a, 100, true).cache;
+  singleton.floorNormal = [0.3, 0.8, 0];
+  singleton.retainedDirection = [1, 0, 0];
+  h.bridge.advance(h.context(a, 100));
+  const firstSlot = singleton.faceCache,
+    aState = h.bridge.state(a);
+  assert.equal(firstSlot.owner, a);
+  h.acquire(b, 200, true);
+  assert.equal(h.links.get(a), singleton);
+  assert.equal(h.links.get(b), singleton);
+  assert.equal(firstSlot.owner, null);
+  assert.equal(aState.cache, null);
+  assert.equal(h.releases[0].oldLink, singleton);
+  assert.deepEqual(aState.processFloorNormal, [f(0.3), f(0.8), 0]);
+  h.bridge.advance(h.context(b, 200));
+  const bSlot = singleton.faceCache;
+  assert.equal(bSlot.owner, b);
+  assert.equal(aState.cache.identity, bSlot); // Actual shared pointer, never A's former slot.
+  h.inputs.set(a, { replay: true, replayOverride: false });
+  h.log.length = 0;
+  assert.equal(h.bridge.advance(h.context(a, 200)).ground.status, "bypassed");
+  assert.equal(singleton.faceCache, bSlot);
+  assert.equal(bSlot.owner, b);
+  assert.deepEqual(h.log, []);
+  h.acquire(a, 300, true);
+  assert.equal(bSlot.owner, null);
+  assert.equal(h.bridge.state(b).cache, null);
+  const normal = h.acquire(a, 400, false).cache;
+  assert.notEqual(normal, singleton);
+  assert.equal(h.links.get(b), singleton);
+  assert.equal(aState.cache, null);
+  assert.deepEqual(aState.processFloorNormal, [0, 0, 0]);
+});
+
+test("canonical move completion releases only face ownership and preserves process, head, directions and slot storage", () => {
+  const h = canonicalHost({ overrides: { proximityRescan: () => undefined } }),
+    owner = {};
+  h.enroll(owner);
+  h.runtime.prepareFrame(frame());
+  const process = h.acquire(owner, 100).cache;
+  h.bridge.advance(h.context(owner, 100));
+  process.floorNormal = [0.2, 0.9, -0.1];
+  process.retainedDirection = [0, 0, -1];
+  process.headSequence = { address: 0x65d050, startTimeMs: 51, index: 1 };
+  process.retryCount = 2;
+  const slot = process.faceCache,
+    selected = slot.selectedFace,
+    faces = slot.faces,
+    ring = h.bridge.pool.order(5),
+    state = h.bridge.state(owner);
+  h.bridge.releaseFaceCache(owner);
+  h.bridge.releaseFaceCache(owner);
+  assert.equal(h.links.get(owner), process);
+  assert.equal(process.faceCache, null);
+  assert.equal(slot.owner, null);
+  assert.equal(slot.selectedFace, selected);
+  assert.equal(slot.faces, faces);
+  assert.deepEqual(h.bridge.pool.order(5), ring);
+  assert.deepEqual(state.processFloorNormal, [f(0.2), f(0.9), f(-0.1)]);
+  assert.deepEqual(process.retainedDirection, [0, 0, -1]);
+  assert.equal(process.headSequence.address, 0x65d050);
+  assert.equal(process.headSequence.index, 1);
+  assert.equal(process.headSequence.startTimeMs, 51);
+  assert.equal(process.retryCount, 2);
+  h.log.length = 0;
+  assert.equal(h.bridge.advance(h.context(owner, 200)).ground.rebuilt, true);
+  assert.ok(h.log.some((row) => row[0] === "collect"));
+  assert.notEqual(process.faceCache, slot);
+  h.bridge.reset();
+  assert.equal(process.faceCache, null);
+  assert.equal(h.bridge.state(owner), null);
+  assert.deepEqual(process.floorNormal, [f(0.2), f(0.9), f(-0.1)]);
+});
+
+test("canonical recache keeps source slot+30 through memcpy and finite query, then commits the returned record", () => {
+  let h,
+    phase = 0,
+    previousSelected;
+  const owner = {},
+    first = floor("first"),
+    second = floor("second");
+  h = canonicalHost({
+    overrides: {
+      collectFaces: () => (phase ? [first] : [first, second]),
+      queryFace: (ctx, face, query) => {
+        const process = h.links.get(ctx.owner),
+          slot = process.faceCache;
+        if (phase) {
+          assert.equal(slot, h.bridge.pool.get(ctx.owner));
+          assert.equal(slot.selectedFace, previousSelected);
+          assert.equal(slot.faces.includes(previousSelected), false);
+          assert.equal(
+            h.bridge.state(ctx.owner).cache.selectedFace,
+            previousSelected,
+          );
+          assert.equal(
+            h.bridge.pool.ownsFaceRecord(slot, previousSelected),
+            true,
+          );
+        }
+        return {
+          parameter: face.id === "second" ? 0.1 : 0.2,
+          point: [query.origin[0], 0, query.origin[2]],
+        };
+      },
+      proximityRescan: () => undefined,
+    },
+  });
+  h.enroll(owner, [0, 0.25, 0]);
+  h.runtime.prepareFrame(frame());
+  const process = h.acquire(owner, 100).cache;
+  h.bridge.advance(h.context(owner, 100));
+  const slot = process.faceCache;
+  previousSelected = slot.selectedFace;
+  assert.equal(previousSelected.id, "second");
+  phase = 1;
+  h.bridge.invalidate(owner);
+  const result = h.bridge.advance(h.context(owner, 200));
+  assert.equal(result.completion.status, "complete");
+  assert.equal(process.faceCache, slot);
+  assert.equal(slot.selectedFace, slot.faces[0]);
+  assert.equal(slot.selectedFace.id, "first");
+  assert.notEqual(slot.selectedFace, previousSelected);
 });

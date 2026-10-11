@@ -12,6 +12,7 @@ import {
   invalidateNativeTrackResource as invalidate,
   nativeTrackRawBounds,
   nativeRawModelBounds,
+  mungeNativeTrackResourceEdges,
 } from "../src/native-track-resources.ts";
 const mat = (name, flags = 0x1800) => ({ name, flags });
 const A = mat("A.MAT"),
@@ -120,6 +121,29 @@ test("proven one-MAT CRT preparation is unstable and records raw compacted IDs s
   assert.equal(result.face.rawFlags, 0xe1);
   assert.deepEqual(result.face.a, [0, 0, 1]);
   assert.equal(result.face.constant, 4);
+});
+
+test("load-time edge updates invalidate current MODEL preparation while DAT flags remain authored", () => {
+  const source = dat(),
+    r = resource(source);
+  prepare(r);
+  assert.equal(emit(r, 0, null, known(null)).face.rawFlags, 0xe1);
+  mungeNativeTrackResourceEdges(r);
+  assert.equal(r.revision, 1);
+  assert.equal(r.prepared, null);
+  assert.deepEqual(
+    source.faces.map((face) => face.flags),
+    [0xe0, 0xe1, 0xe2],
+  );
+  // Three coincident coplanar triangles share all three source edges.
+  assert.deepEqual(
+    r.current.faces.map((face) => face.payload.flags),
+    [0xe7, 0xe7, 0xe7],
+  );
+  assert.equal(emit(r, 0, null, known(null)).kind, "unresolved");
+  prepare(r);
+  assert.equal(emit(r, 0, null, known(null)).face.rawFlags, 0xe7);
+  assert.throws(() => mungeNativeTrackResourceEdges(r), /initial loaded MODEL/);
 });
 
 test("migration invalidates all sharing ACT preparations and generated MODEL keeps old DAT provenance with new pivot", () => {

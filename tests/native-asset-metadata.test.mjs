@@ -157,6 +157,20 @@ test("ACT scene objects retain raw actor metadata without changing effective sty
   assert.equal(extra.children[0].name, nativeDefault.name);
   assert.notEqual(extra.children[0], nativeDefault);
   assert.deepEqual([...scene.sourceActorObjects], originalBindings);
+  const additional = await scene.loadActorResource("scene/scene.act");
+  assert.deepEqual(additional.sourceActors, scene.sourceActors);
+  assert.notEqual(additional.sourceActors[0], sourceDefault);
+  assert.equal(
+    additional.sourceActorObjects.get(additional.sourceActors[0]),
+    additional.group.children[0],
+  );
+  assert.equal(
+    additional.sourceActorObjects.get(additional.sourceActors[0].children[0]),
+    additional.group.children[0].children[0],
+  );
+  assert.equal(additional.sourceActorObjects.has(sourceDefault), false);
+  assert.equal(scene.sourceActorObjects.has(additional.sourceActors[0]), false);
+  assert.deepEqual([...scene.sourceActorObjects], originalBindings);
 });
 
 test("original Stock and Advanced scenes retain ACT source metadata", async (t) => {

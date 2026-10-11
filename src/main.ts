@@ -62,6 +62,7 @@ import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
 import { captureWorldSource } from "./world-source";
 import { captureNativeTrackSceneLayout } from "./native-track-scene-layout";
+import { prepareNativeTrackSceneEdges } from "./track-edge-preparation";
 import { WorldFollowupRuntime, type FollowupDue } from "./world-followup";
 import { DamageSystem } from "./damage";
 import {
@@ -779,6 +780,15 @@ async function loadRace() {
     const trackText = await assets.text(currentTrack);
     const newTrack = parseTrackConfig(trackText);
     const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
+    const trackEdges = prepareNativeTrackSceneEdges(world);
+    world.group.userData.nativeTrackEdgePreparation = {
+      status: trackEdges.status,
+      appliedGeometries: trackEdges.appliedGeometries,
+      changedFaces: trackEdges.changedFaces,
+      requiredProviders: trackEdges.requiredProviders,
+    };
+    for (const reason of trackEdges.requiredProviders)
+      assets.warnings.push(`Track edge preparation: ${reason}`);
     // ExtractColumns computes this before model migration, FindNonCars and
     // authored scale normalization. Never recalculate it from batched meshes.
     const initialNativeLayout = captureNativeTrackSceneLayout(world);

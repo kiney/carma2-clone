@@ -39,6 +39,7 @@ const settings = {
   randomUp: 4,
   spin: 70,
   lifetimeMs: [500, 1500],
+  spurtingPeriodMs: 100,
   sizes: [
     {
       minForce: 0.1,
@@ -117,6 +118,10 @@ function syntheticPedSettings(
     ]),
     "// GIB SLICK!",
     ...slickRows,
+    "// SPURTING STUMP GIBLETS:",
+    "5",
+    "100",
+    "100",
   ].join("\n");
 }
 function runtime() {
@@ -170,6 +175,29 @@ test("pedestrian GIBSLICK parser retains exact authored config tuples", () => {
   assert.deepEqual(parsed.slick.friction, [0.2, 1]);
   assert.deepEqual(parsed.slick.smearDistance, [1, 1]);
   assert.equal(parsed.slick.smearMaterial, "GIBSMEAR.MAT");
+  assert.equal(parsed.spurtingPeriodMs, 100);
+});
+test("stump spurting period retains signed GetAnInt values and rejects missing or unsafe data", () => {
+  const authored = syntheticPedSettings();
+  for (const value of [-2147483648, -1, 0, 100, 2147483647]) {
+    const text = authored.replace(
+      "// SPURTING STUMP GIBLETS:\n5\n100\n100",
+      `// SPURTING STUMP GIBLETS:\n5\n${value}\n100`,
+    );
+    assert.equal(parsePedBloodSettings(text).spurtingPeriodMs, value);
+  }
+  for (const value of ["100.5", "2147483648", "-2147483649", "NaN"]) {
+    const text = authored.replace(
+      "// SPURTING STUMP GIBLETS:\n5\n100\n100",
+      `// SPURTING STUMP GIBLETS:\n5\n${value}\n100`,
+    );
+    assert.throws(() => parsePedBloodSettings(text), /stump spurting period/);
+  }
+  assert.throws(
+    () =>
+      parsePedBloodSettings(authored.split("// SPURTING STUMP GIBLETS:")[0]),
+    /Missing pedestrian stump spurting/,
+  );
 });
 test("pedestrian slick parser keeps identifiers data-driven and honors optional smear fields", () => {
   const alternate = parsePedBloodSettings(
@@ -394,12 +422,14 @@ test(
       ["bigbl01", "bigbl02", "bigbl03", "bigbl04", "bigbl05"],
     );
     assert.deepEqual(parsed.slick.friction, [0.2, 1]);
+    assert.equal(parsed.spurtingPeriodMs, 100);
     assert.deepEqual(parsed.slick.smearDistance, [1, 1]);
     assert.equal(parsed.slick.smearMaterial, "GIBSMEAR.MAT");
     const advanced = parsePedBloodSettings(
       await assets.text("adv_data/PEDS/settings.txt"),
     );
     assert.deepEqual(advanced.slick, parsed.slick);
+    assert.equal(advanced.spurtingPeriodMs, 100);
     const effects = await PedBloodRuntime.create(
       assets,
       parsed,

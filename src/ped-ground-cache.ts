@@ -14,6 +14,8 @@ export interface NativePedGroundCacheSlot<F extends NativePedGroundFace> {
   owner: object | null;
   timeMs: number;
   faces: readonly F[];
+  /** Actual slot+30 pointer into this slot's copied face records. */
+  selectedFace: F | null;
   bounds: PedBounds;
 }
 
@@ -24,6 +26,8 @@ export interface NativePedGroundCacheSlot<F extends NativePedGroundFace> {
 export class NativePedGroundCachePool<F extends NativePedGroundFace> {
   private buckets: NativePedGroundCacheSlot<F>[][];
   private owners = new WeakMap<object, NativePedGroundCacheSlot<F>>();
+  /** Each finite slot's record addresses survive subsequent memcpy writes. */
+  private records = new WeakMap<NativePedGroundCacheSlot<F>, F[]>();
   diagnostics = 0;
   constructor(
     private readonly evicted?: (
@@ -40,6 +44,7 @@ export class NativePedGroundCachePool<F extends NativePedGroundFace> {
           owner: null,
           timeMs: 0,
           faces: [],
+          selectedFace: null,
           bounds: { min: [0, 0, 0], max: [0, 0, 0] } as PedBounds,
         }),
       ),
@@ -95,8 +100,8 @@ export class NativePedGroundCachePool<F extends NativePedGroundFace> {
       // Installed4d1fe9 first clears the evicted process's cache pointer.
       this.owners.delete(priorOwner);
       if (slot.timeMs === timeMs) this.diagnostics |= 1;
-      slot.owner = null;
       this.evicted?.(priorOwner, slot);
+      slot.owner = null;
     }
     const index = bucket.indexOf(slot);
     if (index < 0)
@@ -107,13 +112,28 @@ export class NativePedGroundCachePool<F extends NativePedGroundFace> {
     slot.owner = owner;
     // Native memcpy copies records. Preserve record ordering but do not retain
     // the collector's reusable scratch list as this slot's storage.
-    slot.faces = faces.map((face) => ({
-      ...face,
-      a: [...face.a],
-      b: [...face.b],
-      c: [...face.c],
-      normal: [...face.normal],
-    }));
+    const records = this.records.get(slot) ?? [];
+    faces.forEach((face, i) => {
+      const copied = {
+        ...face,
+        a: [...face.a],
+        b: [...face.b],
+        c: [...face.c],
+        normal: [...face.normal],
+      } as F;
+      if (!records[i]) records[i] = copied;
+      else {
+        // Overwrite this source record address; optional host metadata must not
+        // leak from its previous face. Unwritten records beyond count remain.
+        for (const key of Object.keys(records[i]))
+          delete (records[i] as unknown as Record<string, unknown>)[key];
+        Object.assign(records[i], copied);
+      }
+    });
+    this.records.set(slot, records);
+    slot.faces = records.slice(0, faces.length);
+    //4d20d3 stores slot+30 only after the finite query returns. Repreparation
+    // itself retains that pointer, including a record beyond the new count.
     slot.bounds = {
       min: [
         Math.fround(bounds.min[0]),
@@ -132,8 +152,31 @@ export class NativePedGroundCachePool<F extends NativePedGroundFace> {
   /** Owner release clears the back link; it does not promote/rotate a slot. */
   release(owner: object): void {
     const slot = this.owners.get(owner);
-    if (slot?.owner === owner) slot.owner = null;
-    this.owners.delete(owner);
+    if (slot) {
+      if (slot.owner !== owner)
+        throw new Error("Stale native pedestrian face slot owner link");
+      this.releaseSlot(slot);
+    }
+  }
+  ownsFaceRecord(slot: NativePedGroundCacheSlot<F>, face: F): boolean {
+    return this.records.get(slot)?.includes(face) ?? false;
+  }
+  /** InitProcessData already cleared the old Ped's process pointer. Release
+   * the actual borrowed slot identity without looking up that process again.
+   * Keep its selected-face pointer, copied records and ring position intact. */
+  releaseSlot(slot: NativePedGroundCacheSlot<F>): void {
+    const bucketIndex = NATIVE_PED_GROUND_CACHE_CAPACITIES.indexOf(
+      slot.capacity,
+    );
+    if (bucketIndex < 0 || !this.buckets[bucketIndex].includes(slot))
+      throw new Error("Foreign native pedestrian face slot identity");
+    const owner = slot.owner;
+    if (owner !== null) {
+      if (this.owners.get(owner) !== slot)
+        throw new Error("Stale native pedestrian face slot owner link");
+      this.owners.delete(owner);
+      slot.owner = null;
+    }
   }
   /** Installed4d59a0 restores allocation order and clears owners, not faces. */
   reset(): void {

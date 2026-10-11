@@ -221,8 +221,10 @@ export class Assets {
         slots: number[];
       }
     >();
+    const sourceModelGeometries = new Map<DatModel, THREE.BufferGeometry>();
     for (const [name, model] of models) {
       const geometry = createModelGeometry(model);
+      sourceModelGeometries.set(model, geometry);
       const slots = [...new Set(model.faces.map((f) => f.material))];
       const used = slots.map((index) =>
         index === 0
@@ -312,6 +314,23 @@ export class Assets {
     for (const [index, root] of roots.entries())
       group.add(actor(root, undefined, 4, index, sourceActorObjects));
     group.updateMatrixWorld(true);
+    const loadActorResource = async (path: string) => {
+      const sourceActors = parseAct(await this.bytes(path));
+      const sourceActorObjects = new Map<ActNode, THREE.Group>();
+      const group = new THREE.Group();
+      group.name = path.split("/").pop() ?? path;
+      for (const [index, root] of sourceActors.entries())
+        group.add(actor(root, undefined, 4, index, sourceActorObjects));
+      group.updateMatrixWorld(true);
+      return {
+        group,
+        sourceActors: sourceActors as readonly ActNode[],
+        sourceActorObjects: sourceActorObjects as ReadonlyMap<
+          ActNode,
+          THREE.Group
+        >,
+      };
+    };
     return {
       group,
       /** Authored ACT nodes before render defaults, batching or native load mutations.
@@ -326,16 +345,19 @@ export class Assets {
       /** Authored MAT resources, with the same last-loaded lookup semantics as
        * rendered materials; native identity must not use renderer fallbacks. */
       sourceMaterials,
+      /** Actual MODEL-to-geometry ownership, before cloning or render batching. */
+      sourceModelGeometries: sourceModelGeometries as ReadonlyMap<
+        DatModel,
+        THREE.BufferGeometry
+      >,
       defaultMaterial,
+      /** Separate original ACT identities and live object bindings for an extra
+       * resource; never append them to the initial track's identity crosswalk. */
+      loadActorResource,
       /** Additional authored ACTs share this scene's immutable DAT/MAT/PIX
        * resources. Debris loading must not reload every texture library. */
       loadActorFile: async (path: string): Promise<THREE.Group> => {
-        const extra = new THREE.Group();
-        extra.name = path.split("/").pop() ?? path;
-        for (const [index, root] of parseAct(await this.bytes(path)).entries())
-          extra.add(actor(root, undefined, 4, index));
-        extra.updateMatrixWorld(true);
-        return extra;
+        return (await loadActorResource(path)).group;
       },
       textures: local,
       models,

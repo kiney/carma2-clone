@@ -76,11 +76,21 @@ try {
     pedestrians: window.carma.pedestrians.count,
     paused: window.carma.paused,
     columns: window.carma.collision.sourceSnapshot.columns,
+    trackEdges:
+      window.carma.collision.sourceSnapshot.root.userData
+        .nativeTrackEdgePreparation,
+    preparedEdgeFaces: window.carma.collision.sourceSnapshot.triangles.filter(
+      (face) => face.nativeModelFaceFlags !== null,
+    ).length,
   }));
   assert.equal(initial.paused, true, "async content should load while paused");
   assert.equal(initial.elapsed, 0, "race must not advance during async load");
   assert.equal(initial.health, 100, "player must be healthy before input");
   assert.equal(initial.columns.boundsSource, "native-initial-act");
+  assert.equal(initial.trackEdges.status, "complete");
+  assert.ok(initial.trackEdges.appliedGeometries > 0);
+  assert.ok(initial.trackEdges.changedFaces > 0);
+  assert.ok(initial.preparedEdgeFaces > 0);
   for (const axis of ["X", "Z"])
     assert.equal(
       initial.columns[`size${axis}`],
@@ -323,8 +333,20 @@ try {
       stats: window.carma.stats,
       track: window.carma.track.start,
       columns: window.carma.collision.sourceSnapshot.columns,
+      trackEdges:
+        window.carma.collision.sourceSnapshot.root.userData
+          .nativeTrackEdgePreparation,
+      preparedEdgeFaces: window.carma.collision.sourceSnapshot.triangles.filter(
+        (face) => face.nativeModelFaceFlags !== null,
+      ).length,
     }));
     assert.equal(result.stats.ready, true, `switch to ${label}`);
+    assert.equal(result.trackEdges.status, "complete", `${label} edge pass`);
+    assert.ok(
+      result.trackEdges.changedFaces > 0,
+      `${label} native edge writes`,
+    );
+    assert.ok(result.preparedEdgeFaces > 0, `${label} collision edge metadata`);
     assert.equal(
       result.columns.boundsSource,
       "native-initial-act",

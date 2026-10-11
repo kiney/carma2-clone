@@ -133,7 +133,9 @@ export function emitNativePreparedFace(
     pivot: pivotMetadata,
     plane,
     nativeModelFlags: flags,
-    rawFaceFlags: source.sourceFace.flags as number | undefined,
+    rawFaceFlags:
+      source.nativeModelFaceFlags ??
+      (source.sourceFace.flags as number | undefined),
     pMat: input.pMat,
     material: input.material,
     preparedEdges: input.preparedEdges,
