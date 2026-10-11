@@ -239,6 +239,9 @@ const debug = {
   get pedestrians() {
     return pedestrians;
   },
+  get opponentsReady() {
+    return rivalsReady;
+  },
   get rivals() {
     return rivals;
   },
@@ -1074,10 +1077,18 @@ async function loadRivals(
       heading,
       false,
     );
-    const placement = placeCarAtStart(body, collision, [
+    const reservedStarts = [
       ...(simulation?.cars ?? []),
       ...(simulation?.noncars ?? []),
-    ]);
+    ];
+    let placement = placeCarAtStart(body, collision, reservedStarts);
+    // Browser grid safety extension: dense authored populations and large
+    // vehicles can exhaust the immediate grid. Search farther only on failure;
+    // retain all ground, hull and wheel-support checks and never force a pose.
+    if (!placement.placed)
+      placement = placeCarAtStart(body, collision, reservedStarts, {
+        searchRadius: 4,
+      });
     if (!placement.placed) {
       disposeGroup(model.group);
       throw new Error(

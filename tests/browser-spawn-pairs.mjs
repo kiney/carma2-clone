@@ -14,7 +14,7 @@ try {
   process.exit(0);
 }
 await mkdir("artifacts", { recursive: true });
-const port = 5194;
+const port = Number(process.env.PORT ?? 5194);
 const server = spawn(process.execPath, ["server/dev.mjs", "--production"], {
   env: { ...process.env, PORT: String(port) },
   stdio: ["ignore", "pipe", "pipe"],
@@ -54,12 +54,14 @@ try {
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
+    if (message.type() === "warning")
+      console.log(`Browser warning: ${message.text()}`);
   });
   page.on("requestfailed", (request) =>
     failedRequests.push(`${request.url()}: ${request.failure()?.errorText}`),
   );
   await page.goto(`http://localhost:${port}`);
-  await page.waitForFunction(() => window.carma?.stats.ready, {
+  await page.waitForFunction(() => window.carma?.stats.ready, null, {
     timeout: 90000,
   });
   // Independent solid-hull SAT in the actual browser, without engine guard code.
@@ -114,12 +116,12 @@ try {
     };
   });
   const grids = [];
-  for (const [track, car] of [
+  for (const [track, car] of (process.env.SPAWN_PAIRS_ONLY_CRASHES ? [] : [
     ["data/RACES/desert2/desert2.txt", "data/CARS/eaglegreen/EAGLEGREEN.TXT"],
     ["data/RACES/desert2/desert2.txt", "data/CARS/buggy/buggy.txt"],
     ["data/RACES/desert2/desert2.txt", "data/CARS/bigdump/bigdump.txt"],
     ["data/RACES/newcity1/newcity1.txt", "data/CARS/EAGLE3/EAGLE3.TXT"],
-  ]) {
+  ])) {
     console.log(`Checking supported grid: ${track}, ${car}`);
     await page.evaluate(
       async ({ track, car }) => {
@@ -131,10 +133,9 @@ try {
       },
       { track, car },
     );
-    await page.waitForFunction(
-      () => window.carma.simulation.cars.length === 5,
-      { timeout: 90000 },
-    );
+    await page.waitForFunction(() => window.carma.opponentsReady, null, {
+      timeout: 90000,
+    });
     const initial = await page.evaluate(() => {
       const c = window.carma;
       window.__gridStart = c.simulation.cars.map((p) =>
@@ -187,6 +188,7 @@ try {
     });
     await page.waitForFunction(
       () => window.carma.simulation.elapsed >= window.__until,
+      null,
       { timeout: 30000 },
     );
     const settled = await page.evaluate(() => {
@@ -197,8 +199,14 @@ try {
         moved: p.state.position.distanceTo(window.__gridStart[i]),
         wasted: p.knackered,
         damage: [...p.damage.componentLevels],
+        position: p.state.position.toArray(),
       }));
     });
+    // Preserve the complete grid when an early AI crash fails an assertion.
+    await writeFile(
+      "artifacts/browser-spawn-grid-progress.json",
+      JSON.stringify([...grids, { track, car, initial, settled }], null, 2),
+    );
     assert.ok(
       settled.every((p) => !p.wasted),
       JSON.stringify(settled),
@@ -224,20 +232,29 @@ try {
       await c.loadRace();
       c.paused = true;
     });
-    await page.waitForFunction(
-      () => window.carma.simulation.cars.length === 5,
-      { timeout: 90000 },
-    );
+    await page.waitForFunction(() => window.carma.opponentsReady, null, {
+      timeout: 90000,
+    });
     const crash = await page.evaluate((offset) => {
       const c = window.carma,
         a = c.player,
-        b = c.simulation.cars.find((p) => p.group.name === "EAGLE3");
+        b =
+          c.simulation.cars.find((p) => p !== a && p.group.name === "EAGLE3") ??
+          c.simulation.cars
+            .filter((p) => p !== a)
+            .sort(
+              (x, y) => Math.abs(x.mass - a.mass) - Math.abs(y.mass - a.mass),
+            )[0];
+      if (!b)
+        throw new Error("No loaded original opponent for crash regression");
       const heading = a.state.heading,
         base = a.state.position.clone();
       const up = base.clone().set(0, 1, 0),
         f = base.clone().set(0, 0, -1).applyQuaternion(a.state.orientation),
         right = up.clone().cross(f);
       for (const p of c.simulation.cars) {
+        // Isolate the intended pair from the rest of the original grid.
+        c.simulation.setCarPhysicsActive(p, p === a || p === b);
         p.input.throttle = 0;
         p.input.steer = 0;
         p.input.brake = false;
@@ -267,6 +284,7 @@ try {
       window.__reverseStart = a.state.position.clone();
       return {
         offset,
+        cars: [a.group.name, b.group.name],
         peakDepth,
         pairImpacts,
         revA: a.damage.deformationRevision,
@@ -287,6 +305,7 @@ try {
     await page.keyboard.down("ArrowDown");
     await page.waitForFunction(
       () => window.carma.simulation.elapsed >= window.__until,
+      null,
       { timeout: 30000 },
     );
     await page.keyboard.up("ArrowDown");
@@ -297,6 +316,9 @@ try {
       return {
         travel: c.vehicle.position.distanceTo(window.__reverseStart),
         position: c.vehicle.position.toArray(),
+        input: { ...c.player.input },
+        gear: c.player.state.gear,
+        velocity: c.player.state.velocity.toArray(),
       };
     });
     assert.ok(reverse.travel > 0.5, JSON.stringify({ crash, reverse }));
