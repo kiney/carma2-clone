@@ -1,4 +1,5 @@
 import "./assets.test.mjs";
+import "./render-matrices.test.mjs";
 import "./native-random.test.mjs";
 import "./formats.test.mjs";
 import "./native-asset-metadata.test.mjs";

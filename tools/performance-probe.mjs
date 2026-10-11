@@ -56,6 +56,7 @@ export function installPerformanceProbe() {
   }
   wrap(renderer, "render", "renderer.render");
   wrap(c.scene, "updateMatrixWorld", "scene.updateMatrixWorld");
+  wrap(c, "prepareRenderMatrices", "scene.prepareRenderMatrices");
   for (const name of [
     "updateFrame",
     "step",

@@ -4,11 +4,14 @@ Status: **initial analysis completed; optimization and exact policy remain open*
 TASK-100 / PERF-01 remains priority 1, `wip`, for profiling, unresolved spikes and
 finding coordination. TASK-104 / PERF-05 owns physics code/algorithm optimization
 (P1, `next`), with Web Workers reserved as a last resort.
-TASK-101 / PERF-02 owns scene-hierarchy work (P1, `next`), with
-no solution prescribed. TASK-103 / PERF-04 owns higher visual visibility (P2,
+TASK-101 / PERF-02 scene-hierarchy work is implemented and validated; see the
+[implementation and measurements](render-hierarchy-performance.md).
+TASK-103 / PERF-04 owns higher visual visibility (P2,
 `next`, after TASK-101); TASK-102 / PERF-03 owns resolution policy (P4, `backlog`).
 No production engine behavior, resolution, simulation distance or collision
-safeguard was changed during this phase.
+safeguard was changed during the initial analysis phase described below. The
+subsequent PERF-02 change reduces render matrix traversal while preserving those
+policies and physics behavior.
 
 ## Findings
 

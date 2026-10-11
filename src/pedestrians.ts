@@ -579,6 +579,8 @@ function randomGenerator(seed: number) {
  * Vehicle sweeps/death physics and rigid-part limb playback remain PED-03/ANI-01. */
 export class PedestrianSystem {
   readonly group = new THREE.Group();
+  /** Render-only identities; population and physical ownership stay unchanged. */
+  readonly renderActors = new Set<THREE.Object3D>();
   readonly warnings: string[] = [];
   readonly specs: PedSpawnSpec[];
   readonly motionInfo?: { bones: number; frames: number };
@@ -901,6 +903,7 @@ export class PedestrianSystem {
           proximity: emptyPedProximity(),
         });
         system.population.enroll(object, surface.spec.group);
+        system.renderActors.add(object);
         system.group.add(object);
       }
       if (system.count === limit) break;
@@ -2265,6 +2268,7 @@ export class PedestrianSystem {
     // Textures belong to the asset cache and may be used by other loaded scenes.
     this.group.removeFromParent();
     this.group.clear();
+    this.renderActors.clear();
     this.peds = [];
     this.population.clear();
     this.nativeCountingOwners.clear();

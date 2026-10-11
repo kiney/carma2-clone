@@ -32,6 +32,7 @@ import {
   type NativeSmashAwardState,
 } from "./smash-gameplay";
 import * as THREE from "three";
+import { prepareSceneMatrices, renderScenePasses } from "./render-matrices";
 import { placeCarAtStart } from "./physics/spawn";
 import { Assets } from "./content";
 import { nativeOilActorFollower } from "./oil-actor";
@@ -417,6 +418,10 @@ const debug = {
   /** Diagnostic captures use the same renderer; no second WebGL context. */
   get renderer() {
     return renderer;
+  },
+  /** Shared render preparation is exposed for opt-in CPU timing captures. */
+  prepareRenderMatrices() {
+    prepareSceneMatrices(scene, pedestrians?.group, pedestrians?.renderActors);
   },
   get collision() {
     return collision;
@@ -3585,10 +3590,9 @@ function animate(now: number) {
     skyCamera.layers.set(1);
     skyCamera.far = 1800;
     skyCamera.updateProjectionMatrix();
-    renderer.autoClear = true;
-    renderer.render(scene, skyCamera);
-    renderer.autoClear = false;
-    renderer.render(scene, camera);
+    renderScenePasses(renderer, scene, [skyCamera, camera], () =>
+      debug.prepareRenderMatrices(),
+    );
   } finally {
     renderer.autoClear = true;
     renderPoses.restore();
