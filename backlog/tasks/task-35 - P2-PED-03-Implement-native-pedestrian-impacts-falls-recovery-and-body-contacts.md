@@ -1,11 +1,10 @@
 ---
 id: TASK-35
-title: >-
-  [P2] PED-03: Implement native pedestrian impacts, falls, recovery, and body
-  contacts
+title: '[P2] PED-03: Connect native death counting to population and mission state'
 status: wip
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:33'
 labels:
   - priority-2
   - PED-03
@@ -14,7 +13,10 @@ labels:
 dependencies: []
 references:
   - src/pedestrians.ts
-  - src/ped-blood.ts
+  - src/ped-native-gameplay.ts
+  - src/main.ts
+  - docs/c2-ped-native-gameplay-re.md
+  - tests/browser-ped-native-gameplay.mjs
 priority: high
 ordinal: 2046
 ---
@@ -22,6 +24,32 @@ ordinal: 2046
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
+Original issue ID: **PED-03**
+Numeric priority: **2** (unchanged)
+Original status: **Partial**
+Category: **Opponents and Pedestrians**
+
+## Current bounded outcome
+
+Connect native `OneLessPed` to the real PedestrianSystem population accounting and existing group/mission objective consumers. A genuine native car-contact death associated with an existing population owner must update `hits`, `alive` and `groupCounts` exactly once, using its original spawn-group identity and the source flag `0x100` count gate. This is a new production counting-owner integration, not a rerun of the native wrapper's recorded-event tests.
+
+Share counting ownership with ordinary visual-sweep and combat death paths, without calling their estimated launch/blood/death-transport routine as the native counting callback. Preserve native ordering: the count/objective change occurs before the score continuation. This task does not recover missing score inputs, change physical impulses, synthesize a second corpse, suppress genuine sever eligibility or claim native award parity.
+
+Expected budget: roughly 1–3 active agent hours for the bounded counting seam and focused verification, subject to actual identity-binding findings. If that seam needs a broader physical/pose owner, move that newly discovered prerequisite to the relevant follow-up instead of silently expanding this ticket. No implementation is claimed by this scope change.
+
+## Deferred scope
+
+- [PED-06 / TASK-96](task-96%20-%20P2-PED-06-Integrate-ordinary-population-identities-with-native-physical-lifecycle.md): Integrate ordinary population identities with native physical lifecycle.
+- [PED-07 / TASK-97](task-97%20-%20P2-PED-07-Connect-native-pedestrian-grounding-fall-and-recovery-ownership.md): Connect native pedestrian grounding, fall and recovery ownership.
+- [PED-08 / TASK-98](task-98%20-%20P2-PED-08-Integrate-visible-severing-and-articulated-pedestrian-body-contacts.md): Integrate visible severing and articulated pedestrian body contacts.
+- [PED-09 / TASK-99](task-99%20-%20P2-PED-09-Bind-native-pedestrian-contact-causes-awards-and-effect-outlets.md): Bind native pedestrian contact causes, awards and effect outlets.
+
+Existing owners keep their scopes: PED-04 / TASK-57 selects authored assets and addresses missing original prerequisites; ANI-01 / TASK-62 owns complete BON/SKL/prepared-vertex playback; RAC-04 / TASK-39 owns award formulas; PUP-11 / TASK-30 owns combat powerup effects; AUD-03 / TASK-71 owns positional audio; RAC-09 / TASK-80 owns replay serialization/continuations. These follow-ups are separately closable work, not hidden acceptance requirements for this ticket.
+
+## Historical pre-split evidence
+
+The complete earlier description below is preserved for provenance. It records completed kernels, explicit approximations and unresolved providers across the former broad task; it is not the narrowed task's completion criterion.
+
 Original issue ID: **PED-03**
 Numeric priority: **2** (1 is highest)
 Original status: **Partial**
@@ -35,3 +63,12 @@ Reconstruct native pedestrian collisions, impulses, fall/get-up/corpse movement,
 
 [pedestrians.ts](../../src/pedestrians.ts), [ped-blood.ts](../../src/ped-blood.ts)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 A controlled actual native vehicle contact is bound to an existing authored normal-population owner in Stock and Advanced Chromium scenes; real application alive/hit/group counters change exactly once. Merely recording fixture events is insufficient.
+- [ ] #2 The original spawn group and source 0x100 count gate drive the existing group/mission target consumer; objective evaluation and count updates occur before the native score continuation.
+- [ ] #3 Repeated corpse contact and overlapping legacy/native death callbacks do not repeat counts or objective completion; counting adds no estimated impulse, blood launch or duplicate physical owner.
+- [ ] #4 Existing ordinary visual-sweep and combat deaths retain correct total/group counts and mission behavior through the shared accounting owner; normal race load/reset preserves population state.
+- [ ] #5 Focused deterministic accounting tests and actual Chromium application-counter/objective assertions pass, with no fatal console errors. Follow-up tickets remain open; closure explicitly claims counting integration only.
+<!-- AC:END -->

@@ -4,7 +4,7 @@ title: '[P3] PED-04: Select pedestrian actors and animations from original data'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-11 16:33'
 labels:
   - priority-3
   - PED-04
@@ -32,4 +32,10 @@ Make actor/animation selection data-faithful; currently, one heuristically selec
 ## Source references
 
 [pedestrians.ts](../../src/pedestrians.ts)
+
+## PED-03 scope split (2026-10-11)
+
+Scope extracted from the former broad PED-03: retain native FORM/ACT/MODEL/pivot identities and classify the 24 currently unsupported personality prerequisites in each data tree from the native asset audit. The audit initialized 136/160; missing or malformed original resources need targeted support or clear unavailability. This remains asset selection/compatibility work; normal population PHIL admission belongs to PED-06 and sever topology to PED-08.
+
+Related tasks: [TASK-96](task-96%20-%20P2-PED-06-Integrate-ordinary-population-identities-with-native-physical-lifecycle.md), [TASK-98](task-98%20-%20P2-PED-08-Integrate-visible-severing-and-articulated-pedestrian-body-contacts.md).
 <!-- SECTION:DESCRIPTION:END -->

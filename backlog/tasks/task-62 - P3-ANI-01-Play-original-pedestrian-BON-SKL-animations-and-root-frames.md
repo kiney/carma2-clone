@@ -4,7 +4,7 @@ title: '[P3] ANI-01: Play original pedestrian BON/SKL animations and root frames
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-11 16:33'
 labels:
   - priority-3
   - ANI-01
@@ -33,4 +33,10 @@ Connect complete BON/SKL bone/root-frame playback to displayed pedestrian states
 ## Source references
 
 [formats.ts](../../src/formats.ts), [pedestrians.ts](../../src/pedestrians.ts)
+
+## PED-03 scope split (2026-10-11)
+
+Scope clarification after PED-03 split: complete prepared BON/SKL/root/bone vertex playback in displayed population states remains ANI-01. PED-06 owns population resource/lifecycle admission and PED-08 owns visible sever/body topology. The narrowed PED-03 counting task does not complete animation parity.
+
+Related tasks: [TASK-96](task-96%20-%20P2-PED-06-Integrate-ordinary-population-identities-with-native-physical-lifecycle.md), [TASK-98](task-98%20-%20P2-PED-08-Integrate-visible-severing-and-articulated-pedestrian-body-contacts.md).
 <!-- SECTION:DESCRIPTION:END -->

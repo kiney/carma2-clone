@@ -6,7 +6,7 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-11 16:33'
 labels:
   - priority-2
   - RAC-04
@@ -36,4 +36,10 @@ Native checkpoint credits from GENERAL (no gate time and no finishing-gate credi
 ## Source references
 
 [race rules RE](../../docs/c2-race-rules-re.md), [race awards](../../src/race-awards.ts), [payout](../../src/race-payout.ts)
+
+## PED-03 scope split (2026-10-11)
+
+Scope clarification after PED-03 split: native articulated/indirect pedestrian cause writers and real retained geometry, starting/current velocity, height, killer and event-time inputs are bound by PED-09. This task continues to own reward equations and consumers. PED-03 now supplies OneLessPed population/mission counting only; it does not claim native award parity.
+
+Related tasks: [TASK-99](task-99%20-%20P2-PED-09-Bind-native-pedestrian-contact-causes-awards-and-effect-outlets.md).
 <!-- SECTION:DESCRIPTION:END -->

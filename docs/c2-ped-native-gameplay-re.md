@@ -8,6 +8,18 @@ It owns gameplay state and ordered continuations. It does not produce a second
 physical launch, allocate a generic corpse, or derive damage from visual proximity.
 Production population wiring remains the owning pedestrian system's task.
 
+Work tracking after the 2026-10-11 scope split: PED-03 / TASK-35 is the bounded
+`OneLessPed` integration with real population/group/mission counters, including
+source once-only gating and count-before-score ordering. It does not own full
+physical population admission or native reward/effect parity. PED-06 / TASK-96
+owns ordinary scene/body/resource and movement/spawn integration; PED-07 /
+TASK-97 owns grounding/living recovery and selected-volume providers; PED-08 /
+TASK-98 owns displayed severing/articulated contacts; PED-09 / TASK-99 owns
+actual contact cause/retained award inputs and effect-consumer binding. Actor
+selection, full BON/SKL playback and replay remain PED-04, ANI-01 and RAC-09.
+The broader evidence and limitations below continue to apply to those tasks;
+completion of the smaller counting bridge will not claim full pedestrian parity.
+
 Installed HW SHA256 is
 `698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c`;
 PE metadata appears in [contact evidence](c2-ped-contact-re.md). Small ranges in

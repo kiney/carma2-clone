@@ -19,7 +19,7 @@ backlog task view TASK-1 --plain
 | `wip` | The most recently active workstreams, limited to 3 tickets | Selected Partial tasks with concrete recent activity |
 | `done` | The described scope was implemented and verified according to the existing record | Done |
 
-Migration preserved all 92 numbered issues plus three distinct completed checklist items (95 tasks total). Seven other completed checklist items are retained as evidence on existing tasks to avoid duplicates. The initial migration mapped all 35 Partial issues to `wip`; that mapping confused implementation completeness with active work. On 2026-10-11, 32 inactive partial issues were returned to `backlog`. The resulting board has 59 in `backlog`, 0 in `next`, 3 in `wip`, and 33 in `done`. The `legacy-partial` label and full implementation evidence remain unchanged, regardless of board status. Importing `done` preserves the previous verification record; it does not assert that the whole subsystem is complete or that migration reran engine tests. Original status labels such as `legacy-needs-validation` distinguish validation requests from reported defects. No new engine completion claims are introduced by the migration.
+Migration preserved all 92 numbered issues plus three distinct completed checklist items (95 tasks total). Seven other completed checklist items are retained as evidence on existing tasks to avoid duplicates. The initial migration mapped all 35 Partial issues to `wip`; that mapping confused implementation completeness with active work. On 2026-10-11, 32 inactive partial issues were returned to `backlog`. After that cleanup, the board had 59 in `backlog`, 0 in `next`, 3 in `wip`, and 33 in `done`. The `legacy-partial` label and full implementation evidence remain unchanged, regardless of board status. Importing `done` preserves the previous verification record; it does not assert that the whole subsystem is complete or that migration reran engine tests. Original status labels such as `legacy-needs-validation` distinguish validation requests from reported defects. No new engine completion claims are introduced by the migration.
 
 ## WIP limit: 3
 
@@ -34,6 +34,23 @@ The three retained tickets were selected from actual source/test changes and nor
 | TASK-67 | REN-02 | Retaining accepted TWO_SIDED material flags during duplicate registration |
 
 This selection records the latest work context; changing board status does not resume a paused Goal. Backlog.md 1.47.1 has no built-in configurable WIP cap. The limit is therefore enforced by the project workflow and agent policy; the CLI/browser does not automatically reject a fourth ticket.
+
+## PED-03 scope split
+
+PED-03 / TASK-35 now owns only the small remaining integration of native `OneLessPed` with real population/group/mission counters. Its acceptance criteria require actual native contact bound to an existing population owner and real application-counter changes, plus once-only and legacy-path regressions. Recorded fixture events alone cannot close it. The full pre-split evidence remains in its historical description; no engine implementation or completion is claimed by this split.
+
+Four larger priority-2 follow-ups are separately tracked in `backlog`:
+
+| Legacy ID | Backlog ID | Deferred scope |
+| --- | --- | --- |
+| PED-06 | TASK-96 | Normal population identities, native physical/resource admission and movement/spawn ownership |
+| PED-07 | TASK-97 | Native grounding, fall/get-up/recovery, selected volumes and process/face ownership |
+| PED-08 | TASK-98 | Visible severing, articulated body/part contacts and exceptional form continuations |
+| PED-09 | TASK-99 | Native physical cause/retained award inputs and contact/effect consumer adapters |
+
+Existing PED-04, ANI-01, RAC-04, RAC-09 and PUP-11 retain asset, animation, reward-formula, replay and combat ownership; their descriptions clarify the extracted boundaries. Their existing priorities are unchanged. Follow-ups depend on the narrowed counting integration where appropriate; closing PED-03 does not require completing them and does not assert full native pedestrian parity. No paused Goal or broader acceptance gate is completed by changing task scope.
+
+After this split, the board contains 99 tasks: 63 in `backlog`, 0 in `next`, 3 in `wip`, and 33 in `done`. The WIP limit remains 3.
 
 ## Priorities and sorting
 
