@@ -102,7 +102,10 @@ try {
       document.querySelector("#panel").hidden = true;
     }, track);
     await page.waitForFunction(
-      () => window.carma.stats.ready && window.carma.paused,
+      () =>
+        window.carma.stats.ready &&
+        window.carma.pedestrians &&
+        window.carma.paused,
       null,
       { timeout: 90000 },
     );
@@ -252,12 +255,63 @@ try {
             });
           }
         }
-        let seededMissionVariableDelta = 0;
-        if (hasObjective && value() < goal - 1 && goal - 1 - value() === 1) {
-          // The installed stock scene exposes seventeen pre-core world targets;
-          // seed the final objective boundary, never credits or award state.
-          seededMissionVariableDelta = 1;
-          c.missionVariables.add(variable, seededMissionVariableDelta);
+        let pedestrianObjective = null;
+        if (hasObjective && value() < goal - 1) {
+          // Installed race5 combines the eighteen ACT targets with the marked
+          // ADMIRAL/group56 death. Exercise the CURRENT population's ordinary
+          // vehicle sweep; never invent an initial runtime-variable credit.
+          if (c.raceDefinition.raceType !== "smashAndPed")
+            throw new Error(
+              "Carrier missing its authored pedestrian objective",
+            );
+          const population = c.pedestrians;
+          const states = population?.states ?? [];
+          const targetPed = states.find(
+            (state) =>
+              state.alive &&
+              c.raceDefinition.pedGroupsToKill.includes(state.group),
+          );
+          if (!targetPed)
+            throw new Error(
+              "Carrier objective pedestrian is absent from the loaded population",
+            );
+          const position = targetPed.position.clone();
+          const start = position
+            .clone()
+            .add(new position.constructor(0, 0, 0.5));
+          const end = position
+            .clone()
+            .add(new position.constructor(0, 0, -0.5));
+          const velocity = new position.constructor(0, 0, -2);
+          const beforeKill = value();
+          const beforeKilled = population.hits;
+          population.resetCar(start);
+          const threat = { position: end, yaw: 0, speed: 2, velocity };
+          const frame = {
+            cameraPosition: position,
+            gameTimeMs: Math.max(1000, destruction.timeMs + 1),
+            combatOwner: player,
+            threats: [],
+          };
+          population.update(0, threat, frame);
+          const afterKill = value();
+          population.resetCar(start);
+          population.update(0, threat, frame);
+          pedestrianObjective = {
+            group: targetPed.group,
+            position: position.toArray(),
+            input: { start: start.toArray(), end: end.toArray(), speed: 2 },
+            beforeKill,
+            afterKill,
+            afterRepeatedSweep: value(),
+            killedDelta: population.hits - beforeKilled,
+            adapter:
+              "current legacy vehicle sweep, not native articulated contact",
+          };
+          if (afterKill !== beforeKill + 1 || value() !== afterKill)
+            throw new Error(
+              `Carrier objective pedestrian must count once: ${JSON.stringify(pedestrianObjective)}`,
+            );
         }
         if (hasObjective && value() !== goal - 1)
           throw new Error(
@@ -322,7 +376,8 @@ try {
           : undefined;
         return {
           beforePrep,
-          seededMissionVariableDelta,
+          seededMissionVariableDelta: 0,
+          pedestrianObjective,
           priorTimeAwardGate,
           timeAwardGateOverride: target.enableTimeAwards,
           prepCount: prepImpacts.length,
@@ -371,6 +426,12 @@ try {
   assert.equal(carrierAwardRun.priorTimeAwardGate, true);
   assert.equal(carrierAwardRun.timeAwardGateOverride, false);
   assert.equal(carrierAwardRun.queueBeforeFlush, 1);
+  assert.equal(carrierAwardRun.seededMissionVariableDelta, 0);
+  assert.equal(carrierAwardRun.pedestrianObjective.group, 56);
+  assert.equal(carrierAwardRun.pedestrianObjective.beforeKill, 17);
+  assert.equal(carrierAwardRun.pedestrianObjective.afterKill, 18);
+  assert.equal(carrierAwardRun.pedestrianObjective.afterRepeatedSweep, 18);
+  assert.equal(carrierAwardRun.pedestrianObjective.killedDelta, 1);
   assert.equal(carrierAwardRun.before.variable, 18);
   assert.equal(carrierAwardRun.after.variable, 19);
   assert.ok(carrierAwardRun.text132);

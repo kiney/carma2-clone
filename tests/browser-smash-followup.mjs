@@ -458,6 +458,14 @@ try {
       trigger: "&CORE.ACT",
     };
     const loaded = await loadRace(scenario);
+    await page.waitForFunction(
+      () =>
+        window.carma.stats.ready &&
+        window.carma.paused &&
+        window.carma.pedestrians,
+      null,
+      { timeout: 90000 },
+    );
     assert.equal(loaded.name, "MISSION: HARD CORE");
     const inventory = await enumerateCarrierTargets();
     assert.equal(inventory.variable, 1);
@@ -551,27 +559,12 @@ try {
     assert.equal(core.changed, true);
     assert.equal(core.missionBefore, 17);
     assert.equal(core.missionAfter, 18);
-    if (core.pendingAfter <= core.pendingBefore) {
-      const attempt = {
-        loaded,
-        inventory,
-        sourceContacts,
-        stateBeforeCore: state,
-        core,
-        limitation:
-          "After all 17 authored pre-core actor instances are contacted, the core reaches 18 but its delayed *.DAT cuboid has no eligible live target to enqueue.",
-      };
-      await writeFile(
-        "artifacts/browser-smash-followup-stock-carrier-chain-attempt.json",
-        JSON.stringify(attempt, null, 2),
-      );
-      return {
-        outcome: "verified-incomplete",
-        ...attempt,
-      };
-    }
-    await advanceUntilDrained(20000);
-    const result = await page.evaluate(() => {
+    assert.equal(
+      core.pendingAfter,
+      core.pendingBefore,
+      "the Core is the eighteenth authored ACT increment; it does not create a nineteenth WIGGLYBIT increment",
+    );
+    const afterCore = await page.evaluate(() => {
       const c = window.carma;
       return {
         name: c.raceDefinition?.name,
@@ -579,31 +572,77 @@ try {
         mission: c.missionVariables.get(c.raceDefinition.smashVariable),
         status: c.race.status,
         delayed: c.simulation.delayedSmashes.count,
-        dueRecords: c.worldFollowups.options.testCapture.dueRecords,
-        followupCalls: c.worldFollowups.options.testCapture.followupCalls,
+        completionReason: c.race.completionReason ?? 0,
       };
     });
-    assert.equal(result.name, "MISSION: HARD CORE");
-    assert.equal(result.target, 19);
-    assert.equal(result.mission, 19);
-    assert.equal(result.status, "completed");
-    assert.equal(result.delayed, 0);
-    assert.ok(
-      result.dueRecords.some(
-        (entry) =>
-          entry.selector === 1 &&
-          entry.callerFlag === 0 &&
-          entry.targetSpec?.trigger.name?.toLowerCase() === "&wigglybit.act",
-      ),
-      "core's ordinary delayed world follow-up resolves WIGGLYBIT",
-    );
-    assert.ok(
-      result.followupCalls.some(
-        (call) =>
-          call.changed && call.missionBefore === 18 && call.missionAfter === 19,
-      ),
-      "normal handleFollowup completes the authored 18→19 mission chain",
-    );
+    assert.equal(afterCore.name, "MISSION: HARD CORE");
+    assert.equal(afterCore.target, 19);
+    assert.equal(afterCore.mission, 18);
+    assert.equal(afterCore.status, "racing");
+    assert.equal(afterCore.delayed, 0);
+    assert.equal(afterCore.completionReason, 0);
+
+    const admiralDeath = await page.evaluate(() => {
+      const c = window.carma;
+      const population = c.pedestrians;
+      const variable = c.raceDefinition.smashVariable;
+      const states = population?.states ?? [];
+      const targetPed = states.find(
+        (ped) =>
+          ped.alive && c.raceDefinition.pedGroupsToKill.includes(ped.group),
+      );
+      if (!targetPed)
+        throw new Error(
+          "Stock Carrier has no alive group 56 objective pedestrian",
+        );
+      const position = targetPed.position.clone();
+      const start = position.clone().add(new position.constructor(0, 0, 0.5));
+      const end = position.clone().add(new position.constructor(0, 0, -0.5));
+      const before = c.missionVariables.get(variable);
+      const hitsBefore = population.hits;
+      const threat = {
+        position: end,
+        yaw: 0,
+        speed: 2,
+        velocity: new position.constructor(0, 0, -2),
+      };
+      const frame = {
+        cameraPosition: position,
+        gameTimeMs: Math.max(1000, c.simulation.destruction.timeMs + 1),
+        combatOwner: c.player,
+        threats: [],
+      };
+      population.resetCar(start);
+      population.update(0, threat, frame);
+      const after = c.missionVariables.get(variable);
+      const statusAfter = c.race.status;
+      const reasonAfter = c.race.completionReason ?? 0;
+      population.resetCar(start);
+      population.update(0, threat, frame);
+      return {
+        group: targetPed.group,
+        position: position.toArray(),
+        input: { start: start.toArray(), end: end.toArray(), speed: 2 },
+        before,
+        after,
+        afterRepeatedSweep: c.missionVariables.get(variable),
+        statusAfter,
+        reasonAfter,
+        statusAfterRepeatedSweep: c.race.status,
+        reasonAfterRepeatedSweep: c.race.completionReason ?? 0,
+        killedDelta: population.hits - hitsBefore,
+        adapter: "current legacy vehicle sweep, not native articulated contact",
+      };
+    });
+    assert.equal(admiralDeath.group, 56);
+    assert.equal(admiralDeath.before, 18);
+    assert.equal(admiralDeath.after, 19);
+    assert.equal(admiralDeath.statusAfter, "completed");
+    assert.equal(admiralDeath.reasonAfter, 3);
+    assert.equal(admiralDeath.afterRepeatedSweep, 19);
+    assert.equal(admiralDeath.statusAfterRepeatedSweep, "completed");
+    assert.equal(admiralDeath.reasonAfterRepeatedSweep, 3);
+    assert.equal(admiralDeath.killedDelta, 1);
     await page.screenshot({
       path: "artifacts/browser-smash-followup-stock-carrier-completed.png",
     });
@@ -613,7 +652,8 @@ try {
       inventory,
       sourceContacts,
       core,
-      result,
+      afterCore,
+      admiralDeath,
     };
   };
 

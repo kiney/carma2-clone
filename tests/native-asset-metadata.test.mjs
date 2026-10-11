@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { access } from "node:fs/promises";
 import { Assets } from "../src/content.ts";
-import { parseAct, parseDat } from "../src/formats.ts";
+import { parseAct, parseDat, parseMat } from "../src/formats.ts";
 import { createModelGeometry } from "../src/render-geometry.ts";
 import { createAssetStore } from "../server/assets.mjs";
 
@@ -91,10 +91,13 @@ test("ACT scene objects retain raw actor metadata without changing effective sty
   const act = bytes(
     header(1),
     chunk(0x23, bytes(u8(0), u8(0), name("default-root"))),
+    chunk(0x26, name("parent-material")),
     chunk(0x23, bytes(u8(1), u8(4), name("face-child"))),
     chunk(0x2a),
     chunk(0),
     chunk(0x23, bytes(u8(5), u8(0), name("bounds-root"))),
+    chunk(0x32, bytes(...[-2, -3, -4, 5, 6, 7].map(f32))),
+    chunk(0x29),
     chunk(0),
   );
   const files = new Map([["scene/scene.act", act]]);
@@ -128,6 +131,20 @@ test("ACT scene objects retain raw actor metadata without changing effective sty
   );
   assert.equal(nativeBounds.userData.c2ActorType, 5);
   assert.equal(nativeBounds.userData.c2ActorRenderStyle, 0);
+  assert.equal(
+    nativeDefault.userData.c2ActorLocalMaterialName,
+    "parent-material",
+  );
+  assert.equal(faceChild.userData.c2ActorLocalMaterialName, null);
+  assert.equal(faceChild.userData.c2ActorMaterialName, "parent-material");
+  assert.equal(faceChild.userData.c2ActorLocalModelName, null);
+  assert.deepEqual(nativeBounds.userData.c2ActorBounds, {
+    min: [-2, -3, -4],
+    max: [5, 6, 7],
+  });
+  assert.deepEqual(scene.sourceActors, parseAct(act));
+  nativeBounds.userData.c2ActorBounds.min[0] = 99;
+  assert.equal(scene.sourceActors[1].bounds.min[0], -2);
 });
 
 test("original Stock and Advanced scenes retain ACT source metadata", async (t) => {
@@ -148,6 +165,8 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
   const samples = [
     ["data/CARS/EAGLE3", "EAGLE3"],
     ["adv_data/CARS/69mach1", "69MACH1"],
+    ["data/RACES/newcity1", "newcity1"],
+    ["adv_data/RACES/newcity1", "newcity1"],
   ];
   for (const [dir, stem] of samples) {
     if (!assets.resolve(`${dir}/${stem}.act`)) {
@@ -163,6 +182,12 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
       assert.equal(object.userData.c2ActorRenderStyle, node.renderStyle);
       assert.equal(object.userData.c2ActorName, node.name);
       assert.equal(object.userData.c2ActorChildIndex, index);
+      assert.equal(object.userData.c2ActorLocalModelName, node.model ?? null);
+      assert.equal(
+        object.userData.c2ActorLocalMaterialName,
+        node.material ?? null,
+      );
+      assert.deepEqual(object.userData.c2ActorBounds, node.bounds);
       const childActors = object.children.filter(
         (child) => child.userData.c2ActorName !== undefined,
       );
@@ -170,6 +195,20 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
         visit(child, childActors[childIndex], childIndex),
       );
     };
+    const expectedMaterials = new Map();
+    for (const path of assets.files(dir, /^[^/]+\.mat$/i))
+      for (const mat of parseMat(await assets.bytes(path)))
+        expectedMaterials.set(
+          mat.name.replace(/\.(pix|mat|dat|act|tif|tiff)$/i, "").toLowerCase(),
+          mat,
+        );
+    assert.deepEqual(scene.sourceMaterials, expectedMaterials);
+    assert.equal(scene.sourceMaterials.size, scene.materials.size);
+    for (const [key, mat] of scene.sourceMaterials) {
+      assert.notEqual(mat, scene.materials.get(key));
+      assert.equal(scene.materials.get(key).userData.c2Flags, mat.flags);
+    }
+    assert.deepEqual(scene.sourceActors, roots);
     roots.forEach((root, index) =>
       visit(root, scene.group.children[index], index),
     );

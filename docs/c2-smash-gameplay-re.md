@@ -42,9 +42,21 @@ and Stock Desert retain their original no-time gate: the authored3000/20
 award pays3000 credits and zero seconds. A separately labelled gate-override
 fixture proves the same authored20-second outlet without editing credits or
 award state. Ownerless/NPC contacts, persistent single-shot latches, intermediate
-powerup retention and final index14 delivery are checked. The final objective
-fixture explicitly seeds one mission-counter unit after seventeen real actor
-contacts; it does not claim complete mission traversal.
+powerup retention and final index14 delivery are checked. The objective fixture now starts at zero, contacts seventeen real non-core
+actors, sweeps the actual group-56 ADMIRAL through the current population's
+ordinary vehicle-hit lifecycle once, and contacts the Core to complete at19.
+The repeated pedestrian sweep contributes no additional unit; no counter is
+seeded. The separately controlled vehicle sweep is the existing legacy contact
+adapter, not proof of native articulated pedestrian physics or a natural
+keyboard-driven mission route. A companion follow-up regression checks the
+opposite final order: all eighteen ACT targets, then the ADMIRAL death.
+
+Installed `InitRace481788` clears all1000 runtime-variable bytes; target
+registration `497640` does not preload progress. `InitPedsForRace4d3002..3055`
+marks group56 with `0x200`, and once-only `OneLessPed4ccfdb` adds its death to
+variable1. The authored nineteenth target therefore needs no initial credit,
+extra ACT or second removal of WIGGLYBIT. See the
+[native track loader evidence](c2-native-track-actor-load-re.md).
 
 The proximity check rounds both live actor and effect point coordinates to
 Float32. For the checked Desert X position `-108.43269348144531`, adding

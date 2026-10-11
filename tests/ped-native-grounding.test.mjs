@@ -714,3 +714,38 @@ test("public grounding rejects stale resource contexts and fractional/raw overfl
   assert.throws(() => h.bridge.advance(wrong), /current owner/);
   assert.deepEqual(h.log, []);
 });
+
+test("move completion releases only borrowed face-list ownership, retaining process normal and native ring order", () => {
+  const h = host(),
+    owner = {};
+  h.enroll(owner);
+  h.runtime.prepareFrame(frame());
+  const ctx = h.context(owner);
+  assert.equal(h.bridge.advance(ctx).completion.status, "complete");
+  const state = h.bridge.state(owner);
+  const slot = h.bridge.pool.get(owner);
+  const ring = h.bridge.pool.order(slot.capacity);
+  const oldFaces = slot.faces;
+  const normal = [f(0.2), f(0.9), f(-0.1)];
+  h.bridge.setProcessFloorNormal(owner, normal);
+  h.bridge.releaseFaceCache(owner);
+  assert.equal(h.bridge.state(owner), state);
+  assert.deepEqual(state.processFloorNormal, normal);
+  assert.equal(state.cache, null);
+  assert.equal(slot.owner, null);
+  assert.equal(h.bridge.pool.get(owner), null);
+  assert.equal(slot.faces, oldFaces);
+  assert.deepEqual(h.bridge.pool.order(slot.capacity), ring);
+  // Clearing the process+b0 means no retained-triangle fast path on the next
+  // visit. Acquisition takes the next native slot instead of rotating this one.
+  h.log.length = 0;
+  const next = h.bridge.advance(h.context(owner, 100));
+  assert.equal(next.ground.rebuilt, true);
+  assert.ok(h.log.some((row) => row[0] === "collect"));
+  assert.notEqual(h.bridge.pool.get(owner), slot);
+  h.bridge.releaseFaceCache(owner);
+  h.bridge.releaseFaceCache(owner);
+  assert.equal(h.bridge.state(owner), state);
+  h.bridge.release(owner);
+  assert.equal(h.bridge.state(owner), null);
+});

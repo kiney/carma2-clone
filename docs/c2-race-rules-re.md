@@ -94,7 +94,14 @@ mission; repeating the first actor does not count again. Completion voice 8011
 is dispatched once. A real pedestrian sweep in Hard Core kills one group-56
 pedestrian and increments the shared variable by one. These are deterministic
 integration checks, not proof of every mission's natural driving traversal.
-Carrier/Desert/Silo traversal and script dependencies still need broader checks.
+The Carrier completion regression now contacts all eighteen authored ACT
+objective instances and then kills its actual group-56 ADMIRAL once through the
+existing vehicle-sweep population adapter, completing0→19 without a seeded
+counter. A second regression verifies the ADMIRAL-before-Core order. The
+Core's already-removed WIGGLYBIT follow-up is not a nineteenth objective.
+These are ordinary handler/sweep integration checks, not a natural driven
+mission route or proof of native articulated pedestrian contacts. Carrier,
+Desert and Silo side-effect chronology remains the separate WLD-05 workstream.
 The existing Chromium regression also retains 16 ordered gate crossings, race
 completion, stock Quarry and Advanced Acid Reign loading without fatal errors.
 

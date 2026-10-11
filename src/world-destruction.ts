@@ -931,9 +931,9 @@ export class WorldDestruction {
         if (owner !== mesh)
           for (const child of owner.children)
             if (child !== mesh) {
-              // Installed 0x4f4bc0 calls collision removal 0x4c8710(0) for
-              // each sibling before hiding it. Visibility alone is not a
-              // collider switch: retained dynamic actors may own descendants.
+              // Installed SmashObject sets sibling ACT style NONE; ActorBoxPick
+              // prunes that entire subtree. 0x4c8710 records the model-change
+              // piping event, so the collider adapter needs its own prune flag.
               child.userData.worldSmashDisabled = true;
               child.visible = false;
             }

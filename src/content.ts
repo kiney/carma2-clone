@@ -169,8 +169,10 @@ export class Assets {
     for (const p of mats) {
       parsedMaterials.push(...parseMat(await this.bytes(p)));
     }
+    const sourceMaterials = new Map<string, MatMaterial>();
     let missingTextures = 0;
     for (const mat of parsedMaterials) {
+      sourceMaterials.set(key(mat.name), mat);
       let texture = mat.texture ? local.get(key(mat.texture)) : undefined;
       if (mat.texture && !texture) missingTextures++;
       if (texture) {
@@ -252,6 +254,14 @@ export class Assets {
       object.userData.c2ActorRenderStyle = node.renderStyle;
       object.userData.c2ActorName = node.name;
       object.userData.c2ActorChildIndex = childIndex;
+      // Collector inheritance reads local NULL separately from inherited render state.
+      object.userData.c2ActorLocalModelName = node.model ?? null;
+      object.userData.c2ActorLocalMaterialName = node.material ?? null;
+      if (node.bounds)
+        object.userData.c2ActorBounds = {
+          min: [...node.bounds.min],
+          max: [...node.bounds.max],
+        };
       const m = node.transform;
       object.matrix.set(
         m[0],
@@ -301,6 +311,12 @@ export class Assets {
     group.updateMatrixWorld(true);
     return {
       group,
+      /** Authored ACT nodes before render defaults, batching or native load mutations.
+       * Consumers borrow these source records; mutable native linked lists are separate. */
+      sourceActors: roots as readonly ActNode[],
+      /** Authored MAT resources, with the same last-loaded lookup semantics as
+       * rendered materials; native identity must not use renderer fallbacks. */
+      sourceMaterials,
       defaultMaterial,
       /** Additional authored ACTs share this scene's immutable DAT/MAT/PIX
        * resources. Debris loading must not reload every texture library. */

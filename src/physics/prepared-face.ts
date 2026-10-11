@@ -2,20 +2,24 @@ import type { PedVector } from "../ped-form";
 import type { NativePedGroundFace } from "../ped-grounding";
 import type { WorldSourceTriangle } from "../world-source";
 import type { NativeSingleFace } from "./single-face";
+import type { NativePreparedFacePlane } from "./prepared-plane";
 
 export type NativePreparedFaceMaterial =
   | { kind: "null" }
   | { kind: "present"; identifier: string | null; flags: number }
   | { kind: "unresolved"; reason: string };
 
-export interface NativePreparedCachedFace
+export interface NativePreparedFaceRecord
   extends NativePedGroundFace,
     NativeSingleFace {
-  source: WorldSourceTriangle;
-  sourceFaceIndex: number;
   nativeModelFlags: number;
   materialPresence: "null" | "present";
   constant: number;
+}
+
+export interface NativePreparedCachedFace extends NativePreparedFaceRecord {
+  source: WorldSourceTriangle;
+  sourceFaceIndex: number;
 }
 
 export interface NativePreparedFaceInput {
@@ -32,8 +36,27 @@ export type NativePreparedFaceResult =
   | { kind: "emitted"; face: NativePreparedCachedFace }
   | { kind: "unresolved"; reason: string };
 
+/** Original or migrated indexed MODEL data. Native face/group indices and DAT
+ * provenance belong to the collector, not this geometry-only emission stage. */
+export interface NativePreparedIndexedFaceInput {
+  positions: Float32Array | readonly number[];
+  indices: readonly [number, number, number];
+  pivot: ArrayLike<number>;
+  plane: Readonly<NativePreparedFacePlane>;
+  nativeModelFlags: number;
+  rawFaceFlags?: number;
+  pMat: readonly number[] | Float32Array | null;
+  material: NativePreparedFaceMaterial;
+  preparedEdges?: readonly [number, number, number];
+}
+export type NativePreparedIndexedFaceResult =
+  | { kind: "emitted"; face: NativePreparedFaceRecord }
+  | { kind: "unresolved"; reason: string };
+
 const f = Math.fround;
-const unresolved = (reason: string): NativePreparedFaceResult => ({
+const unresolved = (
+  reason: string,
+): { kind: "unresolved"; reason: string } => ({
   kind: "unresolved",
   reason: `prepared-face:${reason}`,
 });
@@ -99,18 +122,69 @@ export function emitNativePreparedFace(
   const pivotMetadata = source.geometry.userData.c2Pivot;
   if (!Array.isArray(pivotMetadata) && !(pivotMetadata instanceof Float32Array))
     return unresolved("original-model-pivot-required");
-  const pivot = vector(pivotMetadata);
   const plane = source.nativeModelPlane;
   if (!plane) return unresolved("prepared-model-plane-required");
-  let normal = vector(plane.normal),
-    constant = scalar(plane.d);
   const flags = source.effectiveTrackModelFlags;
+  if (flags === null || flags === undefined)
+    return unresolved("effective-model-flags-required");
+  const result = emitNativePreparedIndexedFace({
+    positions,
+    indices: indices as [number, number, number],
+    pivot: pivotMetadata,
+    plane,
+    nativeModelFlags: flags,
+    rawFaceFlags: source.sourceFace.flags as number | undefined,
+    pMat: input.pMat,
+    material: input.material,
+    preparedEdges: input.preparedEdges,
+  });
+  return result.kind === "emitted"
+    ? {
+        kind: "emitted",
+        face: {
+          ...result.face,
+          source,
+          sourceFaceIndex: source.sourceFaceIndex,
+        },
+      }
+    : result;
+}
+
+/** Same installed emission, with explicit current MODEL tables. MungeFaces can
+ * compact a MODEL or migrate a face into a zero-pivot blendy MODEL; callers must
+ * use that destination's positions/indices/pivot/plane, not its old DAT geometry.
+ * No synthetic WorldSourceTriangle or fabricated native face index is needed. */
+export function emitNativePreparedIndexedFace(
+  input: NativePreparedIndexedFaceInput,
+): NativePreparedIndexedFaceResult {
+  const { positions, indices } = input;
+  if (!(positions instanceof Float32Array) && !Array.isArray(positions))
+    return unresolved("original-indexed-positions-required");
+  if (positions.length % 3 !== 0)
+    throw new Error("Invalid prepared face indexed position table");
+  if (!indices) return unresolved("original-face-indices-required");
+  if (
+    indices.length !== 3 ||
+    indices.some(
+      (index) =>
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index * 3 + 2 >= positions.length,
+    )
+  )
+    throw new Error("Invalid prepared face original vertex indices");
+  if (!input.pivot) return unresolved("original-model-pivot-required");
+  const pivot = vector(input.pivot);
+  if (!input.plane) return unresolved("prepared-model-plane-required");
+  let normal = vector(input.plane.normal),
+    constant = scalar(input.plane.d);
+  const flags = input.nativeModelFlags;
   if (flags === null || flags === undefined)
     return unresolved("effective-model-flags-required");
   uint(flags, 0xffff, "effective model flags");
   let rawFlags: number;
   if (flags & 0x80) {
-    const originalFlags = source.sourceFace.flags;
+    const originalFlags = input.rawFaceFlags;
     if (typeof originalFlags !== "number")
       return unresolved("original-raw-face-flags-required");
     rawFlags = uint(originalFlags, 0xff, "raw face flags");
@@ -138,9 +212,9 @@ export function emitNativePreparedFace(
     return unresolved("actor-emission-matrix-required");
   const prepared = indices.map(
     (index): PedVector => [
-      scalar(positions[index * 3] - pivot[0]),
-      scalar(positions[index * 3 + 1] - pivot[1]),
-      scalar(positions[index * 3 + 2] - pivot[2]),
+      scalar(scalar(positions[index * 3]) - pivot[0]),
+      scalar(scalar(positions[index * 3 + 1]) - pivot[1]),
+      scalar(scalar(positions[index * 3 + 2]) - pivot[2]),
     ],
   );
   let [a, b, c] = prepared;
@@ -156,7 +230,7 @@ export function emitNativePreparedFace(
     normal = transform(normal, matrix, false);
     constant = scalar(normal[2] * a[2] + normal[1] * a[1] + normal[0] * a[0]);
   }
-  const face: NativePreparedCachedFace = {
+  const face: NativePreparedFaceRecord = {
     a,
     b,
     c,
@@ -165,8 +239,6 @@ export function emitNativePreparedFace(
     rawFlags,
     materialIdentifier:
       material.kind === "present" ? material.identifier : null,
-    source,
-    sourceFaceIndex: source.sourceFaceIndex,
     nativeModelFlags: flags,
     materialPresence: material.kind,
   };

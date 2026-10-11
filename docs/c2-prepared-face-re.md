@@ -49,6 +49,23 @@ The returned face retains `source` identity, original face index, effective mode
 
 Original native resource pointer order, linked ACT traversal order and the admission/capacity prefix remain separate prerequisites. This emitter does not turn current render grouping, render material fallback or Three traversal order into proof of those native orders.
 
+## Current MODEL tables after face migration
+
+`emitNativePreparedIndexedFace` uses the same emission kernel with explicit current
+indexed positions, face indices, pivot, prepared plane, effective MODEL flags and
+raw face flags. It returns only the geometric/material cached record. The collector
+retains native group/compacted face indices and original DAT provenance separately;
+this helper neither invents indices nor fabricates a `WorldSourceTriangle`.
+
+This matters after `MungeFaces`: remaining faces are compacted, while selected faces
+move to a distinct zero-pivot blendy MODEL and remapped vertex table. Using the old
+DAT pivot or indexing the old geometry with a compacted destination index can
+produce incorrect contact points. Four additional tests cover this distinction,
+actual `CheckSingleFace` intersections, NULL/identity plane handling, invalid input
+and Stock/Advanced source MODEL tables. Synthetic eligibility fixtures are labeled;
+they do not claim authored smash bindings or population initialization. Native actor
+traversal and prepared material-pointer order remain separate prerequisites.
+
 ## Validation
 
 A private 32-bit harness mapped the original HW executable read-only into process-local memory, initialized native CRT floating-point mode through **5798e0**, and called installed **460490** against one-face synthetic prepared models. The installation remained unchanged; harnesses and generated binary captures stayed under `/tmp`.

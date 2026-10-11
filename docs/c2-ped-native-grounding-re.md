@@ -79,6 +79,12 @@ process-cache normal. `invalidate(owner)` forces recaching while retaining the
 old list for the source same-capacity reuse path.
 
 Call `release(owner)` only when that process-cache owner really goes away.
+`releaseFaceCache(owner)` is the narrower installed move-completion operation
+at `4cbfa3..4cbfa9`: clear the borrowed slot owner at `+14` and the process
+face-list pointer at `+b0`. It keeps the actual process, retained floor normal,
+slot records/time and native ring order. The next grounding visit must acquire
+and recollect rather than accept the old selected-triangle shortcut. This is
+neither whole-pedestrian release nor simple selected-face invalidation.
 Render/simple-body culling alone is not proof that the native process cache has
 been disposed. Explicit actor mutation/completion owners may call `invalidate`.
 There is no cache TTL, view-distance substitute or wheel-ray fallback.

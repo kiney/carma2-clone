@@ -16,6 +16,25 @@ while existing effective-style inheritance and mesh creation remain unchanged.
 Existing `Object3D.name`, local matrix, inherited material and child ordering
 continue to represent the scene hierarchy.
 
+The scene now also exposes `sourceActors`: authored parsed ACT roots before
+renderer defaults or native column/model mutations. Collector consumers build
+separate mutable native linked lists; they must not mutate these source records.
+Per-actor metadata retains `c2ActorLocalModelName` and
+`c2ActorLocalMaterialName` independently of effective render inheritance, with
+explicit NULL when no local binding exists. `c2ActorBounds` clones the six local
+BOUNDS components without inferring a mesh union. [Bounds evidence](c2-actor-bounds-re.md)
+records the original chunk attachment and validation. Stock/Advanced Newcity
+source-tree tests verify this metadata throughout all authored actors, including
+the 211 bounds records in each scene.
+
+`sourceMaterials` exposes the authored MAT resource table separately from Three
+materials. Its normalized lookup and last-loaded replacement match the existing
+scene material lookup. Raw flags, identifiers and source object identities remain
+available even when renderer defaults are applied. This does not assign or prove
+Windows heap pointer ordering. Stock/Advanced car and Newcity tests compare every
+returned source MAT with the parsed source libraries and verify distinct render
+object identities.
+
 ## Evidence and limits
 
 The public `madebr/rec2` BRender map identifies `DF_CHUNKID_PIVOT = 21` in

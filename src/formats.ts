@@ -24,6 +24,11 @@ export interface ActNode {
   renderStyle: number;
   model?: string;
   material?: string;
+  /** Authored BOUNDS type_data in actor-local coordinates; no transform applied. */
+  bounds?: {
+    min: [number, number, number];
+    max: [number, number, number];
+  };
   /** BRender 4 by 3 matrix: three basis rows, then a translation row. */
   transform: number[];
   children: ActNode[];
@@ -265,6 +270,7 @@ export function parseAct(bytes: Uint8Array): ActNode[] {
   const roots: ActNode[] = [],
     stack: ActNode[] = [];
   let pendingTransform: number[] | undefined;
+  let pendingBounds: ActNode["bounds"];
   const current = () => {
     const node = stack.at(-1);
     if (!node) throw new Error("ACT: property precedes actor");
@@ -273,6 +279,18 @@ export function parseAct(bytes: Uint8Array): ActNode[] {
   while (r.remaining) {
     const tag = r.u32(),
       length = r.u32();
+    // Native DfPop(BOUNDS), DfTop(ACTOR) requires this resource to stay
+    // immediately above its actor until ACTOR_BOUNDS consumes it.
+    if (
+      pendingBounds &&
+      (tag === 0 ||
+        (tag >= 0x23 && tag <= 0x34 && tag !== 0x29) ||
+        tag === 0x37 ||
+        tag === 0x38)
+    )
+      throw new Error(
+        "ACT: unconsumed bounds before actor property or hierarchy",
+      );
     // Some shipped legacy references (CPOINT.ACT) retain stale chunk lengths.
     // Names are NUL terminated in the bounded file reader, just as MAT refs.
     if (tag === 0x24 || tag === 0x26) {
@@ -298,6 +316,29 @@ export function parseAct(bytes: Uint8Array): ActNode[] {
         break;
       case 0x26:
         current().material = c.string();
+        break;
+      case 0x32: {
+        if (length !== 24)
+          throw new Error("ACT: bounds payload must be 24 bytes");
+        current();
+        if (pendingTransform)
+          throw new Error("ACT: bounds cannot cross an unconsumed transform");
+        const values = c.floats(6);
+        if ([0, 1, 2].some((i) => values[i] > values[i + 3]))
+          throw new Error("ACT: reversed bounds");
+        pendingBounds = {
+          min: [values[0], values[1], values[2]],
+          max: [values[3], values[4], values[5]],
+        };
+        break;
+      }
+      case 0x29:
+        if (length !== 0) throw new Error("ACT: bounds marker must be empty");
+        if (!pendingBounds)
+          throw new Error("ACT: bounds marker without bounds");
+        // The native reader attaches type_data without checking the actor enum.
+        current().bounds = pendingBounds;
+        pendingBounds = undefined;
         break;
       case 0x2b:
       case 0x2c:
@@ -329,7 +370,7 @@ export function parseAct(bytes: Uint8Array): ActNode[] {
         break;
     }
   }
-  if (stack.length || pendingTransform)
+  if (stack.length || pendingTransform || pendingBounds)
     throw new Error("ACT: incomplete hierarchy");
   return roots;
 }

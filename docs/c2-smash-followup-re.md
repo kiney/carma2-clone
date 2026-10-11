@@ -253,3 +253,23 @@ skip cleanly when absent. TypeScript validation passes. The adapter's exact scen
 triangle collection, original actor packing proxy and application callback wiring
 remain integration responsibilities; these unit tests do not establish browser
 behavior for those adapters.
+
+## Carrier completion correction
+
+The earlier ACT-only chain stopped at18/19 after seventeen non-core ACT
+contacts and the Core. That result does not show a missing ACT or initial
+variable credit. Installed Stock Hard Core is native race type5 and also marks
+the group56 ADMIRAL as a target. `InitRace481788` zeroes the variables,
+`InitPedsForRace4d3002..3055` sets the target flag200, and once-only
+`OneLessPed4ccfdb` supplies the nineteenth increment.
+
+The updated Chromium chain reaches18 through all eighteen actual ACTs,
+then sweeps the loaded group56 pedestrian through its existing death
+lifecycle to reach19 and completion reason3. A repeated sweep leaves19.
+There are no seeded variable writes. The complementary gameplay test
+kills the ADMIRAL before the final Core contact. Both tests complete
+without console, request or WebGL errors. Pedestrian contact uses the
+current legacy sweep adapter, not the still-incomplete native articulated
+contact system. The Core's already-removed WIGGLYBIT cannot provide
+another increment: source render-style1 prunes it before model/child
+collection. Other six Stock/Advanced follow-up checks remain separate.

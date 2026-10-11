@@ -152,6 +152,13 @@ export class NativePedGrounding<
       throw new Error("Native grounding process owner is not initialized");
     state.processFloorNormal = vector(normal);
   }
+  /** Installed CBMoveCompleted4cbfa3..4cbfa9 releases only the borrowed
+   * face-list slot and process cache+b0, retaining the process and its normal. */
+  releaseFaceCache(owner: Owner): void {
+    this.pool.release(owner);
+    const state = this.states.get(owner);
+    if (state) state.cache = null;
+  }
   release(owner: Owner): void {
     this.pool.release(owner);
     this.states.delete(owner);
