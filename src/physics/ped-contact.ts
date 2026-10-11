@@ -56,6 +56,14 @@ export interface PedContactInputs {
   /** Source owner executes severing and the common HP/kill tail once, BEFORE
    * caller continuation. Absence retains explicit unresolved severing. */
   damageTail?: (input: PedCommonDamageTailInput) => PedCommonDamageTailResult;
+  /** Installed4cd9e9..4cda0b precedes momentum and the common HP/sever tail.
+   * The actual owner clears its cache retry/interpolation and attributes the
+   * impact here; a delayed post-damage notification cannot replace this. */
+  passivePrelude?: (input: {
+    impactCount: number;
+    resetHaltCount: true;
+    clearDirectionInterpolation: true;
+  }) => void;
 }
 export interface PassivePedContactPacket extends PedContactInputs {
   characterVelocity: PedContactVector;
@@ -281,6 +289,12 @@ export function passivePedContact(packet: PassivePedContactPacket) {
     state = packet.state;
   if (!(state.flags & 0x40))
     return { eligible: false as const, reason: "ped-flag40-clear" as const };
+  const nextImpactCount = (packet.impactCount + 1) & 0xffff;
+  packet.passivePrelude?.({
+    impactCount: nextImpactCount,
+    resetHaltCount: true,
+    clearDirectionInterpolation: true,
+  });
   const mass = scalar(packet.form.personalityMass, "personality mass");
   // Native retains X live, but spills -mass*Y and -mass*Z before addition.
   let x = -mass * v.x,
@@ -321,7 +335,7 @@ export function passivePedContact(packet: PassivePedContactPacket) {
     reactionMoveId: health.hitPoints > 0 ? 90 : 94,
     reactionAction: health.hitPoints > 0 ? 5 : 6,
     deadImpactMove,
-    impactCount: (packet.impactCount + 1) & 0xffff,
+    impactCount: nextImpactCount,
     resetHaltCount: true,
     clearDirectionInterpolation: true,
     collisionFilterA: packet.pedRigidType === 5 ? 0x40000 : 0x20000,

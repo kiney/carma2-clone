@@ -1,4 +1,4 @@
-import { Object3D, Quaternion, Vector3 } from "three";
+import { Matrix4, Object3D, Quaternion, Vector3 } from "three";
 
 export interface RenderBody {
   state: { position: Vector3; orientation: Quaternion };
@@ -14,7 +14,8 @@ interface Pose {
  * transforms back into collision, damage, attachment or checkpoint state. */
 export class RenderPoses {
   private previous = new Map<RenderBody, Pose>();
-  private restored: Array<{ actor: Object3D; pose: Pose }> = [];
+  private restored: Array<{ actor: Object3D; pose: Pose; matrix?: Matrix4 }> =
+    [];
 
   capture(bodies: readonly RenderBody[]) {
     const live = new Set(bodies);
@@ -51,13 +52,24 @@ export class RenderPoses {
     );
   }
 
-  apply(body: RenderBody, actor: Object3D, alpha: number) {
+  /** Flat source ACTs have manual matrices; explicitly commit their temporary
+   * interpolated pose, then restore the exact saved matrix after drawing. */
+  apply(
+    body: RenderBody,
+    actor: Object3D,
+    alpha: number,
+    updateManualMatrix = false,
+  ) {
     this.restored.push({
       actor,
       pose: {
         position: actor.position.clone(),
         orientation: actor.quaternion.clone(),
       },
+      matrix:
+        updateManualMatrix && !actor.matrixAutoUpdate
+          ? actor.matrix.clone()
+          : undefined,
     });
     this.sample(body, alpha, actor.position, actor.quaternion);
     if (actor.parent) {
@@ -66,13 +78,18 @@ export class RenderPoses {
       const parentRotation = actor.parent.getWorldQuaternion(new Quaternion());
       actor.quaternion.premultiply(parentRotation.invert());
     }
+    if (updateManualMatrix) actor.updateMatrix();
     actor.updateMatrixWorld(true);
   }
 
   restore() {
-    for (const { actor, pose } of this.restored) {
+    for (const { actor, pose, matrix } of this.restored) {
       actor.position.copy(pose.position);
       actor.quaternion.copy(pose.orientation);
+      if (matrix) {
+        actor.matrix.copy(matrix);
+        actor.matrixWorldNeedsUpdate = true;
+      }
       actor.updateMatrixWorld(true);
     }
     this.restored.length = 0;

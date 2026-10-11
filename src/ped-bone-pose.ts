@@ -101,11 +101,16 @@ export function nativePedMatrixToAngleBytes(
     quantizeNativePedAngle(radians[2]),
   ];
 }
-/** Native name matching ignores extra exporter bones, but missing FORM angles
- * are diagnosed instead of inventing the native uninitialized storage values. */
+export interface NativePedBoneMotionPreparationOptions {
+  /** ReadMove exact-name misses retain BrMemAllocate's zero angle triplets. */
+  missingBones?: "reject" | "native-zero";
+}
+/** Exact native name matching ignores extra exporter bones. Strict callers
+ * diagnose missing FORM records; the actual native loader opts into zero storage. */
 export function buildNativePedBoneMotion(
   motion: PedRootMotionInput,
   formBoneNames: readonly string[],
+  options: NativePedBoneMotionPreparationOptions = {},
 ): NativePedBoneMotion {
   const count = motion.bones.length,
     frames = motion.frameCount;
@@ -116,6 +121,9 @@ export function buildNativePedBoneMotion(
     frames < 1 ||
     frames > 20000 ||
     motion.matrices.length !== count * frames * 12 ||
+    (options.missingBones !== undefined &&
+      options.missingBones !== "reject" &&
+      options.missingBones !== "native-zero") ||
     !formBoneNames.length ||
     formBoneNames.length > 32 ||
     new Set(formBoneNames).size !== formBoneNames.length ||
@@ -127,13 +135,15 @@ export function buildNativePedBoneMotion(
     throw new Error("PED POSE: invalid animation shape/names");
   const indices = formBoneNames.map((name) => {
     const index = motion.bones.findIndex((b) => b.name === name);
-    if (index < 0) throw new Error(`PED POSE: missing animation bone ${name}`);
+    if (index < 0 && options.missingBones !== "native-zero")
+      throw new Error(`PED POSE: missing animation bone ${name}`);
     return index;
   });
   const result: Uint8Array[] = [];
   for (let frame = 0; frame < frames; frame++) {
     const angles = new Uint8Array(formBoneNames.length * 3);
     for (let bone = 0; bone < indices.length; bone++) {
+      if (indices[bone] < 0) continue;
       const offset = (frame * count + indices[bone]) * 12,
         raw = Array.from({ length: 12 }, (_, j) => motion.matrices[offset + j]);
       angles.set(

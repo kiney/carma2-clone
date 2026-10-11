@@ -1,6 +1,11 @@
 import { Box3, Quaternion, Vector3 } from "three";
 import type { RigidBody } from "./contact";
 import {
+  isNativeSphereBody,
+  nativeBodyWorldBounds,
+  nativeSpherePairRows,
+} from "./sphere-body";
+import {
   hullBounds,
   hullPenetration,
   sweepHulls,
@@ -36,6 +41,12 @@ export function attachmentRoot(body: RigidBody): RigidBody {
 }
 
 function radius(body: HullBody) {
+  if (isNativeSphereBody(body))
+    return (
+      new Vector3(...body.shape.center).distanceTo(
+        body.properties.centerOfMass,
+      ) + body.shape.radius
+    );
   let result = 0;
   for (const hull of body.hulls)
     for (const vertex of hull.vertices)
@@ -68,6 +79,8 @@ export function guardPairTrajectory(
   pairAllowed?: BodyPairPredicate,
 ): number {
   if (pairAllowed && !pairAllowed(a, b)) return 1;
+  if (isNativeSphereBody(a) || isNativeSphereBody(b))
+    return guardSpherePairTrajectory(a, b, pathA, pathB);
   const cacheA = new Map<number, CollisionHull[]>(),
     cacheB = new Map<number, CollisionHull[]>();
   const sample = (
@@ -185,6 +198,82 @@ export function guardPairTrajectory(
     oldA = nextA;
     oldB = nextB;
     safe = end;
+  }
+  return 1;
+}
+
+/** Independent post-solver safety uses the same analytic sphere features.
+ * There is no tessellated fallback or collider expansion. Source old-overlap
+ * rejection intentionally allows an already embedded shape to escape. */
+function guardSpherePairTrajectory(
+  a: HullBody,
+  b: HullBody,
+  pathA: PosePath,
+  pathB: PosePath,
+): number {
+  const angle = (path: PosePath) =>
+    Math.max(
+      path.angularTravel ?? 0,
+      [0, 0.25, 0.5, 0.75].reduce(
+        (n, t) => n + path(t).orientation.angleTo(path(t + 0.25).orientation),
+        0,
+      ),
+    );
+  const samples = Math.min(
+    128,
+    Math.max(1, Math.ceil(Math.max(angle(pathA), angle(pathB)) / 0.05)),
+  );
+  const probe = (
+    body: HullBody,
+    old: GuardPose,
+    next: GuardPose,
+  ): HullBody => ({
+    ...body,
+    state: {
+      ...body.state,
+      position: old.position,
+      orientation: old.orientation,
+      predictedPosition: next.position,
+      predictedOrientation: next.orientation,
+    },
+  });
+  let oldA = pathA(0),
+    oldB = pathB(0);
+  for (let i = 1; i <= samples; i++) {
+    const nextA = pathA(i / samples),
+      nextB = pathB(i / samples),
+      aa = probe(a, oldA, nextA),
+      bb = probe(b, oldB, nextB);
+    const boundsA = nativeBodyWorldBounds(a, oldA.position, oldA.orientation)
+        .union(nativeBodyWorldBounds(a, nextA.position, nextA.orientation))
+        .expandByScalar(0.005),
+      boundsB = nativeBodyWorldBounds(b, oldB.position, oldB.orientation)
+        .union(nativeBodyWorldBounds(b, nextB.position, nextB.orientation))
+        .expandByScalar(0.005);
+    if (boundsA.intersectsBox(boundsB)) {
+      const rows = nativeSpherePairRows(aa, bb);
+      if (rows.length) {
+        // Preserve the clear portion of a fast straight sweep. Returning the
+        // previous angular sample alone could freeze a whole 40ms tick even
+        // when the original feature is reached near its end.
+        let safe = (i - 1) / samples,
+          blocked = i / samples;
+        for (let iteration = 0; iteration < 8; iteration++) {
+          const mid = (safe + blocked) / 2;
+          if (
+            nativeSpherePairRows(
+              probe(a, oldA, pathA(mid)),
+              probe(b, oldB, pathB(mid)),
+            ).length
+          )
+            blocked = mid;
+          else safe = mid;
+        }
+        return safe;
+      }
+    }
+    oldA = nextA;
+    oldB = nextB;
   }
   return 1;
 }

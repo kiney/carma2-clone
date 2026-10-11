@@ -162,6 +162,7 @@ test("native impact grouping rejects invalid live numerical inputs", () => {
     [0, 0, 0],
     [Infinity, 0, 0],
     [2, 0, 0],
+    [1.001, 0, 0],
   ])
     assert.throws(() => groupNativeImpactRows([row(a, b, normal)]), /normal/);
   assert.throws(() => groupNativeImpactRows([row(a, a)]), /distinct/);
@@ -172,5 +173,23 @@ test("native impact grouping rejects invalid live numerical inputs", () => {
         row(a, b, undefined, 3e38),
       ]),
     /bounds/,
+  );
+});
+
+test("native impact grouping retains captured Float32 rotated sphere normal", () => {
+  const a = {},
+    b = {};
+  // Actual Stock Blokebl HEAD type3 contact in Chromium, not a normalized fixture.
+  const normal = [
+    -1.7029471166551957e-8, 1.0000001192092896, 1.170059604760354e-8,
+  ];
+  const sphere = row(a, undefined, normal, 0.03, { sourceType: 3 });
+  const peer = row(a, undefined, [0, 1, 0], 0.04, { sourceType: 3 });
+  const [group] = groupNativeImpactRows([sphere, peer]);
+  assert.deepEqual(group.rows, [sphere, peer]);
+  assert.deepEqual(sphere.normal.toArray(), normal);
+  assert.equal(
+    group.totalLambda,
+    Math.fround(Math.fround(0.03) + Math.fround(0.04)),
   );
 });

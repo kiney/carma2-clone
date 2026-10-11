@@ -173,3 +173,28 @@ Related notes: [pedestrian pools](c2-ped-body-pool-re.md),
 [detached bone initialization](c2-ped-bone-body-re.md),
 [noncar pull/wake](c2-noncar-wake-pull-re.md),
 [noncar reclaim](c2-noncar-slot-reclaim-re.md).
+
+## Browser ownership bridge
+
+`VehicleSimulation.phil` now owns one normal100 registry shared by admitted
+cars, intact native pedestrian bodies, detached bone/car roots, deployed mines
+and promoted noncars. Loaded static scenery and attached visual pieces do not
+reserve headers. Removing a mine on explosion precedes its delayed actor/body
+cleanup. Car reactivation and repair/reattachment reuse the normal admission and
+release paths. Persistent `rigidFlags` represent Object+19c; per-step contact
+flags Object+1dc are separate and cannot overwrite them.
+
+Production Chromium checks on the checked bundle confirmed a Carrier player
+and eight rivals used nine headers, all 93 initially static noncars had none,
+and a physical contact promoted `&98l0341.ACT` into one header. Mine deployment
+added one header, explosion removed it while the delayed body was still retained,
+and seven detached car roots had distinct headers. Headless capacity checks also
+prove that a failed additional mine admission does not erase an existing mine,
+and a full registry rejects a car before changing the active car array.
+
+This is actual shared ownership, not the complete native PHIL traversal. Generic
+simulation arrays still determine collision enumeration; deferred munging/flush,
+PrepareObject during physics, full hierarchy collection and some noncar promotion
+chronology remain explicit integration gaps. The displayed pedestrian population
+has not yet migrated to the native FORM/body host. Do not infer that those source
+episode requirements are complete from passing capacity or lifecycle checks.

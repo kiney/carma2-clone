@@ -13,7 +13,8 @@ import {
   Vector3,
 } from "three";
 import { WorldDestruction } from "../src/world-destruction.ts";
-import { WorldCollision } from "../src/world.ts";
+import { WorldCollision, batchStaticWorld } from "../src/world.ts";
+import { captureWorldSource } from "../src/world-source.ts";
 import { createAssetStore } from "../server/assets.mjs";
 import { parseAct, parseDat, parseMat, decodeText } from "../src/formats.ts";
 import { createModelGeometry } from "../src/render-geometry.ts";
@@ -320,6 +321,60 @@ test("texture damage is local to one native UV tile and does not mutate a shared
     ).changed,
     false,
   );
+});
+
+test("material-only UV-tile smashes retain the same rendered and source collision actor through batching", () => {
+  const { root, actor, mesh } = rootMesh("original-wall-model");
+  root.name = "PP01 1 1 1 1";
+  const runtime = new WorldDestruction(root, [textureSpec()], {
+    textures: textures(),
+    random: () => 0,
+  });
+  assert.deepEqual(runtime.retainActors, [actor]);
+  const source = captureWorldSource(root);
+  const rendered = batchStaticWorld(root, runtime.retainActors);
+  runtime.root = rendered;
+  const world = new WorldCollision(rendered, undefined, source);
+  assert.equal(mesh.parent, actor);
+  assert.equal(actor.parent, rendered);
+  assert.equal(
+    rendered.children.length,
+    1,
+    "no material GPU batch separates mutable original faces",
+  );
+  const bounds = [new Vector3(-1, -1, -1), new Vector3(3, 3, 1)];
+  assert.ok(
+    world.querySurfaces(...bounds).every((face) => face.actor === mesh),
+  );
+  const intactArea = world
+    .querySurfaces(...bounds)
+    .reduce(
+      (sum, face) => sum + new Triangle(face.a, face.b, face.c).getArea(),
+      0,
+    );
+  const first = runtime.handleContact(contact(mesh, 1));
+  assert.equal(first.changed, true);
+  const second = runtime.handleContact(
+    contact(mesh, 3, { faceIndex: first.changes[0].affectedFaceIndices[0] }),
+  );
+  assert.equal(second.changed, true);
+  assert.ok(mesh.geometry.userData.worldSmashFaceModes.includes("passthrough"));
+  world.rebuildStatic();
+  const solid = world.querySurfaces(...bounds);
+  assert.ok(solid.every((face) => face.actor === mesh));
+  assert.ok(
+    solid.every((face) => face.source === undefined),
+    "rewritten tile geometry cannot reuse stale original DAT indices",
+  );
+  const solidArea = solid.reduce(
+    (sum, face) => sum + new Triangle(face.a, face.b, face.c).getArea(),
+    0,
+  );
+  assert.ok(
+    Math.abs(intactArea - solidArea - 1) < 1e-6,
+    "same visible UV tile leaves collision after original-mesh rewrite",
+  );
+  runtime.dispose();
 });
 
 test("authored texture transforms control tile area and whole-quad flags override tile splitting", () => {

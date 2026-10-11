@@ -61,6 +61,7 @@ test("inactive cars remain registered and rendered but are absent from physics u
   second.input = { throttle: 1, steer: 1, brake: 1, handbrake: true };
 
   simulation.setCarPhysicsActive(second, false);
+  assert.equal(simulation.phil.getState(second), 0);
   assert.equal(simulation.isCarPhysicsActive(first), true);
   assert.equal(simulation.isCarPhysicsActive(second), false);
   assert.equal(simulation.cars.includes(second), true);
@@ -97,6 +98,7 @@ test("inactive cars remain registered and rendered but are absent from physics u
   );
 
   simulation.setCarPhysicsActive(second, true);
+  assert.equal(simulation.phil.getState(second), 2);
   assert.equal(simulation.isCarPhysicsActive(second), true);
   simulation.step();
   assert.ok(second.state.position.y < frozenPose.y);

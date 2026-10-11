@@ -60,6 +60,7 @@ import {
 } from "./gameplay";
 import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
+import { captureWorldSource } from "./world-source";
 import { WorldFollowupRuntime, type FollowupDue } from "./world-followup";
 import { DamageSystem } from "./damage";
 import {
@@ -1073,6 +1074,7 @@ async function loadRace() {
         ) ?? models[0]
       );
     });
+    const worldSource = captureWorldSource(world.group);
     world.group = batchStaticWorld(world.group, [
       ...noncarBodies.map((body) => body.actor),
       ...loadedGrooves.actors,
@@ -1082,6 +1084,7 @@ async function loadRace() {
     const newCollision = new WorldCollision(
       world.group,
       parseSurfaceModifiers(trackText),
+      worldSource,
     );
     noncarRenderBatch?.dispose();
     for (const body of simulation?.cars ?? []) tyreEffects.stopOwner(body);
@@ -1421,6 +1424,7 @@ async function loadRace() {
         ...activeSimulation.noncars,
         ...activeSimulation.movingWorld,
         ...activeSimulation.mineBodies,
+        ...activeSimulation.pedBoneBodies,
       ]);
     simulation.settings = upgradeSettings;
     simulation.crashDamageAwards = parseCrashDamageAwards(generalText);
@@ -3165,6 +3169,9 @@ function animate(now: number) {
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.mineBodies)
         if (body.actor.parent) renderPoses.apply(body, body.actor, renderAlpha);
+      for (const body of simulation.pedBoneBodies)
+        if (body.actor.parent)
+          renderPoses.apply(body, body.actor, renderAlpha, true);
       if (gameFrame && !paused && simulation.oil)
         for (const body of simulation.cars) {
           const driver = body.state.driver ?? (body.human ? 8 : 6);

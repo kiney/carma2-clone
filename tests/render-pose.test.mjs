@@ -48,3 +48,26 @@ test("reset/recovery and newly detached actors never interpolate from a stale lo
   assert.deepEqual(actor.position.toArray(), [5, 6, 7]);
   poses.restore();
 });
+
+test("flat manually posed ACTs interpolate their drawn matrix and restore the exact committed pose", () => {
+  const poses = new RenderPoses(),
+    actor = new Group(),
+    body = {
+      state: { position: new Vector3(1, 2, 3), orientation: new Quaternion() },
+    };
+  actor.matrixAutoUpdate = false;
+  actor.matrix.makeTranslation(1, 2, 3);
+  actor.matrix.decompose(actor.position, actor.quaternion, actor.scale);
+  poses.capture([body]);
+  body.state.position.x = 2;
+  actor.position.copy(body.state.position);
+  actor.updateMatrix();
+  const committed = actor.matrix.clone();
+  poses.apply(body, actor, 0.5, true);
+  assert.equal(actor.matrix.elements[12], 1.5);
+  assert.equal(body.state.position.x, 2);
+  poses.restore();
+  assert.deepEqual(actor.matrix.elements, committed.elements);
+  assert.equal(actor.position.x, 2);
+  assert.equal(actor.matrixAutoUpdate, false);
+});

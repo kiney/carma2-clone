@@ -37,6 +37,42 @@ function input() {
     },
   };
 }
+test("passive native prelude wraps the impact WORD and runs before the common tail; flag40 gate skips it", () => {
+  const events = [],
+    packet = {
+      ...input(),
+      characterVelocity: { x: 0, y: 0, z: 0 },
+      pedRigidType: 2,
+      impactCount: 0xffff,
+    };
+  packet.passivePrelude = (prelude) => events.push(["prelude", prelude]);
+  packet.damageTail = (tail) => {
+    assert.equal(events[0][0], "prelude");
+    events.push(["tail", tail.damage]);
+    return {
+      health: resolvePedContactDamage(
+        tail.damage,
+        tail.form,
+        tail.state,
+        tail.aliveMove,
+        tail.deadMove,
+      ),
+      unresolved: [],
+    };
+  };
+  const result = passivePedContact(packet);
+  assert.equal(result.impactCount, 0);
+  assert.deepEqual(events[0], [
+    "prelude",
+    { impactCount: 0, resetHaltCount: true, clearDirectionInterpolation: true },
+  ]);
+  assert.equal(events.length, 2);
+  events.length = 0;
+  packet.state.flags &= ~0x40;
+  assert.equal(passivePedContact(packet).eligible, false);
+  assert.equal(events.length, 0);
+});
+
 test("passive contact executes source common tail once with normalized D and post-sever head mask", () => {
   const packet = {
     ...input(),

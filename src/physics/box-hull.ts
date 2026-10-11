@@ -24,5 +24,5 @@ export function buildBoxHull(min: Vector3, max: Vector3): CollisionHull {
   const edges: [number, number][] = [];
   for (let i = 0; i < 8; i++)
     for (const bit of [1, 2, 4]) if (!(i & bit)) edges.push([i, i | bit]);
-  return { vertices, faces, edges };
+  return { nativeType: "BOX", vertices, faces, edges };
 }

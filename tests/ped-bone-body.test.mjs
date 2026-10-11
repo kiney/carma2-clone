@@ -47,7 +47,7 @@ function create(r = request(), extra = {}) {
     request: r,
     owner: {},
     levelOut: 0.3,
-    retained: { collisionFlags: 0x80000041, objectFriction: 0.7 },
+    retained: { rigidFlags: 0x80000041, objectFriction: 0.7 },
     ...extra,
   });
 }
@@ -154,7 +154,7 @@ test("immediate PHIL failure stops properties and filters after preparing body",
       registerImmediate: (b) => {
         assert.equal(b.headerState, 0);
         assert.equal(b.filterA, null);
-        assert.equal(b.collisionFlags, 0x80000041);
+        assert.equal(b.rigidFlags, 0x80000041);
         assert.deepEqual(b.state.velocity.toArray(), [0, 0, 0]);
         return code;
       },
@@ -189,7 +189,7 @@ test("sever extra1 makes passive property3 false, ordered properties then instal
     [8, f(0.3)],
     [6, 1],
   ]);
-  assert.equal(body.collisionFlags, 0x80000039);
+  assert.equal(body.rigidFlags, 0x80000039);
   assert.equal(body.headerFlags, 12);
   assert.equal(body.headerState, 1);
   assert.equal(body.doNothing, true);
@@ -224,7 +224,7 @@ test("post-mask unlink precedes activation; raw world V and BODY omega transform
   assert.deepEqual(log, ["unlink", "activate", [0, 1], [3, 0], [4, 0], [5, 0]]);
   assert.deepEqual(body.localOmega.toArray(), [1, 2, 3]);
   assert.deepEqual(body.state.angularVelocity.toArray(), [-2, 1, 3]);
-  assert.equal(body.collisionFlags, 0x80000001);
+  assert.equal(body.rigidFlags, 0x80000001);
   assert.equal(body.headerFlags, 12);
   assert.equal(body.headerState, 2);
   assert.equal(body.properties.immovable, false);

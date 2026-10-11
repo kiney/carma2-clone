@@ -60,6 +60,9 @@ test("physical mine contact crushes a stock car locally and timed mines clean up
   const simulation = new VehicleSimulation(emptyWorld, scene);
   simulation.add(owner);
   simulation.add(victim);
+  assert.equal(simulation.phil.count, 2);
+  assert.equal(simulation.phil.getState(owner), 2);
+  assert.equal(simulation.phil.getState(victim), 2);
   simulation.mineFactory = mineFactory();
   const events = [];
   simulation.onMineEvent = (event) => events.push(event.kind);
@@ -83,6 +86,8 @@ test("physical mine contact crushes a stock car locally and timed mines clean up
     true,
   );
   const body = simulation.mineBodies[0];
+  assert.equal(simulation.phil.getState(body), 2);
+  assert.equal(simulation.phil.count, 3);
   body.state.position.copy(victim.state.position).add(new Vector3(0, 0.4, 0));
   body.state.velocity.set(0, -30, 0);
   body.state.predictedPosition = undefined;
@@ -126,6 +131,7 @@ test("physical mine contact crushes a stock car locally and timed mines clean up
     for (let i = 0; i < shapeBefore[s].length; i++)
       assert.equal(victim.shapeVertices[s][i].distanceTo(shapeBefore[s][i]), 0);
   simulation.dispose();
+  assert.equal(simulation.phil.count, 0);
 
   const timerScene = new Group();
   const timerOwner = await stock(t, "buggy", new Vector3());
@@ -134,6 +140,7 @@ test("physical mine contact crushes a stock car locally and timed mines clean up
   const timerSimulation = new VehicleSimulation(emptyWorld, timerScene);
   timerSimulation.add(timerOwner);
   timerSimulation.mineFactory = mineFactory();
+  assert.equal(timerSimulation.phil.count, 1);
   const timerEvents = [];
   timerSimulation.onMineEvent = (event) => timerEvents.push(event.kind);
   assert.equal(
@@ -155,6 +162,8 @@ test("physical mine contact crushes a stock car locally and timed mines clean up
     true,
   );
   for (let i = 0; i < 125; i++) timerSimulation.step();
+  const deployed = timerSimulation.mineBodies[0];
+  assert.equal(timerSimulation.phil.getState(deployed), 2);
   assert.equal(
     timerEvents.includes("explode"),
     false,
@@ -163,6 +172,8 @@ test("physical mine contact crushes a stock car locally and timed mines clean up
   assert.equal(timerSimulation.mineBodies.length, 1);
   timerSimulation.step();
   assert.ok(timerEvents.includes("explode"));
+  assert.equal(timerSimulation.phil.getState(deployed), 0);
+  assert.equal(timerSimulation.phil.count, 1);
   assert.equal(
     timerSimulation.mineBodies.length,
     1,

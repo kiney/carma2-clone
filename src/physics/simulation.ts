@@ -3,6 +3,7 @@ import {
   activateNativePedBody,
   acceptNativePedHalt,
   nativePedRootPose,
+  positionPassivePedBody,
   pedBodyPairExcluded,
   type NativePedBody,
   type NativePedContactResult,
@@ -18,7 +19,30 @@ import {
   collectNativeCollisionFlags,
 } from "./quiet-state";
 import { settleNativePedBody } from "./ped-settling";
+import { NativePhilRegistry, type NativePhilHeader } from "./phil-registry";
+import {
+  applyNativeFreeForces40,
+  type NativeFreeVolumeSnapshot,
+} from "./native-free-forces";
+import { nativeFreeLevelOutDelta } from "./native-free-level-out";
+import {
+  registerNativePedBoneBody,
+  type NativePedBoneBody,
+} from "./ped-bone-body";
+import {
+  isNativePedBoneBody,
+  isNativeSphereBody,
+  nativeBodyLocalBounds,
+  nativeBodyWorldBounds,
+  nativeRigidPose,
+  nativeSphereBodyPose,
+  nativeSpherePairRows,
+  nativeSphereFace,
+  nativeSphereSurfaceContacts,
+} from "./sphere-body";
+import { recoverNativeSphereSupport } from "./sphere-support";
 import { liveModelBounds } from "../render-geometry";
+import { nativeSphereMovingWorldContacts } from "./sphere-moving-world";
 import {
   support as supportsNativeNonCarQuiet,
   createState as createNativeNonCarQuiet,
@@ -316,7 +340,8 @@ export type SimulationBody =
   | DetachedBody
   | NonCarBody
   | MineBody<SimulatedCar>
-  | NativePedBody;
+  | NativePedBody
+  | NativePedBoneBody;
 function isNativePedBody(body: RigidBody): body is NativePedBody {
   return "kind" in body && body.kind === "pedestrian";
 }
@@ -420,6 +445,7 @@ export function createSimulatedCar(
     const order = hull.vertexOrder ?? hull.vertices.map((_, i) => i);
     const remap = new Map(order.map((index, i) => [index, i]));
     return {
+      nativeType: hull.nativeType,
       vertices: order.map((index) => hull.vertices[index].clone()),
       vertexOrder: order.map((_, i) => i),
       faces: hull.faces.map((face) => ({
@@ -526,6 +552,70 @@ export class VehicleSimulation {
   debris: DetachedBody[] = [];
   noncars: NonCarBody[] = [];
   pedBodies: NativePedBody[] = [];
+  /** Stable FORM-owned detached objects. Sleeping does not release the owner. */
+  pedBoneBodies: NativePedBoneBody[] = [];
+  /** One source header owner shared by actual registered roots. Loaded static
+   * world ACTs and unpromoted joint children do not reserve headers. */
+  private readonly philFields = new WeakMap<
+    RigidBody,
+    {
+      flags: number;
+      header: NativePhilHeader<RigidBody> | null;
+      indicator: number;
+      next: RigidBody | null;
+      previous: RigidBody | null;
+    }
+  >();
+  private philFieldsFor(body: RigidBody) {
+    let fields = this.philFields.get(body);
+    if (!fields) {
+      fields = {
+        flags: 0,
+        header: null,
+        indicator: 0,
+        next: null,
+        previous: null,
+      };
+      this.philFields.set(body, fields);
+    }
+    return fields;
+  }
+  readonly phil = new NativePhilRegistry<RigidBody>({
+    readFlags: (body) =>
+      "rigidFlags" in body
+        ? Number(body.rigidFlags) >>> 0
+        : this.philFieldsFor(body).flags,
+    writeFlags: (body, flags) => {
+      if ("rigidFlags" in body) body.rigidFlags = flags;
+      else this.philFieldsFor(body).flags = flags;
+    },
+    writeBinding: (body, header, indicator) => {
+      Object.assign(this.philFieldsFor(body), { header, indicator });
+      if (isNativePedBody(body) || isNativePedBoneBody(body))
+        body.headerState = header?.state ?? 0;
+    },
+    writeLinks: (body, next, previous) => {
+      Object.assign(this.philFieldsFor(body), { next, previous });
+    },
+    writeVelocity: (body, velocity) => body.state.velocity.set(...velocity),
+    writeLocalOmega: (body, omega) => {
+      body.state.angularVelocity
+        .set(...omega)
+        .applyQuaternion(body.state.orientation);
+    },
+    writePassiveMatrix: (body, pose) => {
+      if (!isNativePedBody(body))
+        throw new Error(
+          "Native passive matrix provider required for this body",
+        );
+      positionPassivePedBody(body, pose);
+    },
+    onActivated: (body) => {
+      if (isNativePedBody(body) || isNativePedBoneBody(body))
+        body.headerState = 2;
+      this.invalidateWorldFaceCache(body);
+    },
+  });
   /** Existing generic bodies lack the native quiet hierarchy provider. Their
    * unknown state blocks whole-ring sleep rather than sleeping a partial ring. */
   nativeQuietRingState?: (body: RigidBody) => number;
@@ -533,6 +623,21 @@ export class VehicleSimulation {
   nativeQuietRingSleep?: (members: readonly RigidBody[]) => boolean;
   private pedContactRings = new Map<RigidBody, Set<RigidBody>>();
   private noncarQuiet = new Map<NonCarBody, NativeNonCarQuietState>();
+  private pedBoneQuiet = new Map<
+    NativePedBoneBody,
+    {
+      quietState: number;
+      inertiaScale: 1 | 50;
+      collisionFlags: number;
+      beforeWorldV: Vector3;
+      beforeLocalOmega: Vector3;
+      gravityIncrement: Vector3;
+      requiredProviders: Set<string>;
+    }
+  >();
+  nativePedBoneQuietState(body: NativePedBoneBody) {
+    return this.pedBoneQuiet.get(body) ?? null;
+  }
   /** Actual PHIL-like ec for supported simple free props, independent of the
    * motor's pause/sleep state. Unsupported joint/hierarchy owners return null. */
   nativeNonCarQuietState(
@@ -541,6 +646,8 @@ export class VehicleSimulation {
     return this.noncarQuiet.get(body) ?? null;
   }
   private genericQuietState(body: RigidBody): number {
+    if (isNativePedBoneBody(body))
+      return this.pedBoneQuiet.get(body)?.quietState ?? 0;
     if ("kind" in body && body.kind === "noncar")
       return this.noncarQuiet.get(body as NonCarBody)?.quietState ?? 0;
     return this.nativeQuietRingState?.(body) ?? 0;
@@ -550,6 +657,7 @@ export class VehicleSimulation {
       !members.every(
         (body) =>
           isNativePedBody(body) ||
+          isNativePedBoneBody(body) ||
           ("kind" in body &&
             body.kind === "noncar" &&
             this.noncarQuiet.has(body as NonCarBody)),
@@ -557,7 +665,11 @@ export class VehicleSimulation {
     )
       return this.nativeQuietRingSleep?.(members) ?? false;
     for (const body of members)
-      if ("kind" in body && body.kind === "noncar")
+      if (isNativePedBoneBody(body)) {
+        body.doNothing = true;
+        body.properties.immovable = true;
+        this.pedBoneQuiet.get(body)!.quietState = 0;
+      } else if ("kind" in body && body.kind === "noncar")
         sleepNativeNonCarQuiet(
           body as NonCarBody,
           this.noncarQuiet.get(body as NonCarBody)!,
@@ -721,16 +833,84 @@ export class VehicleSimulation {
   ) {}
   addPedBody(body: NativePedBody): void {
     if (this.pedBodies.includes(body)) return;
+    if (!this.phil.getHeader(body)) {
+      const wasActive = body.headerState === 2;
+      if (this.phil.registerImmediate(body) !== 0)
+        throw new Error("No native PHIL header available for pedestrian body");
+      if (wasActive) this.phil.activate(body, { flag2: true });
+    }
+    const header = this.phil.getHeader(body)!;
+    header.gravity = body.gravity;
+    header.drag = body.drag;
+    header.levelOut = body.levelOut;
+    header.flags = (header.flags & ~8) | (body.volumeEnabled ? 8 : 0);
     // The character/render pool owns actor allocation, hierarchy and release.
     this.pedBodies.push(body);
   }
   removePedBody(body: NativePedBody): void {
+    this.phil.remove(body);
     this.pedBodies = this.pedBodies.filter((entry) => entry !== body);
     this.contactSurfaces.delete(body);
     const faces = this.worldFaceStates.get(body);
     if (faces) this.worldFaceCache.invalidate(faces);
     this.worldFaceStates.delete(body);
     this.pedContactRings.delete(body);
+  }
+  addPedBoneBody(body: NativePedBoneBody): { accepted: boolean; code: number } {
+    if (
+      body.rigidType !== 5 ||
+      !body.actor ||
+      body.model == null ||
+      !(body.properties.mass > 0)
+    )
+      throw new Error(
+        "A prepared native bone object is required for admission",
+      );
+    if (this.pedBoneBodies.includes(body)) return { accepted: true, code: 1 };
+    if (body.shape.type === "LINE")
+      throw new Error(
+        "Native detached LINE movement/contact provider required",
+      );
+    const existing = this.phil.getHeader(body);
+    if (!existing) {
+      const result = registerNativePedBoneBody(body, {
+        supportsShape: (shape) =>
+          shape.type === "BOX" || shape.type === "SPHERE",
+        registerImmediate: (part) => this.phil.registerImmediate(part),
+        onProperty: (part) => {
+          const header = this.phil.getHeader(part)!;
+          header.flags = part.headerFlags;
+          header.gravity = part.gravity;
+          header.levelOut = part.levelOut;
+        },
+      });
+      if (!result.accepted) return result;
+    } else if (!body.registered)
+      throw new Error(
+        "Native bone registration properties must precede admission",
+      );
+    this.pedBoneBodies.push(body);
+    this.pedBoneQuiet.set(body, {
+      quietState: 0,
+      inertiaScale: 1,
+      collisionFlags: 0,
+      beforeWorldV: new Vector3(),
+      beforeLocalOmega: new Vector3(),
+      gravityIncrement: new Vector3(),
+      requiredProviders: new Set(),
+    });
+    return { accepted: true, code: 0 };
+  }
+  removePedBoneBody(body: NativePedBoneBody): void {
+    this.phil.remove(body);
+    body.registered = false;
+    this.pedBoneBodies = this.pedBoneBodies.filter((entry) => entry !== body);
+    this.contactSurfaces.delete(body);
+    const faces = this.worldFaceStates.get(body);
+    if (faces) this.worldFaceCache.invalidate(faces);
+    this.worldFaceStates.delete(body);
+    this.pedContactRings.delete(body);
+    this.pedBoneQuiet.delete(body);
   }
   readonly smashPowerupQueue = new NativeSmashPowerupQueue<
     SimulatedCar,
@@ -757,6 +937,8 @@ export class VehicleSimulation {
     };
   }
   add(car: SimulatedCar) {
+    if (this.phil.addActiveImmediate(car) !== 0)
+      throw new Error("No native PHIL header available for active car");
     car.damage.readSmashStartingVelocity = () =>
       nativeSmashStartingVelocity(this.startingCarSmashVelocity(car));
     car.damage.cancelQueuedSpam = () => this.spamCrushQueue.cancel(car);
@@ -861,10 +1043,13 @@ export class VehicleSimulation {
     if (!this.cars.includes(car))
       throw new Error("Cannot change physics activity for an unregistered car");
     if (active) {
+      if (!this.phil.getHeader(car) && this.phil.addActiveImmediate(car) !== 0)
+        throw new Error("No native PHIL header available to activate car");
       this.inactiveCars.delete(car);
       return;
     }
     this.inactiveCars.add(car);
+    this.phil.remove(car);
     car.input.throttle = 0;
     car.input.steer = 0;
     car.input.brake = 0;
@@ -887,6 +1072,10 @@ export class VehicleSimulation {
     this.cameraContacts.bodies.delete(car);
   }
   addNonCar(body: NonCarBody) {
+    // Authored debris is already pulled at this outlet. Ordinary level ACTs
+    // stay outside PHIL until their actual wheel/contact promotion.
+    if (body.actor.userData.noncarPulled && !this.admitPulledNonCar(body))
+      throw new Error("No native PHIL header available for pulled noncar");
     const definition = body.mechanics.worldJoint;
     if (definition?.kind === "translation") {
       const local = new Vector3(...definition.position);
@@ -921,6 +1110,10 @@ export class VehicleSimulation {
     }
     this.noncars.push(body);
     this.world.addDynamic(body, body.actor, body.mechanics.drivableOn);
+  }
+  private admitPulledNonCar(body: NonCarBody): boolean {
+    if (this.phil.getHeader(body)) return true;
+    return this.phil.addActiveImmediate(body) === 0;
   }
   addMovingWorld(body: MovingWorldBody) {
     this.movingWorld.push(body);
@@ -984,7 +1177,9 @@ export class VehicleSimulation {
       state = this.worldFaceCache.createState();
       this.worldFaceStates.set(body, state);
     }
-    const shapeBounds = hullsBounds(hulls);
+    const shapeBounds = isNativePedBoneBody(body)
+      ? nativeBodyLocalBounds(body)
+      : hullsBounds(hulls);
     const bounds =
       "motion" in body
         ? nativeWheelExtendedBounds(
@@ -1153,6 +1348,7 @@ export class VehicleSimulation {
         (body) => !(body.mine.flags & MINE_FLAGS.exploded),
       ),
       ...this.pedBodies,
+      ...this.pedBoneBodies.filter((body) => this.phil.getState(body) !== 0),
     ];
   }
   private mineCar(car: SimulatedCar): MineCar<SimulatedCar> {
@@ -1188,6 +1384,7 @@ export class VehicleSimulation {
     if (!mine) return false;
     this.mineBodies = this.mineBodies.filter((body) => {
       if (body.mine.slot !== mine.slot) return true;
+      this.phil.remove(body);
       body.actor.removeFromParent();
       return false;
     });
@@ -1200,6 +1397,12 @@ export class VehicleSimulation {
       this.mineFactory.mass,
       car.specialVolume,
     );
+    if (this.phil.addActiveImmediate(body) !== 0) {
+      actor.removeFromParent();
+      // A failed shared-header admission must not erase other deployed mines.
+      mine.flags &= ~MINE_FLAGS.active;
+      return false;
+    }
     this.mineBodies.push(body);
     const hull = transformHulls(body, body.hulls),
       center = mine.position;
@@ -1323,6 +1526,7 @@ export class VehicleSimulation {
       car.state.health = 100 - Math.max(...car.damage.componentLevels);
     } else if (event.kind === "explode" || event.kind === "release") {
       const body = this.mineBodies.find((body) => body.mine === event.mine);
+      if (body) this.phil.remove(body);
       body?.actor.removeFromParent();
       if (event.kind === "release")
         this.mineBodies = this.mineBodies.filter(
@@ -1337,7 +1541,11 @@ export class VehicleSimulation {
       if (node.userData.worldSmashDisabled) return true;
     return false;
   }
-  private syncActor(body: { actor: Object3D; state: RigidBody["state"] }) {
+  private syncActor(body: {
+    actor: Object3D;
+    state: RigidBody["state"];
+    kind?: string;
+  }) {
     body.actor.position.copy(body.state.position);
     body.actor.quaternion.copy(body.state.orientation);
     if (body.actor.parent) {
@@ -1349,7 +1557,29 @@ export class VehicleSimulation {
         body.actor.parent.getWorldQuaternion(new Quaternion()).invert(),
       );
     }
+    if (body.kind === "pedestrian-bone") body.actor.updateMatrix();
     body.actor.updateMatrixWorld(true);
+    if (body.kind === "pedestrian-bone") {
+      const bone = body as NativePedBoneBody;
+      bone.nativeMatrix.copy(body.actor.matrixWorld);
+      if (bone.poseTarget) {
+        const m = bone.nativeMatrix.elements;
+        bone.poseTarget.set([
+          m[0],
+          m[1],
+          m[2],
+          m[4],
+          m[5],
+          m[6],
+          m[8],
+          m[9],
+          m[10],
+          m[12],
+          m[13],
+          m[14],
+        ]);
+      }
+    }
   }
   private allJoints(): RigidJoint[] {
     return [...this.debris, ...this.noncars].flatMap((b) =>
@@ -1690,6 +1920,7 @@ export class VehicleSimulation {
         )
           return;
         if (noncar) {
+          if (!this.admitPulledNonCar(noncar)) return;
           noncar.motor.sleeping = false;
           noncar.properties.immovable = false;
           noncar.actor.userData.noncarPulled = true;
@@ -1828,7 +2059,7 @@ export class VehicleSimulation {
     const defaultWater =
       this.specialVolumes?.defaultWater ?? this.defaultWaterVolume;
     const state = this.initializeSpecialVolume(body);
-    const shapeBounds = hullsBounds(body.hulls);
+    const shapeBounds = nativeBodyLocalBounds(body);
     const localBounds =
       "motion" in body
         ? nativeWheelExtendedBounds(
@@ -1889,29 +2120,93 @@ export class VehicleSimulation {
       this.gravityMultiplier,
     );
   }
+  private applyPedFreeForces(
+    body: NativePedBody | NativePedBoneBody,
+    gravityIncrement: Vector3,
+    diagnostics: Set<string>,
+  ) {
+    const header = this.phil.getHeader(body)!;
+    const snapshot = (
+      environment: BodyVolumeState | undefined,
+    ): NativeFreeVolumeSnapshot => ({
+      depth: environment?.depth ?? 1,
+      volume: environment?.volume
+        ? {
+            identity: environment.volume,
+            gravity: environment.volume.gravityMultiplier,
+            viscosity: environment.volume.viscosityMultiplier,
+          }
+        : null,
+    });
+    const before = snapshot(body.specialVolume),
+      environment =
+        header.flags & 8 && header.state === 2 && !body.doNothing
+          ? this.updateSpecialVolume(body)
+          : body.specialVolume,
+      omega = body.state.angularVelocity
+        .clone()
+        .applyQuaternion(body.state.orientation.clone().invert()),
+      forces = applyNativeFreeForces40(
+        {
+          headerState: header.state,
+          doNothing: body.doNothing,
+          headerFlags: header.flags,
+          gravity: header.gravity,
+          drag: header.drag,
+          levelOut: header.levelOut,
+          mass: body.properties.mass,
+          inertia: body.properties.inertia,
+          worldVelocity: body.state.velocity,
+          localOmega: omega,
+          gravityIncrement,
+        },
+        {
+          globalGravity: this.gravityMultiplier,
+          volumeStep: { before, after: snapshot(environment) },
+          retainedJoint2:
+            isNativePedBoneBody(body) && body.nativeJoint2
+              ? "present"
+              : "absent",
+          levelOut: environment?.waterNormal
+            ? ({ packet }) => {
+                const delta = nativeFreeLevelOutDelta({
+                  inertia: packet.inertia,
+                  actorMatrix: nativeRigidPose(
+                    body.state.position,
+                    body.state.orientation,
+                  ),
+                  waterPlaneNormal: environment.waterNormal!,
+                });
+                if (delta.status === "singular") {
+                  // Verified native4b6d50 produces NaN here. Explicit stability
+                  // deviation: keep gravity/drag but omit this singular torque.
+                  diagnostics.add("native-level-out-singularity-suppressed");
+                  return new Vector3();
+                }
+                return delta.bodyDelta;
+              }
+            : undefined,
+        },
+      );
+    for (const provider of forces.requiredProviders) diagnostics.add(provider);
+    if (forces.jointConstraintProviderRequired)
+      diagnostics.add("native-retained-joint2-constraint");
+    if (forces.applied)
+      body.state.angularVelocity
+        .copy(omega)
+        .applyQuaternion(body.state.orientation);
+    return forces;
+  }
   private preparePedPhysics(): void {
     this.pedContactRings.clear();
     for (const body of this.pedBodies) {
+      if (body.headerState === 2 && this.phil.getState(body) === 1)
+        this.phil.activate(body, { flag2: true });
+      else if (body.headerState === 1 && this.phil.getState(body) === 2)
+        this.phil.makePassive(body);
       // Installed4b674a marks passive headers for this collision phase.
       if (body.headerState === 1) body.phaseMarker = 2;
-      body.gravityIncrement.set(0, 0, 0);
-      if (body.headerState === 2 && !body.doNothing) {
-        const environment = body.volumeEnabled
-          ? this.updateSpecialVolume(body)
-          : undefined;
-        if (environment?.volume)
-          body.diagnostics.add("native-volume-forces-provider-unavailable");
-        else {
-          body.gravityIncrement.y = Math.fround(
-            -0.05681159420289855 * body.gravity * this.gravityMultiplier,
-          );
-          body.state.velocity.y = Math.fround(
-            body.state.velocity.y + body.gravityIncrement.y,
-          );
-        }
-        if (body.drag !== 0)
-          body.diagnostics.add("native-header-drag-provider-unavailable");
-      }
+      this.applyPedFreeForces(body, body.gravityIncrement, body.diagnostics);
       // Installed4b9780 snapshots AFTER forces and BEFORE all lambda solves.
       body.beforeWorldVelocity.copy(body.state.velocity);
       body.beforeLocalOmega
@@ -1930,6 +2225,43 @@ export class VehicleSimulation {
         body.solverInertiaScale = 50;
       }
       body.collisionFlags = 0;
+      this.pedContactRings.set(body, new Set([body]));
+    }
+  }
+  private preparePedBonePhysics(): void {
+    for (const body of this.pedBoneBodies) {
+      const header = this.phil.getHeader(body);
+      if (!header) continue;
+      body.headerState = header.state;
+      body.headerFlags = header.flags;
+      const state = this.pedBoneQuiet.get(body)!;
+      state.requiredProviders.clear();
+      this.applyPedFreeForces(
+        body,
+        state.gravityIncrement,
+        state.requiredProviders,
+      );
+      body.properties.immovable = header.state === 1 || body.doNothing;
+      state.beforeWorldV.copy(body.state.velocity);
+      state.beforeLocalOmega
+        .copy(body.state.angularVelocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      body.localOmega.copy(state.beforeLocalOmega);
+      body.solverLocalVelocity
+        .copy(body.state.velocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      if (state.quietState !== 0 && !body.doNothing) {
+        body.properties.inertia.multiplyScalar(50);
+        body.properties.inertia.set(
+          ...(body.properties.inertia.toArray().map(Math.fround) as [
+            number,
+            number,
+            number,
+          ]),
+        );
+        state.inertiaScale = 50;
+      }
+      state.collisionFlags = 0;
       this.pedContactRings.set(body, new Set([body]));
     }
   }
@@ -1984,6 +2316,17 @@ export class VehicleSimulation {
         [contact.a, contact.b],
         [contact.b, contact.a],
       ] as const) {
+        if (body && isNativePedBoneBody(body)) {
+          if (body.headerState === 1) {
+            body.doNothing = false;
+            body.properties.immovable = false;
+            this.phil.activate(body, { flag2: true });
+            body.headerFlags = this.phil.getHeader(body)!.flags;
+          } else if (body.doNothing && other && !other.properties.immovable) {
+            body.doNothing = false;
+            body.properties.immovable = false;
+          }
+        }
         // Installed4bda6d invokes4bde80 after actual pair geometry, BEFORE
         // lambdas. Two ordinary ec1 bodies and world-only rows do not wake
         // one another. Jointed hierarchies need their separate native owner.
@@ -2003,8 +2346,15 @@ export class VehicleSimulation {
         if (!body || !isNativePedBody(body)) continue;
         if (body.headerState === 1) {
           activateNativePedBody(body, body.characterVelocity);
+          // CharacterMakeActive40b6d9 and level5409692 enable the intact
+          // moved/halt callback bit; severed type5 uses flag2=false instead.
+          this.phil.activate(body, { flag2: true });
           body.onActivated?.(body, other);
-          const context = body.contactProvider?.(body);
+          const context = body.contactProvider?.(body, {
+            phase: "passive",
+            other,
+            contact,
+          });
           if (context)
             this.pedDamageResult(
               body,
@@ -2019,6 +2369,10 @@ export class VehicleSimulation {
                 characterVelocity: body.characterVelocity,
                 pedRigidType: 2,
                 impactCount: body.impactCount,
+                passivePrelude: (prelude) => {
+                  body.impactCount = prelude.impactCount;
+                  context.passivePrelude?.(prelude);
+                },
               }),
               "passive",
             );
@@ -2040,8 +2394,6 @@ export class VehicleSimulation {
         [group.b, group.a, -1],
       ] as const) {
         if (!body || !isNativePedBody(body) || body.headerState !== 2) continue;
-        const context = body.contactProvider?.(body);
-        if (!context) continue;
         const force = new Vector3();
         for (const row of group.rows)
           force.addScaledVector(
@@ -2049,6 +2401,15 @@ export class VehicleSimulation {
             row.normalImpulse * (row.a === body ? 1 : -1),
           );
         const first = group.rows[0];
+        const context = body.contactProvider?.(body, {
+          phase: "active",
+          other,
+          firstRow: first,
+          totalLambda: group.totalLambda,
+          firstLambda: first.normalImpulse,
+          force: force.clone(),
+        });
+        if (!context) continue;
         this.pedDamageResult(
           body,
           activePedContact({
@@ -2150,6 +2511,7 @@ export class VehicleSimulation {
         [...ring].some(
           (member) =>
             !isNativePedBody(member) &&
+            !isNativePedBoneBody(member) &&
             !(
               "kind" in member &&
               member.kind === "noncar" &&
@@ -2174,7 +2536,97 @@ export class VehicleSimulation {
         }
     }
   }
+  private finishPedBoneQuiet(): void {
+    const flags = collectNativeCollisionFlags(
+      this.lastImpacts
+        .filter((row) => row.solverAccepted)
+        .map((row) => ({
+          a: row.a,
+          b: row.b ?? null,
+          sourceType: row.sourceType ?? (row.b ? 5 : 1),
+          lambda: row.normalImpulse,
+        })),
+    ).flags;
+    for (const body of this.pedBoneBodies) {
+      const state = this.pedBoneQuiet.get(body)!;
+      state.collisionFlags = flags.get(body) ?? 0;
+      if (state.inertiaScale === 50) {
+        body.properties.inertia.divideScalar(50);
+        body.properties.inertia.set(
+          ...(body.properties.inertia.toArray().map(Math.fround) as [
+            number,
+            number,
+            number,
+          ]),
+        );
+        state.inertiaScale = 1;
+      }
+      if (body.headerState !== 2) continue;
+      body.localOmega
+        .copy(body.state.angularVelocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      body.solverLocalVelocity
+        .copy(body.state.velocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      const ring = this.pedContactRings.get(body) ?? new Set([body]),
+        result = evaluateNativeQuietLeaf({
+          previousQuietState: state.quietState,
+          singleton: ring.size === 1,
+          collisionFlags: state.collisionFlags,
+          doNothing: body.doNothing,
+          beforeWorldVelocity: state.beforeWorldV.toArray(),
+          worldVelocity: body.state.velocity.toArray(),
+          beforeLocalOmega: state.beforeLocalOmega.toArray(),
+          localOmega: body.localOmega.toArray(),
+          localVelocity: body.solverLocalVelocity.toArray(),
+          gravityIncrement: state.gravityIncrement.toArray(),
+          mass: body.properties.mass,
+          inertia: body.properties.inertia.toArray(),
+          bounds: body.shape.bounds,
+          centreOfMass: body.properties.centerOfMass.toArray(),
+          jointInfoOrientationY: body.nativeJoint2?.quietOrientationY ?? null,
+        });
+      state.quietState = result.quietState;
+      if (result.zeroVelocities) {
+        body.state.velocity.set(0, 0, 0);
+        body.state.angularVelocity.set(0, 0, 0);
+        body.localOmega.set(0, 0, 0);
+        body.auxiliaryLocalOmega.set(0, 0, 0);
+      }
+    }
+    for (const body of this.pedBoneBodies) {
+      if (body.headerState !== 2 || body.doNothing) continue;
+      const ring = this.pedContactRings.get(body) ?? new Set([body]),
+        states = [...ring].map((member) =>
+          isNativePedBody(member)
+            ? member.quietState
+            : this.genericQuietState(member),
+        );
+      if (
+        !canSleepNativeQuietGroup(states) ||
+        !this.sleepGenericQuietRing([...ring])
+      )
+        continue;
+      for (const member of ring)
+        if (isNativePedBody(member)) {
+          member.doNothing = true;
+          member.properties.immovable = true;
+          member.quietState = 0;
+        }
+    }
+  }
   private finishPedFrame(framePeriodMs: number): void {
+    for (const body of this.pedBoneBodies) {
+      const header = this.phil.getHeader(body);
+      if (header?.state !== 2) continue;
+      this.syncActor(body);
+      // Detached type5 has no character moved/halt/get-up dispatch. Initial
+      // sever callbackbit2=false retains active registration even at ec1.
+      if (body.doNothing && header.flags & 2) {
+        this.phil.makePassive(body);
+        body.headerState = 1;
+      }
+    }
     for (const body of [...this.pedBodies]) {
       if (body.headerState !== 2) continue;
       body.actor.position.copy(body.state.position);
@@ -2186,8 +2638,10 @@ export class VehicleSimulation {
           body.diagnostics.add("native-halt-provider-unavailable");
           continue;
         }
-        if (body.onHalt(body, framePeriodMs)) acceptNativePedHalt(body);
-        else {
+        if (body.onHalt(body, framePeriodMs)) {
+          acceptNativePedHalt(body);
+          this.phil.makePassive(body);
+        } else {
           body.doNothing = false;
           body.properties.immovable = false;
         }
@@ -2454,7 +2908,8 @@ export class VehicleSimulation {
   private worldContacts(body: RigidBody, hulls: CollisionHull[]): Contact[] {
     if (
       body.properties.immovable ||
-      (isNativePedBody(body) && body.suppressWorldFaces) ||
+      ((isNativePedBody(body) || isNativePedBoneBody(body)) &&
+        body.suppressWorldFaces) ||
       ("kind" in body &&
         body.kind === "noncar" &&
         (body as NonCarBody).mechanics.ignoreWorldCollisions)
@@ -2481,6 +2936,40 @@ export class VehicleSimulation {
     if (isNativePedBody(body)) {
       body.worldFaceNormals = nearby.map((surface) => surface.normal.clone());
       body.firstWorldFaceNormal = body.worldFaceNormals[0]?.clone() ?? null;
+    }
+    if (isNativeSphereBody(body)) {
+      const pose = nativeSphereBodyPose(body);
+      // Cached world faces retain the candidate owner pose collected before
+      // StopGroovidelic. Use relative endpoints and independent old B points.
+      const staticHits = nativeSphereSurfaceContacts(
+        pose,
+        nearby.filter((surface) => !surface.owner),
+      );
+      const movingHits = nativeSphereMovingWorldContacts(
+        pose,
+        nearby
+          .filter((surface) => !!surface.owner)
+          .map((surface) => ({
+            ...surface,
+            owner: surface.owner as MovingWorldBody,
+            collectedPose: this.collectedMovingWorldPoses.get(surface),
+            sourceSurface: surface,
+            faceFriction: surface.modifier.wallFriction,
+          })),
+      );
+      return finalizeWorldContacts(
+        reduceWorldContacts([...staticHits, ...movingHits]),
+      ).map((hit) => ({
+        a: body,
+        b: hit.sourceSurface?.owner,
+        point: hit.points[0],
+        pointB: hit.pointsB?.[0],
+        normal: hit.normal,
+        sourceType: hit.contactTypes?.[0],
+        penetration: hit.penetration,
+        faceFriction: hit.faceFriction ?? 1,
+        sourceSurface: hit.sourceSurface,
+      }));
     }
     for (let i = 0; i < old.length; i++) {
       const staticNearby = nearby.filter((surface) => !surface.owner);
@@ -2553,7 +3042,8 @@ export class VehicleSimulation {
   private advanceWorldContacts(body: SimulationBody, refine = false) {
     if (
       body.properties.immovable ||
-      (isNativePedBody(body) && body.suppressWorldFaces) ||
+      ((isNativePedBody(body) || isNativePedBoneBody(body)) &&
+        body.suppressWorldFaces) ||
       ("kind" in body &&
         body.kind === "noncar" &&
         body.mechanics.ignoreWorldCollisions)
@@ -2607,6 +3097,14 @@ export class VehicleSimulation {
     basePosition = body.state.position,
     baseOrientation = body.state.orientation,
   ) {
+    if (isNativeSphereBody(body))
+      return this.sweepSphereWorldTrajectory(
+        body,
+        samples,
+        pose,
+        basePosition,
+        baseOrientation,
+      );
     let old = body.hulls.map((hull) =>
       transformHull(hull, basePosition, baseOrientation),
     );
@@ -2749,6 +3247,101 @@ export class VehicleSimulation {
     return {
       contacts,
       fraction: hits.length ? Math.max(0, earliest - 1 / samples) : 1,
+      crossingFraction: earliest,
+    };
+  }
+  private sweepSphereWorldTrajectory(
+    body: NativePedBoneBody & {
+      shape: Extract<NativePedBoneBody["shape"], { type: "SPHERE" }>;
+    },
+    samples: number,
+    pose: (fraction: number) => { position: Vector3; orientation: Quaternion },
+    basePosition: Vector3,
+    baseOrientation: Quaternion,
+  ) {
+    let previous = { position: basePosition, orientation: baseOrientation },
+      earliest = 1;
+    const contacts: Contact[] = [];
+    for (let sample = 1; sample <= samples; sample++) {
+      const next = pose(sample / samples),
+        bounds = nativeBodyWorldBounds(
+          body,
+          previous.position,
+          previous.orientation,
+        )
+          .union(nativeBodyWorldBounds(body, next.position, next.orientation))
+          .expandByScalar(0.005),
+        faces = this.world
+          .querySurfaces(bounds.min, bounds.max)
+          .filter(
+            (surface) =>
+              !surface.owner &&
+              surface.enabled !== false &&
+              !/^[!>]/.test(surface.material) &&
+              surface.collisionMode !== "passthrough",
+          ),
+        spherePose = {
+          sphere: body.shape,
+          oldPose: nativeRigidPose(previous.position, previous.orientation),
+          predictedPose: nativeRigidPose(next.position, next.orientation),
+        },
+        rows = nativeSphereSurfaceContacts(spherePose, faces).concat(
+          // The strict original OLD gate can reject a supported double pose
+          // rounded just inside the Float32 shell. This final commit guard
+          // alone admits the bounded recovery; solver/damage rows are unchanged.
+          recoverNativeSphereSupport(
+            spherePose,
+            faces.map((surface) => ({
+              ...nativeSphereFace(surface),
+              ...(surface.collisionMode === "edges"
+                ? { materialIdentifier: ">" }
+                : {}),
+            })),
+          ),
+        ),
+        centerMotion = new Vector3(...body.shape.center)
+          .applyQuaternion(next.orientation)
+          .add(next.position)
+          .sub(
+            new Vector3(...body.shape.center)
+              .applyQuaternion(previous.orientation)
+              .add(previous.position),
+          );
+      for (const hit of rows) {
+        const local = hit.points[0]
+            .clone()
+            .sub(previous.position)
+            .applyQuaternion(previous.orientation.clone().invert()),
+          inward = centerMotion.dot(hit.normal);
+        // Sphere support in a fixed world normal is center-normal*radius.
+        // Rotating the old material point lifts it off that envelope and could
+        // discard a descending sphere's genuine floor crossing. This is the
+        // final commit guard only; source OLD torque points remain untouched.
+        if (inward >= 0) continue;
+        earliest = Math.min(
+          earliest,
+          (sample - 1 + (hit.fraction ?? 0)) / samples,
+        );
+        contacts.push({
+          a: body,
+          point: local.applyQuaternion(baseOrientation).add(basePosition),
+          normal: hit.normal,
+          sourceType: hit.contactTypes?.[0],
+          sourceSurface: hit.sourceSurface,
+          faceFriction: hit.faceFriction,
+        });
+      }
+      // candidate() reuses its predicted pose objects. Retain values across
+      // angular samples; otherwise the next prediction also mutates OLD and
+      // erases every sweep after the first subinterval.
+      previous = {
+        position: next.position.clone(),
+        orientation: next.orientation.clone(),
+      };
+    }
+    return {
+      contacts,
+      fraction: contacts.length ? Math.max(0, earliest - 1 / samples) : 1,
       crossingFraction: earliest,
     };
   }
@@ -2905,6 +3498,8 @@ export class VehicleSimulation {
     body.state.groundedWheelCount = 0;
     if (result.disableMotion) body.state.rpm = 0;
     this.scene.add(result.actor);
+    if (this.phil.addActiveImmediate(child) !== 0)
+      throw new Error("No native PHIL header available for split car root");
     this.debris.push(child);
     this.syncStructuralState(body);
     return child;
@@ -3023,7 +3618,21 @@ export class VehicleSimulation {
         }
         const old = transformHulls(body, body.hulls),
           next = transformHulls(body, body.hulls, true);
-        const bounds = hullsBounds(old).union(hullsBounds(next));
+        const bounds = isNativeSphereBody(body)
+          ? nativeBodyWorldBounds(
+              body,
+              body.state.position,
+              body.state.orientation,
+            )
+              .union(
+                nativeBodyWorldBounds(
+                  body,
+                  body.state.predictedPosition!,
+                  body.state.predictedOrientation!,
+                ),
+              )
+              .expandByScalar(0.005)
+          : hullsBounds(old).union(hullsBounds(next));
         const result = { old, next, bounds };
         if (
           "kind" in body &&
@@ -3044,10 +3653,14 @@ export class VehicleSimulation {
           pb = poses.get(b)!;
         if (!pa.bounds.intersectsBox(pb.bounds)) continue;
         if (
-          ("owner" in a && a.joint?.parent === b) ||
-          ("owner" in b && b.joint?.parent === a)
+          ("joint" in a && a.joint?.parent === b) ||
+          ("joint" in b && b.joint?.parent === a)
         )
           continue;
+        if (isNativeSphereBody(a) || isNativeSphereBody(b)) {
+          contacts.push(...nativeSpherePairRows(a, b));
+          continue;
+        }
         const oldA = pa.old,
           oldB = pb.old,
           nextA = pa.next,
@@ -3421,7 +4034,8 @@ export class VehicleSimulation {
           {
             human: car.human,
             hitCar: !!otherCar,
-            hitDetachedPart: !!other && "owner" in other,
+            hitDetachedPart:
+              !!other && !isNativePedBoneBody(other) && "owner" in other,
             attackerHuman: otherCar?.human ?? false,
             receiverSoftness: car.damage.carSoftness,
             attackerSoftness: otherCar?.damage.carSoftness ?? 0.7,
@@ -3525,6 +4139,7 @@ export class VehicleSimulation {
     };
   }
   private nativeCrashDriver(body: RigidBody): number | undefined {
+    if (isNativePedBoneBody(body)) return undefined;
     if ("damage" in body) return (body as SimulatedCar).human ? 8 : 6;
     if ("owner" in body) {
       const part = body as DetachedBody;
@@ -3552,6 +4167,7 @@ export class VehicleSimulation {
     return { actor: prop.actor, driver, sparky: prop.mechanics.sparky };
   }
   private crashOwner(body: RigidBody): RigidBody | undefined {
+    if (isNativePedBoneBody(body)) return undefined;
     if (!this.crashOwnerSlots.has(body) && "owner" in body)
       this.crashOwnerSlots.set(body, (body as DetachedBody).owner);
     return this.crashOwnerSlots.get(body);
@@ -3735,6 +4351,7 @@ export class VehicleSimulation {
         if (other) {
           notifyNonCarBodyContact(noncar.mechanics, noncar.motor);
           if (noncar.properties.immovable) {
+            if (!this.admitPulledNonCar(noncar)) continue;
             this.dormantPoses.delete(noncar);
             noncar.properties.immovable = false;
             changed = true;
@@ -3893,12 +4510,18 @@ export class VehicleSimulation {
     this.debris = this.debris.filter((body) => {
       if (this.attachedToInactiveCar(body)) return true;
       if (body.splitRevision !== undefined) {
-        if (body.owner.damage.splitRuntime?.actor !== body.actor) return false;
+        if (body.owner.damage.splitRuntime?.actor !== body.actor) {
+          this.phil.remove(body);
+          return false;
+        }
         this.applyFreeBodyForces(body);
         return true;
       }
       const part = body.owner.damage.runtimeParts[body.part];
-      if (part.state.phase === 0) return false;
+      if (part.state.phase === 0) {
+        this.phil.remove(body);
+        return false;
+      }
       if (body.joint) {
         const relative = body.joint.parent.state.orientation
           .clone()
@@ -3968,6 +4591,7 @@ export class VehicleSimulation {
       if (!(body.mine.flags & MINE_FLAGS.exploded))
         this.applyFreeBodyForces(body);
     this.preparePedPhysics();
+    this.preparePedBonePhysics();
     const bodies = this.allBodies();
     prepareJointVelocities(this.allJoints());
     for (const body of this.noncars)
@@ -4071,6 +4695,7 @@ export class VehicleSimulation {
       guardResults.clear();
     }
     this.finishNonCarQuietLeaves();
+    this.finishPedBoneQuiet();
     this.finishPedQuiet();
     this.finishNonCarQuietRings();
     const committing = this.allBodies();
@@ -4271,6 +4896,7 @@ export class VehicleSimulation {
     }
     for (const body of this.mineBodies)
       if (!(body.mine.flags & MINE_FLAGS.exploded)) this.syncActor(body);
+    for (const body of this.pedBoneBodies) this.syncActor(body);
     for (const body of this.noncars) {
       if (
         body.attached &&
@@ -4431,6 +5057,10 @@ export class VehicleSimulation {
               });
       }
       this.debris.push(body);
+      if (this.phil.addActiveImmediate(body) !== 0)
+        throw new Error(
+          "No native PHIL header available for detached car root",
+        );
     }
   }
   dispose() {
@@ -4451,6 +5081,7 @@ export class VehicleSimulation {
     for (const body of this.mineBodies) body.actor.removeFromParent();
     this.mineBodies = [];
     for (const body of [...this.pedBodies]) this.removePedBody(body);
+    for (const body of [...this.pedBoneBodies]) this.removePedBoneBody(body);
     // Reunite private split geometries before the content loader disposes the
     // scene. Otherwise pristine and secondary meshes become unreachable.
     for (const car of this.cars) car.damage.repair();
@@ -4475,6 +5106,7 @@ export class VehicleSimulation {
     for (const body of this.movingWorld) this.world.removeDynamic(body);
     this.movingWorld = [];
     this.cars = [];
+    for (const body of this.phil.registeredBodies) this.phil.remove(body);
     this.inactiveCars = new WeakSet();
   }
 }

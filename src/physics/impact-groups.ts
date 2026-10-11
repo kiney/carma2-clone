@@ -2,6 +2,10 @@ import type { ContactImpact, RigidBody } from "./contact";
 
 const NORMAL_GROUP_DOT = Math.fround(0.707107);
 const MAX_ROWS = 4;
+// Source normals retain Float32 transform stores. An orthonormal rotation can
+// produce a component one ULP above 1; do not normalize away native dot inputs.
+// Use the same bounded rigid-basis tolerance as the sphere contact adapters.
+const NORMAL_COMPONENT_LIMIT = 1.0001;
 
 /** Installed HW41d39c: consumers process only totalLambda strictly above this. */
 export const NATIVE_IMPACT_MINIMUM_LAMBDA = Math.fround(0.02);
@@ -35,7 +39,10 @@ export function groupNativeImpactRows(
       throw new Error("Impact lambda must be finite, nonnegative Float32");
     const normal = [row.normal.x, row.normal.y, row.normal.z].map(Math.fround);
     if (
-      normal.some((value) => !Number.isFinite(value) || Math.abs(value) > 1) ||
+      normal.some(
+        (value) =>
+          !Number.isFinite(value) || Math.abs(value) > NORMAL_COMPONENT_LIMIT,
+      ) ||
       normal.every((value) => value === 0)
     )
       throw new Error("Impact normal must have finite nonzero unit components");

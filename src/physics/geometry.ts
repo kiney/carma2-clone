@@ -7,6 +7,9 @@ export interface HullFace {
   indices: number[];
 }
 export interface CollisionHull {
+  /** Native shape tag retained by analytic BOX/WIRE constructors. Undefined
+   * means a prepared polygon; never infer a BOX from polygon dimensions. */
+  nativeType?: "BOX" | "WIRE" | "POLY" | "WIREPOLY";
   vertices: Vector3[];
   /** Compact source feature order, expressed as authored vertex indices. */
   vertexOrder?: number[];

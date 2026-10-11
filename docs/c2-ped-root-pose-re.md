@@ -25,14 +25,14 @@ separate providers.
 
 `SetCharacterDirection` is installed at `0x40a730`. Character fields are:
 
-| Field | Meaning |
-| --- | --- |
-| `+0x5c` | Root movement rotation matrix |
-| `+0x8c` | Character orientation matrix |
-| `+0xc0` | Stored direction vector |
-| `+0xcc` | Stored up vector |
+| Field        | Meaning                           |
+| ------------ | --------------------------------- |
+| `+0x5c`      | Root movement rotation matrix     |
+| `+0x8c`      | Character orientation matrix      |
+| `+0xc0`      | Stored direction vector           |
+| `+0xcc`      | Stored up vector                  |
 | move `+0x34` | Normalized net movement direction |
-| move `+0x40` | Selected source direction |
+| move `+0x40` | Selected source direction         |
 
 The operation returns for an invalid selected move, and for active characters
 (flag4) outside action replay. A null new direction retains the stored direction
@@ -196,15 +196,15 @@ same136 case-insensitive personality names. Of these,129 have ACT packages
 matching the current loader's filename filter. All129 personality, default
 movement, FORM and root-remap simple-body parses succeed:
 
-| Form | Personalities | Native summed mass | Simple pool |
-| --- | ---: | ---: | ---: |
-| BIPED1 | 122 | 0.06800000369548798 | 30 |
-| DOG1 | 2 | 0.04699999839067459 | 15 |
-| COW_FORM | 1 | 0.12300000339746475 | 15 |
-| DEER_FORM | 1 | 0.12300000339746475 | 15 |
-| ELEPHANT_FORM | 1 | 4.409999370574951 | 15 |
-| PENGUIN_FORM | 1 | 0.03799999877810478 | 15 |
-| SHEEP_FORM | 1 | 0.05499999597668648 | 15 |
+| Form          | Personalities |  Native summed mass | Simple pool |
+| ------------- | ------------: | ------------------: | ----------: |
+| BIPED1        |           122 | 0.06800000369548798 |          30 |
+| DOG1          |             2 | 0.04699999839067459 |          15 |
+| COW_FORM      |             1 | 0.12300000339746475 |          15 |
+| DEER_FORM     |             1 | 0.12300000339746475 |          15 |
+| ELEPHANT_FORM |             1 |   4.409999370574951 |          15 |
+| PENGUIN_FORM  |             1 | 0.03799999877810478 |          15 |
+| SHEEP_FORM    |             1 | 0.05499999597668648 |          15 |
 
 BIPEDF is separately parsed/tested with native mass68kg; no requested stock
 or Advanced personality references it. Seven referenced names have no matching
@@ -213,9 +213,15 @@ establishes package/data coverage, not successful rendering of every scene.
 
 All136 distinct form/move motion files parse, and135 match their exact FORM
 root name. DOG1 move93 `DogPunted.BON` contains `Bone01` instead of FORM root
-`Bone_01`. The original exact-name loader leaves this unmatched root data
-uninitialized; the checked helper rejects this defect explicitly. There is no
-bone0 substitution. This affects OSCAR and TWOLF move93 only in this audit.
+`Bone_01`. The installed exact-name loader leaves the root in its **zero-filled
+allocation**: BrMemAllocate`0x526c00` calls BrMemSet(pointer,0,size) at
+`0x526c1a–23`. It does not leave uninitialized data or alias the exporter name.
+Strict generic root preparation rejects a missing root by default; native
+instances opt into `missingRoot:"native-zero"`, retaining zero basis/deltas and
+the ordinary signed−0 XYZ frame0 translation reset. There is no bone0 or
+identity substitution. This affects OSCAR and TWOLF move93 in this audit.
+DOG91/94 also have `Bone_NO2` instead of FORM `Bone_N02`; their unmatched angle
+triplets similarly remain zero. See [active move](c2-ped-active-move-re.md).
 
 `tests/ped-form.test.mjs` verifies numerical cardinal/opposite/slope matrices,
 separate pitch, animation-basis preservation, unscaled grounding offset,

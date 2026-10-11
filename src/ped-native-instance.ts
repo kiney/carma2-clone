@@ -339,10 +339,12 @@ function cachedMove(
         asset.motion,
         template.profile.rootName,
         asset.form.resetAxes,
+        { missingRoot: "native-zero" },
       ),
       bones = buildNativePedBoneMotion(
         asset.motion,
         template.form.bones.map((b) => b.name),
+        { missingBones: "native-zero" },
       );
     move = {
       asset,

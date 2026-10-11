@@ -6,6 +6,8 @@ import {
   activateNativePedBody,
   nativePedRootPose,
   pedBodyPairExcluded,
+  prepareNativePedBody,
+  finishNativePedBodyInitialization,
 } from "../src/physics/ped-body.ts";
 import {
   VehicleSimulation,
@@ -80,6 +82,8 @@ test("native root initialization, explicit activation and authored inertia excha
   assert.equal(ped.hitPoints, 100);
   assert.equal(ped.headerState, 1);
   assert.equal(ped.pedestrianFlags, 0);
+  assert.equal(ped.rigidFlags, 0x78);
+  ped.rigidFlags |= 0x80000000;
   const characterV = new Vector3(0.3, 0.1, -0.2);
   activateNativePedBody(ped, characterV);
   assert.deepEqual(
@@ -88,6 +92,7 @@ test("native root initialization, explicit activation and authored inertia excha
   );
   assert.deepEqual(ped.state.angularVelocity.toArray(), [0, 0, 0]);
   assert.equal(ped.suppressWorldFaces, false);
+  assert.equal(ped.rigidFlags, 0x80000000);
   const other = body([0, 0, 0], 1);
   activateNativePedBody(other, new Vector3(1, 0, 0));
   ped.state.velocity.set(0, 0, 0);
@@ -109,6 +114,77 @@ test("native root initialization, explicit activation and authored inertia excha
   assert.deepEqual(
     nativePedRootPose(ped).slice(9),
     new Float32Array([0, 0, 0]),
+  );
+});
+
+test("shared FORM simple slot retains its object, BOX and policy until successful registration", () => {
+  const ped = body(),
+    box = ped.hulls[0],
+    vertices = [...box.vertices],
+    faces = [...box.faces],
+    state = ped.state,
+    inertia = ped.properties.inertia,
+    com = ped.properties.centerOfMass,
+    actor = new Object3D(),
+    nextProfile = profile();
+  nextProfile.bounds = { min: [-0.03, -0.04, -0.01], max: [0.03, 0.07, 0.01] };
+  nextProfile.centreOfMass = [0, 0.02, 0];
+  nextProfile.inertia = nativePedBoxInertia(
+    nextProfile.mass,
+    nextProfile.bounds,
+  );
+  ped.rigidFlags = 0x80000001;
+  ped.properties.objectFriction = Math.fround(0.7);
+  ped.filterA = 0x20000;
+  ped.filterB = 0x40000;
+  ped.state.velocity.set(5, 6, 7);
+  ped.state.angularVelocity.set(2, 3, 4);
+  prepareNativePedBody(ped, {
+    actor,
+    profile: nextProfile,
+    rootPose: [...identity.slice(0, 9), 4, 5, 6],
+    levelOut: 0.3,
+  });
+  assert.equal(ped.actor, actor);
+  assert.equal(ped.hulls[0], box);
+  assert.deepEqual(box.vertices, vertices);
+  assert.deepEqual(box.faces, faces);
+  vertices.forEach((v, i) => assert.equal(box.vertices[i], v));
+  faces.forEach((v, i) => assert.equal(box.faces[i], v));
+  assert.equal(ped.state, state);
+  assert.equal(ped.properties.inertia, inertia);
+  assert.equal(ped.properties.centerOfMass, com);
+  assert.deepEqual(com.toArray(), nextProfile.centreOfMass);
+  assert.deepEqual(inertia.toArray(), nextProfile.inertia);
+  assert.deepEqual(ped.state.position.toArray(), [4, 5, 6]);
+  assert.equal(ped.state.velocity.length(), 0);
+  assert.equal(ped.state.angularVelocity.length(), 0);
+  assert.equal(ped.rigidFlags, 0x80000001);
+  assert.equal(ped.properties.objectFriction, Math.fround(0.7));
+  assert.equal(ped.headerState, 0);
+  assert.equal(
+    ped.filterA,
+    0x20000,
+    "type2 fill is downstream of registration",
+  );
+  assert.throws(() => finishNativePedBodyInitialization(ped), /registration/);
+  assert.equal(activateNativePedBody(ped, new Vector3()), false);
+  ped.headerState = 1; // Actual host PHIL success boundary.
+  finishNativePedBodyInitialization(ped);
+  assert.equal(ped.rigidFlags, 0x80000079);
+  assert.equal(ped.filterA, 0x10000);
+  assert.equal(ped.filterB, 0x50000);
+  assert.equal(ped.suppressWorldFaces, true);
+  assert.equal(ped.collisionFlags, 0);
+  assert.throws(
+    () =>
+      prepareNativePedBody(ped, {
+        actor,
+        profile: { ...nextProfile, formName: "another-FORM" },
+        rootPose: identity,
+        levelOut: 0,
+      }),
+    /across FORMs/,
   );
 });
 
@@ -167,6 +243,7 @@ test("active world contacts populate source flags and quiet zeros before commit,
   assert.equal(ped.doNothing, true);
   assert.equal(ped.filterA, 0x10000);
   assert.equal(ped.suppressWorldFaces, true);
+  assert.equal(ped.rigidFlags, 0x78);
 });
 
 test("exclusion masks reject shape contacts and both pair commit/refinement guards", () => {

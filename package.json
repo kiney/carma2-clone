@@ -42,7 +42,8 @@
     "test:noncar-debris": "npm run build && node tests/browser-noncar-debris.mjs",
     "test:noncar-quiet": "npm run build && node tests/browser-noncar-quiet.mjs",
     "test:world-slicks": "npm run build && node tests/browser-world-slick.mjs",
-    "test:ped-assets": "node tests/native-ped-personality-audit.mjs"
+    "test:ped-assets": "node tests/native-ped-personality-audit.mjs",
+    "test:ped-bones": "npm run build && node tests/browser-ped-bone-runtime.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

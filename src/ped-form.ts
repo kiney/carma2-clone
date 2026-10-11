@@ -455,11 +455,17 @@ export interface PedRootMotionInput {
   frameCount: number;
   matrices: ArrayLike<number>;
 }
+export interface PedRootMotionPreparationOptions {
+  /** Installed BrMemAllocate526c00 zeroes frame storage. ReadMove leaves
+   * unmatched FORM roots at zero; strict parser/math callers opt in explicitly. */
+  missingRoot?: "reject" | "native-zero";
+}
 /** Build native movement root bases and per-frame deltas, including frame0 resets. */
 export function buildPedRootMotion(
   motion: PedRootMotionInput,
   rootName: string,
   resetAxes = "",
+  options: PedRootMotionPreparationOptions = {},
 ): Float32Array[] {
   const count = motion.bones.length,
     frames = motion.frameCount,
@@ -467,7 +473,10 @@ export function buildPedRootMotion(
   if (
     !count ||
     count > 256 ||
-    root < 0 ||
+    (root < 0 && options.missingRoot !== "native-zero") ||
+    (options.missingRoot !== undefined &&
+      options.missingRoot !== "reject" &&
+      options.missingRoot !== "native-zero") ||
     !Number.isInteger(frames) ||
     frames < 1 ||
     frames > 20000 ||
@@ -479,6 +488,12 @@ export function buildPedRootMotion(
     accumulated = [0, 0, 0];
   let previous: PedVector = [0, 0, 0];
   for (let i = 0; i < frames; i++) {
+    if (root < 0) {
+      // Do not normalize this zero allocation (which would invent an identity
+      // fallback) or substitute the first exporter bone under another name.
+      result.push(new Float32Array(12));
+      continue;
+    }
     const at = (i * count + root) * 12,
       raw = Array.from({ length: 12 }, (_, j) => motion.matrices[at + j]);
     const pose = lpNormalisePedMatrix(flipPedExportMatrix(raw)),

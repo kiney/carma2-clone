@@ -4,6 +4,7 @@ import type { NativePedSeverBoneRequest } from "./ped-sever";
 import { buildBoxHull } from "./box-hull";
 import type { RigidBody } from "./contact";
 import type { CollisionHull } from "./geometry";
+import type { BodyVolumeState } from "./simulation";
 
 const f = Math.fround;
 export type NativePedBoneShape =
@@ -35,6 +36,9 @@ export interface NativePedBoneBody<Model = unknown> extends RigidBody {
   boneIndex: number;
   bonedSlot: number;
   nativeMatrix: Matrix4;
+  /** Actual flat ACT pose storage owned by the current character slot.
+   * Written by committed physics, never by render interpolation. */
+  poseTarget?: Float32Array;
   modelBounds: PedBounds;
   shape: NativePedBoneShape;
   hulls: CollisionHull[];
@@ -48,7 +52,7 @@ export interface NativePedBoneBody<Model = unknown> extends RigidBody {
   haltCallbackEnabled: boolean;
   headerState: 0 | 1 | 2;
   headerFlags: number;
-  collisionFlags: number;
+  rigidFlags: number;
   filterA: number | null;
   filterB: number | null;
   subindex: 0;
@@ -59,10 +63,191 @@ export interface NativePedBoneBody<Model = unknown> extends RigidBody {
   suppressWorldFaces: boolean;
   suppressSelfSentinel: boolean;
   suppressJointConstraints: boolean;
-  specialVolume: null;
-  previousSpecialVolume: null;
+  specialVolume?: BodyVolumeState;
+  previousSpecialVolume?: BodyVolumeState;
   registered: boolean;
   detached: boolean;
+  /** Retained Object+18c. Ordinary bare allocations start NULL; preparation
+   * never erases a later articulated owner's joint-info provider. */
+  nativeJoint2: { quietOrientationY: number } | null;
+  overlapRecovery: boolean;
+  overlapDetected: boolean;
+  worldRecovery: boolean;
+  worldOverlapDetected: boolean;
+}
+
+/**4059f7 allocates physical objects before a character supplies an ACT/MODEL.
+ * Bare resources cannot be registered or admitted to the solver. Preparation
+ * refines THIS same object; the source header therefore tracks stable identity. */
+export type NativePedBoneResource<Model = unknown> = Omit<
+  NativePedBoneBody<Model>,
+  "rigidType" | "actor" | "model" | "owner"
+> & {
+  rigidType: 0 | 5;
+  actor: Object3D | null;
+  model: Model | null;
+  owner: object | null;
+};
+export function createNativePedBoneResource<Model = unknown>(
+  collisionType: string | null,
+): NativePedBoneResource<Model> {
+  const modelBounds: PedBounds = { min: [0, 0, 0], max: [0, 0, 0] },
+    shape = nativePedBoneShape(collisionType, modelBounds);
+  return {
+    kind: "pedestrian-bone",
+    rigidType: 0,
+    actor: null,
+    model: null,
+    owner: null,
+    boneIndex: 0,
+    bonedSlot: 0,
+    nativeMatrix: new Matrix4(),
+    modelBounds,
+    shape,
+    hulls: shape.type === "BOX" ? [shape.hull] : [],
+    bounds: shape.bounds,
+    radius: 0,
+    radiusSquared: 0,
+    state: {
+      position: new Vector3(),
+      orientation: new Quaternion(),
+      velocity: new Vector3(),
+      angularVelocity: new Vector3(),
+    },
+    properties: {
+      mass: 0,
+      inertia: new Vector3(),
+      centerOfMass: new Vector3(),
+      worldFriction: 0,
+      objectFriction: 0,
+      immovable: true,
+    },
+    localOmega: new Vector3(),
+    auxiliaryLocalOmega: new Vector3(),
+    solverLocalVelocity: new Vector3(),
+    doNothing: false,
+    haltCallbackEnabled: false,
+    headerState: 0,
+    headerFlags: 0,
+    rigidFlags: 0,
+    filterA: null,
+    filterB: null,
+    subindex: 0,
+    gravity: 0,
+    levelOut: 0,
+    volumeEnabled: false,
+    waterPlaneD: 0,
+    suppressWorldFaces: false,
+    suppressSelfSentinel: false,
+    suppressJointConstraints: false,
+    registered: false,
+    detached: false,
+    nativeJoint2: null,
+    overlapRecovery: false,
+    overlapDetected: false,
+    worldRecovery: false,
+    worldOverlapDetected: false,
+  };
+}
+
+export function prepareNativePedBoneResource<Model>(
+  resource: NativePedBoneResource<Model>,
+  input: Omit<Parameters<typeof createNativePedBoneBody<Model>>[0], "retained">,
+): NativePedBoneBody<Model> {
+  if (resource.registered || resource.headerState !== 0)
+    throw new Error("Native bone preparation requires proven PHIL release");
+  const prepared = createNativePedBoneBody({
+    ...input,
+    retained: {
+      rigidFlags: resource.rigidFlags,
+      objectFriction: resource.properties.objectFriction ?? 0,
+    },
+  });
+  if (resource.shape.type !== prepared.shape.type)
+    throw new Error("A native FORM bone resource cannot change its shape tag");
+  const copyBounds = (target: PedBounds, source: PedBounds) => {
+    const min = target.min as [number, number, number],
+      max = target.max as [number, number, number];
+    for (let i = 0; i < 3; i++) {
+      min[i] = source.min[i];
+      max[i] = source.max[i];
+    }
+  };
+  copyBounds(resource.modelBounds, prepared.modelBounds);
+  copyBounds(resource.shape.bounds, prepared.shape.bounds);
+  if (resource.shape.type === "BOX" && prepared.shape.type === "BOX") {
+    const sourceShape = prepared.shape;
+    resource.shape.hull.vertices.forEach((v, i) =>
+      v.copy(sourceShape.hull.vertices[i]),
+    );
+    resource.shape.hull.faces.forEach((face, i) => {
+      face.normal.copy(sourceShape.hull.faces[i].normal);
+      face.constant = sourceShape.hull.faces[i].constant;
+    });
+  } else if (
+    resource.shape.type === "SPHERE" &&
+    prepared.shape.type === "SPHERE"
+  ) {
+    for (let i = 0; i < 3; i++)
+      (resource.shape.center as [number, number, number])[i] =
+        prepared.shape.center[i];
+    resource.shape.radius = prepared.shape.radius;
+    resource.shape.radiusSquared = prepared.shape.radiusSquared;
+  } else if (resource.shape.type === "LINE" && prepared.shape.type === "LINE")
+    for (let end = 0; end < 2; end++)
+      for (let i = 0; i < 3; i++)
+        (resource.shape.endpoints[end] as [number, number, number])[i] =
+          prepared.shape.endpoints[end][i];
+  // The explicit initializer list preserves external retained joint2 fields.
+  for (const key of [
+    "actor",
+    "model",
+    "owner",
+    "boneIndex",
+    "bonedSlot",
+    "radius",
+    "radiusSquared",
+    "doNothing",
+    "haltCallbackEnabled",
+    "headerState",
+    "headerFlags",
+    "filterA",
+    "filterB",
+    "gravity",
+    "levelOut",
+    "volumeEnabled",
+    "waterPlaneD",
+    "suppressWorldFaces",
+    "suppressSelfSentinel",
+    "suppressJointConstraints",
+    "registered",
+    "detached",
+    "overlapRecovery",
+    "overlapDetected",
+    "worldRecovery",
+    "worldOverlapDetected",
+  ] as const)
+    (resource as unknown as Record<string, unknown>)[key] = prepared[key];
+  resource.rigidType = 5;
+  resource.nativeMatrix.copy(prepared.nativeMatrix);
+  resource.poseTarget = undefined;
+  resource.state.position.copy(prepared.state.position);
+  resource.state.orientation.copy(prepared.state.orientation);
+  resource.state.velocity.copy(prepared.state.velocity);
+  resource.state.angularVelocity.copy(prepared.state.angularVelocity);
+  resource.state.predictedPosition?.copy(prepared.state.position);
+  resource.state.predictedOrientation?.copy(prepared.state.orientation);
+  resource.properties.mass = prepared.properties.mass;
+  resource.properties.inertia.copy(prepared.properties.inertia);
+  resource.properties.centerOfMass.copy(prepared.properties.centerOfMass);
+  resource.properties.worldFriction = 1;
+  resource.properties.immovable = true;
+  resource.localOmega.set(0, 0, 0);
+  resource.auxiliaryLocalOmega.set(0, 0, 0);
+  resource.solverLocalVelocity.set(0, 0, 0);
+  resource.specialVolume = undefined;
+  resource.previousSpecialVolume = undefined;
+  return resource as NativePedBoneBody<Model>;
 }
 
 function scalar(value: number): number {
@@ -241,7 +426,7 @@ export function createNativePedBoneBody<Model>(input: {
   owner: object;
   levelOut: number;
   /** Pooled fields not overwritten by4085f0. The pool owner supplies them. */
-  retained: { collisionFlags: number; objectFriction: number };
+  retained: { rigidFlags: number; objectFriction: number };
 }): NativePedBoneBody<Model> {
   const { request } = input;
   if (
@@ -256,9 +441,9 @@ export function createNativePedBoneBody<Model>(input: {
     request.rigidType !== 5 ||
     request.filterA !== 0x40000 ||
     request.filterB !== 0x50000 ||
-    !Number.isInteger(input.retained.collisionFlags) ||
-    input.retained.collisionFlags < 0 ||
-    input.retained.collisionFlags > 0xffffffff
+    !Number.isInteger(input.retained.rigidFlags) ||
+    input.retained.rigidFlags < 0 ||
+    input.retained.rigidFlags > 0xffffffff
   )
     throw new Error("Invalid native sever body provider");
   const modelBounds = bounds(request.snapshot.bounds),
@@ -314,7 +499,7 @@ export function createNativePedBoneBody<Model>(input: {
     haltCallbackEnabled: true,
     headerState: 0,
     headerFlags: 0,
-    collisionFlags: input.retained.collisionFlags >>> 0,
+    rigidFlags: input.retained.rigidFlags >>> 0,
     filterA: null,
     filterB: null,
     subindex: 0,
@@ -325,10 +510,15 @@ export function createNativePedBoneBody<Model>(input: {
     suppressWorldFaces: false,
     suppressSelfSentinel: false,
     suppressJointConstraints: false,
-    specialVolume: null,
-    previousSpecialVolume: null,
+    specialVolume: undefined,
+    previousSpecialVolume: undefined,
     registered: false,
     detached: false,
+    nativeJoint2: null,
+    overlapRecovery: false,
+    overlapDetected: false,
+    worldRecovery: false,
+    worldOverlapDetected: false,
   };
 }
 
@@ -344,18 +534,15 @@ function property<Model>(
       break;
     case 3:
       body.suppressWorldFaces = !!value;
-      body.collisionFlags =
-        ((body.collisionFlags & ~0x40) | (value ? 0x40 : 0)) >>> 0;
+      body.rigidFlags = ((body.rigidFlags & ~0x40) | (value ? 0x40 : 0)) >>> 0;
       break;
     case 4:
       body.suppressSelfSentinel = !!value;
-      body.collisionFlags =
-        ((body.collisionFlags & ~8) | (value ? 8 : 0)) >>> 0;
+      body.rigidFlags = ((body.rigidFlags & ~8) | (value ? 8 : 0)) >>> 0;
       break;
     case 5:
       body.suppressJointConstraints = !!value;
-      body.collisionFlags =
-        ((body.collisionFlags & ~16) | (value ? 16 : 0)) >>> 0;
+      body.rigidFlags = ((body.rigidFlags & ~16) | (value ? 16 : 0)) >>> 0;
       break;
     case 6:
       body.headerFlags |= 4;
@@ -394,9 +581,27 @@ export function registerNativePedBoneBody<Model>(
   if (!Number.isInteger(code) || code < 0)
     throw new Error("Invalid PHIL registration result");
   if (code !== 0) return { accepted: false, code };
-  body.registered = true;
   body.headerState = 1;
-  body.collisionFlags = (body.collisionFlags | 0x20) >>> 0;
+  finishNativePedBoneInitialization(body, host.onProperty);
+  return { accepted: true, code };
+}
+
+/** Only the real registrar may establish passive state1. Resource-pool hosts
+ * use this tail after their shared PHIL add succeeds, without adding twice. */
+export function finishNativePedBoneInitialization<Model>(
+  body: NativePedBoneBody<Model>,
+  onProperty?: (
+    body: NativePedBoneBody<Model>,
+    index: NativePedBoneProperty,
+    value: number,
+  ) => void,
+): void {
+  if (body.rigidType !== 5 || body.headerState !== 1 || body.registered)
+    throw new Error(
+      "Native bone properties require successful passive registration",
+    );
+  body.registered = true;
+  body.rigidFlags = (body.rigidFlags | 0x20) >>> 0;
   for (const [index, value] of [
     [0, 1],
     [3, 0],
@@ -407,11 +612,10 @@ export function registerNativePedBoneBody<Model>(
     [6, 1],
   ] as const) {
     property(body, index, value);
-    host.onProperty?.(body, index, value);
+    onProperty?.(body, index, value);
   }
   body.filterA = 0x40000;
   body.filterB = 0x50000;
-  return { accepted: true, code };
 }
 
 /** Call after the sever owner commits its missing-mask bit. The explicit unlink
@@ -461,7 +665,7 @@ export function commitNativePedBoneBody<Model>(
   body.headerState = 2;
   // The immediate PHIL activation branch4b5ec3..ee3 clears passive bit20
   // and the caller's zero activation argument clears header bit2.
-  body.collisionFlags = (body.collisionFlags & ~0x20) >>> 0;
+  body.rigidFlags = (body.rigidFlags & ~0x20) >>> 0;
   body.headerFlags &= ~2;
   body.properties.immovable = false;
   body.haltCallbackEnabled = true;

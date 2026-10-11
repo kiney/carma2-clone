@@ -437,6 +437,7 @@ export class WorldDestruction {
     const retained = new Set<Object3D>();
     root.traverse((object) => {
       const indices: number[] = [];
+      let mutableMaterial = false;
       for (const [i, spec] of specs.entries()) {
         if (
           this.bindings.get(
@@ -457,22 +458,28 @@ export class WorldDestruction {
           indices.push(i);
         else if (
           spec.trigger.kind === "material" &&
-          (spec.mode === "remove" || spec.mode === "replacemodel") &&
           object instanceof Mesh &&
           materials(object).some((m) => key(m.name) === key(spec.trigger.name))
-        )
-          indices.push(i);
+        ) {
+          // UV-tile texture changes/decal state are actor-local too. Batching
+          // these models would separate original collision faces from the
+          // visible geometry that the smash queue modifies.
+          mutableMaterial = true;
+          if (spec.mode === "remove" || spec.mode === "replacemodel")
+            indices.push(i);
+        }
       }
-      if (!indices.length) return;
+      if (!indices.length && !mutableMaterial) return;
       // A THREE mesh is the render model inside its ACT group. Retain the ACT
       // group so children, native identifiers and transforms remain available.
       const actor =
         object instanceof Mesh && object.parent && object.parent !== root
           ? object.parent
           : object;
-      this.actorSpecs.set(actor, [
-        ...new Set([...(this.actorSpecs.get(actor) ?? []), ...indices]),
-      ]);
+      if (indices.length)
+        this.actorSpecs.set(actor, [
+          ...new Set([...(this.actorSpecs.get(actor) ?? []), ...indices]),
+        ]);
       actor.userData.worldSmashOriginalIdentifier ??= actor.name;
       actor.userData.worldSmashRetained = true;
       actor.userData.worldSmashSpecIndices = this.actorSpecs.get(actor);

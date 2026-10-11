@@ -1,7 +1,7 @@
 import { Matrix4, Object3D, Quaternion, Vector3 } from "three";
 import type { PedSimpleBodyProfile } from "../ped-form";
 import { buildBoxHull } from "./box-hull";
-import type { RigidBody } from "./contact";
+import type { RigidBody, Contact, ContactImpact } from "./contact";
 import type { CollisionHull } from "./geometry";
 import type { BodyVolumeState } from "./simulation";
 import type {
@@ -23,7 +23,17 @@ export interface NativePedContactContext {
   /** The live character owner supplies its one-shot sever/HP continuation.
    * Forwarded to the native dispatcher before the solver applies impulses. */
   damageTail?: PedContactInputs["damageTail"];
+  passivePrelude?: PedContactInputs["passivePrelude"];
   specialMass?: number;
+}
+export interface NativePedContactDispatch {
+  phase: "passive" | "active";
+  other: RigidBody | undefined;
+  contact?: Contact;
+  firstRow?: ContactImpact;
+  totalLambda?: number;
+  firstLambda?: number;
+  force?: Vector3;
 }
 
 /** Intact simple-body state from 4085f0/408c30 and PHIL registration4b6050.
@@ -34,7 +44,7 @@ export interface NativePedBody extends RigidBody {
   actor: Object3D;
   profile: PedSimpleBodyProfile;
   hulls: CollisionHull[];
-  headerState: 1 | 2;
+  headerState: 0 | 1 | 2;
   doNothing: boolean;
   haltCallbackEnabled: boolean;
   gravity: number;
@@ -44,6 +54,8 @@ export interface NativePedBody extends RigidBody {
   phaseMarker: 0 | 2;
   filterA: number;
   filterB: number;
+  /** Object+19c persistent physics policy. Distinct from contact flags+1dc. */
+  rigidFlags: number;
   collisionFlags: number;
   quietState: number;
   solverInertiaScale: 1 | 50;
@@ -62,7 +74,10 @@ export interface NativePedBody extends RigidBody {
   pedestrianFlags: number;
   impactCount: number;
   diagnostics: Set<string>;
-  contactProvider?: (body: NativePedBody) => NativePedContactContext;
+  contactProvider?: (
+    body: NativePedBody,
+    dispatch: NativePedContactDispatch,
+  ) => NativePedContactContext;
   onActivated?: (body: NativePedBody, other: RigidBody | undefined) => void;
   onContactDamage?: (
     body: NativePedBody,
@@ -199,6 +214,7 @@ export function createNativePedBody(input: {
     phaseMarker: 2,
     filterA: 0x10000,
     filterB: 0x50000,
+    rigidFlags: 0x78,
     collisionFlags: 0,
     quietState: 0,
     solverInertiaScale: 1,
@@ -240,6 +256,81 @@ export function positionPassivePedBody(
   body.state.predictedOrientation?.copy(body.state.orientation);
 }
 
+/** Reinitialize a preallocated FORM simple slot without replacing its BOX,
+ * object identity or retained policy/friction fields. Registration and its
+ * ordered property/fill tail are owned by the shared pool host. */
+export function prepareNativePedBody(
+  body: NativePedBody,
+  input: Parameters<typeof createNativePedBody>[0],
+): void {
+  if (body.profile.formName !== input.profile.formName)
+    throw new Error("Cannot reuse a pedestrian simple slot across FORMs");
+  const prepared = createNativePedBody(input),
+    box = body.hulls[0],
+    next = prepared.hulls[0];
+  if (
+    body.hulls.length !== 1 ||
+    box.vertices.length !== next.vertices.length ||
+    box.faces.length !== next.faces.length
+  )
+    throw new Error("Pooled pedestrian simple slot requires its original BOX");
+  body.actor = input.actor;
+  body.profile = input.profile;
+  box.vertices.forEach((v, i) => v.copy(next.vertices[i]));
+  box.faces.forEach((face, i) => {
+    face.normal.copy(next.faces[i].normal);
+    face.constant = next.faces[i].constant;
+  });
+  body.state.position.copy(prepared.state.position);
+  body.state.orientation.copy(prepared.state.orientation);
+  body.state.predictedPosition?.copy(body.state.position);
+  body.state.predictedOrientation?.copy(body.state.orientation);
+  body.state.velocity.set(0, 0, 0);
+  body.state.angularVelocity.set(0, 0, 0);
+  body.properties.mass = prepared.properties.mass;
+  body.properties.centerOfMass.copy(prepared.properties.centerOfMass);
+  body.properties.inertia.copy(prepared.properties.inertia);
+  body.properties.worldFriction = 1;
+  body.properties.immovable = true;
+  body.doNothing = true;
+  body.haltCallbackEnabled = true;
+  body.levelOut = prepared.levelOut;
+  body.beforeWorldVelocity.set(0, 0, 0);
+  body.beforeLocalOmega.set(0, 0, 0);
+  body.solverLocalVelocity.set(0, 0, 0);
+  body.auxiliaryLocalOmega.set(0, 0, 0);
+  body.specialVolume = undefined;
+  body.headerState = 0;
+  // These integration/contact snapshots belong to the new slot owner, not
+  // Object+19c or +64, which the installed initializer retains.
+  body.phaseMarker = 2;
+  body.collisionFlags = 0;
+  body.quietState = 0;
+  body.solverInertiaScale = 1;
+  body.firstWorldFaceNormal = null;
+  body.worldFaceNormals.length = 0;
+  body.gravityIncrement.set(0, 0, 0);
+  body.characterVelocity.set(0, 0, 0);
+  body.overlapDetected = false;
+  body.worldOverlapDetected = false;
+  body.diagnostics.clear();
+}
+
+/** Successful immediate PHIL registration precedes properties0/3/4/5/7/8
+ * and the type2 filter callback. Keep failed registrations before this seam. */
+export function finishNativePedBodyInitialization(body: NativePedBody): void {
+  if (body.headerState !== 1)
+    throw new Error("Native simple-body properties require PHIL registration");
+  body.rigidFlags = (body.rigidFlags | 0x78) >>> 0;
+  body.gravity = 1;
+  body.suppressWorldFaces = true;
+  body.suppressSelfSentinel = true;
+  body.suppressJointConstraints = true;
+  body.volumeEnabled = true;
+  body.filterA = 0x10000;
+  body.filterB = 0x50000;
+}
+
 /** Character activation40b620 precedes damage eligibility4cd9db and lambda
  * solving. It copies character world V without an invented car kick/spin. */
 export function activateNativePedBody(
@@ -263,6 +354,7 @@ export function activateNativePedBody(
   body.suppressJointConstraints = false;
   body.gravity = 1;
   body.properties.immovable = false;
+  body.rigidFlags = (body.rigidFlags & ~0x78) >>> 0;
   return true;
 }
 
@@ -314,6 +406,7 @@ export function acceptNativePedHalt(body: NativePedBody): void {
   body.suppressWorldFaces = true;
   body.suppressSelfSentinel = true;
   body.suppressJointConstraints = true;
+  body.rigidFlags = (body.rigidFlags | 0x78) >>> 0;
   body.filterA = 0x10000;
   body.filterB = 0x50000;
   body.specialVolume = undefined;

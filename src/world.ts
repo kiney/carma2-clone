@@ -3,6 +3,7 @@ import { DEFAULT_SURFACE, surfaceIndex } from "./physics/surfaces";
 import type { SurfaceModifier } from "./physics/surfaces";
 import { pointVelocity, type RigidBody } from "./physics/contact";
 import { intersectWheelFace } from "./physics/wheel-ray";
+import type { WorldSourceSnapshot, WorldSourceTriangle } from "./world-source";
 export interface Surface {
   a: THREE.Vector3;
   b: THREE.Vector3;
@@ -21,23 +22,56 @@ export interface Surface {
   faceIndex?: number;
   enabled?: boolean;
   collisionMode?: "solid" | "passthrough" | "edges";
+  /** Pre-batch ACT/DAT identity; prepared native group order is separate. */
+  source?: WorldSourceTriangle;
 }
 /** A fixed broad phase over transformed original triangles. Geometry stays in C2 world units. */
 export class WorldCollision {
   private cells = new Map<string, Surface[]>();
   private cellSize = 4;
   triangles = 0;
+  private readonly sourceMeshes: readonly THREE.Mesh[] | undefined;
+  private readonly sourceTriangles = new Map<
+    THREE.Mesh,
+    Map<number, WorldSourceTriangle>
+  >();
   constructor(
     private sourceRoot: THREE.Object3D,
     private modifiers: readonly SurfaceModifier[] = [DEFAULT_SURFACE],
+    readonly sourceSnapshot?: WorldSourceSnapshot,
   ) {
+    if (sourceSnapshot) {
+      for (const triangle of sourceSnapshot.triangles) {
+        let meshFaces = this.sourceTriangles.get(triangle.mesh);
+        if (!meshFaces)
+          this.sourceTriangles.set(triangle.mesh, (meshFaces = new Map()));
+        meshFaces.set(triangle.renderTriangleIndex, triangle);
+      }
+      this.sourceMeshes = [...this.sourceTriangles.keys()];
+    }
     this.rebuildStatic();
   }
   rebuildStatic() {
     this.cells.clear();
     this.triangles = 0;
-    for (const surface of this.makeSurfaces(this.sourceRoot))
-      this.indexSurface(surface);
+    // Render batches discard ACT hierarchy and reorder material groups. Keep
+    // the original mesh references, including actors moved to the render root.
+    const additional: THREE.Mesh[] = [];
+    if (this.sourceMeshes)
+      this.sourceRoot.traverse((object) => {
+        if (
+          object instanceof THREE.Mesh &&
+          !object.userData.worldRenderBatch &&
+          !this.sourceTriangles.has(object)
+        )
+          additional.push(object);
+      });
+    const surfaces = this.sourceMeshes
+      ? [...this.sourceMeshes, ...additional].flatMap((mesh) =>
+          this.makeSurfaces(mesh, undefined, true),
+        )
+      : this.makeSurfaces(this.sourceRoot);
+    for (const surface of surfaces) this.indexSurface(surface);
   }
   private dynamic = new Map<
     RigidBody,
@@ -66,10 +100,14 @@ export class WorldCollision {
       }
     this.triangles++;
   }
-  private makeSurfaces(group: THREE.Object3D, owner?: RigidBody): Surface[] {
+  private makeSurfaces(
+    group: THREE.Object3D,
+    owner?: RigidBody,
+    singleMesh = false,
+  ): Surface[] {
     const surfaces: Surface[] = [];
-    group.updateMatrixWorld(true);
-    group.traverse((object) => {
+    group.updateWorldMatrix(true, true);
+    const visit = (object: THREE.Object3D) => {
       if (!(object instanceof THREE.Mesh)) return;
       if (object.userData.skipWorldCollision) return;
       for (let node: THREE.Object3D | null = object; node; node = node.parent)
@@ -86,10 +124,11 @@ export class WorldCollision {
         index = geo.index;
       if (!pos) return;
       const count = index ? index.count : pos.count;
+      const mirrored = singleMesh && object.matrixWorld.determinant() < 0;
       for (let i = 0; i < count; i += 3) {
         if (geo.userData.worldSmashFaceModes?.[i / 3] === "passthrough")
           continue;
-        const vertices = [0, 1, 2].map((j) =>
+        const vertices = (mirrored ? [0, 2, 1] : [0, 1, 2]).map((j) =>
           new THREE.Vector3()
             .fromBufferAttribute(pos, index ? index.getX(i + j) : i + j)
             .applyMatrix4(object.matrixWorld),
@@ -108,7 +147,19 @@ export class WorldCollision {
             ? object.material[materialGroup?.materialIndex ?? 0]
             : object.material
         ) as THREE.Material | undefined;
+        const rawFaceFlags =
+          geo.userData.sourceFaceFlags?.[i / 3] ??
+          geo.userData.sourceFaces?.[
+            Math.floor((index ? index.getX(i) : i) / 3)
+          ]?.flags ??
+          0;
         const s: Surface = {
+          // Tile clipping/model replacement reindexes faces into a different
+          // geometry. Preserve ACT ownership but do not assign stale DAT IDs.
+          source:
+            this.sourceTriangles.get(object)?.get(i / 3)?.geometry === geo
+              ? this.sourceTriangles.get(object)?.get(i / 3)
+              : undefined,
           actor: object,
           faceIndex: i / 3,
           owner,
@@ -122,12 +173,11 @@ export class WorldCollision {
           minY: Math.min(a.y, b.y, c.y),
           maxY: Math.max(a.y, b.y, c.y),
           material: material?.name ?? "",
-          faceFlags:
-            geo.userData.sourceFaceFlags?.[i / 3] ??
-            geo.userData.sourceFaces?.[
-              Math.floor((index ? index.getX(i) : i) / 3)
-            ]?.flags ??
-            0,
+          faceFlags: mirrored
+            ? (rawFaceFlags & ~5) |
+              ((rawFaceFlags & 1) << 2) |
+              ((rawFaceFlags & 4) >> 2)
+            : rawFaceFlags,
           modifier:
             this.modifiers[surfaceIndex(material?.name ?? "")] ??
             DEFAULT_SURFACE,
@@ -142,7 +192,9 @@ export class WorldCollision {
         };
         surfaces.push(s);
       }
-    });
+    };
+    if (singleMesh) visit(group);
+    else group.traverse(visit);
     return surfaces;
   }
   addDynamic(
@@ -554,6 +606,9 @@ export function batchStaticWorld(
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = material.name;
+    // GPU batches are presentation geometry. Native source collision retains
+    // the original meshes and separately admits later-created live actors.
+    mesh.userData.worldRenderBatch = true;
     result.add(mesh);
   }
   // Release temporary geometry while preserving materials used by the batches.

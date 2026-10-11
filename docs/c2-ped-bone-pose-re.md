@@ -84,6 +84,15 @@ bone-pose provider must join those names to FORM indices.
 BON/SKL matrices are frame-major then animation-bone-major, twelve little-endian
 Float32 values. Match animation names to FORM names; ignore unmatched animation
 bones. Their exporter child lists do not replace FORM parent relationships.
+Installed comparisons`0x4049b6–df/0x40612a–153` are exact byte comparisons,
+without aliases, punctuation normalization or O/0 substitution. The angle arrays
+are allocated at`0x404943–954` through BrMemAllocate`0x526c00`, which zero-fills
+all requested bytes before returning. Unmatched FORM bones therefore retain
+angle bytes(0,0,0). Generic `buildNativePedBoneMotion` remains strict by default;
+native instance preparation opts into `missingBones:"native-zero"`.
+Original DOG91/94 omit exact `Bone_N02` through authored `Bone_NO2`, while93
+also omits root`Bone_01` through `Bone01`. Native zero storage is preserved,
+without renaming borrowed motion records or inventing a missing bone transform.
 After matching, Flip3DStoBRaxes changes a vector(x,y,z) to(x,z,-y), changes basis
 coordinates by the corresponding conjugation, and converts translation too.
 Then LP normalise5325a0 normalizes row2, normalizes row1 cross row2 into row0,

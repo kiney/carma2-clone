@@ -2,12 +2,91 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 import { WorldCollision, batchStaticWorld } from "../src/world.ts";
+import { captureWorldSource } from "../src/world-source.ts";
 function mesh(points, material = new THREE.MeshBasicMaterial()) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
   geo.computeVertexNormals();
   return new THREE.Mesh(geo, material);
 }
+test("pre-batch source collision retains original actors, mirrored face flags and live rebuilds", () => {
+  const root = new THREE.Group();
+  root.name = "PP01 1 1 1 3";
+  const tile = new THREE.Group();
+  tile.name = "0 0";
+  root.add(tile);
+  const staticActor = new THREE.Group();
+  staticActor.name = "static-original";
+  const mirrored = mesh([-2, 0, -2, -2, 0, 2, 2, 0, 2]);
+  mirrored.scale.x = -1;
+  mirrored.geometry.userData.sourceFaceFlags = [1];
+  staticActor.add(mirrored);
+  tile.add(staticActor);
+  const retainedActor = new THREE.Group();
+  retainedActor.name = "moving-original";
+  retainedActor.position.set(5, 1, 0);
+  const moving = mesh([-2, 0, -2, -2, 0, 2, 2, 0, 2]);
+  retainedActor.add(moving);
+  tile.add(retainedActor);
+
+  const source = captureWorldSource(root);
+  const rendered = batchStaticWorld(root, [retainedActor]);
+  const world = new WorldCollision(rendered, undefined, source);
+  const faces = world.querySurfaces(
+    new THREE.Vector3(-3, -1, -3),
+    new THREE.Vector3(8, 2, 3),
+  );
+  assert.equal(faces.length, 2);
+  const floor = faces.find((face) => face.actor === mirrored);
+  assert.ok(floor);
+  assert.equal(floor.normal.y, 1);
+  assert.equal(floor.faceFlags, 4);
+  assert.equal(floor.source.actor, staticActor);
+  assert.equal(floor.source.renderTriangleIndex, 0);
+  assert.equal(floor.source.preparedGroupIndex, null);
+  assert.equal(world.height(0, 0, 0.1), 0);
+  assert.equal(world.height(5, 0, 1.1), 1);
+
+  const additional = mesh([-2, 0, -2, -2, 0, 2, 2, 0, 2]);
+  additional.position.set(10, 3, 0);
+  additional.name = "late-loaded-door";
+  rendered.add(additional);
+  world.rebuildStatic();
+  assert.equal(
+    world.triangles,
+    3,
+    "late-loaded actors join original source meshes without GPU-batch duplicates",
+  );
+  assert.equal(world.height(10, 0, 3.1), 3);
+  const lateFace = world
+    .querySurfaces(new THREE.Vector3(8, 2, -3), new THREE.Vector3(12, 4, 3))
+    .find((face) => face.actor === additional);
+  assert.ok(lateFace);
+  assert.equal(
+    lateFace.source,
+    undefined,
+    "late ACT identity is distinct from the initial snapshot",
+  );
+
+  retainedActor.position.y = 2;
+  world.rebuildStatic();
+  assert.equal(
+    world.height(5, 0, 2.1),
+    2,
+    "retained live actor updates after batching",
+  );
+  staticActor.userData.worldSmashDisabled = true;
+  world.rebuildStatic();
+  assert.equal(world.height(0, 0, 0.1), null);
+  retainedActor.userData.dynamicBody = true;
+  additional.userData.worldSmashDisabled = true;
+  world.rebuildStatic();
+  assert.equal(
+    world.triangles,
+    0,
+    "dynamic actors leave static source collection",
+  );
+});
 test("world ground query retains actor transforms, separates decks, and rejects gaps", () => {
   const group = new THREE.Group();
   const floor = mesh([0, 0, 0, 2, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 2]);

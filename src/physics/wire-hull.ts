@@ -23,6 +23,7 @@ export function buildWireHull(
   )
     throw new Error("Invalid wire collision shape");
   return {
+    nativeType: "WIRE",
     vertices: points.map((point) => point.clone()),
     vertexOrder: points.map((_, index) => index),
     faces: [],

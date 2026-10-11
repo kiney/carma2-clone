@@ -696,12 +696,36 @@ try {
       const p = c.player;
       const sim = c.simulation;
       let door;
+      let doorDistance = Infinity;
+      const doorHitPoint = p.state.position
+        .clone()
+        .set(4.358955, 0.06, 123.451445);
       c.scene.traverse((object) => {
-        if (!door && object.isMesh && /hangerdoor/i.test(object.name))
-          door = object;
+        if (
+          object.isMesh &&
+          !object.userData.worldRenderBatch &&
+          (Array.isArray(object.material)
+            ? object.material
+            : [object.material]
+          ).some((material) => /^hangerdoor(?:\.mat)?$/i.test(material.name))
+        ) {
+          object.geometry.computeBoundingBox();
+          const distance = object.geometry.boundingBox
+            .clone()
+            .applyMatrix4(object.matrixWorld)
+            .distanceToPoint(doorHitPoint);
+          if (distance < doorDistance) {
+            doorDistance = distance;
+            door = object;
+          }
+        }
       });
       if (!door)
         throw new Error("Airport1 hangerdoor smash mesh was not retained");
+      if (doorDistance > 0.05)
+        throw new Error(
+          "Airport1 hangerdoor source actor is absent at the prescribed impact point",
+        );
       const beforeModes = door.geometry.userData.worldSmashFaceModes ?? [];
       const beforeMaterial = door.material;
       const beforeMap = Array.isArray(beforeMaterial)
