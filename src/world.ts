@@ -4,6 +4,36 @@ import type { SurfaceModifier } from "./physics/surfaces";
 import { pointVelocity, type RigidBody } from "./physics/contact";
 import { intersectWheelFace } from "./physics/wheel-ray";
 import type { WorldSourceSnapshot, WorldSourceTriangle } from "./world-source";
+import {
+  createNativeFindFacesProviders,
+  findNativeFacesInBox,
+} from "./native-find-faces";
+import { knownNativeActorValue as known } from "./native-actor-order";
+import type { NativeOrderedActor } from "./native-actor-order";
+import type { NativeModelPickFace } from "./native-model-pick";
+import {
+  nativeWorldMatrix,
+  pullNativeWorldActor,
+  type NativeWorldScene,
+} from "./native-world-scene";
+import {
+  invalidateNativeTrackResource,
+  prepareNativeTrackResource,
+  type NativeTrackModelResource,
+} from "./native-track-resources";
+import type { MatMaterial } from "./formats";
+import type { NativeWorldFaceQuery } from "./physics/world-face-cache";
+import { cameraTriangleInBox } from "./camera/triangle-box";
+import { cameraShapeRay } from "./camera/own-shape";
+import type { CollisionHull } from "./physics/geometry";
+
+export interface WorldFaceCollectorCallbacks {
+  /** Runs on the emitted immutable row before its MODEL stop notification. */
+  onFace?: (surface: Surface) => void;
+  pullActorFromWorld?: (actor: THREE.Object3D) => object | null;
+  stopGroovidelic?: (actor: THREE.Object3D) => void;
+}
+
 export interface Surface {
   a: THREE.Vector3;
   b: THREE.Vector3;
@@ -24,6 +54,8 @@ export interface Surface {
   collisionMode?: "solid" | "passthrough" | "edges";
   /** Pre-batch ACT/DAT identity; prepared native group order is separate. */
   source?: WorldSourceTriangle;
+  native?: NativeModelPickFace;
+  constant?: number;
 }
 /** A fixed broad phase over transformed original triangles. Geometry stays in C2 world units. */
 export class WorldCollision {
@@ -35,10 +67,19 @@ export class WorldCollision {
     THREE.Mesh,
     Map<number, WorldSourceTriangle>
   >();
+  private readonly nativePoses = new Map<
+    NativeOrderedActor,
+    { values: readonly number[]; parent: THREE.Object3D | null }
+  >();
+  private readonly sourceFaceLookup = new Map<
+    THREE.Mesh,
+    Map<number, WorldSourceTriangle>
+  >();
   constructor(
     private sourceRoot: THREE.Object3D,
     private modifiers: readonly SurfaceModifier[] = [DEFAULT_SURFACE],
     readonly sourceSnapshot?: WorldSourceSnapshot,
+    readonly nativeScene?: NativeWorldScene,
   ) {
     if (sourceSnapshot) {
       for (const triangle of sourceSnapshot.triangles) {
@@ -46,14 +87,32 @@ export class WorldCollision {
         if (!meshFaces)
           this.sourceTriangles.set(triangle.mesh, (meshFaces = new Map()));
         meshFaces.set(triangle.renderTriangleIndex, triangle);
+        if (triangle.sourceFaceIndex !== null) {
+          let bySource = this.sourceFaceLookup.get(triangle.mesh);
+          if (!bySource)
+            this.sourceFaceLookup.set(triangle.mesh, (bySource = new Map()));
+          bySource.set(triangle.sourceFaceIndex, triangle);
+        }
       }
       this.sourceMeshes = [...this.sourceTriangles.keys()];
     }
+    if (nativeScene?.initialPoses)
+      for (const [actor, pose] of nativeScene.initialPoses)
+        this.nativePoses.set(actor, pose);
+    if (nativeScene?.initialGeometries)
+      for (const [actor, geo] of nativeScene.initialGeometries)
+        this.nativeGeometryRevisions.set(actor, {
+          geometry: geo,
+          version:
+            (geo.getAttribute("position") as THREE.BufferAttribute | undefined)
+              ?.version ?? 0,
+        });
     this.rebuildStatic();
   }
   rebuildStatic() {
     this.cells.clear();
     this.triangles = 0;
+    this.syncNativeGeometry();
     // Render batches discard ACT hierarchy and reorder material groups. Keep
     // the original mesh references, including actors moved to the render root.
     const additional: THREE.Mesh[] = [];
@@ -197,12 +256,16 @@ export class WorldCollision {
     else group.traverse(visit);
     return surfaces;
   }
+  private dynamicOwners = new Map<THREE.Object3D, RigidBody>();
   addDynamic(
     owner: RigidBody,
     actor: THREE.Object3D,
     drivable = true,
     worldCollider = false,
   ) {
+    const previous = this.dynamic.get(owner);
+    if (previous) this.dynamicOwners.delete(previous.actor);
+    this.dynamicOwners.set(actor, owner);
     this.dynamic.set(owner, {
       actor,
       drivable,
@@ -214,6 +277,8 @@ export class WorldCollision {
     this.refreshDynamic(owner);
   }
   removeDynamic(owner: RigidBody) {
+    const entry = this.dynamic.get(owner);
+    if (entry) this.dynamicOwners.delete(entry.actor);
     this.dynamic.delete(owner);
   }
   invalidateDynamic(owner?: RigidBody) {
@@ -235,7 +300,13 @@ export class WorldCollision {
     }
   }
   private dynamicSurfaces(bounds: THREE.Box3): Surface[] {
-    return [...this.dynamic.values()]
+    return (
+      this.drivableOwners
+        ? this.drivableOwners
+            .map((owner) => this.dynamic.get(owner)!)
+            .filter(Boolean)
+        : [...this.dynamic.values()]
+    )
       .filter(
         (entry) =>
           entry.drivable &&
@@ -244,6 +315,472 @@ export class WorldCollision {
       )
       .flatMap((entry) => entry.surfaces);
   }
+  /** Source FindFacesInBox owns finite prefixes and interleaved callbacks. The
+   * existing spatial hash remains useful for unrestricted rays and legacy tools. */
+  collectFaces(
+    query: NativeWorldFaceQuery,
+    capacity: number,
+    gatherModels = true,
+    callbacks: WorldFaceCollectorCallbacks = {},
+  ): Surface[] {
+    if (!this.nativeScene) {
+      if (!gatherModels || capacity === 0) return [];
+      const bounds = query.bounds.clone().applyMatrix4(query.matrix),
+        inverse = query.matrix.clone().invert(),
+        result: Surface[] = [];
+      for (const surface of this.querySurfaces(bounds.min, bounds.max, true)) {
+        if (
+          !cameraTriangleInBox(
+            [surface.a, surface.b, surface.c].map((p) =>
+              p.clone().applyMatrix4(inverse),
+            ),
+            query.bounds.min,
+            query.bounds.max,
+          )
+        )
+          continue;
+        result.push(surface);
+        callbacks.onFace?.(surface);
+        if (result.length === capacity) break;
+      }
+      return result;
+    }
+    const scene = this.nativeScene;
+    this.syncNativeGeometry();
+    const changedActors = new Set<NativeOrderedActor>();
+    for (const [actor, object] of scene.actorObjects) {
+      const old = this.nativePoses.get(actor),
+        p = object.position,
+        q = object.quaternion,
+        s = object.scale;
+      const values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w, s.x, s.y, s.z];
+      let parentChanged = false;
+      for (let parent = actor.parent; parent; parent = parent.parent)
+        if (changedActors.has(parent)) {
+          parentChanged = true;
+          break;
+        }
+      if (
+        !old ||
+        old.parent !== object.parent ||
+        values.some((v, i) => old.values[i] !== v) ||
+        parentChanged
+      ) {
+        this.updateNativeActorMatrix(actor);
+        this.nativePoses.set(actor, { values, parent: object.parent });
+        changedActors.add(actor);
+      }
+      // Native NONE prunes the complete subtree while keeping its MODEL alive.
+      actor.renderStyle = object.userData.worldSmashDisabled
+        ? 1
+        : (object.userData.c2ActorRenderStyle ?? actor.renderStyle);
+    }
+    const base = createNativeFindFacesProviders(
+      (identity) => {
+        const resource = scene.resources.get(identity);
+        return resource
+          ? known(resource)
+          : { resolved: false, requiredProvider: "native-world-current-MODEL" };
+      },
+      { writePlingFace: () => {} },
+    );
+    const surfaces: Surface[] = [];
+    const result = findNativeFacesInBox({
+      bounds: {
+        min: query.bounds.min.toArray() as [number, number, number],
+        max: query.bounds.max.toArray() as [number, number, number],
+      },
+      matrix: nativeWorldMatrix(query.matrix),
+      layout: scene.layout,
+      columns: scene.columns,
+      additionalActors: known(scene.additionalActors),
+      blackMaterial: known(scene.blackMaterial),
+      capacity,
+      emitModels: gatherModels,
+      worldCallbacks: known({
+        pullActorFromWorld: (actor: NativeOrderedActor) => {
+          const object = scene.actorObjects.get(actor);
+          const pulled = object
+            ? (callbacks.pullActorFromWorld?.(object) ?? null)
+            : null;
+          if (pulled !== null) pullNativeWorldActor(scene, actor);
+          return known(pulled);
+        },
+        stopGroovidelic: (actor: NativeOrderedActor) => {
+          const object = scene.actorObjects.get(actor);
+          if (object) {
+            callbacks.stopGroovidelic?.(object);
+            this.updateNativeActorMatrix(actor);
+          }
+        },
+      }),
+      providers: {
+        modelBounds: base.modelBounds,
+        emitModel: (input) => {
+          const emitted = base.emitModel(input);
+          if (!emitted.resolved) return emitted;
+          for (const row of emitted.rows) {
+            const surface = this.nativeSurface(row);
+            surfaces.push(surface);
+            callbacks.onFace?.(surface);
+          }
+          return emitted;
+        },
+      },
+    });
+    if (!result.resolved)
+      throw new Error(
+        `Native world face collector requires ${result.requiredProvider}`,
+      );
+    return surfaces;
+  }
+  /** Renderer retention can attach an ACT to a different Three parent. Keep
+   * its native local transform relative to the original mutable ACT links. */
+  private nativeGeometryRevisions = new Map<
+    NativeOrderedActor,
+    { geometry: THREE.BufferGeometry; version: number }
+  >();
+  private nativeRuntimeFaceIndices = new WeakMap<
+    NativeTrackModelResource,
+    Map<number, number>
+  >();
+  private nativeGeometryOwners = new Map<
+    NativeOrderedActor,
+    NativeTrackModelResource
+  >();
+  private nativeReplacementSourceFaces = new Map<
+    NativeOrderedActor,
+    Map<number, number>
+  >();
+  /** Geometry mutation outlets already own current topology and source IDs. Rebuild
+   * their MODEL tables before collector use, with actual retained MAT bindings. */
+  private syncNativeGeometry(): void {
+    const scene = this.nativeScene;
+    if (!scene?.meshes) return;
+    for (const [actor, mesh] of scene.meshes) {
+      const geo = mesh.geometry,
+        position = geo.getAttribute("position"),
+        old = this.nativeGeometryRevisions.get(actor);
+      if (
+        !position ||
+        (old?.geometry === geo &&
+          old.version === ((position as THREE.BufferAttribute).version ?? 0))
+      )
+        continue;
+      if (!actor.localModel.resolved || !actor.localModel.value) continue;
+      const resource = scene.resources.get(actor.localModel.value);
+      if (!resource)
+        throw new Error(
+          "Native geometry mutation requires the current MODEL owner",
+        );
+      const previousOwner = this.nativeGeometryOwners.get(actor);
+      const ownership =
+        previousOwner?.source === resource.source ? previousOwner : resource;
+      this.nativeGeometryOwners.set(actor, ownership);
+      const replacement =
+        scene.findModelResource?.(mesh.name) ??
+        [...scene.resources.values()].find(
+          (candidate) =>
+            candidate.source?.name === mesh.name &&
+            candidate.source !== resource.source,
+        );
+      if (
+        replacement &&
+        replacement.source !== resource.source &&
+        this.matchesNativeSourceGeometry(geo, replacement)
+      ) {
+        actor.localModel = known(replacement);
+        this.nativeGeometryOwners.set(actor, replacement);
+        const mapping = new Map<number, number>();
+        const sourceMapping = new Map<number, number>();
+        for (
+          let triangle = 0;
+          triangle < (geo.index?.count ?? position.count) / 3;
+          triangle++
+        ) {
+          const sourceIndex = Math.floor(
+            (geo.index?.getX(triangle * 3) ?? triangle * 3) / 3,
+          );
+          const nativeIndex = replacement.current.faces.findIndex(
+            (face) => face.sourceFaceIndex === sourceIndex,
+          );
+          if (nativeIndex >= 0) mapping.set(nativeIndex, triangle);
+          sourceMapping.set(triangle, sourceIndex);
+        }
+        this.nativeRuntimeFaceIndices.set(replacement, mapping);
+        this.nativeReplacementSourceFaces.set(actor, sourceMapping);
+        this.nativeGeometryRevisions.set(actor, {
+          geometry: geo,
+          version: (position as THREE.BufferAttribute).version ?? 0,
+        });
+        continue;
+      }
+      const allowed = new Map(
+          ownership.current.faces.map((face) => [face.sourceFaceIndex, face]),
+        ),
+        nativeFaces: NativeTrackModelResource["current"]["faces"][number][] =
+          [],
+        vertices: NativeTrackModelResource["current"]["vertices"][number][] =
+          [],
+        mapping = new Map<number, number>(),
+        index = geo.index,
+        uv = geo.getAttribute("uv"),
+        count = index?.count ?? position.count;
+      const sourceFaces = this.sourceTriangles.get(mesh);
+      for (let triangle = 0; triangle < count / 3; triangle++) {
+        const originalRenderIndex =
+          geo.userData.worldSmashSourceFaces?.[triangle] ?? triangle;
+        const oldCrosswalk = sourceFaces?.get(originalRenderIndex),
+          crosswalk =
+            oldCrosswalk?.modelName === resource.source?.name
+              ? oldCrosswalk
+              : undefined,
+          sourceIndex =
+            crosswalk?.sourceFaceIndex ??
+            this.nativeReplacementSourceFaces
+              .get(actor)
+              ?.get(originalRenderIndex) ??
+            (geo.userData.sourceFaces
+              ? Math.floor(
+                  (index ? index.getX(triangle * 3) : triangle * 3) / 3,
+                )
+              : originalRenderIndex);
+        if (sourceIndex === null || sourceIndex === undefined)
+          throw new Error("Native mutation face provenance is missing");
+        const original = allowed.get(sourceIndex);
+        if (!original) continue; // Remaining and migrated raw MODELs own distinct faces.
+        const rawBinding = geo.userData.c2RawFaceMaterials?.[triangle];
+        const slot =
+          geo.groups.find(
+            (group) =>
+              triangle * 3 >= group.start &&
+              triangle * 3 < group.start + group.count,
+          )?.materialIndex ?? 0;
+        const renderMaterial = Array.isArray(mesh.material)
+          ? mesh.material[slot]
+          : mesh.material;
+        const material: MatMaterial | null =
+          rawBinding === null
+            ? null
+            : (rawBinding ??
+              scene.resolveRenderedMaterial?.(renderMaterial) ??
+              original.material);
+        const ids = [0, 1, 2].map((corner) => {
+          const vertex = index
+              ? index.getX(triangle * 3 + corner)
+              : triangle * 3 + corner,
+            id = vertices.length;
+          vertices.push({
+            position: [
+              Math.fround(position.getX(vertex)),
+              Math.fround(position.getY(vertex)),
+              Math.fround(position.getZ(vertex)),
+            ] as [number, number, number],
+            uv: [
+              Math.fround(uv?.getX(vertex) ?? 0),
+              Math.fround(uv?.getY(vertex) ?? 0),
+            ] as [number, number],
+            payload: null,
+          });
+          return id;
+        }) as [number, number, number];
+        mapping.set(nativeFaces.length, triangle);
+        nativeFaces.push({
+          ...original,
+          indices: ids,
+          material,
+          payload: {
+            ...original.payload,
+            indices: ids,
+            flags:
+              geo.userData.sourceFaceFlags?.[triangle] ??
+              original.payload.flags,
+          },
+        });
+      }
+      // Actor-private browser smash geometry gets a separate real mutable MODEL
+      // identity; immutable DAT and other ACT instances keep their resources.
+      const current: NativeTrackModelResource = {
+        source: resource.source,
+        revision: resource.revision,
+        prepared: null,
+        current: { ...resource.current, vertices, faces: nativeFaces },
+      };
+      current.current.identity = current;
+      invalidateNativeTrackResource(current);
+      const prepared = prepareNativeTrackResource(
+        current,
+        scene.arena.materialOrder(current.current.faces),
+      );
+      if (!prepared.resolved)
+        throw new Error(prepared.requiredProviders.join("; "));
+      scene.resources.set(current, current);
+      actor.localModel = known(current);
+      this.nativeRuntimeFaceIndices.set(current, mapping);
+      this.nativeGeometryRevisions.set(actor, {
+        geometry: geo,
+        version: (position as THREE.BufferAttribute).version ?? 0,
+      });
+    }
+  }
+  /** createModelGeometry copies canonical tables. Verify their data against the
+   * exact registry object; copied arrays cannot establish identity by reference. */
+  private matchesNativeSourceGeometry(
+    geo: THREE.BufferGeometry,
+    resource: NativeTrackModelResource,
+  ): boolean {
+    const source = resource.source,
+      positions = geo.userData.sourcePositions as Float32Array | undefined,
+      faces = geo.userData.sourceFaces as
+        | { indices: readonly number[]; material: number }[]
+        | undefined;
+    return (
+      !!source &&
+      positions instanceof Float32Array &&
+      positions.length === source.positions.length &&
+      positions.every((value, index) => value === source.positions[index]) &&
+      faces?.length === source.faces.length &&
+      faces.every(
+        (face, index) =>
+          face.material === source.faces[index].material &&
+          face.indices.length === 3 &&
+          face.indices.every(
+            (value, corner) => value === source.faces[index].indices[corner],
+          ),
+      )
+    );
+  }
+  private updateNativeActorMatrix(actor: NativeOrderedActor): void {
+    const values = this.nativeActorLocalMatrix(actor),
+      storage = actor.matrix as number[];
+    for (let index = 0; index < 12; index++) storage[index] = values[index];
+  }
+  private nativeActorLocalMatrix(actor: NativeOrderedActor): number[] {
+    const scene = this.nativeScene!;
+    const worldMatrix = (current: NativeOrderedActor | null): THREE.Matrix4 => {
+      if (!current) return new THREE.Matrix4();
+      const object = scene.actorObjects.get(current);
+      if (object) {
+        object.updateWorldMatrix(true, false);
+        return object.matrixWorld.clone();
+      }
+      const m = current.matrix,
+        local = new THREE.Matrix4().set(
+          m[0],
+          m[3],
+          m[6],
+          m[9],
+          m[1],
+          m[4],
+          m[7],
+          m[10],
+          m[2],
+          m[5],
+          m[8],
+          m[11],
+          0,
+          0,
+          0,
+          1,
+        );
+      return worldMatrix(current.parent).multiply(local);
+    };
+    return nativeWorldMatrix(
+      worldMatrix(actor.parent).invert().multiply(worldMatrix(actor)),
+    );
+  }
+  private nativeSurface(row: NativeModelPickFace): Surface {
+    const scene = this.nativeScene!,
+      object =
+        scene.faceActors.get(row.actor) ?? scene.actorObjects.get(row.actor);
+    const sourceResource = scene.resources.get(row.sourceModel),
+      sourceModel = sourceResource?.source ?? row.model.source;
+    let mesh = scene.meshes?.get(row.actor),
+      source: WorldSourceTriangle | undefined,
+      faceIndex: number | undefined;
+    const candidates: THREE.Mesh[] = [];
+    if (mesh) candidates.push(mesh);
+    else
+      object?.traverse((candidate) => {
+        if (candidate instanceof THREE.Mesh) candidates.push(candidate);
+      });
+    let fallback: THREE.Mesh | undefined;
+    for (const candidate of candidates) {
+      const faces = this.sourceTriangles.get(candidate),
+        match =
+          faces &&
+          this.sourceFaceLookup.get(candidate)?.get(row.sourceFaceIndex);
+      if (match && match.modelName === sourceModel?.name) {
+        mesh = candidate;
+        source = match;
+        faceIndex = match.renderTriangleIndex;
+        break;
+      }
+      if (candidate.name === sourceModel?.name) fallback = candidate;
+    }
+    mesh ??= fallback;
+    const currentFace = this.nativeRuntimeFaceIndices
+      .get(row.model)
+      ?.get(row.nativeFaceIndex);
+    if (currentFace !== undefined) faceIndex = currentFace;
+    if (!mesh) mesh = scene.meshes?.get(row.actor);
+    let owner: RigidBody | undefined;
+    for (
+      let node: THREE.Object3D | null = object ?? null;
+      node;
+      node = node.parent
+    ) {
+      owner = this.dynamicOwners.get(node);
+      if (owner) break;
+    }
+    const a = new THREE.Vector3(...row.a),
+      b = new THREE.Vector3(...row.b),
+      c = new THREE.Vector3(...row.c),
+      material = row.materialIdentifier ?? "";
+    return {
+      a,
+      b,
+      c,
+      normal: new THREE.Vector3(...row.normal),
+      constant: row.constant,
+      minY: Math.min(a.y, b.y, c.y),
+      maxY: Math.max(a.y, b.y, c.y),
+      material,
+      modifier: this.modifiers[surfaceIndex(material)] ?? DEFAULT_SURFACE,
+      twoSided:
+        row.materialPresence === "null" ||
+        !!((row.materialFlags ?? 0) & 0x1800),
+      materialFlags: row.materialFlags ?? 0,
+      faceFlags: row.rawFlags,
+      owner,
+      actor: mesh,
+      faceIndex,
+      source,
+      native: row,
+      pixelmapType: (Array.isArray(mesh?.material)
+        ? mesh?.material[0]
+        : (mesh?.material as THREE.MeshLambertMaterial | undefined)
+      )?.userData.c2PixelmapType,
+      collisionMode:
+        mesh?.geometry.userData.worldSmashFaceModes?.[faceIndex ?? -1] ??
+        (material.startsWith("?") ? "edges" : "solid"),
+    };
+  }
+  /** Installed MechanicsStep4158b0 snapshots first50 drivable owners in PHIL
+   * linked order. Wheel owner rays run after world-face cache rays418c93. */
+  setDrivableOwnerOrder(owners: readonly RigidBody[]): void {
+    this.drivableOwners = owners
+      .filter((owner) => {
+        const entry = this.dynamic.get(owner);
+        return (
+          entry?.drivable &&
+          !entry.worldCollider &&
+          !("kind" in owner && owner.kind === "moving-world")
+        );
+      })
+      .slice(0, 50);
+  }
+  private drivableOwners: readonly RigidBody[] | undefined;
   /** Bounds-confined original triangle candidates, shared by body and wheel queries. */
   querySurfaces(
     min: THREE.Vector3,
@@ -442,6 +979,82 @@ export class WorldCollision {
     maxDistance: number,
   ) {
     return this.raycast(origin, direction, maxDistance, false, true);
+  }
+  /** Installed418c93–418e59 visits the first50 PHIL drivable objects and all
+   * their shape links. This pass has no access to unrestricted world triangles:
+   * world faces, including grooved actors, already ran through the finite cache.
+   * ShapeRayCast's normal is inward; WheelForces negates it before rotation. */
+  drivableWheelRaycast(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    maxDistance: number,
+  ) {
+    if (
+      !Number.isFinite(maxDistance) ||
+      maxDistance <= 0 ||
+      direction.lengthSq() < 1e-12
+    )
+      return null;
+    const end = origin
+      .clone()
+      .addScaledVector(direction.clone().normalize(), maxDistance);
+    let best: {
+      distance: number;
+      normal: THREE.Vector3;
+      friction: number;
+      rollingResistance: number;
+      downforce: number;
+      bumpiness: number;
+      point: THREE.Vector3;
+      body: RigidBody;
+      velocity: THREE.Vector3;
+    } | null = null;
+    for (const owner of this.drivableOwners ?? []) {
+      const entry = this.dynamic.get(owner);
+      if (
+        !entry?.drivable ||
+        entry.worldCollider ||
+        ("kind" in owner && owner.kind === "moving-world") ||
+        !("hulls" in owner)
+      )
+        continue;
+      const inverse = owner.state.orientation.clone().invert(),
+        from = origin
+          .clone()
+          .sub(owner.state.position)
+          .applyQuaternion(inverse),
+        to = end.clone().sub(owner.state.position).applyQuaternion(inverse);
+      for (const hull of owner.hulls as readonly CollisionHull[]) {
+        const hit = cameraShapeRay(from, to, [hull]);
+        // Installed ShapeRayCast sets fraction2 for start-inside/no boundary.
+        // WheelForces reads that fraction, rather than the function return code.
+        if (hit?.inside !== false || !hit.localNormal) continue;
+        const distance = Math.fround(hit.fraction!) * maxDistance;
+        // Installed418d9d..418dad is strict less: first equal owner/shape wins.
+        if (distance > maxDistance || (best && distance >= best.distance))
+          continue;
+        const point = hit
+            .point!.clone()
+            .applyQuaternion(owner.state.orientation)
+            .add(owner.state.position),
+          modifier = this.modifiers[0] ?? DEFAULT_SURFACE;
+        best = {
+          distance,
+          normal: hit.localNormal
+            .clone()
+            .negate()
+            .applyQuaternion(owner.state.orientation),
+          point,
+          body: owner,
+          velocity: pointVelocity(owner.state, owner.properties, point),
+          friction: modifier.tyreFriction,
+          rollingResistance: 0,
+          downforce: modifier.downforce,
+          bumpiness: modifier.bumpiness,
+        };
+      }
+    }
+    return best;
   }
   height(x: number, z: number, nearY: number) {
     let best: number | null = null;

@@ -302,4 +302,7 @@ import "./ai-native-levitate.test.mjs";
 import "./ai-native-repair.test.mjs";
 import "./ai-native-runtime.test.mjs";
 import "./opponent-placement.test.mjs";
+import "./ped-population-accounting.test.mjs";
+import "./wld-native-collector.test.mjs";
+import "./native-material-render.test.mjs";
 import "./ai-native-fallen.test.mjs";

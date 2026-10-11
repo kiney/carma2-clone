@@ -1,10 +1,10 @@
 ---
 id: TASK-35
 title: '[P2] PED-03: Connect native death counting to population and mission state'
-status: wip
+status: done
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-11 17:47'
 labels:
   - priority-2
   - PED-03
@@ -66,9 +66,15 @@ Reconstruct native pedestrian collisions, impulses, fall/get-up/corpse movement,
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A controlled actual native vehicle contact is bound to an existing authored normal-population owner in Stock and Advanced Chromium scenes; real application alive/hit/group counters change exactly once. Merely recording fixture events is insufficient.
-- [ ] #2 The original spawn group and source 0x100 count gate drive the existing group/mission target consumer; objective evaluation and count updates occur before the native score continuation.
-- [ ] #3 Repeated corpse contact and overlapping legacy/native death callbacks do not repeat counts or objective completion; counting adds no estimated impulse, blood launch or duplicate physical owner.
-- [ ] #4 Existing ordinary visual-sweep and combat deaths retain correct total/group counts and mission behavior through the shared accounting owner; normal race load/reset preserves population state.
-- [ ] #5 Focused deterministic accounting tests and actual Chromium application-counter/objective assertions pass, with no fatal console errors. Follow-up tickets remain open; closure explicitly claims counting integration only.
+- [x] #1 A controlled actual native vehicle contact is bound to an existing authored normal-population owner in Stock and Advanced Chromium scenes; real application alive/hit/group counters change exactly once. Merely recording fixture events is insufficient.
+- [x] #2 The original spawn group and source 0x100 count gate drive the existing group/mission target consumer; objective evaluation and count updates occur before the native score continuation.
+- [x] #3 Repeated corpse contact and overlapping legacy/native death callbacks do not repeat counts or objective completion; counting adds no estimated impulse, blood launch or duplicate physical owner.
+- [x] #4 Existing ordinary visual-sweep and combat deaths retain correct total/group counts and mission behavior through the shared accounting owner; normal race load/reset preserves population state.
+- [x] #5 Focused deterministic accounting tests and actual Chromium application-counter/objective assertions pass, with no fatal console errors. Follow-up tickets remain open; closure explicitly claims counting integration only.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented shared OneLessPed population accounting and explicit native counting-owner binding. Ordinary sweep/combat and native contact update original-group counters once through flag 0x100; application mission/objective checks precede scoring. Native counting creates no estimated launch/blood/corpse transport. Final Stock and Advanced Chromium each verified genuine native contact on an existing population actor: 791 total, hits 0 to 1, alive 791 to 790, group 65 killed 0 to 1, unchanged other groups and mission completion in the count outlet before scoring. Recontacts and pre-counted flag100 sever/score contacts do not count twice. Four accounting tests, existing native/sweep/combat regressions and full suite 2542 passed; production build passed. Final Chromium also exercised actual borrowed face-slot release through the native grounding owner and physical corpse quiet/release; no unsupported outlet, JavaScript, HTTP/request or WebGL errors. Full ordinary native population physical/movement/grounding/sever/cause migration remains PED-06 through PED-09 in backlog. Closure claims the narrowed counting integration only.
+<!-- SECTION:FINAL_SUMMARY:END -->

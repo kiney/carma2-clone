@@ -43,6 +43,16 @@ export interface MatMaterial {
   power: number;
   flags: number;
   uvTransform: number[];
+  indexBase?: number;
+  indexRange?: number;
+  fogMin?: number;
+  fogMax?: number;
+  fogColor?: number;
+  subdivideTolerance?: number;
+  indexShade?: string;
+  indexBlend?: string;
+  screendoor?: string;
+  indexFog?: string;
 }
 export interface PixMap {
   name: string;
@@ -409,7 +419,12 @@ export function parseMat(bytes: Uint8Array): MatMaterial[] {
         power = r.f32();
       const flags = tag === 4 ? r.u16() : r.u32();
       const uvTransform = Array.from(r.floats(6));
-      r.skip(tag === 4 ? 2 : 17);
+      const indexBase = r.u8(),
+        indexRange = r.u8();
+      const fogMin = tag === 4 ? 0 : r.f32(true);
+      const fogMax = tag === 4 ? 0 : r.f32(true);
+      const fogColor = tag === 4 ? 0 : (r.u8() << 16) | (r.u8() << 8) | r.u8();
+      const subdivideTolerance = tag === 4 ? 0 : r.u32() | 0;
       material = {
         name: r.string(),
         rgba,
@@ -419,6 +434,12 @@ export function parseMat(bytes: Uint8Array): MatMaterial[] {
         power,
         flags,
         uvTransform,
+        indexBase,
+        indexRange,
+        fogMin,
+        fogMax,
+        fogColor,
+        subdivideTolerance,
       };
       if (length > r.bytes.length - start + 2)
         throw new Error("MAT: material length exceeds file bounds");
@@ -426,6 +447,10 @@ export function parseMat(bytes: Uint8Array): MatMaterial[] {
       if (!material) throw new Error("MAT: reference precedes material");
       const reference = r.string();
       if (tag === 0x1c) material.texture = reference;
+      else if (tag === 0x1e) material.indexBlend = reference;
+      else if (tag === 0x1f) material.indexShade = reference;
+      else if (tag === 0x20) material.screendoor = reference;
+      else material.indexFog = reference;
     } else {
       r.sub(length);
       if (tag === 0) {

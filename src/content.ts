@@ -1,6 +1,13 @@
 import { createModelGeometry } from "./render-geometry";
 import { NativeResourceRegistry } from "./native-resource-registry";
 import { NativeResourceArena } from "./native-resource-arena";
+import { NativeGlobalResources } from "./native-global-resources";
+import {
+  createNativeRenderMaterial,
+  nativeRenderMaterialSource,
+  updateNativeRenderMaterial,
+  type NativeMaterialRenderOptions,
+} from "./native-material-render";
 import * as THREE from "three";
 import { parseDat, parseAct, parseMat, parsePix, decodeText } from "./formats";
 import { parseTiff } from "./tiff";
@@ -21,6 +28,211 @@ export class Assets {
   textures = new Map<string, THREE.DataTexture>();
   palette?: Uint8Array;
   warnings: string[] = [];
+  readonly materialArena = new NativeResourceArena();
+  readonly nativeMaterialRegistry = new NativeGlobalResources<MatMaterial>(
+    true,
+  );
+  readonly nativeModelRegistry = new NativeGlobalResources<DatModel>(false);
+  private readonly nativeModelMaterialBindings = new Map<
+    DatModel,
+    readonly (MatMaterial | null)[]
+  >();
+  private readonly startupStorage = {};
+  private commonLoaded = false;
+  private readonly renderedNativeMaterials = new Map<
+    MatMaterial,
+    THREE.MeshLambertMaterial
+  >();
+  private readonly nativeGeometries = new Map<
+    DatModel,
+    {
+      geometry: THREE.BufferGeometry;
+      materials: THREE.Material[];
+      slots: number[];
+      nullMaterialSlots: boolean[];
+    }
+  >();
+  private readonly nativeStores = new Map<string, object>();
+  private readonly storageCleanup = new Map<object, Set<() => void>>();
+  private readonly storageReferences = new Map<object, number>();
+  private readonly sceneReleases = new Set<() => void>();
+  private readonly transientMaterialStores = new Map<MatMaterial, object>();
+  private readonly retainedNativeMaterials = new Set<MatMaterial>();
+  private readonly generatedStorage = {};
+  private readonly generatedMaterials = new Map<string, MatMaterial>();
+  registerGeneratedMaterial(source: MatMaterial, storageKey = source.name) {
+    const existing = this.generatedMaterials.get(storageKey);
+    if (existing) return existing;
+    this.generatedMaterials.set(storageKey, source);
+    this.materialArena.allocateMaterial(source);
+    // BrMaterialAllocate(NULL) has no lookup identifier; keep its identity only.
+    if (source.name)
+      this.nativeMaterialRegistry.add(this.generatedStorage, source);
+    this.renderedNativeMaterials.set(
+      source,
+      createNativeRenderMaterial(source, undefined, this.nativeRenderOptions),
+    );
+    return source;
+  }
+  private nativeRenderOptions: NativeMaterialRenderOptions = {};
+  cloneNativeMaterial(render: THREE.Material): THREE.Material {
+    const original = this.resolveNativeMaterial(render);
+    if (!original) return render.clone();
+    const runtime = render.userData.c2NativeState as MatMaterial | undefined;
+    const source: MatMaterial = {
+      ...(runtime ?? original),
+      rgba: [...(runtime ?? original).rgba],
+      uvTransform: [...(runtime ?? original).uvTransform],
+    };
+    const storage = {};
+    this.materialArena.allocateMaterial(source);
+    this.nativeMaterialRegistry.add(storage, source);
+    this.transientMaterialStores.set(source, storage);
+    const originalRender = render as THREE.MeshLambertMaterial;
+    const cloned = createNativeRenderMaterial(
+      source,
+      originalRender.map ?? undefined,
+      { ...this.nativeRenderOptions, depth: undefined },
+    );
+    cloned.color.copy(originalRender.color);
+    cloned.emissive.copy(originalRender.emissive);
+    cloned.emissiveIntensity = originalRender.emissiveIntensity;
+    this.renderedNativeMaterials.set(source, cloned);
+    return cloned;
+  }
+  /** Process-global copied MODELs borrow these exact MAT pointers. Native C2
+   * can leave stale heap pointers; the host explicitly retains valid resources. */
+  retainNativeMaterial(source: MatMaterial): void {
+    if (
+      !this.materialArena.materialAddress(source).resolved ||
+      !this.renderedNativeMaterials.has(source)
+    )
+      throw new Error(
+        "Native MAT retention requires an existing live source allocation and render wrapper",
+      );
+    this.retainedNativeMaterials.add(source);
+  }
+  isRetainedNativeMaterial(
+    materialOrSource: THREE.Material | MatMaterial,
+  ): boolean {
+    const source =
+      materialOrSource instanceof THREE.Material
+        ? this.resolveNativeMaterial(materialOrSource)
+        : materialOrSource;
+    return source !== undefined && this.retainedNativeMaterials.has(source);
+  }
+  isRetainedNativeTexture(texture: THREE.Texture): boolean {
+    for (const source of this.retainedNativeMaterials) {
+      const map = this.renderedNativeMaterials.get(source)?.map;
+      if (map && (map === texture || map.source === texture.source))
+        return true;
+    }
+    return false;
+  }
+  getNativeRenderMaterial(source: MatMaterial) {
+    return this.renderedNativeMaterials.get(source);
+  }
+  ownsNativeGeometry(geometry: THREE.BufferGeometry): boolean {
+    for (const data of this.nativeGeometries.values())
+      if (data.geometry === geometry) return true;
+    return false;
+  }
+  ownsNativeTexture(texture: THREE.Texture): boolean {
+    for (const render of this.renderedNativeMaterials.values())
+      if (render.map?.source === texture.source) return true;
+    return false;
+  }
+  resolveNativeMaterial(material: THREE.Material) {
+    return nativeRenderMaterialSource(material);
+  }
+  updateNativeMaterial(source: MatMaterial) {
+    const rendered = this.renderedNativeMaterials.get(source);
+    if (rendered)
+      updateNativeRenderMaterial(rendered, source, this.nativeRenderOptions);
+    return rendered;
+  }
+  generatedTrackMaterials() {
+    if (!this.palette || this.palette.length < 256 * 4)
+      throw new Error(
+        "Native generated track materials require the complete render palette",
+      );
+    const offset = 227 * 4;
+    const common = {
+      ambient: 1,
+      diffuse: 0,
+      specular: 0,
+      power: 20,
+      uvTransform: [1, 0, 0, 1, 0, 0],
+      fogMin: 0,
+      fogMax: 0,
+      fogColor: 0,
+    };
+    const defaultTrackMaterial = this.registerGeneratedMaterial(
+      {
+        ...common,
+        name: "gDefault_track_material",
+        flags: 1,
+        rgba: [
+          this.palette[offset],
+          this.palette[offset + 1],
+          this.palette[offset + 2],
+          255,
+        ],
+        indexBase: 227,
+        indexRange: 1,
+      },
+      "default-track",
+    );
+    // GetSimpleMaterial selects by input M14, then allocates identifier Simple
+    // and finds the first closest RGB palette entry (488d3e / 517f70..518033).
+    let blackIndex = 127,
+      nearest = Infinity;
+    for (let index = 0; index < 256; index++) {
+      const p = index * 4;
+      const distance =
+        (0x21 - this.palette[p]) ** 2 +
+        (0x21 - this.palette[p + 1]) ** 2 +
+        (0x21 - this.palette[p + 2]) ** 2;
+      if (distance < nearest) {
+        nearest = distance;
+        blackIndex = index;
+      }
+    }
+    const blackMaterial = this.registerGeneratedMaterial(
+      {
+        ...common,
+        name: "Simple",
+        flags: 5,
+        rgba: [0x21, 0x21, 0x21, 255],
+        indexBase: blackIndex,
+        indexRange: 0,
+      },
+      "black",
+    );
+    return { defaultTrackMaterial, blackMaterial };
+  }
+  configureNativeRendering(options: NativeMaterialRenderOptions) {
+    this.nativeRenderOptions = { ...options };
+    for (const source of this.generatedMaterials.values())
+      this.updateNativeMaterial(source);
+  }
+  /** Race storages are cleared together; startup texture libraries remain live. */
+  releaseRaceResources() {
+    for (const release of [...this.sceneReleases]) release();
+    this.nativeStores.clear();
+    for (const [source, storage] of this.transientMaterialStores) {
+      this.nativeMaterialRegistry.removeStorage(storage);
+      if (this.retainedNativeMaterials.has(source)) continue;
+      const rendered = this.renderedNativeMaterials.get(source);
+      rendered?.map?.dispose();
+      rendered?.dispose();
+      this.renderedNativeMaterials.delete(source);
+      const allocation = this.materialArena.materialAddress(source);
+      if (allocation.resolved && allocation.handle)
+        this.materialArena.free(allocation.handle);
+    }
+    this.transientMaterialStores.clear();
+  }
   async init() {
     const r = await fetch("/api/manifest");
     if (!r.ok) throw new Error("Local asset server unavailable");
@@ -104,6 +316,7 @@ export class Assets {
     return maps;
   }
   async common(progress: (text: string) => void) {
+    if (this.commonLoaded) return;
     const palette = this.resolve("data/Reg/PALETTES/DRRENDER.PAL");
     if (palette) {
       try {
@@ -136,8 +349,111 @@ export class Assets {
         this.warnings.push(`${e.path}: ${error}`);
       }
     }
+    // LoadInRegistees loads REG/MATERIAL before REG/MODELS. Unlike track
+    // AddMaterials, DRLoadMaterials directly registers every record, clears
+    // LIGHT and never Glorifies it (installed 48f020..76 / 48f080..dd).
+    for (const path of this.files("data/Reg/MATERIAL", /^[^/]+\.mat$/i)) {
+      progress(`Registering original common materials: ${path}`);
+      for (const source of parseMat(await this.bytes(path))) {
+        source.flags &= ~1;
+        this.materialArena.allocateMaterial(source);
+        this.nativeMaterialRegistry.add(this.startupStorage, source, false);
+        this.renderedNativeMaterials.set(
+          source,
+          createNativeRenderMaterial(
+            source,
+            source.texture ? this.textures.get(key(source.texture)) : undefined,
+          ),
+        );
+      }
+    }
+    const defaultMaterial = createNativeRenderMaterial(
+      {
+        name: "default_mat",
+        rgba: [255, 255, 255, 255],
+        ambient: Math.fround(0.1),
+        diffuse: Math.fround(0.7),
+        specular: 0,
+        power: 20,
+        flags: 1,
+        uvTransform: [1, 0, 0, 1, 0, 0],
+      },
+      undefined,
+    );
+    for (const path of this.files("data/Reg/MODELS", /^[^/]+\.dat$/i)) {
+      progress(`Registering original common models: ${path}`);
+      for (const model of parseDat(await this.bytes(path))) {
+        // DRLoadModels overwrites flags, rather than ORing UPDATEABLE into the
+        // file flags. Ordinary vertices follow its white RGB load path.
+        model.flags = 0x80;
+        this.nativeModelRegistry.add(this.startupStorage, model);
+        this.bindModelMaterials(model);
+        this.bindModelGeometry(model, defaultMaterial);
+        this.warnings.push(...(model.warnings ?? []));
+      }
+    }
+    this.commonLoaded = true;
   }
-  async scene(dir: string, stem: string) {
+  private bindModelMaterials(model: DatModel): void {
+    this.nativeModelMaterialBindings.set(
+      model,
+      model.materials.map(
+        (name) => this.nativeMaterialRegistry.find(name) ?? null,
+      ),
+    );
+  }
+  private bindModelGeometry(model: DatModel, defaultMaterial: THREE.Material) {
+    const geometry = createModelGeometry(model);
+    const slots = [...new Set(model.faces.map((face) => face.material))];
+    const bindings = this.nativeModelMaterialBindings.get(model);
+    if (!bindings)
+      throw new Error(`Native DAT material bindings missing: ${model.name}`);
+    // Index zero and authoritative failed named lookups both hold native NULL.
+    // Keep authored slot numbers, and defer NULL slots to actor inheritance.
+    const resolvedMaterials = slots.map((index) =>
+      index === 0 ? null : bindings[index - 1],
+    );
+    const materials = resolvedMaterials.map((source) => {
+      if (source === null) return defaultMaterial;
+      if (!source)
+        throw new Error(
+          `Native DAT material slot out of bounds: ${model.name}`,
+        );
+      const rendered = this.renderedNativeMaterials.get(source);
+      if (!rendered)
+        throw new Error(`Native render MAT wrapper missing: ${source.name}`);
+      return rendered;
+    });
+    const data = {
+      geometry,
+      materials,
+      slots,
+      nullMaterialSlots: resolvedMaterials.map((source) => source === null),
+    };
+    this.nativeGeometries.set(model, data);
+    return data;
+  }
+  async scene(
+    dir: string,
+    stem: string,
+    options: {
+      storage?: string;
+      shading?: number;
+      defaultMaterial?: MatMaterial;
+    } = {},
+  ) {
+    const storage = options.storage
+      ? (this.nativeStores.get(options.storage) ?? {})
+      : {};
+    if (options.storage) this.nativeStores.set(options.storage, storage);
+    this.storageReferences.set(
+      storage,
+      (this.storageReferences.get(storage) ?? 0) + 1,
+    );
+    const renderOptions = {
+      ...this.nativeRenderOptions,
+      ...(options.shading === undefined ? {} : { shading: options.shading }),
+    };
     const local = new Map(this.textures);
     const loadedKeys = new Set<string>();
     const maps = this.files(dir, /(^|\/)(pixies\.p16|[^/]+\.pix)$/i);
@@ -185,7 +501,7 @@ export class Assets {
       materials = new Map<string, THREE.Material>(),
       renderedMaterials = new Map<MatMaterial, THREE.Material>(),
       sourceMaterials = new Map<string, MatMaterial>(),
-      materialArena = new NativeResourceArena();
+      materialArena = this.materialArena;
     const materialEpisodes: {
       path: string;
       recordIndex: number;
@@ -200,41 +516,31 @@ export class Assets {
       // release rejected duplicates. Addresses describe our host arena only.
       const handles = batch.map((mat) => materialArena.allocateMaterial(mat));
       for (const [recordIndex, mat] of batch.entries()) {
-        const accepted = materialRegistry.add(mat);
+        const accepted =
+          this.nativeMaterialRegistry.add(storage, mat) &&
+          materialRegistry.add(mat);
         materialEpisodes.push({ path, recordIndex, material: mat, accepted });
         if (!accepted) {
           materialArena.free(handles[recordIndex]);
+          const existing = this.nativeMaterialRegistry.find(mat.name);
+          const rendered = existing
+            ? this.renderedNativeMaterials.get(existing)
+            : undefined;
+          if (existing && rendered) {
+            sourceMaterials.set(key(mat.name), existing);
+            materials.set(key(mat.name), rendered);
+          }
           continue;
         }
         sourceMaterials.set(key(mat.name), mat);
         let texture = mat.texture ? local.get(key(mat.texture)) : undefined;
         if (mat.texture && !texture) missingTextures++;
-        if (texture) {
-          texture = texture.clone();
-          const uv = mat.uvTransform;
-          texture.matrixAutoUpdate = false;
-          texture.matrix.set(uv[0], uv[2], uv[4], uv[1], uv[3], uv[5], 0, 0, 1);
-          texture.needsUpdate = true;
-        }
-        const colour = texture
-          ? 0xffffff
-          : new THREE.Color(
-              mat.rgba[0] / 255,
-              mat.rgba[1] / 255,
-              mat.rgba[2] / 255,
-            );
-        const opacity = mat.rgba[3] / 255;
-        const material = new THREE.MeshLambertMaterial({
-          color: colour,
-          map: texture ?? null,
-          side: mat.flags & 0x1800 ? THREE.DoubleSide : THREE.FrontSide,
-          transparent: opacity < 0.99,
-          opacity,
-          alphaTest: texture ? 0.15 : 0,
-          depthWrite: opacity >= 0.99,
-        });
-        material.name = mat.name;
-        material.userData.c2Flags = mat.flags;
+        const material = createNativeRenderMaterial(
+          mat,
+          texture,
+          renderOptions,
+        );
+        this.renderedNativeMaterials.set(mat, material);
         renderedMaterials.set(mat, material);
         materials.set(key(mat.name), material);
       }
@@ -249,26 +555,37 @@ export class Assets {
         await this.bytes(path),
       ).entries()) {
         modelRegistry.add(model);
+        this.nativeModelRegistry.add(storage, model);
+        this.bindModelMaterials(model);
         modelEpisodes.push({ path, recordIndex, model });
         models.set(key(model.name), model);
         this.warnings.push(...(model.warnings ?? []));
       }
     }
     const findSourceMaterial = (identifier: string) =>
-      materialRegistry.find(identifier);
+      this.nativeMaterialRegistry.find(identifier);
     const findSourceModel = (identifier: string) =>
-      modelRegistry.find(identifier);
+      this.nativeModelRegistry.find(identifier);
     const findRenderedMaterial = (identifier: string) => {
       const source = findSourceMaterial(identifier);
-      return source ? renderedMaterials.get(source) : undefined;
+      return source ? this.renderedNativeMaterials.get(source) : undefined;
     };
-    const fallback = new THREE.MeshLambertMaterial({
-      color: 0xaaaaaa,
-      side: THREE.DoubleSide,
-    });
     // BRender SetupDefaultMaterial: white, opaque and lit. DAT index0 means
-    // actor/inherited material; it does not mean an unresolved named material.
-    const defaultMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    // actor/inherited material. A failed native named lookup also stores NULL.
+    const defaultMaterial = createNativeRenderMaterial(
+      {
+        name: "default_mat",
+        rgba: [255, 255, 255, 255],
+        ambient: Math.fround(0.1),
+        diffuse: Math.fround(0.7),
+        specular: 0,
+        power: 20,
+        flags: 1,
+        uvTransform: [1, 0, 0, 1, 0, 0],
+      },
+      undefined,
+      { ...renderOptions, shading: undefined },
+    );
     defaultMaterial.name = "C2 default material";
     defaultMaterial.userData.c2Flags = 1;
     const geometries = new Map<
@@ -277,20 +594,14 @@ export class Assets {
         geometry: THREE.BufferGeometry;
         materials: THREE.Material[];
         slots: number[];
+        nullMaterialSlots: boolean[];
       }
     >();
     const sourceModelGeometries = new Map<DatModel, THREE.BufferGeometry>();
     for (const model of modelRegistry.accepted) {
-      const geometry = createModelGeometry(model);
-      sourceModelGeometries.set(model, geometry);
-      const slots = [...new Set(model.faces.map((f) => f.material))];
-      const used = slots.map((index) =>
-        index === 0
-          ? defaultMaterial
-          : (findRenderedMaterial(model.materials[index - 1] || "") ??
-            fallback),
-      );
-      geometries.set(model, { geometry, materials: used, slots });
+      const data = this.bindModelGeometry(model, defaultMaterial);
+      sourceModelGeometries.set(model, data.geometry);
+      geometries.set(model, data);
     }
     const act =
       this.resolve(`${dir}/${stem}.act`) ??
@@ -304,9 +615,11 @@ export class Assets {
     group.name = stem;
     let missingModels = 0;
     const sourceActorObjects = new Map<ActNode, THREE.Group>();
+    const nativeGeometries = this.nativeGeometries;
+    const nativeRenderedMaterials = this.renderedNativeMaterials;
     function actor(
       node: ActNode,
-      inheritedMaterial?: string,
+      inheritedMaterial?: string | MatMaterial,
       inheritedStyle = 4,
       childIndex = 0,
       bindings?: Map<ActNode, THREE.Group>,
@@ -349,18 +662,31 @@ export class Assets {
       // later render animation may update the decomposed visual transform.
       object.userData.c2ActorMatrix = object.matrix.clone();
       object.matrix.decompose(object.position, object.quaternion, object.scale);
-      const mat = node.material ?? inheritedMaterial,
+      // An authored ACT material name may resolve to NULL; native inheritance
+      // then keeps the parent material instead of creating a named placeholder.
+      const mat =
+          (node.material !== undefined
+            ? findSourceMaterial(node.material)
+            : undefined) ?? inheritedMaterial,
         style = node.renderStyle || inheritedStyle;
-      object.userData.c2ActorMaterialName = mat ?? null;
+      object.userData.c2ActorMaterialName =
+        typeof mat === "string" ? mat : (mat?.name ?? null);
       if (node.model && style !== 1) {
         const sourceModel = findSourceModel(node.model);
-        const data = sourceModel ? geometries.get(sourceModel) : undefined;
+        const data = sourceModel
+          ? nativeGeometries.get(sourceModel)
+          : undefined;
         if (data) {
-          const override = mat ? findRenderedMaterial(mat) : undefined;
+          const override =
+            typeof mat === "string"
+              ? findRenderedMaterial(mat)
+              : mat
+                ? nativeRenderedMaterials.get(mat)
+                : undefined;
           const mesh = new THREE.Mesh(
             data.geometry,
             data.materials.map((material, index) =>
-              data.slots[index] === 0 ? (override ?? material) : material,
+              data.nullMaterialSlots[index] ? (override ?? material) : material,
             ),
           );
           mesh.name = node.model;
@@ -372,7 +698,9 @@ export class Assets {
       return object;
     }
     for (const [index, root] of roots.entries())
-      group.add(actor(root, undefined, 4, index, sourceActorObjects));
+      group.add(
+        actor(root, options.defaultMaterial, 4, index, sourceActorObjects),
+      );
     group.updateMatrixWorld(true);
     const loadActorResource = async (path: string) => {
       const sourceActors = parseAct(await this.bytes(path));
@@ -380,7 +708,9 @@ export class Assets {
       const group = new THREE.Group();
       group.name = path.split("/").pop() ?? path;
       for (const [index, root] of sourceActors.entries())
-        group.add(actor(root, undefined, 4, index, sourceActorObjects));
+        group.add(
+          actor(root, options.defaultMaterial, 4, index, sourceActorObjects),
+        );
       group.updateMatrixWorld(true);
       return {
         group,
@@ -391,8 +721,67 @@ export class Assets {
         >,
       };
     };
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      this.sceneReleases.delete(dispose);
+      const refs = (this.storageReferences.get(storage) ?? 1) - 1;
+      this.storageReferences.set(storage, refs);
+      if (refs === 0) {
+        this.storageReferences.delete(storage);
+        for (const mat of this.nativeMaterialRegistry.removeStorage(storage)) {
+          if (this.retainedNativeMaterials.has(mat)) continue;
+          const render = this.renderedNativeMaterials.get(mat);
+          render?.map?.dispose();
+          render?.dispose();
+          this.renderedNativeMaterials.delete(mat);
+          const allocation = materialArena.materialAddress(mat);
+          if (allocation.resolved && allocation.handle)
+            materialArena.free(allocation.handle);
+        }
+        for (const model of this.nativeModelRegistry.removeStorage(storage)) {
+          this.nativeGeometries.get(model)?.geometry.dispose();
+          this.nativeGeometries.delete(model);
+          this.nativeModelMaterialBindings.delete(model);
+        }
+        if (options.storage) this.nativeStores.delete(options.storage);
+      }
+      if (refs === 0) {
+        for (const cleanup of this.storageCleanup.get(storage) ?? []) cleanup();
+        this.storageCleanup.delete(storage);
+      }
+    };
+    const cleanup = this.storageCleanup.get(storage) ?? new Set<() => void>();
+    this.storageCleanup.set(storage, cleanup);
+    cleanup.add(() => {
+      defaultMaterial.dispose();
+      for (const texture of local.values())
+        if (
+          ![...this.textures.values()].includes(texture) &&
+          !this.isRetainedNativeTexture(texture)
+        )
+          texture.dispose();
+    });
+    this.sceneReleases.add(dispose);
+    const adaptMaterials = (
+      shading: number,
+      depth = this.nativeRenderOptions.depth,
+    ) => {
+      for (const mat of materialRegistry.accepted) {
+        const rendered = this.renderedNativeMaterials.get(mat);
+        if (rendered)
+          updateNativeRenderMaterial(rendered, mat, {
+            ...this.nativeRenderOptions,
+            shading,
+            depth,
+          });
+      }
+    };
     return {
       group,
+      dispose,
+      adaptMaterials,
       /** Authored ACT nodes before render defaults, batching or native load mutations.
        * Consumers borrow these source records; mutable native linked lists are separate. */
       sourceActors: roots as readonly ActNode[],
@@ -410,6 +799,13 @@ export class Assets {
       sourceMaterialStorage:
         materialRegistry.accepted as readonly MatMaterial[],
       sourceModelStorage: modelRegistry.accepted as readonly DatModel[],
+      /** Native MAT table pointers captured at each MODEL-load episode; later
+       * registrations may change global name lookup but cannot rebind faces. */
+      sourceModelMaterialBindings: this
+        .nativeModelMaterialBindings as ReadonlyMap<
+        DatModel,
+        readonly (MatMaterial | null)[]
+      >,
       sourceMaterialEpisodes: materialEpisodes,
       sourceModelEpisodes: modelEpisodes,
       materialArena,

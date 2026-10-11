@@ -98,6 +98,11 @@ try {
       document.querySelector("#track-select").value = path;
       document.querySelector("#car-select").value = car;
       await c.loadRace();
+      if (!c.stats.ready)
+        throw new Error(
+          document.querySelector("#status")?.textContent ??
+            `Race loading failed: ${path}`,
+        );
       c.paused = true;
       document.querySelector("#panel").hidden = true;
     }, track);

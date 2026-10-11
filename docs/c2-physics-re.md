@@ -106,7 +106,19 @@ Original buggy mass1.150008, Eagle1.5 and dumper35.282787 drive separate inertia
 
 Production browser regression drives real track gates to completion, loads stock Quarry and Advanced Acid Reign, preserves controls/audio/opponents/pedestrians, checks geometry, and reports no fatal console errors or failed requests. MCP screenshots inspect actual original geometry, damage and materials, with WebGL `getError()==0`. The MCP GUI instance hung in this environment; an isolated headless Chromium instance uses the installed Chrome DevTools MCP server and software WebGL for these checks. This establishes software-rendered Chromium behavior, not physical GPU performance.
 
-Rendering fixes preserve original DAT smoothing/vertex IDs and correct null material slots to BRender's inherited/default opaque white; named face groups retain their materials. Camera framing follows each authored car's bounds to avoid clipping inside large vehicles. Remaining full-game limits include exact native moving-platform callbacks, analytic sphere/wire dispatch, campaign/mission/AI fidelity and unsupported effects. Newer world and mine integration also has production Chromium and MCP checks, described below.
+Rendering fixes preserve original DAT smoothing/vertex IDs and correct null material slots to BRender's inherited/default material; named face groups retain their materials. Track roots now supply the native palette-227 default-track descriptor. Camera framing follows each authored car's bounds to avoid clipping inside large vehicles. Remaining full-game limits include analytic sphere/wire dispatch, campaign/mission/AI fidelity and unsupported effects. Newer world and mine integration also has production Chromium and MCP checks, described below.
+
+The production finite world collector now executes prepared MODEL/ACT ordering,
+interleaved GROOVE stop/pull notifications, current geometry ownership and the
+separate first-50 PHIL drivable wheel phase. Mutable smashed/replaced tables keep
+original DAT provenance and invalidate prepared revisions without changing other
+instances. See [production collector evidence](c2-wld-production-collector-re.md).
+Original MAT coefficients, directional Gouraud/rational specular, local fog and
+race-scoped global resource lifetime now reach the actual WebGL shader; see
+[material rendering evidence](c2-native-material-render-re.md). Native death
+counting also reaches actual population/group/mission counters before scoring;
+full native population movement and articulated-body integration remain separate
+PED-06 through PED-09 work.
 
 Detached receivers intentionally remain rigid after detachment: `0x41df24` rejects driver≤5 before crush/component processing. Semi driver1 and free driver2 have their own physical boxes/joints; subsequent dents are not forwarded to the owner. A car hit by a piece still gets the source armor/protection branch while skipping attacker offense/softness and world inactivity factors. `0x440550` follows saved owner attribution only for free drivers2/3/4 and excludes self-owned hits. BOX setup `0x43372f` preserves exact bounds, including the original planar Ford pickup plate; `box-hull.ts` supports its zero-width box without invented thickness. A read-only52-car audit checked256 eligible parts, including all authored hinge/poly indices.
 

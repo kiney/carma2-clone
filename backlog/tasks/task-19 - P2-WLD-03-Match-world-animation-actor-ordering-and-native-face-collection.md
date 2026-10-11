@@ -1,9 +1,10 @@
 ---
 id: TASK-19
 title: '[P2] WLD-03: Match world animation, actor ordering, and native face collection'
-status: wip
+status: done
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 17:46'
 labels:
   - priority-2
   - WLD-03
@@ -34,3 +35,18 @@ World GROOVE poses, actor hierarchies and 212 stock blocks are integrated. Insta
 
 [main.ts](../../src/main.ts), [world.ts](../../src/world.ts), [animation.ts](../../src/animation.ts)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 Production original Stock/Advanced worlds use retained native layout, admitted resource identities and current prepared MODEL-group/face order for the finite 300-face cache; no render/hash traversal substitutes for a missing native provider.
+- [x] #2 Native column migration, noncar identifiers and powerup MODEL/MAT mutations reach live ACT/render ownership. Smash target metadata follows authored variable indices without seeding mission progress.
+- [x] #3 MODEL-before-children traversal preserves interleaved pull/stop callbacks at full or zero capacity and NONE subtree pruning. The separate wheel pass follows the first 50 PHIL drivable owners and authored shape links without static-face masking.
+- [x] #4 Grooved, smashed, replaced and restored geometry retains current Float32/pivot/material/face ownership while original DAT provenance and unrelated instances remain unchanged.
+- [x] #5 Installed-function conformance and production collector regressions pass, including original assets, build and Stock/Advanced Chromium scene/drive/world-smash checks with no fatal application or WebGL errors. Host allocator policy and separately owned physical noncar lifecycle limits are explicit.
+<!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented the production native prepared collector over the retained ACT/MODEL layout: finite face order, interleaved pull/stop callbacks, column/noncar/powerup mutations, live replaced/restored geometry and separate first-50 PHIL drivable wheel traversal. Actual startup MODEL bindings and leased changing-powerup MAT identities survive race release. Validation: 14 focused collector regressions; all 123 original shared-session scene preparation/release episodes; full suite 2542 passed; production build; Stock/Advanced Chromium driving, race reloads and smash gameplay passed without fatal application or WebGL errors. Chrome DevTools MCP additionally verified keyboard movement and a grounded damaging wall impact. Evidence and host allocator/physical noncar lifecycle boundaries: docs/c2-wld-production-collector-re.md. Dedicated physical noncar lifecycle remains separately tracked; this closes WLD-03, not complete engine fidelity.
+<!-- SECTION:FINAL_SUMMARY:END -->

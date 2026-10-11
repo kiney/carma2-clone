@@ -223,6 +223,10 @@ export class WorldGrooveRuntime {
     root.traverse((o) => {
       if (o.name && !(o instanceof THREE.Mesh))
         byName.set(o.name.toLowerCase(), o);
+      // FindNonCars compacts live identifiers before GROOVE binding. Retain
+      // the exact authored alias so its original TXT reference still resolves.
+      if (o.userData.c2ActorName && !(o instanceof THREE.Mesh))
+        byName.set(o.userData.c2ActorName.toLowerCase(), o);
     });
     for (const definition of parsed.grooves) {
       const actor = byName.get(definition.actor.toLowerCase());

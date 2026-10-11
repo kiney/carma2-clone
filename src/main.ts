@@ -63,6 +63,7 @@ import { WorldCollision, batchStaticWorld } from "./world";
 import { captureWorldSource } from "./world-source";
 import { captureNativeTrackSceneLayout } from "./native-track-scene-layout";
 import { prepareNativeTrackSceneEdges } from "./track-edge-preparation";
+import { prepareNativeWorldScene } from "./native-world-scene";
 import { WorldFollowupRuntime, type FollowupDue } from "./world-followup";
 import { DamageSystem } from "./damage";
 import {
@@ -669,10 +670,23 @@ function disposeGroup(group: THREE.Object3D) {
       }
     }
   });
-  for (const g of geos) g.dispose();
-  for (const m of mats) m.dispose();
+  for (const g of geos) if (!assets.ownsNativeGeometry(g)) g.dispose();
+  for (const m of mats) {
+    const source = assets.resolveNativeMaterial(m);
+    if (
+      !assets.isRetainedNativeMaterial(m) &&
+      (!source || assets.getNativeRenderMaterial(source) !== m)
+    )
+      m.dispose();
+  }
   const shared = new Set<THREE.Texture>(assets.textures.values());
-  for (const map of maps) if (!shared.has(map)) map.dispose();
+  for (const map of maps)
+    if (
+      !shared.has(map) &&
+      !assets.isRetainedNativeTexture(map) &&
+      !assets.ownsNativeTexture(map)
+    )
+      map.dispose();
 }
 interface Rival {
   object: THREE.Group;
@@ -779,7 +793,37 @@ async function loadRace() {
     status("Parsing original track geometry…");
     const trackText = await assets.text(currentTrack);
     const newTrack = parseTrackConfig(trackText);
-    const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
+    const generalText = await assets.text("data/GENERAL.TXT");
+    nativeCameraSettings = parseCameraSettings(generalText);
+    // Native Glorify/Fog runs as materials are admitted, before actor creation.
+    // Yon here is the base camera value; the track multiplier only clips views.
+    assets.releaseRaceResources();
+    const depth = newTrack.depthCue;
+    assets.configureNativeRendering({
+      directionalColor: newTrack.globalLighting?.directionalColor,
+      depth: {
+        type: depth ? ["darkness", "fog", "colour"].indexOf(depth.mode) : -1,
+        start: depth?.strength[0] ?? 0,
+        end: depth?.strength[1] ?? 0,
+        red: depth?.color[0] ?? 0,
+        green: depth?.color[1] ?? 0,
+        blue: depth?.color[2] ?? 0,
+        baseYon: Math.fround(nativeCameraSettings.far),
+      },
+      interpolation: true,
+      antialiasing: true,
+      perspective: true,
+    });
+    const generatedMaterials = assets.generatedTrackMaterials();
+    const world = await assets.scene(
+      dirOf(currentTrack),
+      stemOf(currentTrack),
+      {
+        shading: 1,
+        storage: "track",
+        defaultMaterial: generatedMaterials.defaultTrackMaterial,
+      },
+    );
     const trackEdges = prepareNativeTrackSceneEdges(world);
     world.group.userData.nativeTrackEdgePreparation = {
       status: trackEdges.status,
@@ -806,8 +850,84 @@ async function loadRace() {
     missionVariables.clear();
     smashAwardStates = new WeakMap();
     worldFollowups = undefined;
-    const generalText = await assets.text("data/GENERAL.TXT");
-    nativeCameraSettings = parseCameraSettings(generalText);
+    const worldSmashSpecs = parseTrackSmashables(trackText, currentTrack);
+    if (!initialNativeLayout.resolved)
+      throw new Error(
+        `Native track layout: ${initialNativeLayout.requiredProvider}`,
+      );
+    const nativeSmashTargets: Array<{
+      model: object;
+      actor: object;
+      index: -1;
+    }> = [];
+    const nativeWorld = prepareNativeWorldScene(world, {
+      initialLayout: initialNativeLayout,
+      ...generatedMaterials,
+      smashSpecs: worldSmashSpecs.map((spec) => ({
+        material:
+          spec.trigger.kind === "material"
+            ? (world.findSourceMaterial(spec.trigger.name) ?? null)
+            : null,
+        triggerType:
+          spec.trigger.kind === "material"
+            ? 0
+            : spec.trigger.kind === "model"
+              ? 1
+              : 2,
+        mode: [
+          "nochange",
+          "decal",
+          "texturechange",
+          "remove",
+          "replacemodel",
+          "crush",
+        ].indexOf(spec.mode),
+        levelCount: spec.levels.length,
+      })),
+      actorSpecs: worldSmashSpecs.map((spec) => ({
+        model:
+          spec.trigger.kind === "model"
+            ? (world.findSourceModel(spec.trigger.name) ?? null)
+            : null,
+        triggerType:
+          spec.trigger.kind === "material"
+            ? 0
+            : spec.trigger.kind === "model"
+              ? 1
+              : 2,
+        targetCode: (spec.connotations?.variableChanges[0]?.[0] ?? 0) & 0xffff,
+      })),
+      race: definition
+        ? {
+            type:
+              typeof definition.raceType === "number"
+                ? definition.raceType
+                : [
+                    "carma",
+                    "cars",
+                    "peds",
+                    "checkpoints",
+                    "smash",
+                    "smashAndPed",
+                  ].indexOf(definition.raceType),
+            targetCode: definition.smashVariable ?? 0,
+          }
+        : null,
+      pixelBits: 16,
+      // PED-06 owns native load-time enrollment. The current population reads
+      // immutable source DAT coverage once, after world load; never respawn it
+      // from the compacted/migrated face tables.
+      spawnPedsOnFace: () => {},
+      updateMaterial: (material) => assets.updateNativeMaterial(material),
+      retainChangingPowerupMaterial: (material) =>
+        assets.retainNativeMaterial(material),
+      resolveRenderedMaterial: (material) =>
+        assets.resolveNativeMaterial(material),
+      addSmashableRaceTarget: (model, actor, index) => {
+        nativeSmashTargets.push({ model, actor, index });
+      },
+    });
+    world.group.userData.nativeSmashTargets = nativeSmashTargets;
     camera.fov = nativeCameraSettings.runtimeFovDegrees;
     camera.far = Math.fround(
       nativeCameraSettings.far * parseTrackCameraSettings(trackText),
@@ -861,7 +981,10 @@ async function loadRace() {
     );
     pedAwardCounter = new NativePedAwardCounter();
     audio.configurePowerups(generalText);
-    const loadedMine = await assets.scene("data/MINE", "ShitMine");
+    const loadedMine = await assets.scene("data/MINE", "ShitMine", {
+      shading: 2,
+      storage: "mine",
+    });
     const explosionSettings = parseWastedExplosionSettings(generalText);
     for (const frame of new Set(
       explosionSettings.groups.flatMap((group) =>
@@ -878,7 +1001,11 @@ async function loadRace() {
     const carText = await assets.text(currentCar);
     const newCarConfig = parseCarConfig(carText);
     await audio.setCar(carText);
-    const loadedCar = await assets.scene(dirOf(currentCar), stemOf(currentCar));
+    const loadedCar = await assets.scene(
+      dirOf(currentCar),
+      stemOf(currentCar),
+      { shading: 2, storage: "our-car" },
+    );
     // Original visual bounds support optional views and the explicit startup
     // framing extension; live chase uses native COM/shape equations.
     const cameraBounds = new THREE.Box3().setFromObject(loadedCar.group);
@@ -931,7 +1058,6 @@ async function loadRace() {
         actor.userData.dynamicBody = true;
         return createMovingWorldBody(actor);
       });
-    const worldSmashSpecs = parseTrackSmashables(trackText, currentTrack);
     const worldShrapnelSpecs = worldSmashSpecs.flatMap((spec) =>
       [
         spec.connotations,
@@ -990,6 +1116,7 @@ async function loadRace() {
         models: world.models,
         textures: world.textures,
         materials: world.materials,
+        cloneMaterial: (material) => assets.cloneNativeMaterial(material),
         random: sharedNativeRandom.random,
         onConnotations: (data, contact, suppressed) =>
           dispatchSmashConnotations(data, contact, suppressed, () => {
@@ -1108,6 +1235,7 @@ async function loadRace() {
       world.group,
       parseSurfaceModifiers(trackText),
       worldSource,
+      nativeWorld,
     );
     noncarRenderBatch?.dispose();
     for (const body of simulation?.cars ?? []) tyreEffects.stopOwner(body);
@@ -2167,11 +2295,15 @@ async function loadRivals(
     const configPath = candidates[i].path;
     const text = await assets.text(configPath);
     const config = parseCarConfig(text);
-    const model = await assets.scene(dirOf(configPath), stemOf(configPath));
+    const model = await assets.scene(dirOf(configPath), stemOf(configPath), {
+      shading: 2,
+      storage: "opponents",
+    });
     const rivalDamage = new DamageSystem(assets, model.group, text);
     rivalDamage.structuralSettings = parseStructuralSettings(generalText);
     await rivalDamage.init();
     if (activeTrack !== currentTrack || loadGeneration !== generation) {
+      model.dispose();
       disposeGroup(model.group);
       return;
     }
@@ -2208,6 +2340,7 @@ async function loadRivals(
         searchRadius: 4,
       });
     if (!placement.placed) {
+      model.dispose();
       disposeGroup(model.group);
       throw new Error(
         `Opponent ${candidates[i].id} has no supported, collision-free start; race population is incomplete`,
@@ -2352,7 +2485,7 @@ async function loadPedestrians(text: string, loadGeneration: number) {
               position,
             )?.gravityMultiplier
           : undefined,
-      onHit: (event) => {
+      onCount: (event) => {
         if (race?.status === "racing" && !race.awardsClosed) {
           if (
             definition?.raceType === "smashAndPed" &&
@@ -2363,6 +2496,11 @@ async function loadPedestrians(text: string, loadGeneration: number) {
           }
           // Native direct-kill path calls OneLessPed/completion before scoring.
           checkRaceObjective();
+          checkSmashObjective();
+        }
+      },
+      onHit: (event) => {
+        if (race?.status === "racing" && !race.awardsClosed) {
           if (
             pedAwards &&
             race.status === "racing" &&

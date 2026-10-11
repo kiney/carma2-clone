@@ -25,19 +25,19 @@ Migration preserved all 92 numbered issues plus three distinct completed checkli
 
 At most **three tickets** may occupy `wip`. Only genuinely active work belongs there; partially implemented but inactive tasks belong in `backlog`. Several subagents working together on a single ticket count as one slot. Record dependencies separately rather than starting every related ticket. Check the WIP count before beginning work; if all slots are occupied, finish a ticket or return inactive work to `backlog` first. Moving a task does not discard its existing implementation or evidence.
 
-The three retained tickets were selected from actual source/test changes and normalized issue-description changes in the last engine commit, `83d0ba3`, rather than migration timestamps:
+The three retained tickets were originally selected from actual source/test changes and normalized issue-description changes in the last engine commit, `83d0ba3`, rather than migration timestamps:
 
-| Backlog ID | Original ID | Recent work |
+| Backlog ID | Original ID | Completed implementation |
 | --- | --- | --- |
-| TASK-19 | WLD-03 | Native resource admission, material ownership and track face collection |
-| TASK-35 | PED-03 | Canonical pedestrian proximity and bounded process/grounding state |
-| TASK-67 | REN-02 | Retaining accepted TWO_SIDED material flags during duplicate registration |
+| TASK-19 | WLD-03 | Production prepared MODEL/ACT collection, live geometry ownership and separate drivable wheel phase |
+| TASK-35 | PED-03 | Real population/group/mission counting from the native once-only OneLessPed outlet |
+| TASK-67 | REN-02 | Native Gouraud/specular coefficients, material fog/sampling and shared race-resource lifetimes |
 
 This selection records the latest work context; changing board status does not resume a paused Goal. Backlog.md 1.47.1 has no built-in configurable WIP cap. The limit is therefore enforced by the project workflow and agent policy; the CLI/browser does not automatically reject a fourth ticket.
 
 ## PED-03 scope split
 
-PED-03 / TASK-35 now owns only the small remaining integration of native `OneLessPed` with real population/group/mission counters. Its acceptance criteria require actual native contact bound to an existing population owner and real application-counter changes, plus once-only and legacy-path regressions. Recorded fixture events alone cannot close it. The full pre-split evidence remains in its historical description; no engine implementation or completion is claimed by this split.
+PED-03 / TASK-35 now owns only the small remaining integration of native `OneLessPed` with real population/group/mission counters. Its acceptance criteria require actual native contact bound to an existing population owner and real application-counter changes, plus once-only and legacy-path regressions. Recorded fixture events alone cannot close it. The full pre-split evidence remains in its historical description; the split itself did not claim engine completion. The bounded counting task is now implemented: Stock/Advanced Chromium verified real population/group/mission changes exactly once before scoring, including the original already-counted flag regression. Its deferred movement and articulated-body owners remain separate.
 
 Four larger priority-2 follow-ups are separately tracked in `backlog`:
 
@@ -50,7 +50,7 @@ Four larger priority-2 follow-ups are separately tracked in `backlog`:
 
 Existing PED-04, ANI-01, RAC-04, RAC-09 and PUP-11 retain asset, animation, reward-formula, replay and combat ownership; their descriptions clarify the extracted boundaries. Their existing priorities are unchanged. Follow-ups depend on the narrowed counting integration where appropriate; closing PED-03 does not require completing them and does not assert full native pedestrian parity. No paused Goal or broader acceptance gate is completed by changing task scope.
 
-After this split, the board contains 99 tasks: 63 in `backlog`, 0 in `next`, 3 in `wip`, and 33 in `done`. The WIP limit remains 3.
+The split produced 99 tasks. After completing the three selected WIP tickets, the board contains 63 in `backlog`, 0 in `next`, 0 in `wip`, and 36 in `done`. The WIP limit remains 3. This completion does not resume or complete a paused broader Goal.
 
 ## Priorities and sorting
 

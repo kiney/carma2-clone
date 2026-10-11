@@ -6,7 +6,9 @@
 FORM/PHIL resource host, source move transition and halt/completion kernels.
 It owns gameplay state and ordered continuations. It does not produce a second
 physical launch, allocate a generic corpse, or derive damage from visual proximity.
-Production population wiring remains the owning pedestrian system's task.
+`PedestrianSystem` now shares counting between ordinary sweep/combat deaths and
+explicitly bound native owners. Full native population physical/pose admission
+remains separate work.
 
 Work tracking after the 2026-10-11 scope split: PED-03 / TASK-35 is the bounded
 `OneLessPed` integration with real population/group/mission counters, including
@@ -19,6 +21,74 @@ actual contact cause/retained award inputs and effect-consumer binding. Actor
 selection, full BON/SKL playback and replay remain PED-04, ANI-01 and RAC-09.
 The broader evidence and limitations below continue to apply to those tasks;
 completion of the smaller counting bridge will not claim full pedestrian parity.
+
+## Shared population counting
+
+`src/ped-population-accounting.ts` owns the authored population actor identity,
+original spawn group and source `0x100` count flag independently of physical
+death state. `hits`, `alive` and `groupCounts` read that one ledger. Ordinary
+sweep/combat deaths call it before their score event; the inactive burning
+score-only branch retains `count=0` and consumes neither overall nor group
+counts. Previously group counts used the visual `alive` flag and incorrectly
+consumed a group member on this score-only branch.
+
+`PedestrianSystem.bindNativeCountingOwner(owner,actor,character)` requires an
+existing authored population actor and a unique native owner/character binding.
+It carries any existing population count flag into the native character and
+already allocated body, so an ordinary death cannot later count again through
+native Kill. Native
+`onOneLessPed` calls `oneLessNativePed(owner,character,timeMs)` after Kill has
+set the actual character flag. The native wrapper's installed `0x100` gate
+continues to decide whether the outlet runs; the shared actor flag prevents
+duplicate consumption across outlets. Counters commit before `onCount`, which
+feeds main's existing group mission-variable and objective consumers. Native
+score continuation therefore observes the committed counters and any race
+completion. The counting callback does not call the estimated visual
+kill/launch/blood routine or fabricate retained award inputs.
+
+A bound counting actor rejects competing ordinary kills; after native counting
+it bypasses ordinary corpse transport. Binding does not admit FORM/PHIL bodies,
+synchronize movement or render poses, provide contact awards, sever resources
+or create an extra visual corpse. Native resource release retains counting
+identity. Race reset clears bindings and counts; a later native physical owner
+must explicitly bind its fresh character. PED-06 still owns general admission
+and reset/reload lifecycle migration.
+
+The browser harness uses a real existing `PedestrianSystem` actor as native
+owner with controlled original Blokebl FORM/PHIL admission. Its original actor
+name and spawn group remain recorded. It configures a controlled SmashAndPed
+objective through the live application definition and real `MissionVariables`,
+then drives the player into the native body with keyboard W. Required assertions
+read actual application hits/alive/all group counters, objective completion and
+mission value in the count outlet and subsequent native score outlet. Event
+traces alone do not satisfy counting acceptance. The ordinary representation
+of this selected fixture is hidden to avoid drawing it twice; this controlled
+resource substitution is not a claim of full authored population migration.
+Ordinary population actors are placed outside the controlled drive's process
+range while their real census and group identities remain intact. This isolates
+the native owner's delta from unrelated visual sweep hits along the drive.
+The separately controlled grouped-contact sever fixture binds another authored
+counting actor with preexisting native `0x100`. It must still sever, die and
+score, while producing no count outlet and leaving real population/group/mission
+state unchanged. That source-gate fixture retains its explicit non-keyboard,
+direct grouped-damage scope.
+The score outlet records real objective completion first, then explicitly
+resumes this controlled fixture's racing phase with a higher objective target
+for the independent corpse quiet/release checks. Completed races stop the
+application vehicle simulation; leaving the one-ped test objective completed
+would prevent that unrelated physical continuation from advancing.
+
+Validation on 2026-10-11: four shared-accounting tests, three ordinary population
+tests, eleven combat integration tests and thirty native gameplay tests passed,
+along with the TypeScript check. The Stock/Advanced Chromium harness passed:
+each real census retained 791 actors, hits changed 0→1 and alive 791→790;
+`ped-cityswat-0` retained original group65, whose killed count changed 0→1.
+The group totals288/369/134 remained unchanged. Real mission variable998 changed
+0→1 and objective completion was visible before native score. The gated sever
+fixture retained all counters and mission state. Existing quiet/release checks
+passed after the explicit racing-phase resume. Closeup images showed the native
+dead-model actor on the road. JavaScript, HTTP/request and WebGL error counts
+were zero. Ignored report and screenshots are under `artifacts/`.
 
 Installed HW SHA256 is
 `698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c`;
@@ -194,10 +264,11 @@ It must not use identity under those conditions. An
 attempt that could sever these legs requires that provider before RNG.
 Exploding/nonhumanoid/articulated severing, retained joint2, replay,
 nonordinary move completion, full active blood/scrape and low-gravity moved
-continuations remain explicit. `onOneLessPed`/`onScoreDeath` own race missions,
-shared awards/combo/earned-credit consumers and feedback, using the cache and
-source event clock. The existing estimated PedestrianSystem kill/launch method
-must not be used unchanged as this native tail.
+continuations remain explicit. `onOneLessPed` uses the shared population counting
+outlet for race missions. `onScoreDeath` still requires native shared
+awards/combo/earned-credit consumers and feedback, using the cache and source
+event clock. The estimated PedestrianSystem kill/launch method is not used by
+this native counting tail.
 
 Focused tests execute actual subtests with `node --import tsx`, including real
 FORM/PHIL activation, ordered prelude/common/caller effects, literal `.4f` Kill,
@@ -206,7 +277,7 @@ provider preflight, raw-speed moved periods, halt and actual one-shot BON
 completion. Stock and Advanced Blokebl/Bandsman share real BIPED1 resources,
 independent gameplay caches and prepared dead models; original tests skip when
 installation data is absent. Numerical fixtures are redistributable synthetic
-inputs. Browser population integration and completion of PED-03 are not claimed.
+inputs. General native physical population admission remains PED-06.
 
 The scan-order regression preserves a later action/move chosen by the actual
 object-scan outlet after halt starts running; committing an earlier kernel
@@ -247,3 +318,16 @@ cache, actual grounding collector, living recovery and articulated/gib/replay
 effect owners remain separate integration work. No missing effect is accepted
 through a blanket no-op; explicitly disabled recording means no replay recorder
 is active, rather than a physical-status change.
+
+The final WIP acceptance rerun passed Stock and Advanced counting/mission,
+corpse quieting and allocation release with no unsupported outlets or
+JavaScript, request or WebGL errors. A newly exercised recovery outlet exposed
+a missing test-fixture provider; the harness now binds the actual
+`NativePedGrounding` borrowed-slot release owner. A controlled release packet
+using a copied original road face verifies that process `+b0`, slot ownership
+and pool lookup clear while process identity, selected/copied records, ring
+order, retained floor and direction survive. Physical contact/volume caches
+are separate owners. Full grounding visits remain outside this counting
+fixture and explicitly reject accidental invocation; this does not close
+PED-07. The integrated headless suite passed all 2,542 tests and the production
+build passed.

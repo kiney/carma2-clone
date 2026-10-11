@@ -88,16 +88,58 @@ Opaque host MAT records do not claim native field serialization. These gaps can
 change pointer-sorted prepared-group order and finite collector prefixes; see
 [resource arena](c2-native-resource-arena-re.md).
 
-The current scene registry is scoped to one scene, rather than the complete
-native global BRender registry and persistent shared storage lifetimes. Native
-car material shading updates, the extra master-actor material, and later
-identifier-prefix mutation are separate loader behavior; this admission change
-does not implement them. Native batch Glorify mutations are also not implied by
-parsing a MAT or allocating its host record.
+The Assets-owned global MAT/MODEL registries now retain registrations across
+scene loads, with exact admission scoped to explicit shared storage keys.
+Startup REG material/model resources are now admitted from their actual files
+into persistent storage. Installed `DRLoadMaterials(0x48f020)` clears LIGHT and
+uses direct `BrMaterialAddMany`, bypassing track storage duplicate rejection;
+`DRLoadModels(0x48f080)` whitens ordinary vertex RGB, overwrites flags with
+UPDATEABLE and registers the real three common powerup MODELs. This includes the
+`&70POWERUP1.ACT` fallback missing from Junknet's race DATs. Startup resources
+remain live after race storage teardown. Each MODEL's captured MAT-index table
+is exposed as `sourceModelMaterialBindings`: it records load-time lookup
+pointers/NULLs, so subsequent global registrations cannot silently rebind faces.
+Opponent loads can share their storage. Race teardown removes scene-owned
+registrations and frees arena/GPU resources; generated default-track and black
+materials remain persistent. See [material rendering](c2-native-material-render-re.md)
+for shading/fog, source identity preservation and the two clone ownership modes.
+The extra car master-actor material and later identifier-prefix mutation remain
+separate loader behavior. Pixelmap and shade-table registries still use the
+existing host lookup adapter; this is not complete global BRender ownership for
+every resource class.
 
-Initial authored ACT ownership is available, but returning storage/crosswalks
-does not execute every native load callback, prepare MODEL resources, or install
-the original prepared-face physics collector. Generated default-track MAT and
-black MAT identities, their allocation/lifetime, and actual callback owners must
-remain explicit when integrating that collector. The generic renderer fallback
-is a separate material and cannot stand in for these native resources.
+Initial authored ACT ownership feeds the production `prepareNativeWorldScene`
+load owner and `WorldCollision.collectFaces` prepared-face query. See the
+[production collector](c2-wld-production-collector-re.md) for load callbacks,
+model preparation and the remaining host-allocation/address limitations.
+Generated default-track and black MATs are explicit persistent identities in the
+shared arena. Changing-powerup global MODEL copies additionally lease the exact
+borrowed MAT identities through `Assets.retainNativeMaterial`: storage lookup is
+still removed, but leased arena/render/texture resources remain live. This host
+policy deliberately avoids the original's possible stale pointers and heap
+address reuse; see [material ownership](c2-native-material-render-re.md). Native NULL material slots retain inheritance; a renderer helper
+cannot replace those identities in the physics collector.
+
+Installed `FopRead_MATERIAL_INDEX(0x522a40)` stores the exact return from
+`BrMaterialFind(0x51e4e0)` at `0x522a9b`, including NULL. `FopRead_FACE_MATERIAL`
+copies the selected table entry at `0x522e18..1f`; ACT material loading stores
+the same lookup return at `0x52316e`. An authoritative completed registry lookup
+returning no resource is therefore a resolved native NULL, not a missing
+provider. Missing provider callbacks remain separate failures.
+
+Advanced Desert's literal `!/75WATER` MAT is admitted in `DESERT_mission.mat`,
+but a lookup with that literal returns NULL: slash dispatch in
+`BrNamePatternMatch(0x528ea0)` reaches `0x528f0c`, which requires the candidate's
+current character to be NUL. The candidate still contains `/75WATER`. The model
+`15 8` has a nonzero raw DAT index for this name; renderer binding now retains
+that raw index while applying native NULL/actor/default inheritance. It does
+not normalize the slash or fabricate a replacement MAT. The Advanced Desert
+DAT inventory has exactly this one failed named lookup.
+
+Generated black is identified as `Simple`, rather than the input selector
+`M14.MAT`, and has the actual closest palette index/range zero. Installed
+`0x47e062` (default track) and `0x488d7c` (black Simple) both call
+`BrMaterialAdd(0x51e490)`; these are genuine global entries, separate from the
+startup SIMPMAT file's `M14.MAT` identity. See
+[material ownership](c2-native-material-render-re.md) for retained texture and
+geometry teardown checks.

@@ -136,7 +136,11 @@ test("ACT scene objects retain raw actor metadata without changing effective sty
     "parent-material",
   );
   assert.equal(faceChild.userData.c2ActorLocalMaterialName, null);
-  assert.equal(faceChild.userData.c2ActorMaterialName, "parent-material");
+  assert.equal(
+    faceChild.userData.c2ActorMaterialName,
+    null,
+    "a completed NULL material lookup inherits the default, not an unresolved name",
+  );
   assert.equal(faceChild.userData.c2ActorLocalModelName, null);
   assert.deepEqual(nativeBounds.userData.c2ActorBounds, {
     min: [-2, -3, -4],
@@ -199,6 +203,7 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
       t.skip(`required Stock/Advanced ACT is unavailable: ${dir}/${stem}.act`);
       return;
     }
+    const previousLiveMaterials = assets.materialArena.liveCount;
     const [scene, roots] = await Promise.all([
       assets.scene(dir, stem),
       assets.bytes(assets.resolve(`${dir}/${stem}.act`)).then(parseAct),
@@ -235,7 +240,10 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
         );
       }
     assert.deepEqual(scene.sourceMaterialStorage, expectedStorage);
-    assert.equal(scene.materialArena.liveCount, expectedStorage.length);
+    assert.equal(
+      scene.materialArena.liveCount,
+      previousLiveMaterials + expectedStorage.length,
+    );
     for (const episode of scene.sourceMaterialEpisodes)
       assert.equal(
         scene.materialArena.materialAddress(episode.material).resolved,

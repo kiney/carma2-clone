@@ -13,6 +13,7 @@ import {
   Vector3,
 } from "three";
 import type { DatModel } from "./formats";
+import { copyNativeTextureSampling } from "./native-material-render";
 import {
   resolveFollowupActorSpec,
   type FollowupFace,
@@ -78,6 +79,8 @@ export interface WorldDestructionAssets {
   textures?: ReadonlyMap<string, Texture>;
   models?: ReadonlyMap<string, DestructionModelAsset>;
   materials?: ReadonlyMap<string, Material>;
+  /** Preserve native MAT identity, shader state and resource ownership. */
+  cloneMaterial?: (material: Material) => Material;
   /** Synchronous resolver; callers can preload requiredModels before play. */
   resolveModel?: (name: string) => DestructionModelAsset | undefined;
   random?: () => number;
@@ -385,6 +388,9 @@ function writeFaces(mesh: Mesh, data: MeshData): void {
     (f) => f.collisionMode,
   );
   geometry.userData.worldSmashSourceFaces = data.faces.map((f) => f.sourceFace);
+  geometry.userData.c2RawFaceMaterials = data.faces.map(
+    (face) => face.material.userData.c2SourceMaterial ?? null,
+  );
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
   mesh.geometry = geometry;
@@ -1040,7 +1046,10 @@ export class WorldDestruction {
         return;
       }
     }
-    const material = old?.material ?? original.material.clone();
+    const material =
+      old?.material ??
+      this.assets.cloneMaterial?.(original.material) ??
+      original.material.clone();
     if (!old) {
       this.ownedMaterials.add(material);
       material.userData.worldSmashOriginalMaterial = original.originalMaterial;
@@ -1242,6 +1251,7 @@ export class WorldDestruction {
     const map = texture.clone();
     map.matrixAutoUpdate = false;
     map.matrix.identity();
+    copyNativeTextureSampling(map, patch.material);
     map.needsUpdate = true;
     this.ownedTextures.add(map);
     const material = patch.material;

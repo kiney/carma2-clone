@@ -100,7 +100,6 @@ import type {
   WorldGrooveRuntime,
   WorldGrooveEvaluationOptions,
 } from "../world-groove";
-import { cameraTriangleInBox } from "../camera/triangle-box";
 import type { WorldSparkSource } from "../sparks";
 import { nativeWorldSparkSource } from "./world-sparks";
 import type { CarSparkSource } from "../car-sparks";
@@ -140,7 +139,7 @@ import {
   redistributeNativeCrashDamage,
   nativeCrashDamageAward,
 } from "./crash-components";
-import type { WorldCollision, Surface } from "../world";
+import { WorldCollision, type Surface } from "../world";
 import {
   applyVehicleForces,
   createMotionParameters,
@@ -1242,48 +1241,52 @@ export class VehicleSimulation {
     }
     return faces;
   }
-  /** Finite ModelPickBox emission precedes eligibility/material filtering.
-   * querySurfaces supplies prepared triangle order; original packed column /
-   * model-group traversal order is still a separate world-loader limitation. */
+  /** Native finite emission and ACT callbacks run before eligibility filtering. */
   private collectWorldFaces(
     query: NativeWorldFaceQuery,
     maximum: number,
     gatherModels: boolean,
   ): Surface[] {
-    if (!gatherModels || maximum === 0) return [];
-    const worldBounds = query.bounds.clone().applyMatrix4(query.matrix);
-    const inverse = query.matrix.clone().invert();
-    const collected: Surface[] = [];
-    for (const surface of this.world.querySurfaces(
-      worldBounds.min,
-      worldBounds.max,
-      true,
-    )) {
-      if (
-        !cameraTriangleInBox(
-          [surface.a, surface.b, surface.c].map((point) =>
-            point.clone().applyMatrix4(inverse),
-          ),
-          query.bounds.min,
-          query.bounds.max,
+    const collect =
+      this.world.collectFaces ?? WorldCollision.prototype.collectFaces;
+    const collected = collect.call(this.world, query, maximum, gatherModels, {
+      pullActorFromWorld: (actor) => this.pullWorldActor(actor),
+      stopGroovidelic: (actor) => this.stopCollectedWorldActor(actor),
+      onFace: (surface) => {
+        if (
+          surface.owner &&
+          "kind" in surface.owner &&
+          surface.owner.kind === "moving-world"
         )
-      )
-        continue;
-      collected.push(surface);
-      if (
-        surface.owner &&
-        "kind" in surface.owner &&
-        surface.owner.kind === "moving-world"
-      )
-        this.collectedMovingWorldPoses.set(
-          surface,
-          captureMovingWorldPose(surface.owner as MovingWorldBody),
-        );
-      if (collected.length === maximum) break;
-    }
-    this.stopGroovesForCollectedFaces(collected);
+          this.collectedMovingWorldPoses.set(
+            surface,
+            captureMovingWorldPose(surface.owner as MovingWorldBody),
+          );
+      },
+    });
+    if (!this.world.nativeScene) this.stopGroovesForCollectedFaces(collected);
     return collected;
   }
+  private stopCollectedWorldActor(actor: Object3D): void {
+    if (!this.worldGrooveFrameActive || !this.grooves) return;
+    if (this.grooves.stopActor(actor, this.worldGrooveOptions)) {
+      this.prepareMovingWorldPoses();
+      this.world.refreshDynamic?.();
+    }
+  }
+  private pullWorldActor(actor: Object3D): object | null {
+    if (!this.physicsQueryDepth) return null;
+    const body = this.noncars.find((body) => body.actor === actor);
+    if (!body || actor.userData.noncarPulled) return null;
+    if (!this.admitPulledNonCar(body)) return null;
+    actor.userData.noncarPulled = true;
+    actor.userData.c2ActorTypeData = body;
+    body.state.velocity.set(0, 0, 0);
+    body.state.angularVelocity.set(0, 0, 0);
+    this.dormantPoses.delete(body);
+    return body;
+  }
+  private physicsQueryDepth = 0;
   /** ActorBoxPick calls once per model that emitted at least one face. */
   private stopGroovesForCollectedFaces(surfaces: readonly Surface[]): void {
     if (!this.worldGrooveFrameActive || !this.grooves) return;
@@ -2019,7 +2022,9 @@ export class VehicleSimulation {
     // Native WheelForces has a separate drivable physics-object pass. Keep
     // that existing finite dynamic query, without admitting static faces that
     // did not survive the shared ring's finite collection/capacity.
-    const dynamic = this.world.wheelRaycast?.(origin, direction, maxDistance);
+    const dynamic = this.world.drivableWheelRaycast
+      ? this.world.drivableWheelRaycast(origin, direction, maxDistance)
+      : this.world.wheelRaycast?.(origin, direction, maxDistance);
     if (
       dynamic?.body &&
       !("kind" in dynamic.body && dynamic.body.kind === "moving-world") &&
@@ -4398,534 +4403,553 @@ export class VehicleSimulation {
   }
   step() {
     this.onBeforeStep?.();
-    for (const car of this.cars)
-      if (car.human && this.isCarPhysicsActive(car))
-        this.lastCrashStepVelocity.set(car, car.state.velocity.clone());
-    // Native skid threshold compares against gProgram_state.current_car,
-    // rather than driver type. Keep the shared force context tied to this world.
-    this.motionContext.currentCar = this.cars.find((car) => car.human)?.state;
-    this.elapsed += PHYSICS_STEP;
-    this.prepareMovingWorld();
-    // Destruction/queued connotations share GetTotalTime's gameplay clock.
-    // Physics elapsed can be fractional or ahead of the rendered frame.
-    this.destruction?.update(this.smashClock());
-    if (!this.collectingOrdinaryCrush)
-      this.worldActivations.update(this.smashClock());
-    this.mines.process(this.elapsed * 1000, (event) =>
-      this.handleMineEvent(event),
-    );
-    this.world.refreshDynamic?.();
-    // Direct diagnostic steps retain an explicit standalone placement adapter.
-    // Production and outer-window callers use the post-graphics frame phase.
-    if (!this.collectingOrdinaryCrush) this.processOilFrame();
-    const previousVelocities = new Map(
-      this.cars
-        .filter((car) => this.isCarPhysicsActive(car))
-        .map((car) => [car, car.state.velocity.clone()]),
-    );
-    for (const car of this.cars) {
-      if (!this.isCarPhysicsActive(car)) continue;
-      if (!(car.damage.pendingShapeSwapFlags & 1))
-        car.repairAwaitingShapeSwap = false;
-      if (
-        car.repairing &&
-        !car.repairAwaitingShapeSwap &&
-        !car.knackered &&
-        !car.damage.wasted
-      ) {
-        const repair = car.damage.repairStep(
-          PHYSICS_STEP * 1000,
-          this.settings
-            ? skillValue(this.settings.repairCost, { skill: this.skill })
-            : 10,
-        );
-        car.smokeLastComponentLevels.set(car.damage.componentLevels);
-        this.onStopCarSmoke?.(car);
-        car.repairAwaitingShapeSwap =
-          repair.bodyworkRepair > 0 && !!(car.damage.pendingShapeSwapFlags & 1);
-        this.onRepair?.(
-          car,
-          repair.cost,
-          repair.cost === 0 && repair.bodyworkRepair === 0,
-        );
-      }
-      this.syncStructuralState(car);
-      car.state.steeringDamageCurvature = car.damage.steeringDamageCurvature;
-      car.state.wheelEnabled = car.damage.splitRuntime?.wheelMask;
-      car.state.componentDamage = Array.from(car.damage.componentLevels);
-      // Car force preparation refreshes faces BEFORE TestAutoSpecialVolume.
-      // Generic PHIL objects retain their existing force-before-collision
-      // phase; their last plane changes only when collision collection runs.
-      this.facesNearBody(car, car.hulls);
-      const environment = this.updateSpecialVolume(car);
-      const factors = volumeMotionFactors(
-        environment.volume,
-        environment.depth,
-        car.state.underwaterAbility,
+    this.physicsQueryDepth++;
+    try {
+      for (const car of this.cars)
+        if (car.human && this.isCarPhysicsActive(car))
+          this.lastCrashStepVelocity.set(car, car.state.velocity.clone());
+      // Native skid threshold compares against gProgram_state.current_car,
+      // rather than driver type. Keep the shared force context tied to this world.
+      this.motionContext.currentCar = this.cars.find((car) => car.human)?.state;
+      this.elapsed += PHYSICS_STEP;
+      this.prepareMovingWorld();
+      // Destruction/queued connotations share GetTotalTime's gameplay clock.
+      // Physics elapsed can be fractional or ahead of the rendered frame.
+      this.destruction?.update(this.smashClock());
+      if (!this.collectingOrdinaryCrush)
+        this.worldActivations.update(this.smashClock());
+      this.mines.process(this.elapsed * 1000, (event) =>
+        this.handleMineEvent(event),
       );
-      car.state.volumeGravityFactor = factors.gravity;
-      car.state.globalGravityMultiplier = this.gravityMultiplier;
-      car.state.settlingVolumeGravity = environment.volume
-        ? car.state.underwaterAbility &&
-          (car.state.driver ?? (car.human ? 8 : 6)) > 5
-          ? 1 - (1 - environment.volume.gravityMultiplier) * 0.6
-          : environment.volume.gravityMultiplier
-        : undefined;
-      car.state.volumeDragFactor = factors.drag;
-      const materialIndex =
-        environment.volume === environment.automatic && environment.automatic
-          ? 10
-          : factors.materialModifierIndex;
-      car.state.volumeSurface =
-        materialIndex !== 0 ? this.world.modifier?.(materialIndex) : undefined;
-      if (car.damage.splitRuntime?.disableMotion) {
-        // Source car+18c8: XZ-snapped primary skips control and WheelForces;
-        // both halves are free bodies. Gravity remains active.
-        this.applyFreeBodyForces(car);
-        car.state.rpm = 0;
-        car.debug = undefined;
-      } else {
-        if (car.knackered && !car.human)
-          car.state.accForce = car.state.brakeForce = 0;
-        car.debug = applyVehicleForces(
-          car.state,
-          {
-            throttle:
-              car.knackered || !car.human ? 0 : Math.max(0, car.input.throttle),
-            steer: !car.human ? 0 : car.input.steer,
-            brake: !car.human
-              ? 0
-              : Math.max(
-                  Number(car.input.brake),
-                  car.knackered ? 0 : -car.input.throttle,
-                ),
-            handbrake: car.human && !!car.input.handbrake,
-          },
-          PHYSICS_STEP,
-          car.motion,
-          this.oilGround(car),
-          this.motionContext,
+      this.world.refreshDynamic?.();
+      this.world.setDrivableOwnerOrder?.(this.phil.registeredBodies);
+      // Direct diagnostic steps retain an explicit standalone placement adapter.
+      // Production and outer-window callers use the post-graphics frame phase.
+      if (!this.collectingOrdinaryCrush) this.processOilFrame();
+      const previousVelocities = new Map(
+        this.cars
+          .filter((car) => this.isCarPhysicsActive(car))
+          .map((car) => [car, car.state.velocity.clone()]),
+      );
+      for (const car of this.cars) {
+        if (!this.isCarPhysicsActive(car)) continue;
+        if (!(car.damage.pendingShapeSwapFlags & 1))
+          car.repairAwaitingShapeSwap = false;
+        if (
+          car.repairing &&
+          !car.repairAwaitingShapeSwap &&
+          !car.knackered &&
+          !car.damage.wasted
+        ) {
+          const repair = car.damage.repairStep(
+            PHYSICS_STEP * 1000,
+            this.settings
+              ? skillValue(this.settings.repairCost, { skill: this.skill })
+              : 10,
+          );
+          car.smokeLastComponentLevels.set(car.damage.componentLevels);
+          this.onStopCarSmoke?.(car);
+          car.repairAwaitingShapeSwap =
+            repair.bodyworkRepair > 0 &&
+            !!(car.damage.pendingShapeSwapFlags & 1);
+          this.onRepair?.(
+            car,
+            repair.cost,
+            repair.cost === 0 && repair.bodyworkRepair === 0,
+          );
+        }
+        this.syncStructuralState(car);
+        car.state.steeringDamageCurvature = car.damage.steeringDamageCurvature;
+        car.state.wheelEnabled = car.damage.splitRuntime?.wheelMask;
+        car.state.componentDamage = Array.from(car.damage.componentLevels);
+        // Car force preparation refreshes faces BEFORE TestAutoSpecialVolume.
+        // Generic PHIL objects retain their existing force-before-collision
+        // phase; their last plane changes only when collision collection runs.
+        this.facesNearBody(car, car.hulls);
+        const environment = this.updateSpecialVolume(car);
+        const factors = volumeMotionFactors(
+          environment.volume,
+          environment.depth,
+          car.state.underwaterAbility,
         );
-        this.onWheelMarks?.(car);
+        car.state.volumeGravityFactor = factors.gravity;
+        car.state.globalGravityMultiplier = this.gravityMultiplier;
+        car.state.settlingVolumeGravity = environment.volume
+          ? car.state.underwaterAbility &&
+            (car.state.driver ?? (car.human ? 8 : 6)) > 5
+            ? 1 - (1 - environment.volume.gravityMultiplier) * 0.6
+            : environment.volume.gravityMultiplier
+          : undefined;
+        car.state.volumeDragFactor = factors.drag;
+        const materialIndex =
+          environment.volume === environment.automatic && environment.automatic
+            ? 10
+            : factors.materialModifierIndex;
+        car.state.volumeSurface =
+          materialIndex !== 0
+            ? this.world.modifier?.(materialIndex)
+            : undefined;
+        if (car.damage.splitRuntime?.disableMotion) {
+          // Source car+18c8: XZ-snapped primary skips control and WheelForces;
+          // both halves are free bodies. Gravity remains active.
+          this.applyFreeBodyForces(car);
+          car.state.rpm = 0;
+          car.debug = undefined;
+        } else {
+          if (car.knackered && !car.human)
+            car.state.accForce = car.state.brakeForce = 0;
+          car.debug = applyVehicleForces(
+            car.state,
+            {
+              throttle:
+                car.knackered || !car.human
+                  ? 0
+                  : Math.max(0, car.input.throttle),
+              steer: !car.human ? 0 : car.input.steer,
+              brake: !car.human
+                ? 0
+                : Math.max(
+                    Number(car.input.brake),
+                    car.knackered ? 0 : -car.input.throttle,
+                  ),
+              handbrake: car.human && !!car.input.handbrake,
+            },
+            PHYSICS_STEP,
+            car.motion,
+            this.oilGround(car),
+            this.motionContext,
+          );
+          this.onWheelMarks?.(car);
+        }
       }
-    }
-    this.debris = this.debris.filter((body) => {
-      if (this.attachedToInactiveCar(body)) return true;
-      if (body.splitRevision !== undefined) {
-        if (body.owner.damage.splitRuntime?.actor !== body.actor) {
+      this.debris = this.debris.filter((body) => {
+        if (this.attachedToInactiveCar(body)) return true;
+        if (body.splitRevision !== undefined) {
+          if (body.owner.damage.splitRuntime?.actor !== body.actor) {
+            this.phil.remove(body);
+            return false;
+          }
+          this.applyFreeBodyForces(body);
+          return true;
+        }
+        const part = body.owner.damage.runtimeParts[body.part];
+        if (part.state.phase === 0) {
           this.phil.remove(body);
           return false;
         }
+        if (body.joint) {
+          const relative = body.joint.parent.state.orientation
+            .clone()
+            .invert()
+            .multiply(body.state.orientation);
+          const outside = jointAllowsSeparation(
+            body.joint.planeLimits.map((limit) => ({
+              parent: limit.parentNormal.toArray(),
+              childInParent: limit.childDirection
+                .clone()
+                .applyQuaternion(relative)
+                .toArray(),
+            })),
+          );
+          if (shouldFullyDetachPart(part.state, this.elapsed * 1000, outside)) {
+            part.state.phase = 2;
+            body.joint = undefined;
+          }
+        }
         this.applyFreeBodyForces(body);
         return true;
-      }
-      const part = body.owner.damage.runtimeParts[body.part];
-      if (part.state.phase === 0) {
-        this.phil.remove(body);
-        return false;
-      }
-      if (body.joint) {
-        const relative = body.joint.parent.state.orientation
-          .clone()
-          .invert()
-          .multiply(body.state.orientation);
-        const outside = jointAllowsSeparation(
-          body.joint.planeLimits.map((limit) => ({
-            parent: limit.parentNormal.toArray(),
-            childInParent: limit.childDirection
-              .clone()
-              .applyQuaternion(relative)
-              .toArray(),
-          })),
-        );
-        if (shouldFullyDetachPart(part.state, this.elapsed * 1000, outside)) {
-          part.state.phase = 2;
-          body.joint = undefined;
-        }
-      }
-      this.applyFreeBodyForces(body);
-      return true;
-    });
-    for (const body of this.noncars) {
-      if (this.disabledWorldActor(body) || this.attachedToInactiveCar(body)) {
-        this.noncarQuiet.delete(body);
-        continue;
-      }
-      finalizeNonCarRelease(body);
-      const supportedQuiet =
-        supportsNativeNonCarQuiet(body).supported &&
-        !!body.actor.userData.noncarPulled;
-      let quietState = this.noncarQuiet.get(body);
-      if (!supportedQuiet && quietState) {
-        this.noncarQuiet.delete(body);
-        quietState = undefined;
-      } else if (supportedQuiet && !quietState) {
-        quietState = createNativeNonCarQuiet(body);
-        this.noncarQuiet.set(body, quietState);
-      }
-      if (quietState?.doNothing) {
-        prepareNativeNonCarQuiet(body, quietState, new Vector3());
-        body.properties.immovable = true;
-        body.collisionFlags = 0;
-        continue;
-      }
-      if (body.motor.sleeping && body.motor.pauseUntilMs === 0) continue;
-      const environment = this.updateSpecialVolume(body);
-      const beforeForces = body.state.velocity.clone();
-      applyNonCarMotionForces(body.mechanics, body, body.motor, {
-        nowMs: this.elapsed * 1000,
-        previousVelocity: body.previousVelocity,
-        collisionFlags: body.collisionFlags,
-        // Native NonCarCalcForce uses raw volume gravity, without depth or
-        // the global pickup multiplier; motor thrust remains independent.
-        gravityScale: environment.volume?.gravityMultiplier ?? 1,
       });
-      body.properties.immovable = body.motor.sleeping;
-      if (quietState)
-        prepareNativeNonCarQuiet(
-          body,
-          quietState,
-          body.state.velocity.clone().sub(beforeForces),
-        );
-      body.collisionFlags = 0;
-    }
-    for (const body of this.mineBodies)
-      if (!(body.mine.flags & MINE_FLAGS.exploded))
-        this.applyFreeBodyForces(body);
-    this.preparePedPhysics();
-    this.preparePedBonePhysics();
-    const bodies = this.allBodies();
-    prepareJointVelocities(this.allJoints());
-    for (const body of this.noncars)
-      body.previousVelocity.copy(body.state.velocity);
-    for (const body of bodies) {
-      body.overlapDetected = false;
-      body.worldOverlapDetected = false;
-      candidate(body, PHYSICS_STEP);
-    }
-    const restartGroups: Set<SimulationBody>[] = [];
-    const beforeApply = (
-      impacts: ContactImpact[],
-      jointImpacts: JointConstraintImpact[],
-    ) => {
-      const accepted = this.processImpactDamage(
-        impacts,
-        jointImpacts,
-        restartGroups,
-      );
-      if (accepted !== false) this.processPedContactDamage(impacts);
-      return accepted;
-    };
-    const joints = this.allJoints();
-    this.lastImpacts = resolveContactGroups(
-      this.preparePedContacts(this.collectContacts(bodies)),
-      PHYSICS_STEP,
-      joints,
-      beforeApply,
-    );
-    // Source split invalidates the old contact solve. Rebuild the changed group
-    // immediately, with the original 30-pass guard, before advancing this tick.
-    const restartCounts = new Map<SimulationBody, number>();
-    const resolveRestarts = () => {
-      while (restartGroups.length) {
-        const members = restartGroups.shift()!;
-        const changed = [...members].filter(
-          (body) => "hulls" in body && !this.disabledWorldActor(body),
-        );
-        if (changed.some((body) => (restartCounts.get(body) ?? 0) >= 30))
+      for (const body of this.noncars) {
+        if (this.disabledWorldActor(body) || this.attachedToInactiveCar(body)) {
+          this.noncarQuiet.delete(body);
           continue;
-        for (const body of changed)
-          restartCounts.set(body, (restartCounts.get(body) ?? 0) + 1);
-        for (const body of changed) candidate(body, PHYSICS_STEP);
-        const changedJoints = [...this.debris, ...this.noncars].flatMap((b) =>
-          b.joint && members.has(b) ? [b.joint] : [],
+        }
+        finalizeNonCarRelease(body);
+        const supportedQuiet =
+          supportsNativeNonCarQuiet(body).supported &&
+          !!body.actor.userData.noncarPulled;
+        let quietState = this.noncarQuiet.get(body);
+        if (!supportedQuiet && quietState) {
+          this.noncarQuiet.delete(body);
+          quietState = undefined;
+        } else if (supportedQuiet && !quietState) {
+          quietState = createNativeNonCarQuiet(body);
+          this.noncarQuiet.set(body, quietState);
+        }
+        if (quietState?.doNothing) {
+          prepareNativeNonCarQuiet(body, quietState, new Vector3());
+          body.properties.immovable = true;
+          body.collisionFlags = 0;
+          continue;
+        }
+        if (body.motor.sleeping && body.motor.pauseUntilMs === 0) continue;
+        const environment = this.updateSpecialVolume(body);
+        const beforeForces = body.state.velocity.clone();
+        applyNonCarMotionForces(body.mechanics, body, body.motor, {
+          nowMs: this.elapsed * 1000,
+          previousVelocity: body.previousVelocity,
+          collisionFlags: body.collisionFlags,
+          // Native NonCarCalcForce uses raw volume gravity, without depth or
+          // the global pickup multiplier; motor thrust remains independent.
+          gravityScale: environment.volume?.gravityMultiplier ?? 1,
+        });
+        body.properties.immovable = body.motor.sleeping;
+        if (quietState)
+          prepareNativeNonCarQuiet(
+            body,
+            quietState,
+            body.state.velocity.clone().sub(beforeForces),
+          );
+        body.collisionFlags = 0;
+      }
+      for (const body of this.mineBodies)
+        if (!(body.mine.flags & MINE_FLAGS.exploded))
+          this.applyFreeBodyForces(body);
+      this.preparePedPhysics();
+      this.preparePedBonePhysics();
+      const bodies = this.allBodies();
+      prepareJointVelocities(this.allJoints());
+      for (const body of this.noncars)
+        body.previousVelocity.copy(body.state.velocity);
+      for (const body of bodies) {
+        body.overlapDetected = false;
+        body.worldOverlapDetected = false;
+        candidate(body, PHYSICS_STEP);
+      }
+      const restartGroups: Set<SimulationBody>[] = [];
+      const beforeApply = (
+        impacts: ContactImpact[],
+        jointImpacts: JointConstraintImpact[],
+      ) => {
+        const accepted = this.processImpactDamage(
+          impacts,
+          jointImpacts,
+          restartGroups,
         );
+        if (accepted !== false) this.processPedContactDamage(impacts);
+        return accepted;
+      };
+      const joints = this.allJoints();
+      this.lastImpacts = resolveContactGroups(
+        this.preparePedContacts(this.collectContacts(bodies)),
+        PHYSICS_STEP,
+        joints,
+        beforeApply,
+      );
+      // Source split invalidates the old contact solve. Rebuild the changed group
+      // immediately, with the original 30-pass guard, before advancing this tick.
+      const restartCounts = new Map<SimulationBody, number>();
+      const resolveRestarts = () => {
+        while (restartGroups.length) {
+          const members = restartGroups.shift()!;
+          const changed = [...members].filter(
+            (body) => "hulls" in body && !this.disabledWorldActor(body),
+          );
+          if (changed.some((body) => (restartCounts.get(body) ?? 0) >= 30))
+            continue;
+          for (const body of changed)
+            restartCounts.set(body, (restartCounts.get(body) ?? 0) + 1);
+          for (const body of changed) candidate(body, PHYSICS_STEP);
+          const changedJoints = [...this.debris, ...this.noncars].flatMap(
+            (b) => (b.joint && members.has(b) ? [b.joint] : []),
+          );
+          this.lastImpacts.push(
+            ...resolveContactGroups(
+              this.preparePedContacts(this.collectContacts(changed)),
+              PHYSICS_STEP,
+              changedJoints,
+              beforeApply,
+            ),
+          );
+        }
+      };
+      resolveRestarts();
+      for (const car of this.cars)
+        if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
+      // Recollect after impulses, rather than advancing an unchecked trajectory.
+      // The bounded final sweep conservatively stops at the actual triangle;
+      // it neither assumes an infinite floor nor changes authored body shapes.
+      let guardResults = new Map<
+        SimulationBody,
+        ReturnType<VehicleSimulation["advanceWorldContacts"]>
+      >();
+      for (let pass = 0; pass < 8; pass++) {
+        // Every solve can redirect a pair trajectory, including props which
+        // intentionally ignore world faces. Their predicted pose must not be
+        // inherited from the pre-impulse solve or an early-returning world guard.
+        for (const body of this.allBodies()) candidate(body, PHYSICS_STEP);
+        guardResults = new Map(
+          this.allBodies().map((body) => [
+            body,
+            this.advanceWorldContacts(body),
+          ]),
+        );
+        const contacts = [...guardResults.values()].flatMap(
+          (guard) => guard.contacts,
+        );
+        // Impulses may create a body-pair crossing which was absent from the
+        // first trajectory. Recollect the same authored hulls, not only roads.
+        contacts.push(...this.collectBodyContacts(this.allBodies()));
+        if (this.movingWorld.length)
+          for (const body of this.allBodies())
+            contacts.push(
+              ...this.worldContacts(body, body.hulls).filter(
+                (contact) =>
+                  contact.b &&
+                  "kind" in contact.b &&
+                  contact.b.kind === "moving-world",
+              ),
+            );
+        if (!contacts.length) break;
         this.lastImpacts.push(
           ...resolveContactGroups(
-            this.preparePedContacts(this.collectContacts(changed)),
+            this.preparePedContacts(contacts),
             PHYSICS_STEP,
-            changedJoints,
+            this.allJoints(),
             beforeApply,
           ),
         );
+        resolveRestarts();
+        guardResults.clear();
       }
-    };
-    resolveRestarts();
-    for (const car of this.cars)
-      if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
-    // Recollect after impulses, rather than advancing an unchecked trajectory.
-    // The bounded final sweep conservatively stops at the actual triangle;
-    // it neither assumes an infinite floor nor changes authored body shapes.
-    let guardResults = new Map<
-      SimulationBody,
-      ReturnType<VehicleSimulation["advanceWorldContacts"]>
-    >();
-    for (let pass = 0; pass < 8; pass++) {
-      // Every solve can redirect a pair trajectory, including props which
-      // intentionally ignore world faces. Their predicted pose must not be
-      // inherited from the pre-impulse solve or an early-returning world guard.
-      for (const body of this.allBodies()) candidate(body, PHYSICS_STEP);
-      guardResults = new Map(
-        this.allBodies().map((body) => [body, this.advanceWorldContacts(body)]),
-      );
-      const contacts = [...guardResults.values()].flatMap(
-        (guard) => guard.contacts,
-      );
-      // Impulses may create a body-pair crossing which was absent from the
-      // first trajectory. Recollect the same authored hulls, not only roads.
-      contacts.push(...this.collectBodyContacts(this.allBodies()));
-      if (this.movingWorld.length)
-        for (const body of this.allBodies())
-          contacts.push(
-            ...this.worldContacts(body, body.hulls).filter(
-              (contact) =>
-                contact.b &&
-                "kind" in contact.b &&
-                contact.b.kind === "moving-world",
-            ),
-          );
-      if (!contacts.length) break;
-      this.lastImpacts.push(
-        ...resolveContactGroups(
-          this.preparePedContacts(contacts),
-          PHYSICS_STEP,
-          this.allJoints(),
-          beforeApply,
-        ),
-      );
-      resolveRestarts();
-      guardResults.clear();
-    }
-    this.finishNonCarQuietLeaves();
-    this.finishPedBoneQuiet();
-    this.finishPedQuiet();
-    this.finishNonCarQuietRings();
-    const committing = this.allBodies();
-    const worldFractions = new Map(
-      committing.map((body) => [
-        body,
-        (guardResults.get(body) ?? this.advanceWorldContacts(body, true))
-          .fraction,
-      ]),
-    );
-    const paths = new Map<HullBody, PosePath>(
-      committing.map((body) => {
-        const probe = {
-          ...body,
-          state: {
-            ...body.state,
-            position: body.state.position.clone(),
-            orientation: body.state.orientation.clone(),
-            velocity: body.state.velocity.clone(),
-            angularVelocity: body.state.angularVelocity.clone(),
-            predictedPosition: new Vector3(),
-            predictedOrientation: new Quaternion(),
-          },
-        };
-        const cache = new Map<
-          number,
-          { position: Vector3; orientation: Quaternion }
-        >();
-        const path: PosePath = (fraction) => {
-          let pose = cache.get(fraction);
-          if (!pose) {
-            candidate(
-              probe,
-              PHYSICS_STEP * worldFractions.get(body)! * fraction,
-            );
-            pose = {
-              position: probe.state.predictedPosition.clone(),
-              orientation: probe.state.predictedOrientation.clone(),
-            };
-            cache.set(fraction, pose);
-          }
-          return pose;
-        };
-        // Momentum / smallest principal inertia bounds all midpoint angular
-        // rates, including full turns hidden by identical endpoint quaternions.
-        const inertia = body.properties.inertia;
-        path.angularTravel =
-          body.properties.immovable || body.properties.rotationLocked
-            ? 0
-            : (body.state.angularVelocity
-                .clone()
-                .applyQuaternion(body.state.orientation.clone().invert())
-                .multiply(inertia)
-                .length() /
-                Math.min(inertia.x, inertia.y, inertia.z)) *
-              PHYSICS_STEP *
-              worldFractions.get(body)!;
-        return [body, path];
-      }),
-    );
-    const pairFractions = guardBodyTrajectories(
-      committing,
-      paths,
-      nativePairAllowed,
-    );
-    for (const body of committing) {
-      if (!body.properties.immovable)
-        advance(
+      this.finishNonCarQuietLeaves();
+      this.finishPedBoneQuiet();
+      this.finishPedQuiet();
+      this.finishNonCarQuietRings();
+      const committing = this.allBodies();
+      const worldFractions = new Map(
+        committing.map((body) => [
           body,
-          PHYSICS_STEP * worldFractions.get(body)! * pairFractions.get(body)!,
-        );
-      body.overlapRecovery = body.overlapDetected;
-      body.worldRecovery = body.worldOverlapDetected;
-    }
-    const joined = [...this.debris, ...this.noncars].filter(
-      (body) => body.joint && !body.properties.immovable,
-    );
-    const beforeProjection = joined.map((body) => ({
-      body,
-      position: body.state.position.clone(),
-      orientation: body.state.orientation.clone(),
-    }));
-    projectJointPositions(joined.map((body) => body.joint!));
-    // Anchor/hinge projection is a second transform mutation after integration.
-    // A constrained part must not teleport through a track face to satisfy it.
-    for (const { body, position, orientation } of beforeProjection) {
-      const projectedPosition = body.state.position.clone();
-      const projectedOrientation = body.state.orientation.clone();
-      if (
-        position.distanceToSquared(projectedPosition) < 1e-14 &&
-        orientation.angleTo(projectedOrientation) < 1e-7
-      )
-        continue;
-      const samples = Math.min(
-        128,
-        Math.max(
-          1,
-          Math.ceil(orientation.angleTo(projectedOrientation) / 0.05),
-        ),
+          (guardResults.get(body) ?? this.advanceWorldContacts(body, true))
+            .fraction,
+        ]),
       );
-      const pose = (fraction: number) => ({
-        position: position.clone().lerp(projectedPosition, fraction),
-        orientation: orientation.clone().slerp(projectedOrientation, fraction),
-      });
-      const guard = this.sweepWorldTrajectory(
-        body,
-        samples,
-        pose,
-        position,
-        orientation,
-      );
-      if (guard.fraction < 1) {
-        const accepted = pose(guard.fraction);
-        body.state.position.copy(accepted.position);
-        body.state.orientation.copy(accepted.orientation);
-        body.worldRecovery = true;
-      }
-    }
-    // Joint projection can otherwise put an already-safe flap/roof through
-    // another car. Verify this second trajectory as well, without impulses.
-    if (beforeProjection.length) {
-      const projected = new Map(
-        beforeProjection.map((entry) => [entry.body, entry]),
-      );
-      const projectionPaths = new Map<HullBody, PosePath>(
-        this.allBodies().map((body) => {
-          const before = projected.get(body as (typeof joined)[number]);
-          const position = body.state.position.clone(),
-            orientation = body.state.orientation.clone();
-          return [
-            body,
-            (fraction) =>
-              before
-                ? {
-                    position: before.position.clone().lerp(position, fraction),
-                    orientation: before.orientation
-                      .clone()
-                      .slerp(orientation, fraction),
-                  }
-                : { position, orientation },
-          ];
+      const paths = new Map<HullBody, PosePath>(
+        committing.map((body) => {
+          const probe = {
+            ...body,
+            state: {
+              ...body.state,
+              position: body.state.position.clone(),
+              orientation: body.state.orientation.clone(),
+              velocity: body.state.velocity.clone(),
+              angularVelocity: body.state.angularVelocity.clone(),
+              predictedPosition: new Vector3(),
+              predictedOrientation: new Quaternion(),
+            },
+          };
+          const cache = new Map<
+            number,
+            { position: Vector3; orientation: Quaternion }
+          >();
+          const path: PosePath = (fraction) => {
+            let pose = cache.get(fraction);
+            if (!pose) {
+              candidate(
+                probe,
+                PHYSICS_STEP * worldFractions.get(body)! * fraction,
+              );
+              pose = {
+                position: probe.state.predictedPosition.clone(),
+                orientation: probe.state.predictedOrientation.clone(),
+              };
+              cache.set(fraction, pose);
+            }
+            return pose;
+          };
+          // Momentum / smallest principal inertia bounds all midpoint angular
+          // rates, including full turns hidden by identical endpoint quaternions.
+          const inertia = body.properties.inertia;
+          path.angularTravel =
+            body.properties.immovable || body.properties.rotationLocked
+              ? 0
+              : (body.state.angularVelocity
+                  .clone()
+                  .applyQuaternion(body.state.orientation.clone().invert())
+                  .multiply(inertia)
+                  .length() /
+                  Math.min(inertia.x, inertia.y, inertia.z)) *
+                PHYSICS_STEP *
+                worldFractions.get(body)!;
+          return [body, path];
         }),
       );
-      const fractions = guardBodyTrajectories(
-        this.allBodies(),
-        projectionPaths,
+      const pairFractions = guardBodyTrajectories(
+        committing,
+        paths,
         nativePairAllowed,
       );
-      for (const { body } of beforeProjection) {
-        const fraction = fractions.get(body)!;
-        if (fraction < 1) {
-          const pose = projectionPaths.get(body)!(fraction);
-          body.state.position.copy(pose.position);
-          body.state.orientation.copy(pose.orientation);
+      for (const body of committing) {
+        if (!body.properties.immovable)
+          advance(
+            body,
+            PHYSICS_STEP * worldFractions.get(body)! * pairFractions.get(body)!,
+          );
+        body.overlapRecovery = body.overlapDetected;
+        body.worldRecovery = body.worldOverlapDetected;
+      }
+      const joined = [...this.debris, ...this.noncars].filter(
+        (body) => body.joint && !body.properties.immovable,
+      );
+      const beforeProjection = joined.map((body) => ({
+        body,
+        position: body.state.position.clone(),
+        orientation: body.state.orientation.clone(),
+      }));
+      projectJointPositions(joined.map((body) => body.joint!));
+      // Anchor/hinge projection is a second transform mutation after integration.
+      // A constrained part must not teleport through a track face to satisfy it.
+      for (const { body, position, orientation } of beforeProjection) {
+        const projectedPosition = body.state.position.clone();
+        const projectedOrientation = body.state.orientation.clone();
+        if (
+          position.distanceToSquared(projectedPosition) < 1e-14 &&
+          orientation.angleTo(projectedOrientation) < 1e-7
+        )
+          continue;
+        const samples = Math.min(
+          128,
+          Math.max(
+            1,
+            Math.ceil(orientation.angleTo(projectedOrientation) / 0.05),
+          ),
+        );
+        const pose = (fraction: number) => ({
+          position: position.clone().lerp(projectedPosition, fraction),
+          orientation: orientation
+            .clone()
+            .slerp(projectedOrientation, fraction),
+        });
+        const guard = this.sweepWorldTrajectory(
+          body,
+          samples,
+          pose,
+          position,
+          orientation,
+        );
+        if (guard.fraction < 1) {
+          const accepted = pose(guard.fraction);
+          body.state.position.copy(accepted.position);
+          body.state.orientation.copy(accepted.orientation);
+          body.worldRecovery = true;
         }
       }
-    }
-    for (const car of this.cars) {
-      if (!this.isCarPhysicsActive(car)) continue;
-      const forward = new Vector3(0, 0, -1).applyQuaternion(
-        car.state.orientation,
-      );
-      car.state.speed = car.state.velocity.dot(forward);
-      car.state.heading = Math.atan2(-forward.x, -forward.z);
-      car.state.health = 100 - Math.max(...car.damage.componentLevels);
-      if (
-        (car.knackered ||
-          (car.damage.wasted && !this.deferredCrashWastage.has(car))) &&
-        car.wastedAt === undefined
-      ) {
-        this.finishWastage(car);
+      // Joint projection can otherwise put an already-safe flap/roof through
+      // another car. Verify this second trajectory as well, without impulses.
+      if (beforeProjection.length) {
+        const projected = new Map(
+          beforeProjection.map((entry) => [entry.body, entry]),
+        );
+        const projectionPaths = new Map<HullBody, PosePath>(
+          this.allBodies().map((body) => {
+            const before = projected.get(body as (typeof joined)[number]);
+            const position = body.state.position.clone(),
+              orientation = body.state.orientation.clone();
+            return [
+              body,
+              (fraction) =>
+                before
+                  ? {
+                      position: before.position
+                        .clone()
+                        .lerp(position, fraction),
+                      orientation: before.orientation
+                        .clone()
+                        .slerp(orientation, fraction),
+                    }
+                  : { position, orientation },
+            ];
+          }),
+        );
+        const fractions = guardBodyTrajectories(
+          this.allBodies(),
+          projectionPaths,
+          nativePairAllowed,
+        );
+        for (const { body } of beforeProjection) {
+          const fraction = fractions.get(body)!;
+          if (fraction < 1) {
+            const pose = projectionPaths.get(body)!(fraction);
+            body.state.position.copy(pose.position);
+            body.state.orientation.copy(pose.orientation);
+          }
+        }
       }
-      this.sync(car);
+      for (const car of this.cars) {
+        if (!this.isCarPhysicsActive(car)) continue;
+        const forward = new Vector3(0, 0, -1).applyQuaternion(
+          car.state.orientation,
+        );
+        car.state.speed = car.state.velocity.dot(forward);
+        car.state.heading = Math.atan2(-forward.x, -forward.z);
+        car.state.health = 100 - Math.max(...car.damage.componentLevels);
+        if (
+          (car.knackered ||
+            (car.damage.wasted && !this.deferredCrashWastage.has(car))) &&
+          car.wastedAt === undefined
+        ) {
+          this.finishWastage(car);
+        }
+        this.sync(car);
+        if (!this.collectingOrdinaryCrush)
+          car.damage.stepFlaps(
+            car.state.velocity
+              .clone()
+              .sub(previousVelocities.get(car)!)
+              .multiplyScalar(1 / PHYSICS_STEP)
+              .add(new Vector3(0, this.flapGravity, 0))
+              .applyQuaternion(car.state.orientation.clone().invert()),
+          );
+        if (!this.collectingOrdinaryCrush) this.detachParts(car);
+        if (car.human)
+          car.recoveryHistory.remember(PHYSICS_STEP * 1000, car.state, {
+            wheelLengths: car.state.wheelLengths,
+            suspensionLengths: car.motion.suspensionLength,
+            roadFrictions: car.debug?.wheelRoadFrictions ?? [],
+            dynamicSupport: car.debug?.dynamicWheelSupport,
+            volumeGravity: car.specialVolume?.volume?.gravityMultiplier,
+            split: car.damage.snapped,
+            disabled: car.knackered,
+          });
+      }
+      for (const body of this.debris) {
+        body.actor.position.copy(body.state.position);
+        body.actor.quaternion.copy(body.state.orientation);
+      }
+      for (const body of this.mineBodies)
+        if (!(body.mine.flags & MINE_FLAGS.exploded)) this.syncActor(body);
+      for (const body of this.pedBoneBodies) this.syncActor(body);
+      for (const body of this.noncars) {
+        if (
+          body.attached &&
+          body.mechanics.worldJoint?.kind !== "translation" &&
+          nonCarBendExceedsThreshold(body.mechanics, body)
+        )
+          releaseNonCar(body);
+        if (body.mechanics.tumble)
+          applyNonCarTumble(
+            body,
+            body.mechanics.tumble,
+            hullsBounds(body.hulls).getSize(new Vector3()),
+            this.lastImpacts.find((i) => i.a === body || i.b === body)
+              ?.normal ?? Y,
+            body.collisionFlags !== 0,
+            body.motor.sleeping,
+          );
+        this.syncActor(body);
+      }
+      this.world.refreshDynamic?.();
+      for (const body of this.movingWorld) commitMovingWorldPose(body);
+      // PHILDoPhysics consumes the current debt, then subtracts40. Its final
+      // outer-frame exit restores1; direct standalone steps have that same exit.
+      this.mechanicsTimeSync = this.collectingOrdinaryCrush
+        ? this.mechanicsTimeSync - PHYSICS_STEP * 1000
+        : 1;
       if (!this.collectingOrdinaryCrush)
-        car.damage.stepFlaps(
-          car.state.velocity
-            .clone()
-            .sub(previousVelocities.get(car)!)
-            .multiplyScalar(1 / PHYSICS_STEP)
-            .add(new Vector3(0, this.flapGravity, 0))
-            .applyQuaternion(car.state.orientation.clone().invert()),
-        );
-      if (!this.collectingOrdinaryCrush) this.detachParts(car);
-      if (car.human)
-        car.recoveryHistory.remember(PHYSICS_STEP * 1000, car.state, {
-          wheelLengths: car.state.wheelLengths,
-          suspensionLengths: car.motion.suspensionLength,
-          roadFrictions: car.debug?.wheelRoadFrictions ?? [],
-          dynamicSupport: car.debug?.dynamicWheelSupport,
-          volumeGravity: car.specialVolume?.volume?.gravityMultiplier,
-          split: car.damage.snapped,
-          disabled: car.knackered,
-        });
+        this.finishPedFrame(PHYSICS_STEP * 1000);
+    } finally {
+      this.physicsQueryDepth--;
     }
-    for (const body of this.debris) {
-      body.actor.position.copy(body.state.position);
-      body.actor.quaternion.copy(body.state.orientation);
-    }
-    for (const body of this.mineBodies)
-      if (!(body.mine.flags & MINE_FLAGS.exploded)) this.syncActor(body);
-    for (const body of this.pedBoneBodies) this.syncActor(body);
-    for (const body of this.noncars) {
-      if (
-        body.attached &&
-        body.mechanics.worldJoint?.kind !== "translation" &&
-        nonCarBendExceedsThreshold(body.mechanics, body)
-      )
-        releaseNonCar(body);
-      if (body.mechanics.tumble)
-        applyNonCarTumble(
-          body,
-          body.mechanics.tumble,
-          hullsBounds(body.hulls).getSize(new Vector3()),
-          this.lastImpacts.find((i) => i.a === body || i.b === body)?.normal ??
-            Y,
-          body.collisionFlags !== 0,
-          body.motor.sleeping,
-        );
-      this.syncActor(body);
-    }
-    this.world.refreshDynamic?.();
-    for (const body of this.movingWorld) commitMovingWorldPose(body);
-    // PHILDoPhysics consumes the current debt, then subtracts40. Its final
-    // outer-frame exit restores1; direct standalone steps have that same exit.
-    this.mechanicsTimeSync = this.collectingOrdinaryCrush
-      ? this.mechanicsTimeSync - PHYSICS_STEP * 1000
-      : 1;
-    if (!this.collectingOrdinaryCrush) this.finishPedFrame(PHYSICS_STEP * 1000);
   }
   private detachParts(car: SimulatedCar) {
     for (let index = 0; index < car.damage.runtimeParts.length; index++) {

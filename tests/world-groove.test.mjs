@@ -43,6 +43,19 @@ test("source timed straight harmonic keeps the authored amplitude and period", (
   assert.ok(Math.abs(actor.position.length() - 0.75) < 1e-6);
 });
 
+test("native compacted ACT identifiers retain authored GROOVE binding", () => {
+  const root = new THREE.Group(),
+    actor = new THREE.Group();
+  actor.name = "&07c0001.ACT";
+  actor.userData.c2ActorName = "&PLAT.ACT";
+  root.add(actor);
+  const runtime = new WorldGrooveRuntime(root, authored());
+  assert.equal(runtime.diagnostics.length, 0);
+  assert.ok(runtime.actors.has(actor));
+  runtime.update(1250);
+  assert.ok(Math.abs(actor.position.length() - 0.75) < 1e-6);
+});
+
 test("continuous and linear waveforms follow MOVE_FUNK_PARAMETER endpoints", () => {
   const root = new THREE.Group(),
     actor = new THREE.Group();

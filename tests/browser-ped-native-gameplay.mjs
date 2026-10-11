@@ -62,6 +62,35 @@ try {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 800 },
   });
+  // A deterministic runtime audit must retain its enrolled native owners while
+  // other authorized source changes are being edited in the shared workspace.
+  await page.route("**/@vite/client", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: `
+        const styles = new Map();
+        export function createHotContext() {
+          return { data: {}, accept() {}, prune() {}, dispose() {},
+            on() {}, off() {}, send() {}, invalidate() {} };
+        }
+        export function updateStyle(id, content) {
+          let style = styles.get(id);
+          if (!style) {
+            style = document.createElement('style');
+            styles.set(id, style);
+            document.head.appendChild(style);
+          }
+          style.textContent = content;
+        }
+        export function removeStyle(id) {
+          styles.get(id)?.remove();
+          styles.delete(id);
+        }
+        export const injectQuery = (url) => url;
+      `,
+    }),
+  );
   page.setDefaultTimeout(90000);
   page.on("pageerror", (error) => {
     const message = String(error);
@@ -123,6 +152,11 @@ try {
         document.querySelector("#car-select").value = carPath;
         await c.loadRace();
         c.paused = true;
+        const populationDeadline = performance.now() + 90000;
+        while (!c.pedestrians && performance.now() < populationDeadline)
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        if (!c.pedestrians)
+          throw new Error("Authored pedestrian population failed to load");
         document.querySelector("#panel").hidden = true;
         const [
           assetsModule,
@@ -142,6 +176,7 @@ try {
           recoveryModule,
           processModule,
           rulesModule,
+          groundingModule,
         ] = await Promise.all([
           import("/src/ped-native-assets.ts"),
           import("/src/ped-native-runtime.ts"),
@@ -160,6 +195,7 @@ try {
           import("/src/ped-recovery-effects.ts"),
           import("/src/ped-process-cache.ts"),
           import("/src/ped-rules.ts"),
+          import("/src/ped-native-grounding.ts"),
         ]);
         const assets = await assetsModule.loadNativePedAssets(
           c.assets,
@@ -212,7 +248,48 @@ try {
         if (!processMovement)
           throw new Error("Original process movement row absent");
         const rng = randomModule.sharedNativeRandom;
-        const owner = { label: `Blokebl-${dataRoot}` };
+        const population = c.pedestrians;
+        const populationIndex = population.states.findIndex(
+          (state) => state.alive,
+        );
+        const owner = population.group.children[populationIndex];
+        if (!owner || populationIndex < 0)
+          throw new Error("Authored pedestrian population owner unavailable");
+        const originalActorName = owner.name;
+        const originalGroup = population.states[populationIndex].group;
+        owner.label = `Blokebl-${dataRoot}`;
+        // Retain the actual census and group identities while placing ordinary
+        // actors outside this controlled contact lane. Independent visual sweep
+        // kills during the seven-second drive would obscure this owner's delta.
+        for (const actor of population.group.children.slice(
+          0,
+          population.count,
+        ))
+          actor.position.x += 10000;
+        // This controlled native admission uses Blokebl FORM/PHIL resources for
+        // an existing population counting identity. Full authored pose/resource
+        // migration remains PED-06; do not draw the ordinary fixture twice.
+        for (const child of owner.children) child.visible = false;
+        const missionVariable = 998;
+        Object.assign(c.raceDefinition, {
+          raceType: "smashAndPed",
+          mission: true,
+          pedGroupsToKill: [originalGroup],
+          smashVariable: missionVariable,
+          smashTarget: 1,
+        });
+        const readPopulation = () => ({
+          count: population.count,
+          hits: population.hits,
+          alive: population.alive,
+          group: originalGroup,
+          groupCounts: [...population.groupCounts],
+          missionValue: c.missionVariables.get(missionVariable),
+          raceStatus: c.race.status,
+          ordinaryAlive: population.states[populationIndex].alive,
+          ordinaryCorporeal: population.states[populationIndex].corporeal,
+        });
+        const populationBefore = readPopulation();
         const events = [];
         const cacheByOwner = new Map();
         const attribute = attributionModule.createNativePedContactAttribution({
@@ -330,10 +407,20 @@ try {
             });
           },
           onOneLessPed: (context) => {
+            const counted =
+              context.owner === owner
+                ? population.oneLessNativePed(
+                    context.owner,
+                    context.character,
+                    context.timeMs,
+                  )
+                : null;
             events.push({
               kind: "one-less",
               owner: context.owner.label,
               flags: context.character.flags,
+              counted,
+              population: context.owner === owner ? readPopulation() : null,
             });
           },
           onScoreDeath: (context, state) => {
@@ -343,7 +430,20 @@ try {
               hitPoints: context.character.hitPoints,
               action: state.action,
               killerDriver: state.cache?.killerDriver ?? null,
+              population: context.owner === owner ? readPopulation() : null,
             });
+            if (context.owner === owner && c.race.status === "completed") {
+              // The preceding snapshots prove actual objective completion
+              // before score. Resume this controlled fixture's racing phase
+              // for its independent quiet/release regression: race completion
+              // otherwise stops the application's vehicle simulation.
+              c.raceDefinition.smashTarget = 127;
+              c.race.status = "racing";
+              events.push({
+                kind: "resume-transport-fixture",
+                owner: owner.label,
+              });
+            }
           },
           readHaltInput: (context, state) => {
             const body = context.body;
@@ -410,6 +510,43 @@ try {
           hooks: gameplay.hooks,
         });
         gameplay.bindRuntime(runtime);
+        // This fixture already owns the bounded process records. Bind their
+        // borrowed-list release to the real85-slot owner; physical contact
+        // normals and volume caches belong to separate simulation owners.
+        const grounding = new groundingModule.NativePedGrounding(runtime, {
+          readProcessCache: (owner) => gameplay.state(owner).cache,
+          readInput: () => {
+            throw new Error(
+              "Full grounding visits are outside this counting fixture",
+            );
+          },
+        });
+        recoveryHost.grounding = {
+          releaseFaceCache: (owner) => {
+            const cache = gameplay.state(owner).cache;
+            if (!cache)
+              throw new Error("Release requires actual current process owner");
+            const slot = cache.faceCache;
+            const before = {
+              slotOwner: slot?.owner === owner,
+              processIndex: cache.index,
+              floorNormal: [...cache.floorNormal],
+              retainedDirection: [...cache.retainedDirection],
+            };
+            grounding.releaseFaceCache(owner);
+            events.push({
+              kind: "release-selected-face-cache",
+              owner: owner.label,
+              before,
+              processCleared: cache.faceCache === null,
+              slotReleased: slot === null || slot.owner === null,
+              poolCleared: grounding.pool.get(owner) === null,
+              processRetained: gameplay.state(owner).cache === cache,
+              floorNormal: [...cache.floorNormal],
+              retainedDirection: [...cache.retainedDirection],
+            });
+          },
+        };
         const processPool = new processModule.NativePedProcessCachePool({
           readCache: (owner) => gameplay.state(owner).cache,
           writeCache: (owner, cache) => {
@@ -418,6 +555,7 @@ try {
           },
           randomTurnInterval: (min, max) =>
             rulesModule.pedRandomInteger(rng.random, min, max),
+          releaseFaceCache: (slot) => grounding.releaseBorrowedFaceSlot(slot),
         });
         runtime.hooks.beforePose = (context) => {
           const result = processPool.visit(context.owner, {
@@ -497,6 +635,7 @@ try {
           flags: 0x40,
           hitPoints: 100,
         });
+        population.bindNativeCountingOwner(owner, owner, character);
         const gameplayState = gameplay.enroll(owner, {
           action: 0,
           cache: null,
@@ -580,6 +719,68 @@ try {
         });
         const initialVisits = prepare();
         const allocation = runtime.allocation(owner);
+        const down = player.state.position.clone().set(0, -1, 0);
+        const floorHit = c.collision.raycast(
+          rootPosition.clone().addScaledVector(down, -2),
+          down,
+          20,
+          true,
+        );
+        if (!floorHit)
+          throw new Error(
+            "Controlled borrowed-list release requires an actual original floor face",
+          );
+        const sourceFace = floorHit.surface;
+        const borrowedFace = {
+          a: sourceFace.a.toArray(),
+          b: sourceFace.b.toArray(),
+          c: sourceFace.c.toArray(),
+          normal: sourceFace.normal.toArray(),
+          rawFlags: sourceFace.faceFlags,
+          materialIdentifier: sourceFace.material,
+          native: sourceFace.native,
+        };
+        const vertices = [borrowedFace.a, borrowedFace.b, borrowedFace.c];
+        const borrowedSlot = grounding.pool.acquire({
+          owner,
+          capacity: 5,
+          faces: [borrowedFace],
+          timeMs,
+          bounds: {
+            min: [0, 1, 2].map((axis) =>
+              Math.min(...vertices.map((point) => point[axis])),
+            ),
+            max: [0, 1, 2].map((axis) =>
+              Math.max(...vertices.map((point) => point[axis])),
+            ),
+          },
+        });
+        const processForRelease = gameplay.state(owner).cache;
+        borrowedSlot.selectedFace = borrowedSlot.faces[0];
+        processForRelease.faceCache = borrowedSlot;
+        const selectedRecord = borrowedSlot.selectedFace;
+        const recordsForRelease = borrowedSlot.faces;
+        const orderBeforeRelease = grounding.pool.order(5);
+        // Explicit controlled effect packet tests borrowed-slot ownership only;
+        // it does not claim a grounding query selected a locomotion support.
+        gameplay.options.onRecoveryEffect(
+          { owner },
+          { kind: "release-selected-face-cache" },
+          gameplay.state(owner),
+        );
+        const borrowedRelease = {
+          scope:
+            "controlled release packet; real copied original face and process/85-slot owners, no locomotion-support claim",
+          event: events.at(-1),
+          faceMaterial: borrowedFace.materialIdentifier,
+          selectedRecordRetained: borrowedSlot.selectedFace === selectedRecord,
+          recordsRetained: borrowedSlot.faces === recordsForRelease,
+          ringOrderRetained: grounding.pool
+            .order(5)
+            .every((slot, index) => slot === orderBeforeRelease[index]),
+          sourceNativeRecordRetained:
+            borrowedSlot.faces[0].native === sourceFace.native,
+        };
         if (!allocation?.body)
           throw new Error(
             `Native body pool did not allocate the original pedestrian: ${JSON.stringify({ visits: initialVisits.map((visit) => ({ status: visit.pool.status, required: visit.pool.requiredProviders, collideworthyReturn: visit.pool.collideworthyReturn, registrationReturn: visit.pool.registrationReturn })), flags: character.flags, position: character.position, cameraOrigin, bounds: assets.profile.bounds, maxSimple: assets.form.maxSimple })}`,
@@ -689,6 +890,7 @@ try {
         requestAnimationFrame(frameTick);
         window.__pedNativeSnapshot = () => ({
           events: [...events],
+          population: readPopulation(),
           slickMaterials: {
             registration: slickRegistration.status,
             identities: slickRegistration.resources.map(
@@ -859,7 +1061,14 @@ try {
           c.paused = true;
           const controlledGlobalsGore = globals.goreLevel;
           globals.goreLevel = 2;
-          const controlledOwner = { label: `controlled-sever-${dataRoot}` };
+          const controlledIndex = population.states.findIndex(
+            (state, index) => state.alive && index !== populationIndex,
+          );
+          const controlledOwner = population.group.children[controlledIndex];
+          if (!controlledOwner)
+            throw new Error("Second authored counting owner unavailable");
+          controlledOwner.label = `controlled-sever-${dataRoot}`;
+          for (const child of controlledOwner.children) child.visible = false;
           const controlledPosition = c.player.state.position
             .clone()
             .addScaledVector(forward, 3);
@@ -886,9 +1095,16 @@ try {
             direction: forward.toArray(),
             groundNormal: [0, 1, 0],
             timeMs: controlledTime,
-            flags: 0x40,
+            // Explicit preexisting source flag exercises OneLessPed's gate;
+            // it must not suppress genuine severing or the score continuation.
+            flags: 0x140,
             hitPoints: 100,
           });
+          population.bindNativeCountingOwner(
+            controlledOwner,
+            controlledOwner,
+            controlledCharacter,
+          );
           const controlledGameplay = gameplay.enroll(controlledOwner, {
             action: 0,
             cache: null,
@@ -915,6 +1131,7 @@ try {
             sourceType: 5,
           };
           const eventStart = events.length;
+          const populationGateBefore = readPopulation();
           c.simulation.processPedContactDamage([row]);
           globals.goreLevel = controlledGlobalsGore;
           return {
@@ -943,6 +1160,12 @@ try {
             philState: c.simulation.phil.getState(body),
             bodyPosition: body.state.position.toArray(),
             events: events.slice(eventStart),
+            sourceCountGate: {
+              initialFlags: 0x140,
+              finalFlags: controlledCharacter.flags,
+              populationBefore: populationGateBefore,
+              populationAfter: readPopulation(),
+            },
           };
         };
         c.paused = false;
@@ -960,6 +1183,7 @@ try {
           bodyState: allocation.body.headerState,
           initialVisits: initialVisits.map((visit) => visit.pool.status),
           headSequence,
+          borrowedRelease,
           inactiveRelease: {
             allocated: controlAllocated,
             released: controlReleased,
@@ -982,6 +1206,13 @@ try {
             countCommitted: gameplayState.countCommitted,
           },
           ownerKey: owner.label,
+          populationBinding: {
+            originalActorName,
+            originalGroup,
+            before: populationBefore,
+            scope:
+              "existing authored counting owner; controlled Blokebl native physical admission",
+          },
         };
       },
       { track, dataRoot },
@@ -1022,6 +1253,25 @@ try {
       () => window.__pedNativeControlledSever?.() ?? null,
     );
     report.cases.at(-1).controlledSever = controlledSever;
+    assert.equal(
+      controlledSever?.hitPoints,
+      0,
+      `${dataRoot}: source-count-gated fixture still dies`,
+    );
+    assert.ok(
+      controlledSever?.events.some((event) => event.kind === "score-death"),
+      `${dataRoot}: source count gate preserves score continuation`,
+    );
+    assert.equal(
+      controlledSever?.events.some((event) => event.kind === "one-less"),
+      false,
+      `${dataRoot}: preexisting source flag100 suppresses count outlet`,
+    );
+    assert.deepEqual(
+      controlledSever?.sourceCountGate.populationAfter,
+      controlledSever?.sourceCountGate.populationBefore,
+      `${dataRoot}: flag100 preserves all real counters and mission state`,
+    );
     // Keep scenario state inside the page, then read the actual live records and callback trace.
     const snapshot = await page.evaluate(
       () => window.__pedNativeSnapshot?.() ?? null,
@@ -1350,6 +1600,67 @@ try {
       ]),
     ];
     const ordinaryOwner = report.cases.at(-1).ownerKey;
+    const populationBefore = report.cases.at(-1).populationBinding.before;
+    const countEvent = snapshot?.events.find(
+      (event) => event.owner === ordinaryOwner && event.kind === "one-less",
+    );
+    const scoreEvent = snapshot?.events.find(
+      (event) => event.owner === ordinaryOwner && event.kind === "score-death",
+    );
+    assert.equal(
+      countEvent?.counted,
+      true,
+      `${dataRoot}: genuine native contact consumes authored population`,
+    );
+    assert.equal(snapshot.population.count, populationBefore.count);
+    assert.equal(snapshot.population.hits, populationBefore.hits + 1);
+    assert.equal(snapshot.population.alive, populationBefore.alive - 1);
+    const groupsBefore = new Map(populationBefore.groupCounts);
+    const groupsAfter = new Map(snapshot.population.groupCounts);
+    for (const [group, before] of groupsBefore) {
+      assert.deepEqual(
+        groupsAfter.get(group),
+        {
+          total: before.total,
+          killed: before.killed + (group === populationBefore.group ? 1 : 0),
+        },
+        `${dataRoot}: original spawn group ${group} consumes exactly once`,
+      );
+    }
+    assert.equal(
+      countEvent.population.missionValue,
+      populationBefore.missionValue + 1,
+    );
+    assert.equal(
+      countEvent.population.raceStatus,
+      "completed",
+      `${dataRoot}: application mission objective commits in count outlet`,
+    );
+    assert.deepEqual(
+      scoreEvent.population,
+      countEvent.population,
+      `${dataRoot}: real counters and mission precede score continuation`,
+    );
+    assert.equal(
+      snapshot.population.missionValue,
+      populationBefore.missionValue + 1,
+      `${dataRoot}: repeated corpse contacts cannot consume mission twice`,
+    );
+    assert.equal(snapshot.population.ordinaryAlive, false);
+    assert.equal(
+      snapshot.population.ordinaryCorporeal,
+      populationBefore.ordinaryCorporeal,
+      `${dataRoot}: native count does not create estimated ordinary corpse`,
+    );
+    assert.equal(
+      snapshot.events.filter(
+        (event) => event.owner === ordinaryOwner && event.kind === "one-less",
+      ).length,
+      1,
+    );
+    assert.ok(
+      snapshot.events.indexOf(countEvent) < snapshot.events.indexOf(scoreEvent),
+    );
     report.cases.at(-1).coverage = {
       actualContactObserved: !!snapshot?.events.some(
         (event) => event.owner === ordinaryOwner && event.kind === "attribute",
@@ -1369,6 +1680,8 @@ try {
           (event) =>
             event.owner === ordinaryOwner && event.kind === "score-death",
         ),
+      actualPopulationCounters: true,
+      actualMissionConsumptionBeforeScore: true,
       deadModelSet:
         snapshot?.modelSet === 1 && snapshot?.poseIndices?.[1] === 2,
       headSeverReached: !!(snapshot?.character.removedBoneMask & (1 << 1)),
@@ -1382,7 +1695,7 @@ try {
       coverageComplete: false,
       uncovered: [
         "authored halt/recovery face-cache continuation",
-        "ordinary native population ownership",
+        "full ordinary native population physical/pose ownership (PED-06)",
       ],
       closeupCamera: closeup?.diagnostic?.status ?? "unavailable",
     };
@@ -1410,6 +1723,52 @@ try {
     JSON.stringify(report, null, 2),
   );
   for (const scenario of report.cases) {
+    const borrowedRelease = scenario.borrowedRelease;
+    assert.equal(
+      borrowedRelease?.event.before.slotOwner,
+      true,
+      `${scenario.dataRoot}: actual borrowed slot was owned before release`,
+    );
+    for (const key of [
+      "processCleared",
+      "slotReleased",
+      "poolCleared",
+      "processRetained",
+    ])
+      assert.equal(
+        borrowedRelease.event[key],
+        true,
+        `${scenario.dataRoot}: borrowed face release ${key}`,
+      );
+    for (const key of [
+      "selectedRecordRetained",
+      "recordsRetained",
+      "ringOrderRetained",
+      "sourceNativeRecordRetained",
+    ])
+      assert.equal(
+        borrowedRelease[key],
+        true,
+        `${scenario.dataRoot}: borrowed face release retains ${key}`,
+      );
+    assert.deepEqual(
+      borrowedRelease.event.floorNormal,
+      borrowedRelease.event.before.floorNormal,
+    );
+    assert.deepEqual(
+      borrowedRelease.event.retainedDirection,
+      borrowedRelease.event.before.retainedDirection,
+    );
+    for (const event of scenario.after.events.filter(
+      (event) => event.kind === "release-selected-face-cache",
+    )) {
+      assert.equal(event.processCleared, true);
+      assert.equal(event.slotReleased, true);
+      assert.equal(event.poolCleared, true);
+      assert.equal(event.processRetained, true);
+      assert.deepEqual(event.floorNormal, event.before.floorNormal);
+      assert.deepEqual(event.retainedDirection, event.before.retainedDirection);
+    }
     assert.equal(scenario.after.slickMaterials.registration, "complete");
     assert.deepEqual(scenario.after.slickMaterials.identities, [
       "GIBSLICK",

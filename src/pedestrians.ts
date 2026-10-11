@@ -49,6 +49,10 @@ import { NativeRandom, sharedNativeRandom } from "./native-random";
 import { parsePix } from "./formats";
 import { ExplosionRuntime, parseWastedExplosionSettings } from "./explosion";
 import type { SmashExplosion } from "./world-smash";
+import {
+  PED_COUNTED_FLAG,
+  PedPopulationAccounting,
+} from "./ped-population-accounting";
 export { PedAction } from "./ped-rules";
 export type { PedThreat } from "./ped-rules";
 
@@ -82,6 +86,18 @@ export interface PedHitEvent {
     pedStartingVelocity?: THREE.Vector3;
   };
 }
+export interface PedCountEvent {
+  timeMs: number;
+  group: number;
+  count: 1;
+  total: number;
+  actor: THREE.Object3D;
+  source: "ordinary" | "native";
+}
+export interface NativePedCountingCharacter {
+  flags: number;
+  body?: { pedestrianFlags: number } | null;
+}
 export interface PedCombatSource {
   /** Native car.pos: live world centre of mass in raw actor units. */
   position: THREE.Vector3;
@@ -106,6 +122,8 @@ export interface PedOptions {
   collision?: Pick<WorldCollision, "raycast"> &
     Partial<Pick<WorldCollision, "querySurfaces">>;
   onHit?: (event: PedHitEvent) => void;
+  /** Counters are committed before this objective outlet and any score outlet. */
+  onCount?: (event: PedCountEvent) => void;
   onNapalmIgnited?: (
     actor: THREE.Object3D,
     velocity: THREE.Vector3,
@@ -203,6 +221,7 @@ interface Limb {
   kind: "arm" | "leg" | "knee";
 }
 interface Ped {
+  nativeCountingCharacter?: NativePedCountingCharacter;
   object: THREE.Group;
   visual: THREE.Group;
   limbs: Limb[];
@@ -563,7 +582,14 @@ export class PedestrianSystem {
   readonly warnings: string[] = [];
   readonly specs: PedSpawnSpec[];
   readonly motionInfo?: { bones: number; frames: number };
-  hits = 0;
+  private readonly population = new PedPopulationAccounting<THREE.Object3D>();
+  private readonly nativeCountingOwners = new Map<
+    object,
+    {
+      ped: Ped;
+      character: NativePedCountingCharacter;
+    }
+  >();
   private peds: Ped[] = [];
   private previousCar: THREE.Vector3;
   private random = randomGenerator(0x43a2c9);
@@ -650,21 +676,60 @@ export class PedestrianSystem {
   get count() {
     return this.peds.length;
   }
+  get hits() {
+    return this.population.hits;
+  }
   get alive() {
-    return this.peds.length - this.hits;
+    return this.population.alive;
   }
   get groupCounts() {
-    const groups = new Map<number, { total: number; killed: number }>();
-    for (const ped of this.peds) {
-      let group = groups.get(ped.spec.group);
-      if (!group) {
-        group = { total: 0, killed: 0 };
-        groups.set(ped.spec.group, group);
-      }
-      group.total++;
-      if (!ped.alive) group.killed++;
-    }
-    return groups;
+    return this.population.groupCounts;
+  }
+
+  /** Bind only counting identity to an existing authored population actor.
+   * FORM/PHIL admission, pose and effects remain the caller's actual owners. */
+  bindNativeCountingOwner(
+    owner: object,
+    actor: THREE.Object3D,
+    character: NativePedCountingCharacter,
+  ): void {
+    const ped = this.peds.find((entry) => entry.object === actor);
+    if (
+      !ped ||
+      this.nativeCountingOwners.has(owner) ||
+      ped.nativeCountingCharacter ||
+      !Number.isInteger(character.flags) ||
+      character.flags < 0 ||
+      character.flags > 0xffffffff
+    )
+      throw new Error("Invalid native pedestrian population binding");
+    character.flags = (character.flags | this.population.flags(actor)) >>> 0;
+    if (character.body) character.body.pedestrianFlags = character.flags;
+    ped.nativeCountingCharacter = character;
+    this.nativeCountingOwners.set(owner, { ped, character });
+  }
+
+  /** Native Kill has already set character flag100 before this outlet. Never
+   * call the estimated visual kill/launch/blood path from this callback. */
+  oneLessNativePed(
+    owner: object,
+    character: NativePedCountingCharacter,
+    timeMs: number,
+  ): boolean {
+    const binding = this.nativeCountingOwners.get(owner);
+    if (!binding || binding.character !== character)
+      throw new Error("Unknown native pedestrian counting owner");
+    if (!(character.flags & PED_COUNTED_FLAG)) return false;
+    const event = this.population.oneLess(binding.ped.object);
+    if (!event) return false;
+    binding.ped.alive = false;
+    this.options.onCount?.({
+      ...event,
+      timeMs,
+      actor: binding.ped.object,
+      source: "native",
+    });
+    return true;
   }
 
   static async create(
@@ -835,6 +900,7 @@ export class PedestrianSystem {
           profile,
           proximity: emptyPedProximity(),
         });
+        system.population.enroll(object, surface.spec.group);
         system.group.add(object);
       }
       if (system.count === limit) break;
@@ -1202,6 +1268,7 @@ export class PedestrianSystem {
     const gravity = this.targetGravity(ped.object.position);
     if (
       !ped.alive ||
+      ped.nativeCountingCharacter ||
       (!inactiveBurnScore && this.combatFrame.immortalPedestrians)
     )
       return false;
@@ -1221,7 +1288,16 @@ export class PedestrianSystem {
       ped.startingVelocity.copy(velocity);
       ped.corporeal = true;
     }
-    if (!inactiveBurnScore) this.hits++;
+    if (!inactiveBurnScore) {
+      const count = this.population.oneLess(ped.object);
+      if (count)
+        this.options.onCount?.({
+          ...count,
+          timeMs,
+          actor: ped.object,
+          source: "ordinary",
+        });
+    }
     const position = ped.object.position;
     const bounds = new THREE.Box3()
       .setFromObject(ped.visual)
@@ -1617,6 +1693,8 @@ export class PedestrianSystem {
     const camera = frame.cameraPosition ?? car.position,
       threats = frame.threats ?? [car];
     for (const ped of this.peds) {
+      // A native-counted body retains actual native transport ownership.
+      if (!ped.alive && ped.nativeCountingCharacter) continue;
       const p = ped.object.position;
       const inProcess =
         Math.abs(p.x - camera.x) < this.settings.processDistance &&
@@ -2095,7 +2173,8 @@ export class PedestrianSystem {
     this.nearReset = true;
   }
   reset() {
-    this.hits = 0;
+    this.population.reset();
+    this.nativeCountingOwners.clear();
     for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);
     for (const ped of this.peds)
       this.options.onNapalmExtinguished?.(ped.object);
@@ -2113,6 +2192,7 @@ export class PedestrianSystem {
     this.elapsed = 0;
     this.previousCar.copy(this.options.spawn);
     for (const ped of this.peds) {
+      ped.nativeCountingCharacter = undefined;
       ped.alive = true;
       ped.vanished = false;
       ped.action = PedAction.Walking;
@@ -2186,5 +2266,7 @@ export class PedestrianSystem {
     this.group.removeFromParent();
     this.group.clear();
     this.peds = [];
+    this.population.clear();
+    this.nativeCountingOwners.clear();
   }
 }

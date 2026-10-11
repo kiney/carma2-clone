@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { copyNativeTextureSampling } from "./native-material-render";
 
 export interface AnimationInput {
   speed: number;
@@ -665,6 +666,7 @@ export class TextureAnimation {
             if (!source)
               throw new Error(`Frame texture ${frame.texture} is absent`);
             const texture = source.clone();
+            copyNativeTextureSampling(texture, material);
             this.owned.add(texture);
             texture.matrixAutoUpdate = false;
             const atlas = new THREE.Matrix3().set(
@@ -687,6 +689,7 @@ export class TextureAnimation {
             if (!original)
               throw new Error("Animated material has no texture map");
             matrixMap = original.clone();
+            copyNativeTextureSampling(matrixMap, material);
             this.owned.add(matrixMap);
             matrixMap.matrixAutoUpdate = false;
           }
@@ -775,6 +778,7 @@ export class TextureAnimation {
             .copy(baseUv)
             .premultiply(new THREE.Matrix3().set(1, 0, u, 0, 1, v, 0, 0, 1));
       }
+      copyNativeTextureSampling(texture, material);
       if (material.map !== texture) {
         material.map = texture;
         material.needsUpdate = true;
