@@ -594,7 +594,9 @@ export class ShardRuntime {
     for (let slot = 0; slot < CAPACITY; slot++) {
       const fragment = this.slots[slot];
       if (!fragment) continue;
-      if (now < fragment.startMs || now >= fragment.endMs) {
+      // HW 4eff2d compares only the unsigned expiry (+8). A predicted clock
+      // regression below birth (+0c) still visits and moves this live record.
+      if (now >= fragment.endMs) {
         for (const member of this.slots)
           if (member?.groupId === fragment.groupId) this.removeFragment(member);
         continue;

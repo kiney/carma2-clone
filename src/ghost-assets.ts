@@ -102,7 +102,9 @@ export async function loadGhostAssets(
           }
           // Native enumeration walks head-inserted child links, the reverse of
           // parseAct's append order. Do not recurse through nested descendants.
-          for (const actor of [...container.children].reverse()) {
+          for (const actor of [...container.children]
+            .filter((child) => (child as THREE.Mesh).isMesh !== true)
+            .reverse()) {
             const template = makeTemplate(actor);
             if (!template) {
               diagnostics.push(

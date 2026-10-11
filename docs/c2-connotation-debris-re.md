@@ -109,6 +109,11 @@ their expiry. Force-cleanup and replay timing have additional gates; ordinary
 expiry must retain unsigned comparison and grouped release rather than deleting
 only the triggering slot.
 
+The unsigned comparison at installed `0x4eff2d` checks expiry (`+8`), not birth
+(`+0xc`). A predicted clock regression below a fragment's birth does not remove
+it; the native signed delta still advances movement. The browser ghost audit
+exposed an extra birth-time guard, now removed and covered numerically.
+
 ## Noncar pull, body capacity and wake
 
 Each attempt draws its seed **before** checking render ACT capacity at
@@ -292,3 +297,31 @@ does not determine dt. Expiry/group callback processing remains upward slot
 order, allowing an earlier valid slot to advance before a later sibling expires
 and removes their group. Group callbacks are replay/session serialization
 (`0x4c8620`, `0x4c8a90`, `0x4c8af0`), not gameplay followup-smash execution.
+
+## Ghost visibility at execution
+
+Ghost production calls `PointOutOfSight 0x4e5aa0` at `0x4eb7c9–0x4eb7d8`
+before saving rand, reseeding or selecting the count. Replay bypasses this
+gate. Its point is the retained smash point (DoShrapnel stack argument 4),
+not actor translation or the quad-presence flag. The range is
+`gYon_squared 0x75f620`, stored by `CalculateCameraStuff` as
+`gYon_multiplier^2 * mainCamera.yon^2`.
+
+The existing independent leaf `src/world-visibility.ts` implements the predicate.
+The point is in sight when any enabled mirror/main camera has both strict
+`distanceSquared < limit` and `delta dot cameraBackwards < 0`, or any registered
+extra-render camera has the strict distance test alone. A nonzero supplied limit
+is shared by all views; zero alone selects each camera's own yon squared. This
+does not check obstruction, a complete perspective frustum, or actor render
+visibility. Installed mirror flag is `0x702fe0`; main camera matrix rows 2/3
+start at `0x74b618`/`0x74b624`, mirror rows at `0x74b718`/`0x74b724`; extra
+count is `0x6a0950`, records at `0x6a0958` with stride 8.
+
+Native camera snapshot calculation occurs after physics and before groove,
+delayed effects and final queue flush. Evaluate at each actual ghost producer:
+physics barrier flushes see the preceding camera snapshot, while final queue
+flush sees the new one. An enqueue-time Boolean, `actor.visible`, or unconditional
+acceptance for captured texture patches changes both output and shared RNG order.
+The browser currently has a single camera; missing rearview/extra-render
+providers are explicit optional-view gaps rather than a reason to substitute
+actor visibility.

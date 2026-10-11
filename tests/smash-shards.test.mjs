@@ -309,7 +309,7 @@ test("native signed delta integrates backwards, restores visibility, and quantiz
   runtime.dispose();
 });
 
-test("time before birth or after one member lifetime removes its whole group", () => {
+test("only an expired member removes its group; birth is not an expiry gate", () => {
   for (const mode of ["before-birth", "expired-member"]) {
     const { runtime } = setup();
     runtime.update(1);
@@ -322,7 +322,12 @@ test("time before birth or after one member lifetime removes its whole group", (
         spec({ lifetimeSeconds: [5, 5] }),
         source({ timeMs: 100, groupId: 77 }),
       );
+      const count = runtime.snapshot().active;
       runtime.update(50);
+      assert.equal(runtime.snapshot().active, count);
+      // Installed 4eff2d only compares expiry. At the earliest member's
+      // exact expiry, cleanup also removes its later-born live siblings.
+      runtime.update(5000);
     } else {
       runtime.spawn(
         spec({ lifetimeSeconds: [0.1, 0.1] }),

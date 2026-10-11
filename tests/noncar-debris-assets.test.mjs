@@ -120,7 +120,7 @@ test("reports missing ACT names and mechanics without flattening another actor",
   );
 });
 
-test("deduplicates exact actor identifiers through the native 100-entry resource cache", async () => {
+test("resource cache compares current identifiers after mechanics rewriting", async () => {
   const scene = new THREE.Group();
   addActor(scene, "Shared", new THREE.Matrix4(), true);
   let actorLoads = 0;
@@ -129,10 +129,12 @@ test("deduplicates exact actor identifiers through the native 100-entry resource
       {
         kind: "noncars",
         actorFile: "parts.act",
-        nonCars: [
-          { actor: "Shared", mechanics: "50part.txt" },
-          { actor: "Shared", mechanics: "50part.txt" },
-        ],
+        nonCars: [{ actor: "Shared", mechanics: "50part.txt" }],
+      },
+      {
+        kind: "noncars",
+        actorFile: "parts.act",
+        nonCars: [{ actor: "Shared", mechanics: "50part.txt" }],
       },
     ],
     async () => {
@@ -141,10 +143,16 @@ test("deduplicates exact actor identifiers through the native 100-entry resource
     },
     async () => mechanics(50),
   );
-  const templates = loaded.get(0).templates;
-  assert.equal(actorLoads, 1);
-  assert.equal(templates.length, 2);
-  assert.equal(templates[0].actor, templates[1].actor);
+  assert.equal(actorLoads, 2);
+  const first = loaded.get(0).templates[0];
+  const second = loaded.get(1).templates[0];
+  assert.equal(first.actor.name, "&50!bbbb.ACT");
+  assert.equal(second.actor.name, "&50!bbbb.ACT");
+  assert.notEqual(first.actor, second.actor);
+  assert.equal(
+    first.actor.children[0].geometry,
+    second.actor.children[0].geometry,
+  );
 });
 
 async function originalStore() {

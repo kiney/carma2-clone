@@ -9,6 +9,7 @@ import {
 } from "./geometry";
 
 export type HullBody = RigidBody & { hulls: CollisionHull[] };
+export type BodyPairPredicate = (a: HullBody, b: HullBody) => boolean;
 export interface GuardPose {
   position: Vector3;
   orientation: Quaternion;
@@ -64,7 +65,9 @@ export function guardPairTrajectory(
   b: HullBody,
   pathA: PosePath,
   pathB: PosePath,
+  pairAllowed?: BodyPairPredicate,
 ): number {
+  if (pairAllowed && !pairAllowed(a, b)) return 1;
   const cacheA = new Map<number, CollisionHull[]>(),
     cacheB = new Map<number, CollisionHull[]>();
   const sample = (
@@ -193,6 +196,7 @@ export function guardPairTrajectory(
 export function guardBodyTrajectories(
   bodies: readonly HullBody[],
   paths: Map<HullBody, PosePath>,
+  pairAllowed?: BodyPairPredicate,
 ): Map<HullBody, number> {
   const parents = bodies.map((_, i) => i);
   const roots = bodies.map(attachmentRoot);
@@ -219,6 +223,7 @@ export function guardBodyTrajectories(
   const pairs: [number, number][] = [];
   for (let i = 0; i < bodies.length; i++)
     for (let j = i + 1; j < bodies.length; j++) {
+      if (pairAllowed && !pairAllowed(bodies[i], bodies[j])) continue;
       if (roots[i] === roots[j]) {
         union(i, j);
         continue;
@@ -239,6 +244,7 @@ export function guardBodyTrajectories(
       bodies[j],
       paths.get(bodies[i])!,
       paths.get(bodies[j])!,
+      pairAllowed,
     );
     for (const index of [i, j])
       if (!bodies[index].properties.immovable)

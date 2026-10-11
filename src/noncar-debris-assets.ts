@@ -25,7 +25,10 @@ export async function loadNonCarDebrisAssets(
   loadMechanics: (name: string) => Promise<NonCarMechanics>,
 ): Promise<Map<number, NonCarDebrisAssetSet>> {
   const result = new Map<number, NonCarDebrisAssetSet>();
-  const actorCache = new Map<string, THREE.Object3D>();
+  // rec2 ReadShrapnelSpec compares the actors' current identifiers. The
+  // mechanics rewrite below changes those identifiers; an authored-name map
+  // would incorrectly reuse templates from a later freshly loaded ACT file.
+  const actorCache: THREE.Object3D[] = [];
   const mechanicsCache = new Map<string, Promise<NonCarMechanics>>();
 
   for (let specIndex = 0; specIndex < specs.length; specIndex++) {
@@ -47,17 +50,17 @@ export async function loadNonCarDebrisAssets(
     for (const entry of spec.nonCars ?? []) {
       const originalName = entry.actor;
       const mechanicsName = entry.mechanics;
-      let sourceActor = actorCache.get(originalName);
+      const found = scene && findActor(scene, originalName);
+      if (!found) {
+        diagnostics.push(`missingactor: ${originalName} in ${actorFile}`);
+        continue;
+      }
+      let sourceActor = actorCache.find((actor) => actor.name === found.name);
       if (!sourceActor) {
-        const found = scene && findActor(scene, originalName);
-        if (!found) {
-          diagnostics.push(`missingactor: ${originalName} in ${actorFile}`);
-          continue;
-        }
         sourceActor = cloneActorWithMatrices(found);
         // The native cache has 100 slots. Once full, later selections still
         // work but are no longer entered into this identifier cache.
-        if (actorCache.size < 100) actorCache.set(originalName, sourceActor);
+        if (actorCache.length < 100) actorCache.push(sourceActor);
       }
 
       let mechanics: NonCarMechanics;

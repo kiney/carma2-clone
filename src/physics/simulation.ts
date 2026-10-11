@@ -1,4 +1,23 @@
 import { CameraContactFrame } from "../camera/contact-frame";
+import {
+  activateNativePedBody,
+  acceptNativePedHalt,
+  nativePedRootPose,
+  pedBodyPairExcluded,
+  type NativePedBody,
+  type NativePedContactResult,
+} from "./ped-body";
+import {
+  passivePedContact,
+  activePedContact,
+  type PedContactOther,
+} from "./ped-contact";
+import {
+  evaluateNativeQuietLeaf,
+  canSleepNativeQuietGroup,
+  collectNativeCollisionFlags,
+} from "./quiet-state";
+import { settleNativePedBody } from "./ped-settling";
 import { applyWorldPinball } from "./pinball";
 import { nativeCrashSmokeReturn } from "./crash-smoke";
 import { planPhysicsFrameWindow } from "./frame-window";
@@ -284,7 +303,17 @@ export type SimulationBody =
   | SimulatedCar
   | DetachedBody
   | NonCarBody
-  | MineBody<SimulatedCar>;
+  | MineBody<SimulatedCar>
+  | NativePedBody;
+function isNativePedBody(body: RigidBody): body is NativePedBody {
+  return "kind" in body && body.kind === "pedestrian";
+}
+function nativePairAllowed(a: RigidBody, b: RigidBody): boolean {
+  return !pedBodyPairExcluded(
+    a as { filterA?: number; filterB?: number },
+    b as { filterA?: number; filterB?: number },
+  );
+}
 const Y = new Vector3(0, 1, 0);
 export function boxVertices(bounds: Box3): Vector3[] {
   const result: Vector3[] = [];
@@ -484,6 +513,13 @@ export class VehicleSimulation {
   cars: SimulatedCar[] = [];
   debris: DetachedBody[] = [];
   noncars: NonCarBody[] = [];
+  pedBodies: NativePedBody[] = [];
+  /** Existing generic bodies lack the native quiet hierarchy provider. Their
+   * unknown state blocks whole-ring sleep rather than sleeping a partial ring. */
+  nativeQuietRingState?: (body: RigidBody) => number;
+  /** Applies ec to the complete generic ring; true confirms that ownership. */
+  nativeQuietRingSleep?: (members: readonly RigidBody[]) => boolean;
+  private pedContactRings = new Map<RigidBody, Set<RigidBody>>();
   movingWorld: MovingWorldBody[] = [];
   grooves?: WorldGrooveRuntime;
   private worldGrooveFrameActive = false;
@@ -594,6 +630,19 @@ export class VehicleSimulation {
     public world: WorldCollision,
     public scene: Object3D,
   ) {}
+  addPedBody(body: NativePedBody): void {
+    if (this.pedBodies.includes(body)) return;
+    // The character/render pool owns actor allocation, hierarchy and release.
+    this.pedBodies.push(body);
+  }
+  removePedBody(body: NativePedBody): void {
+    this.pedBodies = this.pedBodies.filter((entry) => entry !== body);
+    this.contactSurfaces.delete(body);
+    const faces = this.worldFaceStates.get(body);
+    if (faces) this.worldFaceCache.invalidate(faces);
+    this.worldFaceStates.delete(body);
+    this.pedContactRings.delete(body);
+  }
   readonly smashPowerupQueue = new NativeSmashPowerupQueue<
     SimulatedCar,
     Object3D
@@ -1014,6 +1063,7 @@ export class VehicleSimulation {
       ...this.mineBodies.filter(
         (body) => !(body.mine.flags & MINE_FLAGS.exploded),
       ),
+      ...this.pedBodies,
     ];
   }
   private mineCar(car: SimulatedCar): MineCar<SimulatedCar> {
@@ -1724,6 +1774,308 @@ export class VehicleSimulation {
       this.gravityMultiplier,
     );
   }
+  private preparePedPhysics(): void {
+    this.pedContactRings.clear();
+    for (const body of this.pedBodies) {
+      // Installed4b674a marks passive headers for this collision phase.
+      if (body.headerState === 1) body.phaseMarker = 2;
+      body.gravityIncrement.set(0, 0, 0);
+      if (body.headerState === 2 && !body.doNothing) {
+        const environment = body.volumeEnabled
+          ? this.updateSpecialVolume(body)
+          : undefined;
+        if (environment?.volume)
+          body.diagnostics.add("native-volume-forces-provider-unavailable");
+        else {
+          body.gravityIncrement.y = Math.fround(
+            -0.05681159420289855 * body.gravity * this.gravityMultiplier,
+          );
+          body.state.velocity.y = Math.fround(
+            body.state.velocity.y + body.gravityIncrement.y,
+          );
+        }
+        if (body.drag !== 0)
+          body.diagnostics.add("native-header-drag-provider-unavailable");
+      }
+      // Installed4b9780 snapshots AFTER forces and BEFORE all lambda solves.
+      body.beforeWorldVelocity.copy(body.state.velocity);
+      body.beforeLocalOmega
+        .copy(body.state.angularVelocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      body.solverLocalVelocity
+        .copy(body.state.velocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      if (body.quietState !== 0 && !body.doNothing) {
+        body.properties.inertia.multiplyScalar(50);
+        body.properties.inertia.set(
+          Math.fround(body.properties.inertia.x),
+          Math.fround(body.properties.inertia.y),
+          Math.fround(body.properties.inertia.z),
+        );
+        body.solverInertiaScale = 50;
+      }
+      body.collisionFlags = 0;
+      this.pedContactRings.set(body, new Set([body]));
+    }
+  }
+  private pedOther(other: RigidBody | undefined): PedContactOther | null {
+    if (!other) return null;
+    const type = isNativePedBody(other)
+      ? 2
+      : "damage" in other
+        ? 1
+        : "rigidType" in other
+          ? Number(other.rigidType)
+          : 0;
+    return {
+      type,
+      ownerPresent:
+        isNativePedBody(other) || "damage" in other || "owner" in other,
+      mass: other.properties.mass,
+      velocity: other.state.velocity,
+    };
+  }
+  private pedDamageResult(
+    body: NativePedBody,
+    result: NativePedContactResult,
+    phase: "passive" | "active",
+  ): void {
+    if (result.eligible && "unresolved" in result) {
+      for (const diagnostic of result.unresolved)
+        body.diagnostics.add(diagnostic);
+      // The common HP tail is downstream of severing; no fabricated limb state.
+      if (result.unresolved.length === 0) {
+        if ("hitPoints" in result) body.hitPoints = result.hitPoints;
+        if ("flags" in result) body.pedestrianFlags = result.flags;
+        if ("impactCount" in result) body.impactCount = result.impactCount;
+        if ("collisionFilterA" in result) {
+          body.filterA = result.collisionFilterA;
+          body.filterB = result.collisionFilterB;
+        }
+      }
+    }
+    body.onContactDamage?.(body, result, phase);
+  }
+  private preparePedContacts(contacts: Contact[]): Contact[] {
+    for (const contact of contacts) {
+      // 4bda86 joins the geometry contact ring even if its later lambda is0.
+      if (contact.b) {
+        const a = this.pedContactRings.get(contact.a) ?? new Set([contact.a]),
+          b = this.pedContactRings.get(contact.b) ?? new Set([contact.b]);
+        const ring = new Set([...a, ...b]);
+        for (const member of ring) this.pedContactRings.set(member, ring);
+      }
+      for (const [body, other] of [
+        [contact.a, contact.b],
+        [contact.b, contact.a],
+      ] as const) {
+        if (!body || !isNativePedBody(body)) continue;
+        if (body.headerState === 1) {
+          activateNativePedBody(body, body.characterVelocity);
+          body.onActivated?.(body, other);
+          const context = body.contactProvider?.(body);
+          if (context)
+            this.pedDamageResult(
+              body,
+              passivePedContact({
+                ...context,
+                state: {
+                  ...context.state,
+                  hitPoints: body.hitPoints,
+                  flags: body.pedestrianFlags,
+                },
+                other: this.pedOther(other),
+                characterVelocity: body.characterVelocity,
+                pedRigidType: 2,
+                impactCount: body.impactCount,
+              }),
+              "passive",
+            );
+          else body.diagnostics.add("ped-contact-provider-unavailable");
+        } else if (body.doNothing) {
+          body.doNothing = false;
+          body.properties.immovable = false;
+        }
+      }
+    }
+    return contacts;
+  }
+  private processPedContactDamage(impacts: ContactImpact[]): void {
+    // Installed4bbbf5 callback precedes4bbc30 normal application. Group sums
+    // and first-row lambda are independent, retaining the source greedy order.
+    for (const group of groupNativeImpactRows(impacts)) {
+      for (const [body, other, sign] of [
+        [group.a, group.b, 1],
+        [group.b, group.a, -1],
+      ] as const) {
+        if (!body || !isNativePedBody(body) || body.headerState !== 2) continue;
+        const context = body.contactProvider?.(body);
+        if (!context) continue;
+        const force = new Vector3();
+        for (const row of group.rows)
+          force.addScaledVector(
+            row.normal,
+            row.normalImpulse * (row.a === body ? 1 : -1),
+          );
+        const first = group.rows[0];
+        this.pedDamageResult(
+          body,
+          activePedContact({
+            ...context,
+            state: {
+              ...context.state,
+              hitPoints: body.hitPoints,
+              flags: body.pedestrianFlags,
+            },
+            other: this.pedOther(other),
+            pedRigidType: 2,
+            pedOwnerPresent: true,
+            replay: false,
+            totalLambda: group.totalLambda,
+            firstRowLambda: first.normalImpulse,
+            pedVelocityY: body.state.velocity.y,
+            worldForce: force,
+            faceNormal:
+              first.sourceSurface?.normal.clone().multiplyScalar(sign) ?? null,
+          }),
+          "active",
+        );
+      }
+    }
+  }
+  private finishPedQuiet(): void {
+    const accepted = this.lastImpacts.filter((row) => row.solverAccepted);
+    const flags = collectNativeCollisionFlags(
+      accepted.map((row) => ({
+        a: row.a,
+        b: row.b ?? null,
+        sourceType: row.sourceType ?? (row.b ? 5 : 1),
+        lambda: row.normalImpulse,
+      })),
+    ).flags;
+    for (const body of this.pedBodies) {
+      body.collisionFlags = flags.get(body) ?? 0;
+      // Installed4ba7eb clears the marker and resolves ec from registration
+      // before the leaf evaluator; activation has already removed bit0x20.
+      if (body.phaseMarker !== 0) {
+        body.phaseMarker = 0;
+        body.doNothing = body.headerState === 1;
+        body.properties.immovable = body.doNothing;
+      }
+      if (body.headerState !== 2) continue;
+      // Installed4ba7bb restores the temporary prepare-phase moments before
+      // eligibility evaluation; no scaled inertia leaks into integration.
+      if (body.solverInertiaScale === 50) {
+        body.properties.inertia.divideScalar(50);
+        body.properties.inertia.set(
+          Math.fround(body.properties.inertia.x),
+          Math.fround(body.properties.inertia.y),
+          Math.fround(body.properties.inertia.z),
+        );
+        body.solverInertiaScale = 1;
+      }
+      body.solverLocalVelocity
+        .copy(body.state.velocity)
+        .applyQuaternion(body.state.orientation.clone().invert());
+      const omega = body.state.angularVelocity
+          .clone()
+          .applyQuaternion(body.state.orientation.clone().invert()),
+        ring = this.pedContactRings.get(body) ?? new Set([body]);
+      const quiet = evaluateNativeQuietLeaf({
+        previousQuietState: body.quietState,
+        singleton: ring.size === 1,
+        collisionFlags: body.collisionFlags,
+        doNothing: body.doNothing,
+        beforeWorldVelocity: body.beforeWorldVelocity.toArray(),
+        worldVelocity: body.state.velocity.toArray(),
+        beforeLocalOmega: body.beforeLocalOmega.toArray(),
+        localOmega: omega.toArray(),
+        localVelocity: body.solverLocalVelocity.toArray(),
+        gravityIncrement: body.gravityIncrement.toArray(),
+        mass: body.properties.mass,
+        inertia: body.properties.inertia.toArray(),
+        bounds: body.profile.bounds,
+        centreOfMass: body.profile.centreOfMass,
+        jointInfoOrientationY: null,
+      });
+      body.quietState = quiet.quietState;
+      if (quiet.zeroVelocities) {
+        body.state.velocity.set(0, 0, 0);
+        body.state.angularVelocity.set(0, 0, 0);
+        body.auxiliaryLocalOmega.set(0, 0, 0);
+      }
+    }
+    for (const body of this.pedBodies) {
+      if (body.headerState !== 2 || body.doNothing) continue;
+      const ring = this.pedContactRings.get(body) ?? new Set([body]),
+        states = [...ring].map((member) =>
+          isNativePedBody(member)
+            ? member.quietState
+            : (this.nativeQuietRingState?.(member) ?? 0),
+        );
+      if (
+        [...ring].some((member) => !isNativePedBody(member)) &&
+        !this.nativeQuietRingState
+      )
+        body.diagnostics.add("mixed-contact-ring-quiet-provider-unavailable");
+      if (!canSleepNativeQuietGroup(states)) continue;
+      if (
+        [...ring].some((member) => !isNativePedBody(member)) &&
+        !this.nativeQuietRingSleep?.([...ring])
+      ) {
+        body.diagnostics.add("mixed-contact-ring-sleep-provider-unavailable");
+        continue;
+      }
+      for (const member of ring)
+        if (isNativePedBody(member)) {
+          member.doNothing = true;
+          member.properties.immovable = true;
+          member.quietState = 0;
+        }
+    }
+  }
+  private finishPedFrame(framePeriodMs: number): void {
+    for (const body of [...this.pedBodies]) {
+      if (body.headerState !== 2) continue;
+      body.actor.position.copy(body.state.position);
+      body.actor.quaternion.copy(body.state.orientation);
+      body.actor.updateMatrix();
+      if (body.doNothing) {
+        if (!body.haltCallbackEnabled) continue;
+        if (!body.onHalt) {
+          body.diagnostics.add("native-halt-provider-unavailable");
+          continue;
+        }
+        if (body.onHalt(body, framePeriodMs)) acceptNativePedHalt(body);
+        else {
+          body.doNothing = false;
+          body.properties.immovable = false;
+        }
+      } else {
+        const result = settleNativePedBody({
+          worldVector: body.state.velocity.toArray(),
+          firstWorldFaceNormal: body.firstWorldFaceNormal?.toArray() ?? null,
+          actorMatrix: nativePedRootPose(body),
+          mass: body.properties.mass,
+          inertia: body.properties.inertia.toArray(),
+          bounds: body.profile.bounds,
+          localOmega: body.state.angularVelocity
+            .clone()
+            .applyQuaternion(body.state.orientation.clone().invert())
+            .toArray(),
+          collisionFlag: body.collisionFlags !== 0,
+          doNothing: body.doNothing,
+        });
+        if (result.gate === "face-unavailable")
+          body.diagnostics.add("native-settling-face-unavailable");
+        body.state.angularVelocity
+          .fromArray(result.localOmega)
+          .applyQuaternion(body.state.orientation);
+        body.characterVelocity.copy(body.state.velocity);
+        body.onMoved?.(body, framePeriodMs);
+      }
+    }
+  }
   /** Full powerup repair439460 also resets suspension, including an unbent
    * car. Restore partition properties before recalculating axle loads. */
   repair(car: SimulatedCar) {
@@ -1757,6 +2109,7 @@ export class VehicleSimulation {
     } finally {
       this.collectingOrdinaryCrush = false;
     }
+    this.finishPedFrame(Math.round(Math.max(0, dt) * 1000) >>> 0);
     this.onFinishCars?.(Math.round(Math.max(0, dt) * 1000) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
@@ -1792,6 +2145,7 @@ export class VehicleSimulation {
     this.cameraContacts.finish(window.lastPhysicsTickMs, window.frameEndMs);
     this.elapsed = window.lastPhysicsTickMs / 1000;
     this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
+    this.finishPedFrame(Math.round(framePeriodMs) >>> 0);
     this.onFinishCars?.(Math.round(framePeriodMs) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
@@ -1951,6 +2305,7 @@ export class VehicleSimulation {
   private worldContacts(body: RigidBody, hulls: CollisionHull[]): Contact[] {
     if (
       body.properties.immovable ||
+      (isNativePedBody(body) && body.suppressWorldFaces) ||
       ("kind" in body &&
         body.kind === "noncar" &&
         (body as NonCarBody).mechanics.ignoreWorldCollisions)
@@ -1969,10 +2324,15 @@ export class VehicleSimulation {
     const nearby = this.facesNearBody(body, hulls, true).filter(
       (surface) =>
         surface.enabled !== false &&
+        (!surface.owner || nativePairAllowed(body, surface.owner)) &&
         !/^[!>]/.test(surface.material) &&
         surface.collisionMode !== "passthrough",
     );
     surfaces.push(...nearby);
+    if (isNativePedBody(body)) {
+      body.worldFaceNormals = nearby.map((surface) => surface.normal.clone());
+      body.firstWorldFaceNormal = body.worldFaceNormals[0]?.clone() ?? null;
+    }
     for (let i = 0; i < old.length; i++) {
       const staticNearby = nearby.filter((surface) => !surface.owner);
       const recovery = carBody.worldRecovery
@@ -2044,6 +2404,7 @@ export class VehicleSimulation {
   private advanceWorldContacts(body: SimulationBody, refine = false) {
     if (
       body.properties.immovable ||
+      (isNativePedBody(body) && body.suppressWorldFaces) ||
       ("kind" in body &&
         body.kind === "noncar" &&
         body.mechanics.ignoreWorldCollisions)
@@ -2528,6 +2889,7 @@ export class VehicleSimulation {
       for (let j = i + 1; j < bodies.length; j++) {
         const a = bodies[i],
           b = bodies[j];
+        if (!nativePairAllowed(a, b)) continue;
         if (a.properties.immovable && b.properties.immovable) continue;
         const pa = poses.get(a)!,
           pb = poses.get(b)!;
@@ -3428,6 +3790,7 @@ export class VehicleSimulation {
     for (const body of this.mineBodies)
       if (!(body.mine.flags & MINE_FLAGS.exploded))
         this.applyFreeBodyForces(body);
+    this.preparePedPhysics();
     const bodies = this.allBodies();
     prepareJointVelocities(this.allJoints());
     for (const body of this.noncars)
@@ -3441,10 +3804,18 @@ export class VehicleSimulation {
     const beforeApply = (
       impacts: ContactImpact[],
       jointImpacts: JointConstraintImpact[],
-    ) => this.processImpactDamage(impacts, jointImpacts, restartGroups);
+    ) => {
+      const accepted = this.processImpactDamage(
+        impacts,
+        jointImpacts,
+        restartGroups,
+      );
+      if (accepted !== false) this.processPedContactDamage(impacts);
+      return accepted;
+    };
     const joints = this.allJoints();
     this.lastImpacts = resolveContactGroups(
-      this.collectContacts(bodies),
+      this.preparePedContacts(this.collectContacts(bodies)),
       PHYSICS_STEP,
       joints,
       beforeApply,
@@ -3468,7 +3839,7 @@ export class VehicleSimulation {
         );
         this.lastImpacts.push(
           ...resolveContactGroups(
-            this.collectContacts(changed),
+            this.preparePedContacts(this.collectContacts(changed)),
             PHYSICS_STEP,
             changedJoints,
             beforeApply,
@@ -3513,7 +3884,7 @@ export class VehicleSimulation {
       if (!contacts.length) break;
       this.lastImpacts.push(
         ...resolveContactGroups(
-          contacts,
+          this.preparePedContacts(contacts),
           PHYSICS_STEP,
           this.allJoints(),
           beforeApply,
@@ -3522,6 +3893,7 @@ export class VehicleSimulation {
       resolveRestarts();
       guardResults.clear();
     }
+    this.finishPedQuiet();
     const committing = this.allBodies();
     const worldFractions = new Map(
       committing.map((body) => [
@@ -3580,7 +3952,11 @@ export class VehicleSimulation {
         return [body, path];
       }),
     );
-    const pairFractions = guardBodyTrajectories(committing, paths);
+    const pairFractions = guardBodyTrajectories(
+      committing,
+      paths,
+      nativePairAllowed,
+    );
     for (const body of committing) {
       if (!body.properties.immovable)
         advance(
@@ -3662,6 +4038,7 @@ export class VehicleSimulation {
       const fractions = guardBodyTrajectories(
         this.allBodies(),
         projectionPaths,
+        nativePairAllowed,
       );
       for (const { body } of beforeProjection) {
         const fraction = fractions.get(body)!;
@@ -3741,6 +4118,7 @@ export class VehicleSimulation {
     this.mechanicsTimeSync = this.collectingOrdinaryCrush
       ? this.mechanicsTimeSync - PHYSICS_STEP * 1000
       : 1;
+    if (!this.collectingOrdinaryCrush) this.finishPedFrame(PHYSICS_STEP * 1000);
   }
   private detachParts(car: SimulatedCar) {
     for (let index = 0; index < car.damage.runtimeParts.length; index++) {
@@ -3893,6 +4271,7 @@ export class VehicleSimulation {
     this.mines.clear();
     for (const body of this.mineBodies) body.actor.removeFromParent();
     this.mineBodies = [];
+    for (const body of [...this.pedBodies]) this.removePedBody(body);
     // Reunite private split geometries before the content loader disposes the
     // scene. Otherwise pristine and secondary meshes become unreachable.
     for (const car of this.cars) car.damage.repair();

@@ -68,6 +68,27 @@ function source(material, changes = {}) {
 const close = (a, b, tolerance = 1e-6) =>
   assert.ok(Math.abs(a - b) <= tolerance, `${a} != ${b}`);
 
+test("native clock regression below birth retains and moves a live ghost group", () => {
+  const { runtime, material } = setup();
+  runtime.update(90);
+  runtime.spawnGhosts(spec(), source(material));
+  runtime.update(110); // Birth suppresses one movement pass, not expiry.
+  const before = runtime.snapshot().fragments[0];
+  runtime.update(80);
+  const after = runtime.snapshot().fragments[0];
+  assert.equal(runtime.snapshot().active, 1);
+  const dt = Math.fround(Math.fround(-30) * Math.fround(0.001));
+  close(
+    after.position[0],
+    Math.fround(before.position[0] + (Math.fround(6.9) * dt) / 6.9),
+  );
+  close(after.velocity[1], Math.fround(-dt * 9.8));
+  assert.ok(after.position[0] < before.position[0]);
+  runtime.update(after.endMs);
+  assert.equal(runtime.snapshot().active, 0);
+  runtime.dispose();
+});
+
 test("ordered negative ghost amount emits each authored model once and restores a rand output", () => {
   const { runtime, material, rng } = setup(17),
     expected = new NativeRandom(17);

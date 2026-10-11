@@ -72,6 +72,7 @@ test("nonpositive count selects direct container children in reverse insertion o
   );
   assert.deepEqual(set.containerSize, [9, 6, 2]);
   assert.equal(set.templates[1].model.name, "model1");
+  assert.deepEqual(set.diagnostics, []);
   assert.equal(
     set.templates.some((t) => t.name === "nested"),
     false,

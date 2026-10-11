@@ -3,12 +3,25 @@ import type { DatFace, DatModel } from "./formats";
 
 const f32 = Math.fround;
 type SourceModel = Pick<DatModel, "positions" | "faces">;
+type PreparedSourceModel = Pick<
+  DatModel,
+  "positions" | "uvs" | "faces" | "flags"
+>;
 export interface CarPreparedOptions {
   /** Actual resolved native material addresses, keyed by DAT face material ID.
    * Zero is the native NULL face material, even with an inherited actor MAT. */
   materialPointers?: ReadonlyMap<number, number>;
   /** Only supply when BR_MODF_CREASE and its source angle are known. */
   creaseCos?: number;
+}
+export interface ModelPreparedOptions extends CarPreparedOptions {}
+
+export interface NativePreparedVertexGroup {
+  /** Offset in the single contiguous prepared vertex allocation. */
+  start: number;
+  count: number;
+  /** More than one DAT ID may resolve to the same actual native MAT pointer. */
+  materialIndices: number[];
 }
 export interface CarSmokeSamplerOptions extends CarPreparedOptions {
   /** Native car_actor: the browser principal model ACT, not its mesh child. */
@@ -101,6 +114,55 @@ export function prepareNativeCarVertexOrder(
   model: SourceModel,
   options: CarPreparedOptions = {},
 ) {
+  // Installed car loading forces BR_MODF_DONT_WELD before model preparation.
+  // Keep this API independent of the original DAT's own flags and UV presence.
+  return prepareVertexOrder(model, options, true);
+}
+
+/** Installed generic model preparation: flags bit1 selects 520030 DONT_WELD;
+ * otherwise 51ff20 compares material, XYZ/UV (only when source IDs differ),
+ * then unnormalized smoothing sums. Original positive MAT addresses remain an
+ * explicit provider; without them only NULL-first/single-material order is
+ * authoritative. This shares the independent CRT sort and smoothing with cars.
+ * It returns one contiguous allocation order, including all material groups;
+ * a first-group smoke index can intentionally reach a following group's vertex.
+ * Prepared model pivot subtraction is a separate caller-owned provider. */
+export function prepareNativeModelVertexOrder(
+  model: PreparedSourceModel,
+  options: ModelPreparedOptions = {},
+) {
+  if (
+    !model ||
+    !Number.isInteger(model.flags) ||
+    model.flags < 0 ||
+    model.flags > 0xffff
+  )
+    throw new Error("Invalid native model flags");
+  if (!model.uvs || model.uvs.length !== (model.positions.length / 3) * 2)
+    throw new Error("Invalid native model source UV count");
+  if (!Array.from(model.uvs).every(Number.isFinite))
+    throw new Error("Invalid native model source UV");
+  if (model.positions.length / 3 > 0xffff || model.faces.length > 0xffff)
+    throw new Error("Native model source exceeds 16-bit counts");
+  if ((model.flags & 0x100) !== 0 && options.creaseCos === undefined)
+    throw new Error("Missing native model crease cosine provider");
+  return prepareVertexOrder(
+    model,
+    {
+      ...options,
+      creaseCos: (model.flags & 0x100) !== 0 ? options.creaseCos : undefined,
+    },
+    (model.flags & 1) !== 0,
+    model.uvs,
+  );
+}
+
+function prepareVertexOrder(
+  model: SourceModel,
+  options: CarPreparedOptions,
+  dontWeld: boolean,
+  uvs?: Float32Array,
+) {
   if (model.positions.length % 3 !== 0)
     throw new Error("Invalid car source positions");
   const points: Vector3[] = [];
@@ -153,6 +215,12 @@ export function prepareNativeCarVertexOrder(
     throw new Error("Invalid car crease cosine");
   const normals = model.faces.map((face) => {
     if (
+      face.indices.length !== 3 ||
+      !Number.isInteger(face.material) ||
+      face.material < 0 ||
+      !Number.isInteger(face.smoothing) ||
+      face.smoothing < 0 ||
+      face.smoothing > 0xffff ||
       face.indices.some(
         (i) => !Number.isInteger(i) || i < 0 || i >= points.length,
       )
@@ -209,22 +277,48 @@ export function prepareNativeCarVertexOrder(
   }
   const materialRank = (faceIndex: number) =>
     rank.get(model.faces[faceIndex].material)!;
-  nativeSort(
-    corners,
-    (a, b) =>
-      materialRank(a.faceIndex) - materialRank(b.faceIndex) ||
-      a.source - b.source ||
-      xyz(a.sum, b.sum),
-  );
+  const compare = (
+    a: (typeof corners)[number],
+    b: (typeof corners)[number],
+  ) => {
+    const material = materialRank(a.faceIndex) - materialRank(b.faceIndex);
+    if (material) return material;
+    if (dontWeld) return a.source - b.source || xyz(a.sum, b.sum);
+    if (a.source !== b.source) {
+      const position = xyz(points[a.source], points[b.source]);
+      if (position) return position;
+      const mapping =
+        uvs![2 * a.source] - uvs![2 * b.source] ||
+        uvs![2 * a.source + 1] - uvs![2 * b.source + 1];
+      if (mapping) return mapping;
+    }
+    return xyz(a.sum, b.sum);
+  };
+  nativeSort(corners, compare);
   const distinct = corners.filter(
-    (corner, i) =>
-      i === 0 ||
-      materialRank(corner.faceIndex) !==
-        materialRank(corners[i - 1].faceIndex) ||
-      corner.source !== corners[i - 1].source ||
-      xyz(corner.sum, corners[i - 1].sum) !== 0,
+    (corner, i) => i === 0 || compare(corner, corners[i - 1]) !== 0,
   );
+  const groups: NativePreparedVertexGroup[] = [];
+  for (let start = 0; start < distinct.length; ) {
+    const pointerRank = materialRank(distinct[start].faceIndex);
+    let end = start + 1;
+    while (
+      end < distinct.length &&
+      materialRank(distinct[end].faceIndex) === pointerRank
+    )
+      end++;
+    groups.push({
+      start,
+      count: end - start,
+      materialIndices: materials.filter(
+        (material) => rank.get(material) === pointerRank,
+      ),
+    });
+    start = end;
+  }
   return {
+    welding: dontWeld ? ("dont-weld" as const) : ("weld" as const),
+    groups,
     materialOrder,
     materialIndices: selected,
     remainingMaterialOrder:

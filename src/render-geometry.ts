@@ -57,6 +57,8 @@ export function createModelGeometry(model: DatModel): THREE.BufferGeometry {
   geometry.setIndex(orderedIndices);
   geometry.userData.sourceVertexIndices = sourceVertexIndices;
   geometry.userData.sourcePositions = model.positions.slice();
+  geometry.userData.sourceUVs = model.uvs.slice();
+  geometry.userData.modelFlags = model.flags;
   geometry.userData.sourceFaces = sourceFaces;
   updateModelNormals(geometry);
   geometry.computeBoundingSphere();
