@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import {
+  prepareNativeModelFacePlane,
+  type NativePreparedFacePlane,
+} from "./physics/prepared-plane";
 
 export interface WorldSourceColumns {
   readonly countX: number;
@@ -41,6 +45,10 @@ export interface WorldSourceTriangle {
   /** Geometry material-group ordinal only; native prepared group order remains unresolved. */
   readonly renderMaterialGroup: number;
   readonly preparedGroupIndex: null;
+  /** Installed LoadTrackModels/AddSmoothModels preparation, not raw DAT flags. */
+  readonly effectiveTrackModelFlags: number | null;
+  /** Source-local equation before pivot subtraction or cached-world emission. */
+  readonly nativeModelPlane: Readonly<NativePreparedFacePlane> | null;
 }
 
 export interface WorldSourceSnapshot {
@@ -334,7 +342,10 @@ function buildFaceResolver(geometry: THREE.BufferGeometry) {
 
 /** Capture immutable source identity/order before static batching moves or
  * disposes source objects. Mesh/Object3D references intentionally remain live. */
-export function captureWorldSource(root: THREE.Object3D): WorldSourceSnapshot {
+export function captureWorldSource(
+  root: THREE.Object3D,
+  options: { modelPreparation?: "track" } = {},
+): WorldSourceSnapshot {
   const nativeColumns = nativeColumnRoot(root);
   const { ppRoot, identifier: columnIdentifier } = nativeColumns;
   const pp = nativeColumns.config;
@@ -415,6 +426,43 @@ export function captureWorldSource(root: THREE.Object3D): WorldSourceSnapshot {
         ? mesh.material[materialIndex]
         : mesh.material;
       const face = faceForTriangle(tri);
+      const rawModelFlags = geometry.userData.modelFlags;
+      const effectiveTrackModelFlags =
+        options.modelPreparation === "track" &&
+        Number.isInteger(rawModelFlags) &&
+        rawModelFlags >= 0 &&
+        rawModelFlags <= 0xffff
+          ? (rawModelFlags | 0x80) & 0xfdfe
+          : null;
+      let nativeModelPlane: Readonly<NativePreparedFacePlane> | null = null;
+      const indexedPositions = geometry.userData.sourcePositions as
+        | Float32Array
+        | undefined;
+      const sourceIndices = face.sourceFace?.indices;
+      if (
+        effectiveTrackModelFlags !== null &&
+        indexedPositions instanceof Float32Array &&
+        Array.isArray(sourceIndices) &&
+        sourceIndices.length === 3 &&
+        sourceIndices.every(
+          (i) =>
+            Number.isInteger(i) &&
+            i >= 0 &&
+            i * 3 + 2 < indexedPositions.length,
+        )
+      ) {
+        const [a, b, c] = sourceIndices.map(
+          (i) =>
+            [
+              indexedPositions[i * 3],
+              indexedPositions[i * 3 + 1],
+              indexedPositions[i * 3 + 2],
+            ] as [number, number, number],
+        );
+        const plane = prepareNativeModelFacePlane(a, b, c);
+        Object.freeze(plane.normal);
+        nativeModelPlane = Object.freeze(plane);
+      }
       triangles.push(
         Object.freeze({
           mesh,
@@ -430,6 +478,8 @@ export function captureWorldSource(root: THREE.Object3D): WorldSourceSnapshot {
           sourceFace: face.sourceFace,
           renderMaterialGroup: groupIndex,
           preparedGroupIndex: null,
+          effectiveTrackModelFlags,
+          nativeModelPlane,
         }),
       );
     }

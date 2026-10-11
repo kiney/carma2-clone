@@ -10,6 +10,8 @@ export interface DatFace {
 export interface DatModel {
   name: string;
   flags: number;
+  /** Native BRender model pivot; omitted when the DAT has no PIVOT chunk. */
+  pivot?: [number, number, number];
   positions: Float32Array;
   uvs: Float32Array;
   faces: DatFace[];
@@ -239,10 +241,19 @@ export function parseDat(bytes: Uint8Array): DatModel[] {
         for (let i = 0; i < count; i++) m.faces[i].material = c.u16();
         break;
       }
+      case 0x15: {
+        const m = current();
+        if (m.pivot) throw new Error("DAT: duplicate model pivot");
+        if (c.remaining !== 12)
+          throw new Error("DAT: model pivot must contain exactly 3 scalars");
+        const pivot = c.floats(3);
+        m.pivot = [pivot[0], pivot[1], pivot[2]];
+        break;
+      }
       case 0:
         finish();
         break;
-      // Optional pivot, precomputed bounds, and unknown extensions are isolated chunks.
+      // Precomputed bounds and unknown extensions are isolated chunks.
     }
   }
   if (model) throw new Error("DAT: missing final end marker");

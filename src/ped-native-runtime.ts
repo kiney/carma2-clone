@@ -8,6 +8,8 @@ import type { NativePedDeadModels } from "./ped-dead-models";
 import {
   createNativePedInstance,
   advanceNativePedPose,
+  poseNativePedFrame,
+  synchronizeNativePedPhysicalPose,
   selectNativePedMove,
   selectNativePedBoneModel,
   releaseNativePedActorSet,
@@ -52,6 +54,11 @@ import type {
 } from "./physics/ped-sever";
 import type { RigidBody } from "./physics/contact";
 import type { VehicleSimulation } from "./physics/simulation";
+import {
+  setNativePedPosition,
+  type NativePedSetPositionResult,
+} from "./ped-set-position";
+import type { NativePedMoveCallbackState } from "./physics/ped-active-move";
 
 export type NativePedRuntimeSimulation = Pick<
   VehicleSimulation,
@@ -107,6 +114,11 @@ export interface NativePedRuntimeCallback<Owner extends object> {
   framePeriodMs: number;
 }
 export interface NativePedRuntimeHooks<Owner extends object> {
+  /** Original outer current-root grounding/proximity phase after resource
+   * admission and before this frame's BON advancement or passive PHIL write. */
+  beforePose?: (
+    context: NativePedRuntimeCallback<Owner>,
+  ) => NativePedInstanceResult | void;
   contactProvider?: (
     context: NativePedRuntimeCallback<Owner>,
     dispatch: NativePedContactDispatch,
@@ -564,11 +576,32 @@ export class NativePedRuntime<Owner extends object = object> {
         completedMove: false,
       };
     c.instance.rootPose.set(pose);
-    const result = advanceNativePedPose(c.instance, this.currentTimeMs, {
-      mode: 3,
-    });
+    const result = poseNativePedFrame(c.instance, 3);
     if (result.status === "complete" && c.body)
       this.simulation.phil.setPassiveMatrix(c.body, c.instance.rootPose);
+    this.recordResult(c, result);
+    return result;
+  }
+  /** Installed SetCharacterPosition(mode1). Use the raw finite ground hit,
+   * not an already clearance-offset point. Ped.pos remains an outer-tail store;
+   * this core does not advance BON clocks or overwrite an active physical root. */
+  setGroundPosition(
+    owner: Owner,
+    groundPoint: PedVector,
+    callbackState?: NativePedMoveCallbackState,
+  ): NativePedSetPositionResult | NativePedInstanceResult {
+    const c = this.character(owner);
+    if (!c.instance || !c.body)
+      return missing("native-position-render-and-simple-body-owner");
+    const result = setNativePedPosition({
+      instance: c.instance,
+      groundPoint,
+      physicsFlags: c.physicsFlags,
+      callbackState,
+      writePassiveMatrix: (pose) =>
+        this.simulation.phil.setPassiveMatrix(c.body!, pose),
+    });
+    if (result.status === "complete") c.rootPose.set(c.instance.rootPose);
     this.recordResult(c, result);
     return result;
   }
@@ -658,6 +691,19 @@ export class NativePedRuntime<Owner extends object = object> {
       if (pool.status === "processed" && c.instance && c.body) {
         this.copyMasks(c);
         c.instance.physicsActive = this.simulation.phil.getState(c.body) === 2;
+        const preparation = this.hooks.beforePose?.(this.context(c));
+        if (preparation) {
+          this.recordResult(c, preparation);
+          if (preparation.status !== "complete")
+            return { pool, pose: preparation };
+        }
+        // Current-root MakePedVanish may have released this admitted ACT/body.
+        // Do not pose an unowned resource, or advance a newly vanished record.
+        if (!c.instance || !c.body || c.flags & 0x80)
+          return { pool, pose: preparation ?? null };
+        // Ground/AI owners may have changed the masks or movement state.
+        this.copyMasks(c);
+        c.body.pedestrianFlags = c.flags;
         const options: NativePedAdvanceOptions = { mode: c.poseMode };
         if (c.instance.physicsActive) {
           options.activeRootPose = nativePedRootPose(c.body);
@@ -812,20 +858,22 @@ export class NativePedRuntime<Owner extends object = object> {
     c: NativePedRuntimeCharacter<Owner>,
     framePeriodMs: number,
   ): void {
+    // Installed40b770 handles simple resources only; boned dispatch is separate.
+    if (!(c.physicsFlags & 1)) return;
     const body = c.body!,
       instance = c.instance!;
     instance.physicsActive = true;
     c.physicsFlags |= 4;
     this.copyMasks(c);
-    const pose = advanceNativePedPose(instance, this.currentTimeMs, {
-      activeRootPose: nativePedRootPose(body),
-      activeWorldVelocity: body.state.velocity.toArray() as [
-        number,
-        number,
-        number,
-      ],
-      mode: 3,
-    });
+    const pose = synchronizeNativePedPhysicalPose(
+      instance,
+      nativePedRootPose(body),
+    );
+    instance.nativeCharacterVelocity.splice(
+      0,
+      3,
+      ...(body.state.velocity.toArray() as [number, number, number]),
+    );
     this.recordResult(c, pose);
     if (pose.status === "complete") this.saveRoot(c);
     if (this.hooks.onMoved) this.hooks.onMoved(this.context(c, framePeriodMs));
@@ -848,18 +896,19 @@ export class NativePedRuntime<Owner extends object = object> {
       c.instance!.physicsActive = true;
       c.physicsFlags |= 4;
     }
+    if (value === 1)
+      c.instance!.nativeCharacterVelocity.splice(
+        0,
+        3,
+        ...(c.body!.state.velocity.toArray() as [number, number, number]),
+      );
     return value;
   }
   private movedPoseOnly(c: NativePedRuntimeCharacter<Owner>): void {
-    const result = advanceNativePedPose(c.instance!, this.currentTimeMs, {
-      activeRootPose: nativePedRootPose(c.body!),
-      activeWorldVelocity: c.body!.state.velocity.toArray() as [
-        number,
-        number,
-        number,
-      ],
-      mode: 3,
-    });
+    const result = synchronizeNativePedPhysicalPose(
+      c.instance!,
+      nativePedRootPose(c.body!),
+    );
     this.recordResult(c, result);
     if (result.status === "complete") this.saveRoot(c);
   }

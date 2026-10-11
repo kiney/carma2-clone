@@ -53,6 +53,13 @@ attribution store even when a later effect provider is unavailable.
 
 Kill skips model changes/giblets when internal gore is nonpositive or the
 actual special-volume gravity is below1 (`4ccc8b`). Count and score still run.
+The selected native volume pointer `Object+258` is the browser cache's
+`specialVolume.volume`, not the allocated cache itself. The automatic candidate
+at `Object+25c` and immersion depth at `Object+254` do not enter this check.
+An empty cache or an automatic candidate that has not been selected means NULL;
+a selected volume supplies its raw Float32 `+88` gravity multiplier. The default
+owner now reads this state directly, fixing dry-body provider failures after the
+simulation allocates an empty cache. Explicit providers retain the same contract.
 No V/omega is synthesized at Kill. The actual sever body already has its
 source launch/spin from the resource host. Corpse contacts do not repeat Kill;
 count uses the real flag, not a separate timer or score-owner heuristic.
@@ -62,8 +69,21 @@ Moved93/94/97 periods use Float32 raw body speed, one shared CRT draw in
 low-gravity multiplication1.5. Zero speed uses0 without this draw. Simulation
 already owns ordinary gain1.39/minimum.1 settling, so this hook does not repeat it.
 The later low-gravity omega/buoyancy branch requires its actual provider.
+It additionally requires HP strictly positive (`4d28dc..4d28ec`); dead corpses
+still receive the period adjustment but do not enter that living continuation.
+Regression cases cover empty/automatic/selected caches, depth independence,
+ordinary dead-model/giblet/count/score transitions and the living/corpse gate.
 
 ## Callable integration
+
+Outer grounding/AI owners can call `gameplay.requestMove(context,request)`
+through their actual `beforePose` context. This shares contact/recovery FSM
+substitution, authored speed handling and active/inactive transition providers;
+it does not advance BON or fabricate a launch. Current character/ACT/body
+identity is checked. Missing authored moves or substitution providers are
+explicit results. A changed active move retains physical V/omega and clears its
+animation timestamp to zero according to `40a26a..27c`; the next animation visit
+stamps it before advancing. The grounding bridge uses this seam for falling.
 
 ```ts
 const gameplay = new NativePedGameplay<PedOwner>({
@@ -181,3 +201,16 @@ sever-contact, halt, active-move and runtime subtests. TypeScript and formatting
 checks passed. The added scan-order regression preserves a later action/move
 chosen by the actual object-scan outlet after halt starts running; committing
 an earlier kernel snapshot must not erase that selection.
+
+### Signed animation browser validation
+
+The live Stock/Advanced native gameplay harness now processes ordinary signed
+animation-clock corrections without `native-reverse-replay-provider`. Keyboard
+Eagle contact commits persistent HP0, death/count/scoring and dead-model state
+in both installations. The separate controlled sever fixture admits an actual
+independent head PHIL body; this is not a keyboard-sever claim. No JavaScript,
+HTTP/request or WebGL errors were observed. Native moved/halt callbacks retain
+the BON clock and derive O from the current authored frame. Active out-of-scope
+corpse release remains incomplete: Stock stayed active after one halt attempt;
+Advanced retained `source-recovery-effect-owner`. No missing recovery effect was
+acknowledged with a no-op, and no future timestamp was injected to force release.

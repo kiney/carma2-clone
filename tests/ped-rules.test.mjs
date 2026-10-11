@@ -13,8 +13,38 @@ import {
   pedInterpolateDirection,
   pedRandomInteger,
   pedRandomFloat,
+  nativePedSlopeCosine,
 } from "../src/ped-rules.ts";
 import { PedestrianSystem, collectPedSurfaces } from "../src/pedestrians.ts";
+
+test("native maximum-slope angle conversion governs population and finite-floor rejection", () => {
+  const source = Math.fround(Math.cos(4550 * 9.587379924285257e-5));
+  assert.equal(nativePedSlopeCosine(25), source);
+  assert.notEqual(source, Math.fround(Math.cos((25 * Math.PI) / 180)));
+  assert.equal(nativePedSlopeCosine(0), 1);
+  const threshold = Math.acos(source);
+  const spec = {
+    material: "walk",
+    movement: 0,
+    group: 0,
+    density: 1000,
+    exclusions: [],
+    exceptions: [],
+  };
+  for (const [offset, supported] of [
+    [-1e-5, true],
+    [1e-5, false],
+  ]) {
+    const group = new THREE.Group();
+    const mesh = floor("walk", 10);
+    mesh.rotation.x = threshold + offset;
+    group.add(mesh);
+    group.updateMatrixWorld(true);
+    assert.equal(collectPedSurfaces(group, [spec], 25).length > 0, supported);
+  }
+  for (const invalid of [NaN, Infinity, -1, 90])
+    assert.throws(() => nativePedSlopeCosine(invalid), /slope/);
+});
 
 function floor(material = "walk", area = 10, x = 0) {
   const geometry = new THREE.BufferGeometry();
@@ -278,7 +308,8 @@ function movingAssets() {
   assets.bytes = async () => bytes;
   assets.text = async (path) => {
     if (/settings/i.test(path)) return settings;
-    if (/PEEPS/i.test(path)) return "FORM\nDEFAULT\n";
+    if (/PEEPS/i.test(path))
+      return "FORM\nDEFAULT\nSTART OF MOVES\nEND OF MOVES\n-.05,-.15,-.03\n.05,.15,.03\n0,0,0\nSOUNDS.TXT\n";
     if (/FORMS/i.test(path))
       return (
         "START OF BONES\nRoot\n68\nBOX\nEND OF BONES\nSTART OF MOVES\n" +

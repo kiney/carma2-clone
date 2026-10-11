@@ -58,6 +58,10 @@ export interface PedSimpleBodyProfile {
   centreOfMass: PedVector;
   radius: number;
   inertia: PedVector;
+  /** Native personality+50: raw distance, not a metre/remap conversion. */
+  jumpHeight: number;
+  /** Native callback sound table source; loaded handles are not authored IDs. */
+  soundFilename: string;
   modelsByBone: ReadonlyMap<string, readonly (string | null)[]>;
   /** Native joint anchors, indexed by exact FORM name; root has no entry. */
   attachmentsByBone: ReadonlyMap<string, PedBoneAttachment>;
@@ -328,6 +332,34 @@ export function parsePedPersonalityMoves(
   }
   return result;
 }
+export interface PedPersonalityOptions {
+  soundFilename: string;
+  jumpHeight: number;
+}
+function personalityOptions(
+  rows: readonly string[],
+  moveEnd: number,
+): PedPersonalityOptions {
+  const token = (row: string | undefined) => row?.split(/[\t ,/]+/)[0];
+  // Installed CBLoadPersonality4cc700 reads one optional line, not rec2's
+  // options loop. GetAString discards other tokens on its command line.
+  const command = token(rows[moveEnd + 5]);
+  return {
+    soundFilename: filename(token(rows[moveEnd + 4])),
+    jumpHeight:
+      command?.toUpperCase() === "JUMPHEIGHT"
+        ? scalar(token(rows[moveEnd + 6]))
+        : 0,
+  };
+}
+/** Read callback metadata independently of FORM/remap/animation loading. */
+export function parsePedPersonalityOptions(
+  text: string,
+): PedPersonalityOptions {
+  const rows = records(text),
+    [, moveEnd] = section(rows, "START OF MOVES", "END OF MOVES");
+  return personalityOptions(rows, moveEnd);
+}
 export function parsePedPersonalitySimpleBody(
   text: string,
   form: PedForm,
@@ -337,7 +369,7 @@ export function parsePedPersonalitySimpleBody(
   const rows = records(text),
     [bs, be] = section(rows, "START OF BONES", "END OF BONES"),
     [ms, me] = section(rows, "START OF MOVES", "END OF MOVES");
-  if (bs !== 2 || ms !== be + 1 || rows.length < me + 4)
+  if (bs !== 2 || ms !== be + 1 || rows.length < me + 5)
     throw new Error("PED: invalid personality sections");
   if (form.remapFilename && !remap)
     throw new Error("PED: required remap missing");
@@ -402,6 +434,7 @@ export function parsePedPersonalitySimpleBody(
     ),
     radius: Math.max(...bounds.min.map(Math.abs), ...bounds.max.map(Math.abs)),
     inertia: nativePedBoxInertia(form.mass, bounds),
+    ...personalityOptions(rows, me),
     modelsByBone,
     attachmentsByBone,
     movement,
@@ -732,6 +765,7 @@ export function stepPedRootPose(
   movement: ArrayLike<number>,
   scale: number,
   translate = true,
+  translationSign: 1 | -1 = 1,
 ): Float32Array {
   const old = matrix(currentPose),
     source = matrix(frame),
@@ -746,9 +780,9 @@ export function stepPedRootPose(
       f(source[11] * k),
     ]);
     position = [
-      f(old[9] + delta[0]),
-      f(old[10] + delta[1]),
-      f(old[11] + delta[2]),
+      f(old[9] + translationSign * delta[0]),
+      f(old[10] + translationSign * delta[1]),
+      f(old[11] + translationSign * delta[2]),
     ];
   }
   return composePedRootPose(source, orientation, position);
@@ -796,7 +830,9 @@ export function advancePedAnimationClock(
     clock.lastTimeMs < 0 ||
     clock.lastTimeMs > 0xffffffff ||
     clock.fraction < 0 ||
-    clock.fraction >= 1
+    //409df6 stores a Float32 remainder that can round upward to exactly1.
+    //The next native call consumes that value; it does not carry it early.
+    clock.fraction > 1
   )
     throw new Error("PED: invalid animation clock");
   const fraction = f(finite(clock.fraction));
@@ -809,9 +845,9 @@ export function advancePedAnimationClock(
     };
   const delta = (timeMs - clock.lastTimeMs) | 0,
     target =
-      clock.frame +
+      Math.max(-10, Math.min(10, delta / clock.periodMs)) +
       fraction +
-      Math.max(-10, Math.min(10, delta / clock.periodMs)),
+      clock.frame,
     integral = Math.floor(target);
   return {
     advance: integral - clock.frame,

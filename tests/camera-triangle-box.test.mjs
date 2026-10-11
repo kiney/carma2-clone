@@ -30,10 +30,21 @@ test("camera box picking clips real triangle rather than accepting its AABB", ()
 test("camera triangle box picker rejects malformed binary-derived coordinates", () => {
   assert.throws(
     () => cameraTriangleInBox([v(0, 0), v(0, 1), v(NaN, 0)], min, max),
-    /bounds/,
+    /finite/,
   );
   assert.throws(
     () => cameraTriangleInBox([v(0, 0), v(0, 1), v(1, 0)], max, min),
     /bounds/,
+  );
+});
+
+test("camera query preserves installed minimum/maximum tangent asymmetry", () => {
+  assert.equal(
+    cameraTriangleInBox([v(-1, 0), v(0, 0), v(0, 1)], v(0, -1, -1), max),
+    false,
+  );
+  assert.equal(
+    cameraTriangleInBox([v(1, 0), v(0, 0), v(0, 1)], min, v(0, 1, 1)),
+    true,
   );
 });

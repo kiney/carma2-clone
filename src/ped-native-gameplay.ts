@@ -290,6 +290,55 @@ export class NativePedGameplay<Owner extends object = object> {
     if (!state) throw new Error("Native gameplay owner not enrolled");
     return state;
   }
+  /** Shared source SetPedMove entry for outer grounding/AI owners. Reuses the
+   * same authored FSM, speed factors and active/inactive transition providers
+   * as contacts and recovery; it does not advance this frame's BON clock. */
+  requestMove(
+    context: NativePedRuntimeCallback<Owner>,
+    request: {
+      id: number;
+      speed: number;
+      completion: boolean;
+      action: number;
+      retainRoot?: boolean;
+    },
+  ): NativePedInstanceResult {
+    const c = this.host().character(context.owner);
+    if (
+      context.character !== c ||
+      context.instance !== c.instance ||
+      context.body !== c.body
+    )
+      throw new Error(
+        "Native move request requires current character/ACT/body ownership",
+      );
+    uint(context.timeMs, "ped move clock");
+    if (
+      !Number.isInteger(request.id) ||
+      !Number.isInteger(request.action) ||
+      request.action < 0 ||
+      request.action > 6 ||
+      !Number.isFinite(f(request.speed))
+    )
+      throw new Error("Invalid native gameplay move request");
+    const missing: string[] = [];
+    this.move(
+      context,
+      request.id,
+      request.speed,
+      request.completion,
+      request.action,
+      missing,
+      request.retainRoot ?? false,
+    );
+    diagnostic(context, this.state(context.owner), missing);
+    return {
+      status: missing.length ? "provider-required" : "complete",
+      requiredProviders: [...new Set(missing)],
+      processedFrames: 0,
+      completedMove: false,
+    };
+  }
   release(owner: Owner): void {
     const c = this.host().character(owner);
     if (c.body || c.instance)
@@ -325,7 +374,12 @@ export class NativePedGameplay<Owner extends object = object> {
         throw new Error("Invalid native volume gravity");
       return n === null ? null : f(n);
     }
-    return ctx.body.specialVolume ? undefined : null;
+    // Native +258 is the selected volume pointer. The allocated browser cache
+    // itself and its +25c automatic-water candidate do not establish presence.
+    const n = ctx.body.specialVolume?.volume?.gravityMultiplier ?? null;
+    if (n !== null && !Number.isFinite(f(n)))
+      throw new Error("Invalid native volume gravity");
+    return n === null ? null : f(n);
   }
   private contactProvider(
     ctx: NativePedRuntimeCallback<Owner>,
@@ -746,7 +800,7 @@ export class NativePedGameplay<Owner extends object = object> {
       this.move(ctx, -1, period, false, this.state(ctx.owner).action, missing);
     }
     if (gravity === undefined) missing.push("source-special-volume-gravity");
-    else if (gravity !== null && gravity < 1) {
+    else if (gravity !== null && gravity < 1 && ctx.character.hitPoints > 0) {
       if (this.options.onMovedVolume)
         this.outlet(ctx, this.options.onMovedVolume(ctx), missing);
       else missing.push("source-moved-low-gravity-continuation");

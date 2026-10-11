@@ -1074,7 +1074,9 @@ async function loadRace() {
         ) ?? models[0]
       );
     });
-    const worldSource = captureWorldSource(world.group);
+    const worldSource = captureWorldSource(world.group, {
+      modelPreparation: "track",
+    });
     world.group = batchStaticWorld(world.group, [
       ...noncarBodies.map((body) => body.actor),
       ...loadedGrooves.actors,

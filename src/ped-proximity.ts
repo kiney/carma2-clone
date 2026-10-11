@@ -1,7 +1,11 @@
 import { Box3, Triangle, Vector3 } from "three";
 import type { Surface } from "./world";
 import type { PedSpawnSpec } from "./pedestrians";
-import { pedFloorAllowed, pedObstacleIgnored } from "./ped-rules";
+import {
+  pedFloorAllowed,
+  pedObstacleIgnored,
+  nativePedSlopeCosine,
+} from "./ped-rules";
 
 export interface PedProximity {
   distance: number;
@@ -125,7 +129,7 @@ export function scanPedProximity(
     flat = new Vector3(dir.x, 0, dir.z).normalize(),
     lateral = floorNormal.clone().cross(dir).normalize(),
     width = boundsMaxX * 1.3,
-    cosine = Math.cos((maxSlopeDegrees * Math.PI) / 180),
+    cosine = nativePedSlopeCosine(maxSlopeDegrees),
     alongD = dir.dot(position),
     lateralD = lateral.dot(position),
     floorD = floorNormal.dot(floorPosition);

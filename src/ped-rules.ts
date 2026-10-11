@@ -2,6 +2,15 @@ import { Vector3 } from "three";
 import type { PedSpawnSpec } from "./pedestrians";
 
 export const PED_POPULATION_CAPACITY = 2000;
+/** Installed ReadSettings4cac1b..42: native16 angle, then x87 cosine. The
+ * degree multiplier is182f, not65536/360 and not a direct radian conversion. */
+export function nativePedSlopeCosine(degrees: number): number {
+  const value = Math.fround(degrees);
+  if (!Number.isFinite(value) || value < 0 || value >= 90)
+    throw new Error("Invalid native pedestrian maximum slope");
+  const angle = Math.trunc(value * 182) & 0xffff;
+  return Math.fround(Math.cos(angle * 9.587379924285257e-5));
+}
 const nativeSample = (random: () => number) =>
   Math.max(0, Math.min(0x7fff, Math.floor(random() * 0x8000)));
 /** Installed IRandomBetween 0x512f00 and SRandomBetween 0x513000. */

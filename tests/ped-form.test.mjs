@@ -12,6 +12,7 @@ import {
   parsePedForm,
   parsePedRemap,
   parsePedPersonalitySimpleBody,
+  parsePedPersonalityOptions,
   parsePedPersonalityMoves,
   remapPedVector,
   nativePedBoxInertia,
@@ -34,6 +35,32 @@ const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 const formText = `3\n2\n4\n1\nROOT.TXT\nSTART OF BONES\nroot\n100\nBOX\nNONE\nNEXT BONE\nchild\n20\nLINE\nFALSE\n0\nEND OF BONES\nSTART OF MOVES\n30\n25\nXZ\n0,0,1\nwalk.BON\n0\nEND OF MOVES\nHUMANOID\n1\n-1\n1`;
 const remapText = `START OF BONES\nroot\n+Y\n+X\n-Z\n+X\n+Y\n+Z\nEND OF BONES`;
 const personalityText = `FORM\nDEFAULT\nSTART OF BONES\nroot\nBODY.ACT\nchild\nHEAD.DAT,NULL\n0,0,0\n0,1,0\nEND OF BONES\nSTART OF MOVES\n30\n0.5\nGROUND\n0.2\nEND OF MOVES\n-1,-2,-3\n1,2,3\n0,0.4,0\nSOUNDS.TXT`;
+test("installed personality callback reads only its first optional token and next-line scalar", () => {
+  const parse = (tail = "") =>
+    parsePedPersonalityOptions(personalityText + tail);
+  assert.deepEqual(parse(), { soundFilename: "SOUNDS.TXT", jumpHeight: 0 });
+  assert.equal(parse("\nJuMpHeIgHt ignored\n1.25 trailing").jumpHeight, 1.25);
+  assert.equal(parse("\nJUMPHEIGHT,9\n-0.2/ignored").jumpHeight, f(-0.2));
+  assert.equal(parse("\nUNKNOWN\nJUMPHEIGHT\n1").jumpHeight, 0);
+  assert.equal(parse("\nOPTIONS\nJUMPHEIGHT\n1").jumpHeight, 0);
+  assert.equal(parse("\nJUMPHEIGHT\n1\nJUMPHEIGHT\n2").jumpHeight, 1);
+  for (const tail of [
+    "\nJUMPHEIGHT 1",
+    "\nJUMPHEIGHT\nNaN",
+    "\nJUMPHEIGHT\n1e1000",
+  ])
+    assert.throws(() => parse(tail), /scalar/);
+  assert.throws(() =>
+    parsePedPersonalityOptions(personalityText.replace("SOUNDS.TXT", "")),
+  );
+  const profile = parsePedPersonalitySimpleBody(
+    personalityText + "\nJUMPHEIGHT\n0.2",
+    parsePedForm(formText),
+    parsePedRemap(remapText),
+  );
+  assert.equal(profile.jumpHeight, f(0.2));
+  assert.equal(profile.soundFilename, "SOUNDS.TXT");
+});
 
 test("form sums every bone regardless of collision keyword and retains native pools/moves", () => {
   const p = parsePedForm(formText);
@@ -261,6 +288,91 @@ test("native direction builds cardinal yaw, opposite-direction fallback and slop
   near(slope.movement, slope.orientation);
   near(rotatePedMatrixCos([0, 1, 0], 2), identity);
 });
+test("installed animation clock retains a remainder rounded to1 until its next call", () => {
+  for (const [input, timeMs, expected, nextTime, next] of [
+    [
+      { frame: 4, fraction: f(0.95), periodMs: 20, lastTimeMs: 2302 },
+      2363,
+      { advance: 3, fraction: 1, lastTimeMs: 2363, initialPose: false },
+      2364,
+      { advance: 1, fraction: f(0.05), lastTimeMs: 2364, initialPose: false },
+    ],
+    [
+      {
+        frame: 24,
+        fraction: f(0.3030302822589874),
+        periodMs: 33,
+        lastTimeMs: 915,
+      },
+      971,
+      { advance: 1, fraction: 1, lastTimeMs: 971, initialPose: false },
+      972,
+      { advance: 1, fraction: f(1 / 33), lastTimeMs: 972, initialPose: false },
+    ],
+  ]) {
+    const result = advancePedAnimationClock(input, timeMs);
+    assert.deepEqual(result, expected);
+    const retained = {
+      ...input,
+      frame: input.frame + result.advance,
+      fraction: result.fraction,
+      lastTimeMs: result.lastTimeMs,
+    };
+    assert.deepEqual(advancePedAnimationClock(retained, nextTime), next);
+    assert.deepEqual(advancePedAnimationClock(retained, timeMs), {
+      advance: 1,
+      fraction: 0,
+      lastTimeMs: timeMs,
+      initialPose: false,
+    });
+    assert.throws(
+      () => advancePedAnimationClock({ ...retained, fraction: 1.01 }, nextTime),
+      /clock/,
+    );
+  }
+});
+
+test("installed clock operation order preserves half-ULP boundaries and tiny residuals", () => {
+  const source = advancePedAnimationClock(
+    {
+      frame: 24,
+      fraction: 0.18360379338264465,
+      periodMs: 5855,
+      lastTimeMs: 400000,
+    },
+    445765,
+  );
+  assert.deepEqual(source, {
+    advance: 8,
+    fraction: 3.591040353967401e-8,
+    lastTimeMs: 445765,
+    initialPose: false,
+  });
+  for (const [fraction, advance, retained] of [
+    [0.4999999403953552, 0, 0.9999999403953552],
+    [0.4999999701976776, 0, 1],
+    [0.5, 1, 0],
+  ]) {
+    assert.deepEqual(
+      advancePedAnimationClock(
+        {
+          frame: 24,
+          fraction,
+          periodMs: 2,
+          lastTimeMs: 100,
+        },
+        101,
+      ),
+      {
+        advance,
+        fraction: retained,
+        lastTimeMs: 101,
+        initialPose: false,
+      },
+    );
+  }
+});
+
 test("movement matrix separately pitches the ground-plane direction into actual travel", () => {
   const result = buildPedOrientation([0, 0.6, 0.8], [0, 1, 0], [0, 0, 1]);
   near(result.orientation, identity);
@@ -442,6 +554,28 @@ test("original humanoid and quadruped personalities provide independent remapped
           0.00016681253327988088,
         ],
       );
+    }
+  }
+});
+
+test("Stock and Advanced callback jump distances come from original personality options", async (t) => {
+  for (const root of ["data", "adv_data"]) {
+    for (const [person, expectedJump, expectedSounds] of [
+      ["Blokebl", 0, "MALESOUNDS.TXT"],
+      ["Elephant", 1, "ELEPHANTSOUNDS.TXT"],
+      ["sheep", 1, "SHEEPSOUNDS.TXT"],
+    ]) {
+      const archive = await original(`${root}/PEDS/PEEPS/${person}.TWT`, t);
+      if (!archive) return;
+      const entry = parseTwt(archive).entries.find(
+        (e) => e.name.toLowerCase() === `${person}.txt`.toLowerCase(),
+      );
+      assert.ok(entry);
+      const options = parsePedPersonalityOptions(
+        decodeText(archive.subarray(entry.offset, entry.offset + entry.size)),
+      );
+      assert.equal(options.jumpHeight, expectedJump);
+      assert.equal(options.soundFilename.toUpperCase(), expectedSounds);
     }
   }
 });

@@ -35,6 +35,16 @@ retained native12 bone pose; interpolation cannot become its authoritative pose.
 Ordinary displayed population integration still requires the character gameplay,
 grounding, active move, halt and bounded stored-part outlets.
 
+The host now exposes a processed-slot `beforePose` hook after admission and
+before BON advancement. `setGroundPosition` applies verified mode1 current-frame
+grounding without advancing the clock, preserving the separate outer `ped.pos`
+store and notifying actual passive PHIL ownership. It accepts the raw face hit,
+so the move clearance is not added twice. Numerical host tests verify one
+subsequent BON advance and the final passive matrix; missing current-root
+providers explicitly stop that phase. This seam alone does not supply the
+ordinary population's cache, native finite collector or proximity/AI owner.
+See [position setter](c2-ped-set-position-re.md).
+
 `npm run test:ped-bones` runs a Chromium diagnostic with real Eagle keyboard
 contacts against original Blokebl HEAD SPHERE and Spine BOX bodies in both data
 trees. It checks contact types, live movement, header release, requests and WebGL.

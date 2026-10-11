@@ -20,6 +20,7 @@ import {
 } from "./quiet-state";
 import { settleNativePedBody } from "./ped-settling";
 import { NativePhilRegistry, type NativePhilHeader } from "./phil-registry";
+import { classifyNativePedOther } from "./ped-other";
 import {
   applyNativeFreeForces40,
   type NativeFreeVolumeSnapshot,
@@ -2266,21 +2267,7 @@ export class VehicleSimulation {
     }
   }
   private pedOther(other: RigidBody | undefined): PedContactOther | null {
-    if (!other) return null;
-    const type = isNativePedBody(other)
-      ? 2
-      : "damage" in other
-        ? 1
-        : "rigidType" in other
-          ? Number(other.rigidType)
-          : 0;
-    return {
-      type,
-      ownerPresent:
-        isNativePedBody(other) || "damage" in other || "owner" in other,
-      mass: other.properties.mass,
-      velocity: other.state.velocity,
-    };
+    return classifyNativePedOther(other);
   }
   private pedDamageResult(
     body: NativePedBody,
@@ -4139,8 +4126,11 @@ export class VehicleSimulation {
     };
   }
   private nativeCrashDriver(body: RigidBody): number | undefined {
-    if (isNativePedBoneBody(body)) return undefined;
-    if ("damage" in body) return (body as SimulatedCar).human ? 8 : 6;
+    if (isNativePedBody(body) || isNativePedBoneBody(body)) return undefined;
+    if ("damage" in body) {
+      const car = body as SimulatedCar;
+      return car.state.driver ?? (car.human ? 8 : 6);
+    }
     if ("owner" in body) {
       const part = body as DetachedBody;
       return part.joint ? 1 : part.part === -1 ? 3 : 2;
@@ -4148,6 +4138,18 @@ export class VehicleSimulation {
     if ("kind" in body && body.kind === "noncar") return 4;
     // Mines have a separate explicit ownership path; do not reinterpret them.
     return undefined;
+  }
+  /** Current independent source car-spec wrapper driver for4cdc60/4cd010.
+   * Pedestrian/bone owners and mine objects are not car-spec wrappers. */
+  pedestrianAttributionDriver(owner: object): number | undefined {
+    if (!("properties" in owner) || !("state" in owner)) return undefined;
+    return this.nativeCrashDriver(owner as RigidBody);
+  }
+  /** Source car-spec+c8. Initial free-part ownership is copied once; later
+   * sticky crash ownership may differ from the original repair owner. */
+  pedestrianAttributionCulprit(owner: object): object | null | undefined {
+    if (this.pedestrianAttributionDriver(owner) === undefined) return undefined;
+    return this.crashOwner(owner as RigidBody) ?? null;
   }
   private nativeSparkParticipant(body: RigidBody) {
     const driver = this.nativeCrashDriver(body);

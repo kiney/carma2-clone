@@ -202,6 +202,105 @@ test("FORM resources are allocated once, start with zero retained policy/frictio
   assert.equal(runtime.bonePool.counts("safe-FORM").physicalResources, 2);
 });
 
+test("processed pre-pose grounding owns position before a single BON advance and passive PHIL commit", () => {
+  const events = [];
+  let runtime;
+  const h = host({
+    hooks: {
+      beforePose: (ctx) => {
+        const clock = { ...ctx.instance.clock };
+        const oldPedPosition = [...ctx.character.position];
+        const orientation = [...ctx.instance.characterOrientation];
+        const motion = [...ctx.instance.movement];
+        const result = runtime.setGroundPosition(ctx.owner, [2, 3, 4]);
+        assert.equal(result.status, "complete");
+        assert.equal(result.physicsMatrixWritten, true);
+        assert.deepEqual(ctx.instance.clock, clock);
+        assert.deepEqual(ctx.character.position, oldPedPosition);
+        assert.deepEqual([...ctx.instance.characterOrientation], orientation);
+        assert.deepEqual([...ctx.instance.movement], motion);
+        events.push([ctx.timeMs, clock.lastTimeMs, clock.frame]);
+        return result;
+      },
+    },
+  });
+  runtime = h.runtime;
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  assert.equal(c.instance.clock.lastTimeMs, 100);
+  runtime.prepareFrame(frame(140));
+  assert.deepEqual(events, [
+    [100, 100, 0],
+    [140, 100, 0],
+  ]);
+  assert.equal(c.instance.clock.lastTimeMs, 140);
+  assert.equal(c.instance.clock.frame, 0);
+  assert.equal(c.instance.clock.fraction, f(0.4));
+  assert.equal(c.rootPose[10], 3);
+  assert.equal(c.position[1], 3);
+  assert.deepEqual([...nativePedRootPose(c.body)], [...c.instance.rootPose]);
+  assert.equal(c.body.state.position.y, 3);
+  assert.equal(c.diagnostics.size, 0);
+});
+
+test("missing current-root provider stops pose advancement explicitly, and unprocessed characters do not invoke it", () => {
+  let calls = 0;
+  const { runtime } = host({
+    hooks: {
+      beforePose: () => {
+        calls++;
+        return {
+          status: "provider-required",
+          requiredProviders: ["test-current-root-owner"],
+          processedFrames: 0,
+          completedMove: false,
+        };
+      },
+    },
+  });
+  const near = enroll(runtime, {});
+  const far = enroll(runtime, {}, "first", [1000, 1, 0]);
+  const visits = runtime.prepareFrame(frame(100));
+  assert.equal(calls, 1);
+  assert.equal(visits[0].pose.status, "provider-required");
+  assert.equal(visits[1].pool.status, "out-of-scope");
+  assert.equal(far.instance, null);
+  assert.equal(near.instance.clock.lastTimeMs, 100);
+  assert.equal(near.instance.clock.fraction, 0);
+  assert.ok(near.diagnostics.has("test-current-root-owner"));
+});
+
+test("successful pre-pose vanish releases actual resources without a later BON or passive write", () => {
+  let runtime, body, oldInstance;
+  const h = host({
+    hooks: {
+      beforePose: (ctx) => {
+        body = ctx.body;
+        oldInstance = ctx.instance;
+        runtime.updateState(ctx.owner, { flags: ctx.character.flags | 0x80 });
+        // The same actual resource host performs ordinary flagged-owner removal.
+        runtime.prepareFrame(frame(ctx.timeMs));
+        return {
+          status: "complete",
+          requiredProviders: [],
+          processedFrames: 0,
+          completedMove: false,
+        };
+      },
+    },
+  });
+  runtime = h.runtime;
+  const c = enroll(runtime, {});
+  const visits = runtime.prepareFrame(frame(100));
+  assert.equal(visits[0].pose.status, "complete");
+  assert.equal(c.instance, null);
+  assert.equal(c.body, null);
+  assert.equal(runtime.allocation(c.owner), null);
+  assert.equal(h.simulation.phil.getState(body), 0);
+  assert.equal(oldInstance.clock.lastTimeMs, 100);
+  assert.equal(oldInstance.clock.fraction, 0);
+});
+
 test("two personalities share first-free FORM capacity, then reuse stable ACT/object/BOX with retained fields", () => {
   const { runtime, simulation } = host();
   runtime.registerPersonality("second", assetsFixture("second"));

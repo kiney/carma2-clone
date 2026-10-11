@@ -200,7 +200,9 @@ test("original Stock and Advanced Newcity ACT roots retain PP01 and tile metadat
       return new Uint8Array(bytes);
     };
     const scene = await assets.scene(`${dataRoot}/RACES/newcity1`, "newcity1");
-    const snapshot = captureWorldSource(scene.group);
+    const snapshot = captureWorldSource(scene.group, {
+      modelPreparation: "track",
+    });
     assert.equal(snapshot.ppRoot.name, "PP01 16 16 1.000 1126");
     assert.equal(snapshot.columns.countX, 16);
     assert.equal(snapshot.columns.countZ, 16);
@@ -219,5 +221,56 @@ test("original Stock and Advanced Newcity ACT roots retain PP01 and tile metadat
       ),
     );
     assert.equal(snapshot.preparedGroupOrderResolved, false);
+    assert.ok(
+      snapshot.triangles.every(
+        (triangle) => triangle.nativeModelPlane !== null,
+      ),
+    );
+    assert.ok(
+      snapshot.triangles.every(
+        (triangle) => (triangle.effectiveTrackModelFlags & 0x80) !== 0,
+      ),
+    );
+    assert.ok(
+      snapshot.triangles.every(
+        (triangle) => (triangle.effectiveTrackModelFlags & 0x201) === 0,
+      ),
+    );
   }
+});
+
+test("track snapshot retains installed prepared plane and effective loader flags without changing render geometry", () => {
+  const root = new THREE.Group(),
+    actor = new THREE.Group();
+  actor.name = "track";
+  root.add(actor);
+  const model = {
+    name: "floor",
+    flags: 0x201,
+    positions: new Float32Array([0, 2, 0, 1, 2, 0, 0, 2, 1]),
+    uvs: new Float32Array(),
+    materials: [],
+    faces: [{ indices: [0, 1, 2], smoothing: 0, flags: 0x85, material: 0 }],
+  };
+  const geometry = createModelGeometry(model);
+  actor.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial()));
+  const unknown = captureWorldSource(root).triangles[0];
+  assert.equal(unknown.nativeModelPlane, null);
+  assert.equal(unknown.effectiveTrackModelFlags, null);
+  const triangle = captureWorldSource(root, { modelPreparation: "track" })
+    .triangles[0];
+  assert.equal(triangle.effectiveTrackModelFlags, 0x80);
+  assert.deepEqual(triangle.nativeModelPlane, {
+    normal: [0, -0.9999998807907104, 0],
+    d: -2,
+    degenerate: false,
+  });
+  assert.equal(triangle.sourceFace.flags, 0x85);
+  assert.equal(geometry.userData.modelFlags, 0x201);
+  assert.deepEqual(
+    Array.from(geometry.userData.sourcePositions),
+    Array.from(model.positions),
+  );
+  assert.ok(Object.isFrozen(triangle.nativeModelPlane));
+  assert.ok(Object.isFrozen(triangle.nativeModelPlane.normal));
 });

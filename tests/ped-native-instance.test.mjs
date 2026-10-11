@@ -8,6 +8,8 @@ import {
   createNativePedInstance,
   selectNativePedMove,
   advanceNativePedPose,
+  poseNativePedFrame,
+  synchronizeNativePedPhysicalPose,
   selectNativePedBoneModel,
   currentNativePedModel,
   releaseNativePedActorSet,
@@ -363,7 +365,8 @@ test("physical mode3 preserves full solver root and reparents ordinary children 
   assert.equal(r.processedFrames, 2);
   assert.equal(ped.rootPose, rootIdentity);
   assert.deepEqual([...ped.rootPose], [...physical]);
-  close(ped.nativeCharacterVelocity, [2, 3, 4]);
+  close(ped.nativeCharacterVelocity, [0, 0, 0]);
+  synchronizeNativePedPhysicalPose(ped, physical);
   anchors(ped);
   const frozen = [...ped.rootPose];
   assert.deepEqual(advanceNativePedPose(ped, 400).requiredProviders, [
@@ -382,14 +385,25 @@ test("native modes retain the selected root basis and child matrices", () => {
     tilted = nativePedAnglesToMatrix([17, 23, 31]);
   ped.rootPose.set(tilted.subarray(0, 9));
   const children = ped.bones.slice(1).map((bone) => [...bone.pose]);
-  advanceNativePedPose(ped, 200, { mode: 2 });
+  // Explicit SetCharacterBonePositions mode2, separate from the source-selected clock modes.
+  ped.rootPose.set(
+    stepPedRootPose(
+      ped.rootPose,
+      ped.move.roots[1],
+      ped.characterOrientation,
+      ped.movement,
+      ped.move.asset.personality.scale,
+    ),
+  );
+  ped.rootPose.set(tilted.subarray(0, 9));
+  poseNativePedFrame(ped, 2);
   close(ped.rootPose.slice(0, 9), tilted.slice(0, 9));
   close(ped.rootPose.slice(9), [12, 20, 30]);
   ped.bones
     .slice(1)
     .forEach((bone, i) => assert.deepEqual([...bone.pose], children[i]));
   const root = [...ped.rootPose];
-  advanceNativePedPose(ped, 300, { mode: 3 });
+  poseNativePedFrame(ped, 3);
   assert.deepEqual([...ped.rootPose], root);
   anchors(ped);
 });
@@ -403,7 +417,9 @@ test("removed and immediate-parent masks freeze only the source selected child m
   assert.notDeepEqual([...ped.bones[0].pose], old[0]);
   assert.equal(ped.bones[1].actor.visible, true);
   ped.vanishedBoneMask = 2;
-  advanceNativePedPose(ped, 350);
+  // No ordinary passive pose occurs for a fractional-only clock advance.
+  // The visibility owner explicitly commits the changed vanished mask.
+  poseNativePedFrame(ped, 3);
   assert.equal(ped.bones[1].actor.visible, false);
 });
 test("model variants change pointers and visibility without creating siblings or resizing hull", () => {

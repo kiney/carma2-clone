@@ -1,4 +1,5 @@
 import { parsePedMotion } from "./ped-motion";
+import { parsePedPersonalityOptions } from "./ped-form";
 export { parsePedMotion } from "./ped-motion";
 export type { PedMotion } from "./ped-motion";
 import * as THREE from "three";
@@ -19,6 +20,7 @@ import {
   pedRandomInteger,
   pedTurnDuration,
   pedInterpolateDirection,
+  nativePedSlopeCosine,
 } from "./ped-rules";
 import type { PedMovement, PedSettings, PedThreat } from "./ped-rules";
 import { PedBloodRuntime, parsePedBloodSettings } from "./ped-blood";
@@ -187,7 +189,6 @@ export function parsePedGroups(text: string): Map<number, string[]> {
   });
   return out;
 }
-
 
 interface Surface {
   a: THREE.Vector3;
@@ -418,7 +419,7 @@ export function collectPedSurfaces(
       const cross = b.clone().sub(a).cross(c.clone().sub(a));
       if (
         !cross.lengthSq() ||
-        cross.y / cross.length() <= Math.cos((maxSlopeDegrees * Math.PI) / 180)
+        cross.y / cross.length() <= nativePedSlopeCosine(maxSlopeDegrees)
       )
         continue;
       const population = pedFacePopulation(
@@ -487,11 +488,9 @@ async function loadPedProfile(
         ),
       );
     }
-    const jump = personality.findIndex(
-      (row) => row.toUpperCase() === "JUMPHEIGHT",
-    );
-    if (jump >= 0 && Number.isFinite(Number(personality[jump + 1])))
-      profile.jumpHeight = Number(personality[jump + 1]);
+    profile.jumpHeight = parsePedPersonalityOptions(
+      personality.join("\n"),
+    ).jumpHeight;
     const bonesStart = form.indexOf("START OF BONES");
     const rootName = form[bonesStart + 1];
     let mass = 0;
@@ -1594,8 +1593,7 @@ export class PedestrianSystem {
     );
     if (
       hit &&
-      (hit.normal.y <=
-        Math.cos((this.settings.maxSlopeDegrees * Math.PI) / 180) ||
+      (hit.normal.y <= nativePedSlopeCosine(this.settings.maxSlopeDegrees) ||
         (!this.collision?.querySurfaces &&
           !pedFloorAllowed(
             ped.spec,

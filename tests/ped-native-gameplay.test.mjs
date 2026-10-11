@@ -730,6 +730,115 @@ test("Kill low-gravity branch skips dead MODEL/giblets but still commits native 
   assert.equal(h.draws(), 0);
 });
 
+test("outer grounding move requests reuse native substitutions, active ownership and source timing", () => {
+  const h = create(fixture(), {
+    resolveMove: (_ctx, id) => (id === 72 ? 94 : id),
+  });
+  h.c.instance.nativeCharacterVelocity.splice(0, 3, 0.3, 0.4, -0.5);
+  assert.equal(h.runtime.activate(h.c.owner), true);
+  const ctx = {
+    character: h.c,
+    owner: h.c.owner,
+    instance: h.c.instance,
+    body: h.c.body,
+    timeMs: 100,
+    framePeriodMs: 0,
+  };
+  const velocity = h.c.body.state.velocity.clone(),
+    omega = h.c.body.state.angularVelocity.clone();
+  const result = h.gameplay.requestMove(ctx, {
+    id: 72,
+    speed: -2,
+    action: 3,
+    completion: false,
+  });
+  assert.equal(result.status, "complete");
+  assert.equal(result.processedFrames, 0);
+  assert.equal(h.c.moveId, 94);
+  assert.equal(h.state.action, 3);
+  assert.equal(h.c.instance.clock.periodMs, 200);
+  //40a26a..27c clears the native active transition timestamp; the next
+  //ordinary animation visit stamps it without advancing.
+  assert.equal(h.c.instance.clock.lastTimeMs, 0);
+  assert.equal(h.c.instance.clock.frame, 0);
+  assert.equal(h.simulation.phil.getState(h.c.body), 2);
+  assert.ok(h.c.body.state.velocity.equals(velocity));
+  assert.ok(h.c.body.state.angularVelocity.equals(omega));
+  assert.throws(
+    () =>
+      h.gameplay.requestMove(
+        { ...ctx, body: {} },
+        { id: 72, speed: -1, action: 3, completion: false },
+      ),
+    /ownership/,
+  );
+  const before = { ...h.c.instance.clock };
+  const absent = h.gameplay.requestMove(ctx, {
+    id: 73,
+    speed: -1,
+    action: 3,
+    completion: false,
+  });
+  assert.equal(absent.status, "provider-required");
+  assert.deepEqual(absent.requiredProviders, ["native-authored-move-73"]);
+  assert.deepEqual(h.c.instance.clock, before);
+});
+
+test("native Kill uses selected volume, not allocated cache, automatic candidate or depth", () => {
+  const water = { gravityMultiplier: f(0.5) };
+  for (const [cache, expectedModelSet, expectedGiblets] of [
+    [undefined, 1, 1],
+    [{ volume: null, automatic: null, depth: 0 }, 1, 1],
+    [{ volume: null, automatic: water, depth: 1 }, 1, 1],
+    [{ volume: { gravityMultiplier: 1 }, automatic: water, depth: 0.1 }, 1, 1],
+    [{ volume: water, automatic: null, depth: 0 }, 0, 0],
+    [{ volume: water, automatic: water, depth: 1 }, 0, 0],
+  ]) {
+    const h = create(fixture(), {}, globals({ goreLevel: 2 }));
+    h.c.body.specialVolume = cache;
+    active(h, 0.5);
+    assert.equal(h.c.hitPoints, 0);
+    assert.equal(h.c.instance.modelSet, expectedModelSet);
+    assert.equal(
+      h.events.filter((e) => e[0] === "giblets").length,
+      expectedGiblets,
+    );
+    assert.equal(h.events.filter((e) => e[0] === "count").length, 1);
+    assert.equal(h.events.filter((e) => e[0] === "score").length, 1);
+    assert.equal(h.c.diagnostics.size, 0);
+  }
+  const invalid = create();
+  invalid.c.body.specialVolume = {
+    volume: { gravityMultiplier: NaN },
+    automatic: null,
+  };
+  assert.throws(() => active(invalid), /volume gravity/);
+});
+
+test("native low-gravity period applies to corpses but living-only continuation does not", () => {
+  let called = 0;
+  const h = create(fixture(), {
+    values: [0],
+    onMovedVolume: () => {
+      called++;
+    },
+  });
+  h.runtime.activate(h.c.owner);
+  h.runtime.setMove(h.c.owner, 94, [0, 0, 1], [0, 1, 0], 100);
+  h.c.body.specialVolume = {
+    volume: { gravityMultiplier: f(0.5) },
+    automatic: null,
+    depth: 0,
+  };
+  h.c.body.state.velocity.set(1, 0, 0);
+  h.c.hitPoints = h.c.body.hitPoints = 0;
+  h.c.body.onMoved(h.c.body, 40);
+  assert.equal(h.c.instance.clock.periodMs, 30);
+  assert.equal(h.draws(), 1);
+  assert.equal(called, 0);
+  assert.equal(h.c.diagnostics.size, 0);
+});
+
 test("low-gravity moved period applies1.5 after integer clamp and delegates extra source tail without added draws", () => {
   let called = 0;
   const h = create(fixture(), {

@@ -244,9 +244,14 @@ export class Assets {
       node: ActNode,
       inheritedMaterial?: string,
       inheritedStyle = 4,
+      childIndex = 0,
     ): THREE.Group {
       const object = new THREE.Group();
       object.name = node.name;
+      object.userData.c2ActorType = node.type;
+      object.userData.c2ActorRenderStyle = node.renderStyle;
+      object.userData.c2ActorName = node.name;
+      object.userData.c2ActorChildIndex = childIndex;
       const m = node.transform;
       object.matrix.set(
         m[0],
@@ -287,10 +292,12 @@ export class Assets {
           object.add(mesh);
         } else missingModels++;
       }
-      for (const child of node.children) object.add(actor(child, mat, style));
+      for (const [index, child] of node.children.entries())
+        object.add(actor(child, mat, style, index));
       return object;
     }
-    for (const root of roots) group.add(actor(root));
+    for (const [index, root] of roots.entries())
+      group.add(actor(root, undefined, 4, index));
     group.updateMatrixWorld(true);
     return {
       group,
@@ -300,8 +307,8 @@ export class Assets {
       loadActorFile: async (path: string): Promise<THREE.Group> => {
         const extra = new THREE.Group();
         extra.name = path.split("/").pop() ?? path;
-        for (const root of parseAct(await this.bytes(path)))
-          extra.add(actor(root));
+        for (const [index, root] of parseAct(await this.bytes(path)).entries())
+          extra.add(actor(root, undefined, 4, index));
         extra.updateMatrixWorld(true);
         return extra;
       },

@@ -99,6 +99,7 @@ export function createModelGeometry(model: DatModel): THREE.BufferGeometry {
   geometry.userData.sourceUVs = model.uvs.slice();
   geometry.userData.modelFlags = model.flags;
   geometry.userData.sourceFaces = sourceFaces;
+  geometry.userData.c2Pivot = model.pivot ? [...model.pivot] : [0, 0, 0];
   updateModelNormals(geometry);
   geometry.computeBoundingSphere();
   return geometry;

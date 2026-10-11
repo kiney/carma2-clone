@@ -110,10 +110,13 @@ export interface NativePedAdvanceOptions {
   /** A source ground point, applied before authored deltas, never guessed feet. */
   groundHeight?: number;
   activeRootPose?: ArrayLike<number>;
-  /** Source physical world V, copied when supplied by the moved callback owner. */
+  /** Physical V is validated here but owned by the moved callback, not the BON clock. */
   activeWorldVelocity?: PedVector;
-  /** Native pose mode:2 retains root basis;3 retains the whole root;1/2 retain children. */
+  /** Legacy caller argument: native Munge selects its own modes. */
   mode?: 0 | 1 | 2 | 3;
+  actionReplay?: boolean;
+  /** Required only when replay is enabled; negative rate reverses root deltas. */
+  replayRate?: number;
 }
 export interface NativePedInstanceResult {
   status: "complete" | "provider-required";
@@ -619,18 +622,58 @@ export function selectNativePedBoneModel(
   render(instance);
   return { ...result(), nativeModelReturn: 1 };
 }
-function physicalOrientation(
-  frame: Float32Array,
-  root: Float32Array,
-): Float32Array {
-  const inverse = identity();
+/** Explicit SetCharacterBonePositions mode without changing the BON clock. */
+export function poseNativePedFrame(
+  instance: NativePedInstance,
+  mode: 0 | 1 | 2 | 3,
+): NativePedInstanceResult {
+  if (!Number.isInteger(mode) || mode < 0 || mode > 3)
+    throw new Error("Invalid native pose mode");
+  return applyBonePose(instance, mode);
+}
+/** Installed40b770/409400 shared physical-pose prefix. This never consumes the
+ * animation clock; moved and accepted halt own the separate character-V copy. */
+export function synchronizeNativePedPhysicalPose(
+  instance: NativePedInstance,
+  physicalRootPose: ArrayLike<number>,
+): NativePedInstanceResult {
+  if (!ownsActors(instance)) return result(["native-render-actor-set-owner"]);
+  if (!instance.move) return result(["native-selected-move-provider"]);
+  const root = matrix(physicalRootPose),
+    frame = instance.move.roots[instance.clock.frame],
+    inverse = identity();
+  // Installed BrMatrix34LPInverse5324f0 transposes the LP basis; O translation
+  // is explicitly cleared after inverse(frame)*physicalRoot.
   for (let i = 0; i < 3; i++)
     for (let j = 0; j < 3; j++) inverse[i * 3 + j] = frame[j * 3 + i];
-  return composePedRootPose(inverse, root, [0, 0, 0]);
+  instance.rootPose.set(root);
+  const orders = [
+    [2, 1, 0],
+    [0, 1, 2],
+    [0, 1, 2],
+    [0, 1, 2],
+    [0, 2, 1],
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 0, 2],
+  ];
+  const orientation = new Float32Array(12);
+  for (let row = 0; row < 3; row++)
+    for (let column = 0; column < 3; column++) {
+      const terms = [0, 1, 2].map(
+          (k) => inverse[row * 3 + k] * root[k * 3 + column],
+        ),
+        order = orders[row * 3 + column];
+      orientation[row * 3 + column] = scalar(
+        terms[order[0]] + terms[order[1]] + terms[order[2]],
+      );
+    }
+  instance.characterOrientation = orientation;
+  return applyBonePose(instance, 3);
 }
-/** Advance integral frames with every authored delta, then pose flat children.
- * activeRootPose transfers root ownership to the solver and re-derives O from
- * inverse current frame basis, matching the native moved/halt wrapper. */
+/** Installed409ca0 ordinary non-morph clock. Negative advance poses the CURRENT
+ * frame before decrementing. Moved/halt callbacks own physical O and V updates. */
 export function advanceNativePedPose(
   instance: NativePedInstance,
   timeMs: number,
@@ -639,11 +682,9 @@ export function advanceNativePedPose(
   if (!ownsActors(instance)) return result(["native-render-actor-set-owner"]);
   time(timeMs);
   const physicalRoot = options.activeRootPose
-      ? matrix(options.activeRootPose)
-      : null,
-    physicalVelocity = options.activeWorldVelocity
-      ? vector(options.activeWorldVelocity)
-      : null;
+    ? matrix(options.activeRootPose)
+    : null;
+  if (options.activeWorldVelocity) vector(options.activeWorldVelocity);
   if (
     options.mode !== undefined &&
     (!Number.isInteger(options.mode) || options.mode < 0 || options.mode > 3)
@@ -654,20 +695,30 @@ export function advanceNativePedPose(
   if (instance.morphActive) return result(["native-ped-morph-pose-provider"]);
   if (instance.mutantSpeed !== 0)
     return result(["native-mutant-angle-rng-provider"]);
-  if (instance.physicsActive && !options.activeRootPose)
+  const active = instance.physicsActive || !!physicalRoot;
+  // Installed409ccb returns before clock changes for active articulated bodies.
+  if (active && instance.boned && !instance.temporaryMatricesAvailable)
+    return result(["native-temporary-bone-matrix-provider"]);
+  if (active && instance.boned && instance.temporaryMatricesAvailable)
+    return result(["native-temporary-bone-matrix-storage-provider"]);
+  if (active && !physicalRoot)
     return result(["native-active-root-pose-provider"]);
+  const replay = options.actionReplay ?? false;
+  if (replay && options.replayRate === undefined)
+    return result(["native-replay-rate-provider"]);
+  if (options.replayRate !== undefined) scalar(options.replayRate);
   const move = instance.move,
     clock = advancePedAnimationClock(instance.clock, timeMs);
-  if (clock.advance < 0) return result(["native-reverse-replay-provider"]);
   if (
+    clock.advance > 0 &&
+    !replay &&
     instance.completionRequested &&
     !instance.onMoveCompleted &&
     instance.clock.frame + clock.advance >= move.roots.length
   )
     return result(["native-move-completion-provider"]);
-  if (options.activeRootPose) instance.physicsActive = true;
-  const active = instance.physicsActive,
-    mode = options.mode ?? (active ? 3 : 0);
+  instance.physicsActive = active;
+  if (physicalRoot) instance.rootPose.set(physicalRoot);
   if (
     options.groundHeight !== undefined &&
     !active &&
@@ -681,71 +732,97 @@ export function advanceNativePedPose(
       ),
       9,
     );
-  const oldOrigin = [
-      instance.rootPose[9],
-      instance.rootPose[10],
-      instance.rootPose[11],
-    ],
+  const oldOrigin = [...instance.rootPose.subarray(9)],
     oldPeriod = instance.clock.periodMs;
   let processedFrames = 0,
-    completedMove = false;
-  instance.clock.fraction = clock.fraction;
-  instance.clock.lastTimeMs = clock.lastTimeMs;
-  for (let i = 0; i < clock.advance; i++) {
-    let frame = instance.clock.frame + 1;
-    if (frame >= move.roots.length) {
-      if (instance.completionRequested) {
-        instance.completionRequested = false;
-        instance.clock.frame = move.roots.length - 1;
-        completedMove = true;
-        instance.onMoveCompleted!(instance, timeMs);
-        if (!ownsActors(instance))
-          return {
-            ...result(["native-render-actor-set-owner"]),
-            processedFrames,
-            completedMove,
-          };
-        if (instance.move !== move) {
-          return {
-            ...applyBonePose(instance, mode),
-            processedFrames,
-            completedMove,
-          };
-        }
-      }
-      frame = 0;
-    }
-    instance.clock.frame = frame;
-    processedFrames++;
+    completedMove = false,
+    posed = result();
+  const pose = (mode: 0 | 2 | 3, translate: boolean) => {
     if (!active && mode !== 3) {
       const next = stepPedRootPose(
         instance.rootPose,
-        move.roots[frame],
+        instance.move!.roots[instance.clock.frame],
         instance.characterOrientation,
         instance.movement,
-        move.asset.personality!.scale,
-        !instance.movementDisabled,
+        instance.move!.asset.personality!.scale,
+        translate && !instance.movementDisabled,
+        replay && options.replayRate! < 0 ? -1 : 1,
       );
       if (mode === 2) next.set(instance.rootPose.subarray(0, 9));
       instance.rootPose.set(next);
     }
+    posed = applyBonePose(instance, mode);
+  };
+  instance.clock.fraction = clock.fraction;
+  if (oldPeriod !== 0) {
+    if (clock.initialPose) pose(0, false);
+    else if (clock.advance < 0) {
+      for (let iterator = clock.advance; iterator < 0; iterator++) {
+        pose(iterator < -1 ? 2 : 0, true);
+        processedFrames++;
+        instance.clock.frame--;
+        if (instance.clock.frame < 0) {
+          if (move.asset.form.flags & 1) {
+            instance.clock.frame = 0;
+            pose(3, true);
+            break;
+          }
+          instance.clock.frame = move.roots.length - 1;
+        }
+      }
+    } else if (clock.advance > 0) {
+      for (let iterator = 0; iterator < clock.advance; iterator++) {
+        instance.clock.frame++;
+        if (instance.clock.frame >= instance.move!.roots.length) {
+          const current = instance.move!;
+          instance.clock.frame = current.roots.length - 1;
+          if (!replay && instance.completionRequested) {
+            instance.completionRequested = false;
+            completedMove = true;
+            instance.onMoveCompleted!(instance, timeMs);
+            if (!ownsActors(instance))
+              return {
+                ...result(["native-render-actor-set-owner"]),
+                processedFrames,
+                completedMove,
+              };
+            if (instance.move === current) instance.clock.frame = 0;
+            pose(0, false);
+            // Installed CBMoveCompleted returns1 even if the move stays unchanged.
+            break;
+          }
+          if (replay && current.asset.form.flags & 1) {
+            pose(0, true);
+            processedFrames++;
+            break;
+          }
+          instance.clock.frame = 0;
+        }
+        pose(iterator + 1 < clock.advance ? 2 : 0, true);
+        processedFrames++;
+      }
+    } else if (active || replay) pose(0, false);
   }
-  if (active) {
-    instance.rootPose.set(physicalRoot!);
-    instance.characterOrientation = physicalOrientation(
-      move.roots[instance.clock.frame],
-      instance.rootPose,
+  // A completion callback may change the period. Native still uses the original
+  // signed requested advance, including steps skipped by that callback.
+  instance.clock.lastTimeMs = timeMs;
+  if (clock.advance) {
+    const seconds = clock.advance * instance.clock.periodMs * 0.001;
+    const velocity = oldOrigin.map((n, i) =>
+      f(f(instance.rootPose[9 + i] - n) / seconds),
     );
-    if (physicalVelocity)
-      instance.nativeCharacterVelocity.splice(0, 3, ...physicalVelocity);
-  } else if (processedFrames) {
-    const seconds = processedFrames * oldPeriod * 0.001;
-    for (let i = 0; i < 3; i++)
-      instance.nativeCharacterVelocity[i] = scalar(
-        f(instance.rootPose[9 + i] - oldOrigin[i]) / seconds,
-      );
+    if (velocity.some((n) => !Number.isFinite(n)))
+      return {
+        ...result(["native-nonfinite-animation-velocity"]),
+        processedFrames,
+        completedMove,
+      };
+    instance.nativeCharacterVelocity.splice(
+      0,
+      3,
+      ...(velocity as [number, number, number]),
+    );
   } else if (oldPeriod === 0) instance.nativeCharacterVelocity.fill(0);
-  const posed = applyBonePose(instance, mode);
   return { ...posed, processedFrames, completedMove };
 }
 /** Selected authored model identity and remapped local bounds for body setup. */

@@ -127,6 +127,15 @@ Run `npm test` for parsers, assets and deterministic motion/contact/crush/compon
 
 `npm run test:crash-matrix` checks four Stock/Advanced cars with real driving input, severe crash chains, simultaneous Eagle bumper joints, native Porker2 splitting and repair. Controlled impact setups are recorded separately from driven collisions. Reports and screenshots stay in ignored `artifacts/`.
 
+`npm run test:ped-gameplay` checks the native pedestrian resource/contact adapter
+in Stock and Advanced Chromium: keyboard-driven Eagle contact, original death
+models, attribution and count/score callbacks; a separately labeled controlled
+contact checks actual severing and independent PHIL registration. Inactive
+resource release is covered. Active-corpse recovery/release still requires its
+remaining source effect outlets, and normal populations retain the existing
+movement/contact path. The report distinguishes these unresolved paths; it does
+not claim full native population integration.
+
 `npm run test:component-smoke` drives original Eagle/Buggy collisions and checks
 component smoke, wasting order and held/full repair. Its report distinguishes
 unreached smoke tiers. `npm run test:ghosts` checks original Stock/Advanced

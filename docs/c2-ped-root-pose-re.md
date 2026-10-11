@@ -129,7 +129,7 @@ provides the bounded arithmetic for this path:
 
 ```text
 delta = signed32(unsigned32(now-lastTime))
-target = oldFrame + oldFraction + clamp(delta/period, -10, +10)
+target = (clamp(delta/period, -10, +10) + oldFraction) + oldFrame
 advance = floor(target)-oldFrame
 fraction = f32(target-floor(target))
 ```
@@ -137,17 +137,92 @@ fraction = f32(target-floor(target))
 A zero period performs no frame advancement. A zero last time initializes the
 current pose with no translation before recording the current time. Ordinary
 animation uses integral frame bases; the retained fractional clock is not a
-basis interpolation factor. Frame looping, completion, queued moves, reverse
-replay and morph transitions must be dispatched by the runtime; the helper
-does not silently wrap or invent an animation policy.
+basis interpolation factor. The clock helper does not choose frame-loop policy. The ordinary native
+instance now implements positive and negative traversal; queued and morph
+transitions remain separate providers.
 
-The normal non-morph tail `0x409fa1–0x40a01a` sets character world velocity to
-the float32 root-origin displacement divided by
-`processedFrames * signedPeriodMs * double(0.001)`. If no frames were processed,
-velocity remains unchanged unless period is zero, which clears it. This is
-the velocity copied into a freshly activated passive simple body. Car velocity,
-visual-frame displacement divided by render elapsed time, random spin and an
-invented launch increment are not substitutes.
+The target spills to double at installed `409ddc`; the remainder spills to
+Float32 at `409df6`. That remainder can round up to exactly1, which the original
+stores and reads unchanged on the next call (`409dd1`). It must not be rejected
+or carried into the frame early. Actual Stock/Advanced browser contacts exposed
+this bug in the previous validator. Installed probes confirm frame4/fraction
+`.95f`/period20/elapsed61 produces frame7/fraction1, then elapsed1 produces
+frame8/fraction`.05f`; the corresponding period33 case retains1 too. Even a
+repeat at the same timestamp consumes the retained1 on the next ordinary call.
+Independent numerical regressions preserve that source callback chronology.
+An additional2,004 installed calls matched the corrected arithmetic exactly,
+including462 stored remainders equal to1. Twenty differed from the former
+association even when both outputs remained valid. Installed CRT initialization
+`5798e0..8ea` selects nearest-rounded53-bit x87 precision (`CW027f`), so the
+double intermediate is deliberate rather than a generic JS approximation.
+
+### Signed frame traversal and physical callbacks
+
+Verified from the installed binary using48 reverse probes (24 original
+Stock/Advanced BIPED/DOG move30/94 cases) and eight positive/completion probes.
+`advanceNativePedPose` implements this path independently.
+
+Negative advancement at `409f08–409f6a` is ordinary behavior, with no replay
+gate. Each iteration poses the **current** frame before decrementing. Mode2
+preserves root basis/children while more iterations remain; the final iteration
+uses mode0. Underflow wraps to the last frame unless authored move flag1 is set,
+which clamps frame0, calls mode3 and stops. That extra call must not replace a
+basis retained by an intermediate mode2 step. There is no final pose using the
+decremented frame, completion callback or completion-bit clear. Ordinary negative
+clock steps still **add** authored displacement; subtraction applies only during
+action replay with negative replay rate (`407d91–407dcf`).
+
+Positive ordinary traversal ignores authored flag1. Replay clamps/stops at the
+last frame when it is set. A requested completion clears bit2, exposes the last
+frame and updated fraction to the callback, then resets frame0 when no new move
+was selected. Installed `CBMoveCompleted` returns literal1 at `4cbfb4`, stopping
+remaining traversal even if the callback retains the move. The final pose has
+movement disabled. The raw timestamp is stored after callback/traversal, so a
+callback observes the old timestamp. Ordinary passive zero-advance calls do not
+pose; active/replay zero-advance calls do. Period0 skips pose and clears V.
+
+The non-morph tail `409fa1–40a01a` stores:
+
+```text
+V = f32(f32(newOrigin - oldOrigin)
+        / (originalSignedAdvance * currentSignedPeriodMs * double(.001)))
+```
+
+The denominator includes steps skipped by a callback and reads any period
+changed by that callback. Signed zeros are preserved. A callback-created zero
+period can produce native infinity; the browser reports
+`native-nonfinite-animation-velocity` and retains the previous finite V instead
+of admitting infinity into PHIL. This is an explicit robustness deviation. With
+zero advance V remains unchanged unless the input period is0.
+
+Animation retains character orientation O. Active root ownership suppresses root
+delta writes, so nonzero advancement computes zero character V while leaving
+physical body V unchanged. The separate moved `40b770` and halt `409400` callbacks
+do **not** consume animation time, frame or fraction: they obtain O from
+`inverseLP(currentFrame) * actualPhysicalRoot`, clear O translation and call
+mode3 without movement. Installed `BrMatrix34LPInverse 5324f0` transposes the LP
+basis. The installed `531c60` basis sums use entry-specific association: rows
+`[(2+1)+0,(0+1)+2,(0+1)+2]`, `[(0+1)+2,(0+2)+1,(0+1)+2]`,
+`[(0+2)+1,(1+0)+2,(1+0)+2]`, with one final Float32 store. A captured
+cancellation fixture distinguishes this from a uniform dot-product association.
+The physical-pose helper implements those orders. Moved handles only simple
+resource bit1; boned callbacks require their actual source dispatch/storage.
+Moved copies body V before its gameplay callback. Halt copies final body V
+only after acceptance; a rejected halt retains previous character V. The browser
+uses `synchronizeNativePedPhysicalPose` for this separate phase.
+
+An installed Stock Blokebl30 capture uses explicit identity O/movement, frame0,
+period33, fraction0, origin `(10,20,30)`, clock331→315:
+
+```text
+stored frame29; fraction .5151515007019043
+origin (10.000452995300293,19.998130798339844,30.010194778442383)
+V (-.013727130368351936,.05664247274398804,-.30893269181251526)
+```
+
+The applied basis is frame0 despite the stored frame29. Read-only original asset
+tests preserve this numeric anchor; synthetic tests cover callback ordering,
+underflow, repeat impacts' animation clocks and physical ownership.
 
 ## Grounding and runtime contract
 
