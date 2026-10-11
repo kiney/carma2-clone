@@ -1,9 +1,10 @@
 ---
 id: TASK-90
 title: '[P5] UI-01: Show individual damage components and active powerup durations'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-5
   - UI-01

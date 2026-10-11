@@ -3,9 +3,10 @@ id: TASK-63
 title: >-
   [P3] ANI-02: Implement remaining GROOVE modes, paths, controls, and stop
   behavior
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - ANI-02

@@ -3,9 +3,10 @@ id: TASK-21
 title: >-
   [P2] DMG-01: Implement native WAM effects, damage queues, shards, and repair
   behavior
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - DMG-01

@@ -1,9 +1,10 @@
 ---
 id: TASK-66
 title: '[P3] REN-01: Apply original track lighting and depth-cue fog'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - REN-01

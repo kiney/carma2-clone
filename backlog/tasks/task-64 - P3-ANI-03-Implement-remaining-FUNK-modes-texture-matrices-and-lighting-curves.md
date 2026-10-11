@@ -3,9 +3,10 @@ id: TASK-64
 title: >-
   [P3] ANI-03: Implement remaining FUNK modes, texture matrices, and lighting
   curves
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - ANI-03

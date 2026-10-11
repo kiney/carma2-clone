@@ -3,9 +3,10 @@ id: TASK-71
 title: >-
   [P3] AUD-03: Add original spatial audio for opponents, pedestrians, and world
   events
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - AUD-03

@@ -1,9 +1,10 @@
 ---
 id: TASK-85
 title: '[P4] QUA-07: Isolate or remove obsolete arcade-handling helpers'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-4
   - QUA-07

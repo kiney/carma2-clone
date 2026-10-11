@@ -3,9 +3,10 @@ id: TASK-32
 title: >-
   [P2] AI-01: Match opponent objectives, personalities, pursuit, and crash
   reactions
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - AI-01

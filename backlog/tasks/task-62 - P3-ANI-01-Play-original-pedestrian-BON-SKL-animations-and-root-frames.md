@@ -1,9 +1,10 @@
 ---
 id: TASK-62
 title: '[P3] ANI-01: Play original pedestrian BON/SKL animations and root frames'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - ANI-01

@@ -3,9 +3,10 @@ id: TASK-20
 title: >-
   [P2] WLD-05: Integrate native world awards, triggers, debris, and surface
   effects
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - WLD-05

@@ -1,9 +1,10 @@
 ---
 id: TASK-74
 title: '[P3] QUA-03: Expand browser coverage across tracks and vehicle classes'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - QUA-03

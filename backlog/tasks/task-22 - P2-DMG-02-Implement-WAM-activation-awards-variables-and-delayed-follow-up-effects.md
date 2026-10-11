@@ -3,9 +3,10 @@ id: TASK-22
 title: >-
   [P2] DMG-02: Implement WAM activation, awards, variables, and delayed
   follow-up effects
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - DMG-02

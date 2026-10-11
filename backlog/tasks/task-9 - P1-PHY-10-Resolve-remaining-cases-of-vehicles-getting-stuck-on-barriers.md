@@ -1,9 +1,10 @@
 ---
 id: TASK-9
 title: '[P1] PHY-10: Resolve remaining cases of vehicles getting stuck on barriers'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 16:07'
 labels:
   - priority-1
   - PHY-10
@@ -13,7 +14,7 @@ dependencies: []
 references:
   - docs/c2-physics-re.md
   - tests/barrier-release.test.mjs
-priority: high
+priority: low
 ordinal: 1014
 ---
 
@@ -33,3 +34,13 @@ Renewed report of getting stuck on barriers: an additional browser block with sh
 
 [RE notes](../../docs/c2-physics-re.md), [Tests](../../tests/barrier-release.test.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: kiney
+created: 2026-10-11 16:07
+---
+hasn't happened for a while now, so changing prio to low
+---
+<!-- COMMENTS:END -->

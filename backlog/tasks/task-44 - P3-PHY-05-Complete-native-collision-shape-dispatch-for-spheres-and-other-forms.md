@@ -3,9 +3,10 @@ id: TASK-44
 title: >-
   [P3] PHY-05: Complete native collision-shape dispatch for spheres and other
   forms
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - PHY-05

@@ -1,9 +1,10 @@
 ---
 id: TASK-56
 title: '[P3] AI-04: Implement native opponent stuck detection and recovery'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-3
   - AI-04

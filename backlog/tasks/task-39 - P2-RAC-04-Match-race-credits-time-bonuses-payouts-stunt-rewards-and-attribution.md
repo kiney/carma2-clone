@@ -3,9 +3,10 @@ id: TASK-39
 title: >-
   [P2] RAC-04: Match race credits, time bonuses, payouts, stunt rewards, and
   attribution
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - RAC-04

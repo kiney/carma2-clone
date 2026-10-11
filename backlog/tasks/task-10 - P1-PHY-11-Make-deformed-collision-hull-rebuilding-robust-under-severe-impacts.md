@@ -3,9 +3,10 @@ id: TASK-10
 title: >-
   [P1] PHY-11: Make deformed collision-hull rebuilding robust under severe
   impacts
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-1
   - PHY-11

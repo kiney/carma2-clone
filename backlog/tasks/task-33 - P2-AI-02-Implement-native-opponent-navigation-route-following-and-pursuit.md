@@ -1,9 +1,10 @@
 ---
 id: TASK-33
 title: '[P2] AI-02: Implement native opponent navigation, route following, and pursuit'
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - AI-02

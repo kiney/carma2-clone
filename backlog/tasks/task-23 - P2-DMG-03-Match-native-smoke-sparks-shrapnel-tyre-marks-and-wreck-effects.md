@@ -3,9 +3,10 @@ id: TASK-23
 title: >-
   [P2] DMG-03: Match native smoke, sparks, shrapnel, tyre marks, and wreck
   effects
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-11 16:03'
 labels:
   - priority-2
   - DMG-03

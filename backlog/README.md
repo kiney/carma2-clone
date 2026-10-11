@@ -14,12 +14,26 @@ backlog task view TASK-1 --plain
 
 | Column | Meaning | Imported status |
 | --- | --- | --- |
-| `backlog` | Open work awaiting selection, including unresolved data issues and validation | Missing, Needs validation, Data issue |
+| `backlog` | Open work awaiting selection, including inactive partially implemented work, unresolved data issues and validation | Missing, inactive Partial, Needs validation, Data issue |
 | `next` | Explicitly selected upcoming work | Initially empty |
-| `wip` | Work partly implemented, with remaining scope recorded in the description | Partial |
+| `wip` | The most recently active workstreams, limited to 3 tickets | Selected Partial tasks with concrete recent activity |
 | `done` | The described scope was implemented and verified according to the existing record | Done |
 
-Migration imports all 92 numbered issues plus three distinct completed checklist items: 27 in `backlog`, 35 in `wip`, 33 in `done` (95 tasks total). Seven other completed checklist items are retained as evidence on existing tasks to avoid duplicates. Imported `wip` means partially implemented, not that all 35 tasks are being worked on simultaneously. Importing `done` preserves the previous verification record; it does not assert that the whole subsystem is complete or that migration reran engine tests. Original status labels such as `legacy-needs-validation` distinguish validation requests from reported defects. No new engine completion claims are introduced by the migration.
+Migration preserved all 92 numbered issues plus three distinct completed checklist items (95 tasks total). Seven other completed checklist items are retained as evidence on existing tasks to avoid duplicates. The initial migration mapped all 35 Partial issues to `wip`; that mapping confused implementation completeness with active work. On 2026-10-11, 32 inactive partial issues were returned to `backlog`. The resulting board has 59 in `backlog`, 0 in `next`, 3 in `wip`, and 33 in `done`. The `legacy-partial` label and full implementation evidence remain unchanged, regardless of board status. Importing `done` preserves the previous verification record; it does not assert that the whole subsystem is complete or that migration reran engine tests. Original status labels such as `legacy-needs-validation` distinguish validation requests from reported defects. No new engine completion claims are introduced by the migration.
+
+## WIP limit: 3
+
+At most **three tickets** may occupy `wip`. Only genuinely active work belongs there; partially implemented but inactive tasks belong in `backlog`. Several subagents working together on a single ticket count as one slot. Record dependencies separately rather than starting every related ticket. Check the WIP count before beginning work; if all slots are occupied, finish a ticket or return inactive work to `backlog` first. Moving a task does not discard its existing implementation or evidence.
+
+The three retained tickets were selected from actual source/test changes and normalized issue-description changes in the last engine commit, `83d0ba3`, rather than migration timestamps:
+
+| Backlog ID | Original ID | Recent work |
+| --- | --- | --- |
+| TASK-19 | WLD-03 | Native resource admission, material ownership and track face collection |
+| TASK-35 | PED-03 | Canonical pedestrian proximity and bounded process/grounding state |
+| TASK-67 | REN-02 | Retaining accepted TWO_SIDED material flags during duplicate registration |
+
+This selection records the latest work context; changing board status does not resume a paused Goal. Backlog.md 1.47.1 has no built-in configurable WIP cap. The limit is therefore enforced by the project workflow and agent policy; the CLI/browser does not automatically reject a fourth ticket.
 
 ## Priorities and sorting
 
