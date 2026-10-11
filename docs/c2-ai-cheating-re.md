@@ -20,6 +20,33 @@ When no next section exists, this cheaty branch zeros acceleration and brake for
 
 ## Physics-off side effects
 
+### Shared follow lifecycle implementation
+
+`src/ai/follow-lifecycle.ts` now composes physical following with the recovered
+cheaty entry/steady-motion helpers. Follow START clears its cheating bit
+(`0x4b0ec8–0x4b0eef`), even when the outer opponent is already cheating; the
+following RUN therefore enters the nonphysical mode again. START on an inactive
+non-cheating car requests nearest-section rematerialization with the stored
+velocity magnitude (`0x4b0ef5–0x4b0f50`). These callbacks are synchronous.
+
+Exit uses authored finish maximum speed when below255, otherwise positive
+minimum speed, converted by double .14492753623188406 and stored Float32.
+When neither limit applies, it uses Float32 distance-to-finish and clamps twice
+that distance to [1,7] (`0x4b0955–0x4b0a1b`). This is not the physical follower's
+desired-speed field. A nonzero rematerialization result clears car forces and
+returns immediately without physical following in the same call. Zero restores
+the follow cheating bit and proceeds through cheaty motion, without changing
+made-it. Raw path-end result1 clears forces and remains an objective-owned
+notification, distinct from physical result2 give-up.
+
+The adapter's tests cover both motion branches, transition side-effect order,
+authored speed tiers, direction-dependent endpoints, raw return polarity and
+cursor synchronization. `src/ai/rematerialization-state.ts` separately composes
+the24 placement attempts, full saved-matrix restoration, activation, aligned
+velocity resets and exhausted fallback. Both are still independent adapters:
+engine cache/shape queries, objective dispatch and live rendering callbacks
+must be bound before replacing RoadNavigator.
+
 `TurnOpponentPhysicsOff` is installed at **`0x4a7740`** (the rec2 annotation `0x4a79a0` does not match the installed address). It performs these stores on every call:
 
 - car fields at `car +0x12b8`, `+0x12c0`, `+0x1254`, `+0x135c`, and `+0x1340` are zeroed;

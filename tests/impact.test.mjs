@@ -36,6 +36,26 @@ test("car impacts include APO receiver armour, attacker offence and attacker sof
     (((0.91 ** 2 * 1.2 * 1.06 ** 3 * 1.5 * 0.9) / (1.7 / 0.7)) * 0.2) / 2,
   );
   close(result.crush.x, result.damage.x * 0.5);
+  close(result.accumulatedDamage.x, result.damage.x * 2);
+});
+
+test("crash accumulator input precedes protection and remains independent of visual crush", () => {
+  const raw = new Vector3(1, 2, 3);
+  const ordinary = scaleImpactVectors(raw, base);
+  const protectedCar = scaleImpactVectors(raw, { ...base, protection: 4 });
+  assert.deepEqual(
+    protectedCar.accumulatedDamage.toArray(),
+    ordinary.accumulatedDamage.toArray(),
+  );
+  close(protectedCar.accumulatedDamage.lengthSq(), 0.56);
+  close(protectedCar.damage.lengthSq(), 0.035);
+  close(protectedCar.crush.lengthSq(), 0.00875);
+  protectedCar.damage.x = 99;
+  protectedCar.crush.y = 99;
+  assert.deepEqual(
+    protectedCar.accumulatedDamage.toArray(),
+    [0.2, 0.4, 0.6000000000000001],
+  );
 });
 test("opponent impacts retain distinct world inactivity and opponent-to-opponent multipliers", () => {
   const raw = new Vector3(1, 0, 0);

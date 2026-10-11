@@ -55,9 +55,16 @@ export function scaleImpactVectors(
   }
   factor *= 0.2;
   const damage = rawVector.clone().multiplyScalar(factor);
+  // DamageCar41e0f9–ff accumulates this vector's squared magnitude before
+  // protection and crush scaling. Crash attribution and AI use that record.
+  const accumulatedDamage = damage.clone();
   if (p.human && (p.protection ?? 1) !== 0)
     damage.divideScalar(p.protection ?? 1);
-  return { damage, crush: damage.clone().multiplyScalar(p.human ? 0.5 : 1.5) };
+  return {
+    accumulatedDamage,
+    damage,
+    crush: damage.clone().multiplyScalar(p.human ? 0.5 : 1.5),
+  };
 }
 
 /** CheckForWastedCars0x43f620: steering and brakes alone do not waste a car.

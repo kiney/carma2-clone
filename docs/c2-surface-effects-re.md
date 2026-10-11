@@ -5,9 +5,9 @@
 Original track material modifiers are parsed into wheel friction, sound,
 sparkiness, smoke-type and skid-material fields. The browser currently uses
 tyre friction, but has no skid-mark, continuous-smoke or spark consumer. The
-installed HW binary confirms the skid-mark lifecycle and the wheel-force
-producer; the exact branch meaning of several wheel-force trigger values is
-still under analysis. Smoke production is reconstructed from rec2, while its
+installed HW binary confirms the skid-mark lifecycle and the force-driven
+per-wheel producer, which now emits tested requests in the browser motion
+pipeline. Persistent mark/smoke rendering and contact filtering remain open. Smoke production is reconstructed from rec2, while its
 installed allocator is not mapped. Sparkiness has no located rec2 consumer and
 remains open.
 
@@ -57,7 +57,7 @@ with type byte `0x12`, and a wheel whose material-name string has the special
 12-character form with `'|'` at offset 5. It then sets the wheel bit and
 updates per-wheel mark start/position data. In `0x418870`, one call cluster at
 `0x41a521–0x41a53a` is inside a four-wheel loop and calls the helper when that
-wheel's oil field is positive. Other calls at `0x41ad35`, `0x41ad55`,
+wheel's oil field is nonzero. Other calls at `0x41ad35`, `0x41ad55`,
 `0x41ae4e`, `0x41af15`, `0x41b1ca`, `0x41b1eb`, `0x41b2eb` and `0x41b3b6`
 occur in tyre-force/slip branches. The latter clusters compare intermediates
 against the installed `20`/`60` constants and, in some branches, `0.1`, before
@@ -65,14 +65,12 @@ marking a wheel.
 
 The surrounding wheel-force code updates `wheel_slip` and applies
 `friction_slipping_reduction` while resolving force demand against tyre
-capacity. However, the full operand mapping for each `20`/`60` and `0.1`
-comparison is not yet established. Do not substitute the browser's current
-`allocateTyrePair` saturation flag as a proven one-to-one producer for
-`new_skidding`; it is only a candidate integration signal pending that mapping.
-The important runtime path is per wheel: preserve the selected road material,
-the wheel's actual slip/force state, and its skid-history state, then invoke the
-mark update once during the frame lifecycle. Do not infer marks from vehicle
-speed or chassis yaw alone.
+capacity. The operand mapping and Float32/live comparison boundaries are now
+resolved in the force-driven request section below. Axle saturation alone is
+not the per-wheel mark producer. Preserve each wheel's selected road material,
+force request and history, accumulate eligible `new_skidding` across physics
+substeps, then update marks once during the native game-frame lifecycle.
+Speed or chassis yaw alone does not authorize a mark.
 
 ## Continuous smoke
 

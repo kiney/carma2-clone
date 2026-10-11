@@ -213,6 +213,58 @@ Installed LoadRaces (`0x48c4c9–0x48c4ff`) reads scalar nastiness and replaces 
 
 Pursuit can also preempt this final forced-choice branch after the first frame: fresh player sighting, collision/grudge, or scary-bang conditions run first. For regular fresh sighting, if pursuing population is below skill+3, chance is `trunc(grudge-20+30*nastiness)`, else zero; a verified head-on test adds 50 before the percentage call (`0x4ad2eb–0x4ad42e`). Selection raises grudge by the general increment `trunc(40*nastiness+10)` with min/max 20/100 and starts pursuit. The complete pursuit/get-near routing, visibility geometry and cheating/rematerialisation consumer remain separate unresolved objective scope; a forced-choice scaffold does not constitute their implementation.
 
+### Visibility and objective lifecycle adapters
+
+`src/ai/visibility.ts` independently implements installed regular visibility
+`0x4ad880`: only a strict expired deadline clears in-view and draws the next
+4000–4900 ms check before testing stored distance <50. The ray starts at player
+origin plus Float32 .15 in Y, and its direction uses rival minus player with
+another .15 Y bias. Stored fraction >1 sets in-view and clears acknowledgment;
+fraction 1 is blocked. An unsuccessful check preserves acknowledgment.
+
+Head-on classifier `0x4ad338–0x4ad423` retains live position differences,
+normalization and dot products. Length at most 2^-22 chooses (1,0,0).
+Rival dot order is (Y+X)+Z, player order (X+Y)+Z, with strict opposing tests
+against Float32(cos(double .5235668420791626)), or .866041362285614.
+Tests distinguish this value from the trail's different cosine, normalized
+Float32 rounding from live comparison, and timer/distance/fraction boundaries.
+
+`src/ai/objective-lifecycle.ts` implements the installed outer order, with
+callbacks for engine-owned mode, repair and objective dispatch. NewObjective
+does old DIE, stores new type/start, draws/stores deadline, then writes the
+pursuit target and increments the new category before synchronous START.
+Non-pursuit transitions preserve the stale target. It does not decrement the
+old category. ObjectiveComplete sets new-required and decrements the current
+category. MungeOpponents recounts unfinished regular rivals each frame
+(`0x4a9f3a–0x4a9f96`), so signed within-frame counter drift is intentional.
+
+ProcessThisOpponent runs mode change, repair and selector even while stopped
+or stunned. After synchronous selection it clears new-required, applies
+Float32(10*stored mass) braking for countdown or race finish, then runs only
+if unfinished, movement enabled, race unfinished and now strictly after stun.
+Countdown alone does not suppress RUN. Cheating cached-position copy is last.
+These adapters and their tests do not yet replace live RoadNavigator; world
+rays, impact flags, shared target/trail caches and physical-mode side effects
+still require runtime binding.
+
+### Run-away objective
+
+The independently implemented `src/ai/run-away-state.ts` follows installed
+objective3 dispatch `0x4aa80a`. START draws its own inclusive30–90-second stop
+deadline after NewObjective has drawn the ordinary objective deadline; clears
+the shared projected route; finds the nearest authored section; and seeds
+direction0 only when the live (Z+X)+Y dot of stored cached car direction and
+stored section direction is negative. Zero selects1. Random top-up fills12,
+then shared Follow START runs with all three options false (`0x4aa908–0x4aa9b0`).
+
+RUN at stop-deadline equality still follows. Strict expiry calls
+ObjectiveComplete before route shifting, refill or following. Positive consumed
+prefixes shift and reset the cursor unconditionally; unlike CompleteRace,
+count11 refills. Follower result2 reseeds/top-ups/restarts without redrawing the
+stop deadline or NewObjective. Result1 alone does not complete RunAway. DIE is
+a no-op. Tests cover RNG order, stored direction sign boundaries, shared cursor
+and refill, deadline equality, preserved forces/deadlines and bounds errors.
+
 ### Installed RNG semantics
 
 `IRandomBetween`, installed `0x512f00`, consumes one 15-bit CRT random result r and returns `A+trunc(r*(B-A+1)/32768)` for the nonnegative ranges used here. Deadline range 20–60 is inclusive, and equal endpoints still consume RNG. NewObjective always makes this call. `PercentageChance`, installed `0x512f30`, returns false without consuming RNG only when p equals zero. Otherwise it consumes r and compares `floor(r*100/32768) < p` as signed integers. Its draw range is 0–99, unlike rec2's `IRandomBetween(0,100)` reconstruction. Negative p still consumes and returns false; p at least 100 still consumes and returns true. Browser random callbacks can map r as `floor(random()*32768)` for finite random values in [0,1).
