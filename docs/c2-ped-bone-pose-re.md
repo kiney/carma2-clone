@@ -124,7 +124,7 @@ double588350. JS arithmetic cannot guarantee every x87 intermediate's exact
 last-bit result, but should preserve these storage boundaries and quantization.
 Do not quantize the root's retained full basis.
 
-For BIPED1/BIPEDF move30 `walk_normal_male.SKL` frame0, FORM root/head angles
+For BIPED1 move30 `walk_normal_male.SKL` frame0, FORM root/head angles
 are(127,0,63), left upper leg(128,5,192), lower leg(128,27,192). The normalized
 root first row is approximately(.0142760,.9998592,-.0088171): its remapped local
 long X axis points almost along world Y. A yaw-only root does not do that.
@@ -294,8 +294,10 @@ Small current-model measurements after general remap:
 Blokebl head alternatives CHEBLA/CHEBLB and Bandsman HEDCA/HEDCB occupy pose1/2
 of FORM bone1. Twolf neck is index1(TGNECK), head2(TGHEAD1), tail3(TGTAIL).
 Human move30 has30 frames and25 animation bones; dog move30 has32 frames and39
-animation bones. Name matching is essential. BIPED1 and BIPEDF share animation
-and model mapping, but the latter's physics joints require articulated support.
+animation bones. Name matching is essential. BIPED1 and BIPEDF share FORM bone
+names/model mapping, but BIPEDF move30 uses `walk_normal_female.SKL` and its
+physics joints require articulated support. Female frame0's first four angle
+triples are(127,0,62), (127,0,63), (127,4,190), (127,28,189).
 
 A production provider needs immutable FORM parent/remap records; retained
 personality attachments/model pose tables; per-frame full root basis/deltas

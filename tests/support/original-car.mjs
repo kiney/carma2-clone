@@ -49,6 +49,9 @@ export async function originalCar(name) {
       const model = models.get(node.model.toLowerCase());
       if (model) {
         const geometry = new BufferGeometry();
+        geometry.userData.sourcePositions = model.positions.slice();
+        geometry.userData.modelFlags = model.flags;
+        geometry.userData.c2VertexLayout = "source";
         geometry.setAttribute(
           "position",
           new BufferAttribute(model.positions.slice(), 3),

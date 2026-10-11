@@ -13,9 +13,11 @@ This is an independent behavioral description, not copied reference code.
 World/WAM slicks, oil powerups and settled pedestrian blood share **one pool
 of 32 oil spill records**. World slick production is an authored invocation
 of the existing oil allocator, not an explosion, particle cloud or independent
-decal pool. The browser currently parses the data but does not dispatch this
-connotation outlet. Its `OilRuntime` uses fixed powerup parameters, while
-`PedBloodRuntime` maintains a separate 32-slick pool.
+decal pool. The browser now dispatches this connotation outlet through the same
+`OilRuntime` as charged oil, with original parameters/materials, retained
+ACT/MODEL providers, the outer-frame process phase, ten-face projection and
+retained graphics masks. `PedBloodRuntime` still maintains a separate 32-slick
+pool; connecting its actual corpse actor/model remains necessary.
 
 ## Installed function and phase map
 
@@ -176,9 +178,12 @@ already visible spill.
 `MungeCarGraphics` at `0x41ea20–0x41eae2` clears/builds the retained 32-bit car
 field `+0x1594`, named `shadow_intersection_flags` by rec2. This is a spill-slot
 mask, not a grounded-wheel mask. Eligible visible cars with driver>5 test every
-active source-ACT slot. Radius is
+active source-ACT slot. The bound comes from the first/head physics shape,
+not the union of attached shapes; it remains in native world units. Radius is
 `shape.common.bb.max.z * f32(1/6.9) * f32(1.5)`; strict X/Z rectangle overlap
-uses the car ACT translation and spill ACT translation/full half-size. This
+uses the car ACT translation and spill ACT translation/full half-size. The
+installed x87 product remains unrounded for the first X-side comparison,
+then a Float32 store supplies the other three comparisons. This
 graphics phase runs before ProcessOilSpills, so the next physics phase uses a
 retained broadphase mask, not a newly recomputed wheel mask.
 
@@ -252,11 +257,45 @@ The smallest source-correct integration is:
    do not preserve an independent32 blood-slick capacity. Its ordinary
    PEDSMEAR trail needs the already shared100 skid allocation separately.
 
-Current unresolved providers are the original ACT-local frame/model identity
-after static world batching, exact ten-face source ordering, and original
-hierarchical corpse ACT model bounds. Those are explicit adapter gaps, not
-permission to infer source bounds from impact points or build an unrelated
-particle effect. Existing OilRuntime also samples yaw during enqueue, updates
-per40ms physics step, samples only the final overlapping spill, and omits
-authored wheel-material retention; these differences must remain visible until
-the shared consumer is integrated.
+The authored allocator and production charged command now draw full size then
+growth at allocation, and draw yaw only at a permitted placement attempt.
+Charged growth uses the installed literal Float32 values `.00009.. .0003`.
+Production spill processing is once after graphics and GROOVE, before delayed
+effects/final flush. Slot-major wheel2/3/0/1 sampling consumes each overlapping
+slot's friction/smear draws and retains its actual smear material. Standalone
+legacy `queueSpill` remains a compatibility adapter; real command35 uses
+`queueChargedSpill` and the native authored lifecycle.
+
+`projectNativeOil` consumes a finite ten-face ACT-local box and first-hit
+segment. Installed `CheckSingleFace45f1c0` divides the second barycentric
+numerator by the **negated** determinant at45f504–45f54c. rec2 misses that sign
+and incorrectly rejects ordinary triangle interiors; the browser uses the
+installed sign. Numerical checks cover nonnegative plane distances, endpoint
+tolerance, finite triangles, source box bounds, capacity and retained spill
+position. Graphics retains the native strict X/Z slot mask for the next physics
+phase; the wheel consumer does not reinterpret it as a grounded-wheel mask.
+
+Charged oil retains the **master car ACT**, with its graphics-phase matrix,
+and separately reads the principal car ACT's live MODEL bounds
+(`4dde57–4dde96`). Rebuilding the source matrix from the current physics state
+or using the principal child's translation would shift placement relative to
+the visible car.
+
+Source MODEL bounds now retain unused original vertices and observe live
+deformation of face-backed vertices. Crush itself does not yet mutate unused
+MODEL vertices. The source MODEL pointer remains captured when queued.
+
+Production Chromium verifies normal action35 grants and F/W driving in both
+Stock and Advanced, with visible original OIL.PIX and reduced wheel grip. An
+explicit synthetic connotation attached to an original retained NONCARS ACT
+passes normal destruction dispatch, native placement and growth with the
+original PETPUMP material. Installed world/WAM configurations contain no authored
+slicks. A retained original tank-pump ACT fails the native placement gate;
+the test preserves that rejection rather than altering its pose or projector.
+The report/screenshots are ignored artifacts from `npm run test:world-slicks`.
+
+Remaining providers are original ACT-local identity after static world batching,
+exact packed model/column ordering for the finite ten-face collection, complete
+unused-vertex crush, and original hierarchical corpse
+ACT/model ownership. Corpse blood still has its separate legacy pool. These
+remain explicit compatibility gaps.

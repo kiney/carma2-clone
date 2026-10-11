@@ -34,6 +34,9 @@ import {
 import * as THREE from "three";
 import { placeCarAtStart } from "./physics/spawn";
 import { Assets } from "./content";
+import { nativeOilActorFollower } from "./oil-actor";
+import { queueWorldSlick } from "./world-slick";
+import { nativeOilBroadphaseMask } from "./physics/oil-placement";
 import {
   parseTrackConfig,
   parseCarConfig,
@@ -250,6 +253,7 @@ let shards: ShardRuntime | undefined;
 let ghostTemplateLibrary: THREE.Group | undefined;
 let noncarDebris: NativeNonCarDebrisRuntime | undefined;
 let noncarDebrisActors: THREE.Group | undefined;
+let worldSlickMaterials: ReadonlyMap<string, THREE.Material> = new Map();
 let smoke: SmokeSystem | undefined;
 const tyreEffects = new NativeTyreEffects<SimulatedCar>({
   isPlaying: (tag) => audio.isSoundPlaying(tag),
@@ -1056,6 +1060,7 @@ async function loadRace() {
           }),
       },
     );
+    worldSlickMaterials = world.materials;
     await loadedDestruction.preload(async (name) => {
       const path = assets.resolve(
         `${dirOf(currentTrack)}/${name.replace(/\.(act|dat)$/i, "")}.DAT`,
@@ -1283,7 +1288,9 @@ async function loadRace() {
           suspensionDistance: body.state.wheelLengths[wheel],
           suspensionHeight: body.motion.suspensionLength[wheel >> 1],
           oilRemaining: beforeOil,
-          oilMaterial: "OILSMEAR.MAT",
+          oilMaterial:
+            simulation?.oil?.wheelOilMaterial(body, wheel)?.name ??
+            "OILSMEAR.MAT",
         });
         if (result.oilRemaining < beforeOil)
           simulation?.oil?.consumeOilMark(
@@ -1753,6 +1760,7 @@ function dispatchSmashConnotations(
   contact: WorldSmashContact,
   suppressed = false,
   shrapnel?: () => void,
+  slickMaterials = worldSlickMaterials,
 ) {
   const sound = chooseSmashAudio(data.sounds, sharedNativeRandom.random);
   if (sound !== undefined)
@@ -1854,6 +1862,23 @@ function dispatchSmashConnotations(
       undefined,
       orientation,
     );
+  }
+  if (data.slick && simulation?.oil) {
+    try {
+      const actor = contact.actor;
+      const source = nativeOilActorFollower(actor);
+      const spill = queueWorldSlick(
+        simulation.oil,
+        data.slick,
+        source,
+        slickMaterials,
+        stats.gameTimeMs >>> 0,
+      );
+      if (spill) scene.add(spill.mesh);
+    } catch (error) {
+      const warning = String(error);
+      if (!assets.warnings.includes(warning)) assets.warnings.push(warning);
+    }
   }
   // Native variable effects precede the immediate smash-completion check.
   missionVariables.apply(data.variableChanges);
@@ -1987,22 +2012,28 @@ function bindWamEffects(
         ? [slot]
         : [],
     );
-    dispatchSmashConnotations(event.connotations, contact, false, () => {
-      for (const spec of event.connotations.shrapnel)
-        if (spec.kind === "abstract")
-          spawnAbstractShrapnel(spec, contact, materials);
-        else if (spec.kind === "shards")
-          shards?.spawn(spec, {
-            geometry: event.mesh.geometry,
-            matrixWorld: meshTransform,
-            materialSlots: slots,
-            sourceVertexLimit: 50,
-            sourceFaceLimit: 50,
-            materials,
-            impacteeVelocity: event.startingVelocity,
-            timeMs: event.timeMs,
-          });
-    });
+    dispatchSmashConnotations(
+      event.connotations,
+      contact,
+      false,
+      () => {
+        for (const spec of event.connotations.shrapnel)
+          if (spec.kind === "abstract")
+            spawnAbstractShrapnel(spec, contact, materials);
+          else if (spec.kind === "shards")
+            shards?.spawn(spec, {
+              geometry: event.mesh.geometry,
+              matrixWorld: meshTransform,
+              materialSlots: slots,
+              sourceVertexLimit: 50,
+              sourceFaceLimit: 50,
+              materials,
+              impacteeVelocity: event.startingVelocity,
+              timeMs: event.timeMs,
+            });
+      },
+      materials,
+    );
   };
 }
 
@@ -3134,6 +3165,25 @@ function animate(now: number) {
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.mineBodies)
         if (body.actor.parent) renderPoses.apply(body, body.actor, renderAlpha);
+      if (gameFrame && !paused && simulation.oil)
+        for (const body of simulation.cars) {
+          const driver = body.state.driver ?? (body.human ? 8 : 6);
+          if (driver <= 5 || !body.group.visible) continue;
+          const bounds = new THREE.Box3();
+          // Graphics41ea20 reads the head shape's bound, not the union of
+          // attached/deformed collision shapes. Bounds remain in world units.
+          const headHull = body.hulls[0];
+          if (!headHull) continue;
+          for (const point of headHull.vertices) bounds.expandByPoint(point);
+          simulation.oil.setWheelBroadphaseMask(
+            body,
+            nativeOilBroadphaseMask(
+              body.group.getWorldPosition(new THREE.Vector3()),
+              bounds.max.z,
+              simulation.oil.spills,
+            ),
+          );
+        }
     }
     if (player && gameFrame && !paused && cunningStuntCredits) {
       const award = cunningStunts.advance({
@@ -3282,6 +3332,7 @@ function animate(now: number) {
       simulation.finishWorldGrooveFrame(stats.gameTimeMs >>> 0, {
         isVisible: worldGrooveVisible,
       });
+      simulation.processOilFrame(stats.gameTimeMs >>> 0);
       // MungeShrapnel first advances the persistent smoke/flame columns,
       // before fragments and the final authored smash queue are processed.
       smoke?.updateColumns(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);

@@ -59,6 +59,17 @@ test("original Eagle and buggy acquire source per-wheel oil grip from a projecte
     assert.ok(simulation.dropOil(car));
     assert.ok(simulation.dropOil(car), "No same-car cooldown for ability");
     const oil = simulation.oil.spills.find(Boolean);
+    Object.defineProperty(damage, "primaryRenderModelBounds", {
+      configurable: true,
+      get() {
+        throw new Error("Principal MODEL re-selection after queue");
+      },
+    });
+    assert.ok(
+      !oil.source.readModelBounds().isEmpty(),
+      "queue retains the captured MODEL rather than re-selecting a principal",
+    );
+    delete damage.primaryRenderModelBounds;
     const projected = simulation.projectOil(
       car.state.position,
       oil.fullSize,

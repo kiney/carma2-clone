@@ -8,6 +8,7 @@ import type {
   PedContactForm,
   PedContactSettings,
   PedContactState,
+  PedContactInputs,
   passivePedContact,
   activePedContact,
 } from "./ped-contact";
@@ -19,6 +20,10 @@ export interface NativePedContactContext {
   settings: PedContactSettings;
   form: PedContactForm;
   state: PedContactState;
+  /** The live character owner supplies its one-shot sever/HP continuation.
+   * Forwarded to the native dispatcher before the solver applies impulses. */
+  damageTail?: PedContactInputs["damageTail"];
+  specialMass?: number;
 }
 
 /** Intact simple-body state from 4085f0/408c30 and PHIL registration4b6050.

@@ -272,6 +272,7 @@ export class Assets {
       object.matrix.decompose(object.position, object.quaternion, object.scale);
       const mat = node.material ?? inheritedMaterial,
         style = node.renderStyle || inheritedStyle;
+      object.userData.c2ActorMaterialName = mat ?? null;
       if (node.model && style !== 1) {
         const data = geometries.get(key(node.model));
         if (data) {
@@ -293,6 +294,7 @@ export class Assets {
     group.updateMatrixWorld(true);
     return {
       group,
+      defaultMaterial,
       /** Additional authored ACTs share this scene's immutable DAT/MAT/PIX
        * resources. Debris loading must not reload every texture library. */
       loadActorFile: async (path: string): Promise<THREE.Group> => {

@@ -3,6 +3,45 @@ import type { DatFace, DatModel } from "./formats";
 
 type SourceFace = Pick<DatFace, "indices" | "smoothing" | "flags" | "material">;
 
+/** Recover live MODEL-space bounds from face-expanded render vertices while
+ * retaining original vertices absent from every face. Those unused vertices
+ * currently retain their original positions; crush does not yet mutate them. */
+export function liveModelBounds(geometry: THREE.BufferGeometry): THREE.Box3 {
+  const source = geometry.userData.sourcePositions as Float32Array | undefined;
+  const mapping = geometry.userData.sourceVertexIndices as
+    | Uint32Array
+    | undefined;
+  const rendered = geometry.getAttribute("position");
+  const sourceLayout = geometry.userData.c2VertexLayout === "source";
+  if (
+    !source?.length ||
+    source.length % 3 ||
+    !rendered ||
+    (sourceLayout
+      ? rendered.count * 3 !== source.length
+      : !mapping || mapping.length !== rendered.count)
+  )
+    throw new Error("Live MODEL bounds require original vertex metadata");
+  const live = source.slice();
+  const seen = new Set<number>();
+  for (let i = 0; i < rendered.count; i++) {
+    const index = sourceLayout ? i : mapping![i];
+    if (index * 3 + 2 >= live.length)
+      throw new Error("Live MODEL vertex mapping exceeds source bounds");
+    if (seen.has(index)) continue;
+    seen.add(index);
+    live.set([rendered.getX(i), rendered.getY(i), rendered.getZ(i)], index * 3);
+  }
+  const bounds = new THREE.Box3();
+  for (let i = 0; i < live.length; i += 3) {
+    const point = new THREE.Vector3().fromArray(live, i);
+    if (!point.toArray().every(Number.isFinite))
+      throw new Error("Live MODEL vertex is nonfinite");
+    bounds.expandByPoint(point);
+  }
+  return bounds;
+}
+
 /** Build render vertices per face corner so authored smoothing groups stay intact. */
 export function createModelGeometry(model: DatModel): THREE.BufferGeometry {
   const faceCount = model.faces.length;

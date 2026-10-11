@@ -18,6 +18,7 @@ import {
   collectNativeCollisionFlags,
 } from "./quiet-state";
 import { settleNativePedBody } from "./ped-settling";
+import { liveModelBounds } from "../render-geometry";
 import {
   support as supportsNativeNonCarQuiet,
   createState as createNativeNonCarQuiet,
@@ -28,6 +29,8 @@ import {
   type State as NativeNonCarQuietState,
 } from "./noncar-quiet";
 import { applyWorldPinball } from "./pinball";
+import { projectNativeOil } from "./oil-placement";
+import type { OilSpill } from "./oil";
 import { nativeCrashSmokeReturn } from "./crash-smoke";
 import { planPhysicsFrameWindow } from "./frame-window";
 import { NativeCarCrushQueue } from "./crush-queue";
@@ -1531,8 +1534,23 @@ export class VehicleSimulation {
   dropOil(car: SimulatedCar): boolean {
     if (!this.oil) return false;
     // Installed PissOutOil4dde40 queues the live actor with native pCar=null.
-    // ProcessOilSpills places it on the next tick; it has no owner cooldown.
-    const spill = this.oil.queueSpill(car, this.elapsed * 1000);
+    // The retained source is car_actor/MODEL, independent from pCar attribution.
+    // Final outer-frame processing places it; no owner cooldown applies.
+    const mesh = car.damage.primaryRenderMesh;
+    if (!mesh?.parent) return false;
+    const sourceModel = mesh.geometry;
+    // Installed4dde57..96 follows the MASTER ACT but retains the principal
+    // car ACT's MODEL. The graphics phase supplies its interpolated matrix.
+    const source = {
+      identity: car.group,
+      readMatrix: () => {
+        car.group.updateWorldMatrix(true, false);
+        return car.group.matrixWorld.clone();
+      },
+      readPosition: () => car.group.getWorldPosition(new Vector3()),
+      readModelBounds: () => liveModelBounds(sourceModel),
+    };
+    const spill = this.oil.queueChargedSpill(source, this.smashClock());
     if (!spill) return false;
     this.scene.add(spill.mesh);
     return true;
@@ -1541,7 +1559,16 @@ export class VehicleSimulation {
     position: Vector3,
     fullSize: number,
     actor: RigidBody | null,
+    spill?: OilSpill,
   ) {
+    if (spill?.source)
+      return projectNativeOil(
+        spill.source.readMatrix(),
+        spill.source.readModelBounds(),
+        fullSize,
+        spill.mesh.position,
+        (query, capacity) => this.collectWorldFaces(query, capacity, true),
+      );
     const origin = position.clone().add(new Vector3(0, 0.2, 0));
     const hit = this.world.raycast(origin, new Vector3(0, -1, 0), 1);
     if (!hit) return null;
@@ -1684,7 +1711,9 @@ export class VehicleSimulation {
         grounded: readonly boolean[],
       ) => {
         if (!this.oil) return [1, 1, 1, 1];
-        const factors = this.oil.wheelFactors(car, points);
+        const factors = this.oil.wheelFactors(car, points, {
+          driver: car.state.driver ?? (car.human ? 8 : 6),
+        });
         // Production consumes distance only when native SkidMark accepts a
         // section. Standalone tools without a renderer retain their old adapter.
         if (this.onWheelMarks) return factors;
@@ -2224,6 +2253,7 @@ export class VehicleSimulation {
     this.onFinishCars?.(Math.round(Math.max(0, dt) * 1000) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
+    if (!this.deferFinalSmashFlush) this.processOilFrame();
     this.flushSmashEffects();
     this.mechanicsTimeSync = 1;
   }
@@ -2277,7 +2307,10 @@ export class VehicleSimulation {
           ),
         );
     }
-    if (!this.deferFinalSmashFlush) this.flushSmashEffects();
+    if (!this.deferFinalSmashFlush) {
+      this.processOilFrame();
+      this.flushSmashEffects();
+    }
     this.mechanicsTimeSync = 1;
     return window;
   }
@@ -2295,6 +2328,11 @@ export class VehicleSimulation {
     this.destruction?.configureSmashQueue();
     for (const car of this.cars) car.damage.configureWamSmashQueue();
     return count;
+  }
+  /** Mainloop49373c runs after graphics, before delayed effects/final flush.
+   * Final-flush connotations therefore wait for the next accepted frame. */
+  processOilFrame(timeMs = this.smashClock()): void {
+    this.oil?.update(timeMs, this.projectOil.bind(this));
   }
   /** Native argument-one barriers retain configured queue ownership. */
   private flushSmashEffectsBarrier(mode: 0 | 1 = 1): number {
@@ -3758,7 +3796,9 @@ export class VehicleSimulation {
       this.handleMineEvent(event),
     );
     this.world.refreshDynamic?.();
-    this.oil?.update(this.elapsed * 1000, this.projectOil.bind(this));
+    // Direct diagnostic steps retain an explicit standalone placement adapter.
+    // Production and outer-window callers use the post-graphics frame phase.
+    if (!this.collectingOrdinaryCrush) this.processOilFrame();
     const previousVelocities = new Map(
       this.cars
         .filter((car) => this.isCarPhysicsActive(car))

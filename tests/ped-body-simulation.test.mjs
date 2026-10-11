@@ -23,6 +23,7 @@ import { createAssetStore } from "../server/assets.mjs";
 import { decodeText } from "../src/formats.ts";
 import { DamageSystem } from "../src/damage.ts";
 import { originalCar } from "./support/original-car.mjs";
+import { resolvePedContactDamage } from "../src/physics/ped-contact.ts";
 
 const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 function profile(mass = Math.fround(0.068)) {
@@ -397,4 +398,88 @@ test("whole emitted pair ring sleeps together before movement; unknown external 
   sim.finishPedQuiet();
   assert.equal(a.doNothing, false);
   assert.ok(a.diagnostics.has("mixed-contact-ring-quiet-provider-unavailable"));
+});
+
+test("live simulation dispatches owner sever/HP tail before impulses and preserves passive caller continuation", () => {
+  const sim = simulation(),
+    ped = body(),
+    other = body([0, 0, 0], 1),
+    log = [];
+  // Use the native car type for a deterministic contact packet, avoiding a
+  // render sweep or arbitrary car-shaped trigger volume.
+  other.rigidType = 1;
+  other.kind = "fixture-car";
+  activateNativePedBody(other, new Vector3(Math.sqrt(0.41), 0, 0));
+  ped.pedestrianFlags = 0x40;
+  ped.contactProvider = (b) => ({
+    settings: {
+      severDamage: 40,
+      severChance: 10,
+      maxSurvivableInitialImpact: 1,
+      damagePerForce: 1000,
+    },
+    form: {
+      personalityMass: b.properties.mass,
+      simpleBodyMass: b.properties.mass,
+      boneCount: 10,
+      nonHumanoid: false,
+    },
+    state: {
+      hitPoints: b.hitPoints,
+      flags: b.pedestrianFlags,
+      immortal: false,
+      exploding: false,
+      brittle: false,
+      goreLevel: 2,
+      removedBoneMask: 0,
+      headMissing: false,
+    },
+    damageTail: (q) => {
+      log.push(["tail", q.damage, q.aliveMove, q.deadMove]);
+      assert.equal(ped.headerState, 2);
+      assert.equal(ped.state.velocity.length(), 0);
+      assert.equal(other.state.velocity.x, Math.fround(Math.sqrt(0.41)));
+      // The owner has removed the actual head before the common HP tail.
+      return {
+        health: resolvePedContactDamage(
+          q.damage,
+          q.form,
+          { ...q.state, removedBoneMask: 2, headMissing: true },
+          q.aliveMove,
+          q.deadMove,
+        ),
+        unresolved: [],
+      };
+    },
+  });
+  ped.onContactDamage = (b, result, phase) => {
+    log.push([phase, result.hitPoints, result.reactionMoveId]);
+    assert.equal(b.hitPoints, 0);
+  };
+  const rows = sim.preparePedContacts([
+    {
+      a: ped,
+      b: other,
+      point: new Vector3(),
+      normal: new Vector3(1, 0, 0),
+      sourceType: 5,
+    },
+  ]);
+  assert.deepEqual(log, [
+    ["tail", 40, 90, 91],
+    ["passive", 0, 94],
+  ]);
+  assert.equal(ped.impactCount, 1);
+  assert.equal(ped.filterA, 0x20000);
+  assert.equal(ped.filterB, 0x40000);
+  assert.equal(ped.diagnostics.size, 0);
+  const momentum = other.properties.mass * other.state.velocity.x;
+  resolveContacts(rows);
+  near(
+    ped.properties.mass * ped.state.velocity.x +
+      other.properties.mass * other.state.velocity.x,
+    momentum,
+  );
+  assert.ok(ped.state.velocity.x > 0);
+  assert.equal(log.length, 2, "solver application must not replay the HP tail");
 });

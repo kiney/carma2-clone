@@ -45,7 +45,7 @@ import {
   type DetachmentSchedulingContext,
 } from "./physics/attachment";
 import { isWasted } from "./physics/impact";
-import { updateModelNormals } from "./render-geometry";
+import { liveModelBounds, updateModelNormals } from "./render-geometry";
 import { selectOrdinaryDetachGeometry } from "./physics/joint";
 import {
   applyPlasticFlap,
@@ -552,6 +552,11 @@ export class DamageSystem {
   get primaryRenderModelBounds(): Box3 | undefined {
     const geometry = this.principalModels()[0]?.mesh.geometry;
     if (!geometry) return;
+    if (
+      geometry.userData.sourcePositions &&
+      geometry.userData.sourceVertexIndices
+    )
+      return liveModelBounds(geometry);
     geometry.computeBoundingBox();
     return geometry.boundingBox?.clone() ?? undefined;
   }
