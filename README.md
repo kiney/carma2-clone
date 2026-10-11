@@ -14,8 +14,8 @@ Technical comparison of car geometry, body deformation and city rendering: both 
     <th>Browser engine</th>
   </tr>
   <tr>
-    <td><img src="https://gaming-cdn.com/images/products/16521/screenshot/carmageddon-2-carpocalypse-now-pc-gioco-steam-wallpaper-1.jpg?v=1712048231" width="600" alt="Original Carmageddon II: a damaged red Eagle, blue Coupe de Grace, yellow Buzzmobile and pink Slam Sedan beside city buildings"></td>
-    <td><img src="artifacts/readme-comparison/engine-city-comparison.png" width="600" alt="Browser engine: the same four car models arranged on a city street, with damaged Eagle bodywork, textured fire escapes and the independent browser HUD"></td>
+    <td><img src="docs/images/original-city-comparison.jpg" width="600" alt="Original Carmageddon II: a damaged red Eagle, blue Coupe de Grace, yellow Buzzmobile and pink Slam Sedan beside city buildings"></td>
+    <td><img src="docs/images/engine-city-comparison.png" width="600" alt="Browser engine: the same four car models arranged on a city street, with damaged Eagle bodywork, textured fire escapes and the independent browser HUD"></td>
   </tr>
 </table>
 
