@@ -53,3 +53,14 @@ and `54` without tag `21`.
 The parser's exact-length and finite-value checks are defensive host validation.
 The reference BRender pivot reader consumes the three scalar fields into the
 current model but does not itself validate the chunk length or scalar finiteness.
+
+## Authored ACT identity to live scene objects
+
+`Assets.scene` now exposes `sourceActorObjects`, a read-only borrowed map from
+each exact authored `ActNode` in `sourceActors` to its initial live Three Group.
+This connects native linked actors' `source` identity to render/physical actor
+ownership without comparing names or using Three traversal order. Repeated
+identifiers remain distinct. Later `loadActorFile` templates reuse DAT/MAT/PIX
+resources but do not replace or append this initial scene's bindings. Original
+Stock/Advanced car and Newcity checks verify every node/group correspondence.
+This crosswalk itself performs no native load mutation or PHIL registration.

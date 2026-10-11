@@ -11,6 +11,7 @@ import {
   nativeTrackMaterialOrder,
   invalidateNativeTrackResource as invalidate,
   nativeTrackRawBounds,
+  nativeRawModelBounds,
 } from "../src/native-track-resources.ts";
 const mat = (name, flags = 0x1800) => ({ name, flags });
 const A = mat("A.MAT"),
@@ -238,6 +239,43 @@ test("installed MODEL bounds/radius use all raw vertices including unused vertic
   r.current.flags &= ~0x400;
   r.current.vertices = [];
   assert.equal(nativeTrackRawBounds(r).resolved, false);
+});
+
+test("preparation-independent RAW bounds consume an iterable once and retain unresolved custom/empty owners", () => {
+  const r = resource(dat());
+  let reads = 0;
+  function* positions() {
+    for (const vertex of r.current.vertices) {
+      reads++;
+      yield vertex.position;
+    }
+  }
+  assert.deepEqual(
+    nativeRawModelBounds(r.current.flags, positions()),
+    nativeTrackRawBounds(r),
+  );
+  assert.equal(reads, r.current.vertices.length);
+  assert.equal(r.prepared, null);
+  const unused = {
+    [Symbol.iterator]() {
+      throw new Error("custom bounds must not read RAW vertices");
+    },
+  };
+  assert.equal(nativeRawModelBounds(0x400, unused).resolved, false);
+  assert.match(nativeRawModelBounds(0, []).requiredProvider, /empty MODEL/);
+  for (const flags of [-1, 65536, 1.5, NaN])
+    assert.throws(() => nativeRawModelBounds(flags, []), /uint16/);
+  for (const position of [
+    [1, 2],
+    [1, 2, 3, 4],
+    [NaN, 0, 0],
+    [0.1, 0, 0],
+  ])
+    assert.throws(() => nativeRawModelBounds(0, [position]), /finite Float32/);
+  assert.throws(
+    () => nativeRawModelBounds(0, [[Math.fround(3e38), 0, 0]]),
+    /finite stored result/,
+  );
 });
 
 test("Stock and Advanced Newcity material identities and single-MAT cached records use original tables", async (t) => {

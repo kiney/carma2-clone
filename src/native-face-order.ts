@@ -4,9 +4,14 @@
 
 export type NativeFaceMaterialOrder =
   | {
-      kind: "native-pointers" | "verified-pointer-order";
+      kind:
+        | "native-pointers"
+        | "verified-pointer-order"
+        | "host-resource-addresses";
       /** One unsigned key per original model face; zero means NULL material.
-       * Ordinals require independently verified native pointer ordering. */
+       * Ordinals require independently verified native pointer ordering. Host
+       * resource addresses must come from actual live owned arena allocations;
+       * they do not claim a captured Windows heap's finite-prefix ordering. */
       keys: readonly number[];
       evidence: string;
     }
@@ -23,7 +28,10 @@ export interface NativePreparedFaceGroup {
 export type NativePreparedFaceOrder =
   | {
       resolved: true;
-      keySource: "native-pointers" | "verified-pointer-order";
+      keySource:
+        | "native-pointers"
+        | "verified-pointer-order"
+        | "host-resource-addresses";
       evidence: string;
       /** Original model indices, corresponding to prepared group.face_user. */
       faceOrder: readonly number[];
@@ -62,7 +70,8 @@ export function prepareNativeFaceOrder(
   }
   if (
     materialOrder.kind !== "native-pointers" &&
-    materialOrder.kind !== "verified-pointer-order"
+    materialOrder.kind !== "verified-pointer-order" &&
+    materialOrder.kind !== "host-resource-addresses"
   )
     throw new Error(
       "Native face order: explicit pointer-order metadata required",

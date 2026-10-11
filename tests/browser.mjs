@@ -75,10 +75,23 @@ try {
     rivals: window.carma.rivals.length,
     pedestrians: window.carma.pedestrians.count,
     paused: window.carma.paused,
+    columns: window.carma.collision.sourceSnapshot.columns,
   }));
   assert.equal(initial.paused, true, "async content should load while paused");
   assert.equal(initial.elapsed, 0, "race must not advance during async load");
   assert.equal(initial.health, 100, "player must be healthy before input");
+  assert.equal(initial.columns.boundsSource, "native-initial-act");
+  for (const axis of ["X", "Z"])
+    assert.equal(
+      initial.columns[`size${axis}`],
+      Math.fround(
+        (initial.columns.bounds[`max${axis}`] -
+          initial.columns.bounds[`min${axis}`] -
+          2 * initial.columns.extraRoom) /
+          initial.columns[`count${axis}`],
+      ),
+      `production ${axis} width uses installed pre-mutation minus-room expression`,
+    );
   assert.ok(
     initial.damage.every((level) => level === 0),
     `player must be undamaged before input: ${JSON.stringify(initial)}`,
@@ -309,8 +322,14 @@ try {
       status: document.getElementById("status").textContent,
       stats: window.carma.stats,
       track: window.carma.track.start,
+      columns: window.carma.collision.sourceSnapshot.columns,
     }));
     assert.equal(result.stats.ready, true, `switch to ${label}`);
+    assert.equal(
+      result.columns.boundsSource,
+      "native-initial-act",
+      `${label} original layout reaches live collision snapshot`,
+    );
     assert.ok(result.stats.triangles > 1000);
     switches.push({ label, ...result });
     await page.evaluate(() => (document.getElementById("panel").hidden = true));

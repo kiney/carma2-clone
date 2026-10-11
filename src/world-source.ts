@@ -1,10 +1,12 @@
 import * as THREE from "three";
+import type { NativeTrackLayoutResult } from "./native-track-layout";
 import {
   prepareNativeModelFacePlane,
   type NativePreparedFacePlane,
 } from "./physics/prepared-plane";
 
 export interface WorldSourceColumns {
+  readonly boundsSource: "native-initial-act" | "renderer-fallback";
   readonly countX: number;
   readonly countZ: number;
   readonly extraRoom: number;
@@ -344,14 +346,29 @@ function buildFaceResolver(geometry: THREE.BufferGeometry) {
  * disposes source objects. Mesh/Object3D references intentionally remain live. */
 export function captureWorldSource(
   root: THREE.Object3D,
-  options: { modelPreparation?: "track" } = {},
+  options: {
+    modelPreparation?: "track";
+    initialNativeLayout?: Extract<NativeTrackLayoutResult, { resolved: true }>;
+  } = {},
 ): WorldSourceSnapshot {
   const nativeColumns = nativeColumnRoot(root);
   const { ppRoot, identifier: columnIdentifier } = nativeColumns;
-  const pp = nativeColumns.config;
-  const bounds = worldBounds(root);
-  const sizeX = (bounds.max.x - bounds.min.x + 2 * pp.extraRoom) / pp.countX;
-  const sizeZ = (bounds.max.z - bounds.min.z + 2 * pp.extraRoom) / pp.countZ;
+  const native = options.initialNativeLayout;
+  const pp = native
+    ? { ...native.header, metadataSource: nativeColumns.config.metadataSource }
+    : nativeColumns.config;
+  const bounds = native
+    ? new THREE.Box3(
+        new THREE.Vector3(...native.initialBounds.min),
+        new THREE.Vector3(...native.initialBounds.max),
+      )
+    : worldBounds(root);
+  const sizeX =
+    native?.layout.columnSizeX ??
+    (bounds.max.x - bounds.min.x + 2 * pp.extraRoom) / pp.countX;
+  const sizeZ =
+    native?.layout.columnSizeZ ??
+    (bounds.max.z - bounds.min.z + 2 * pp.extraRoom) / pp.countZ;
   if (
     !(
       Number.isFinite(sizeX) &&
@@ -362,12 +379,15 @@ export function captureWorldSource(
   )
     throw new Error("World source PP01 columns have invalid dimensions");
   const columns = Object.freeze({
+    boundsSource: native
+      ? ("native-initial-act" as const)
+      : ("renderer-fallback" as const),
     countX: pp.countX,
     countZ: pp.countZ,
     extraRoom: pp.extraRoom,
     metadataSource: pp.metadataSource,
-    originX: bounds.min.x - pp.extraRoom,
-    originZ: bounds.min.z - pp.extraRoom,
+    originX: native?.layout.originX ?? bounds.min.x - pp.extraRoom,
+    originZ: native?.layout.originZ ?? bounds.min.z - pp.extraRoom,
     sizeX,
     sizeZ,
     bounds: Object.freeze({

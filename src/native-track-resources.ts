@@ -195,22 +195,42 @@ export function invalidateNativeTrackResource(
 export function nativeTrackRawBounds(
   resource: NativeTrackModelResource,
 ): NativeActorValue<{ bounds: NativeActorBounds; radius: number }> {
-  const model = resource.current;
-  if (model.flags & 0x400)
+  return nativeRawModelBounds(
+    resource.current.flags,
+    resource.current.vertices.map((vertex) => vertex.position),
+  );
+}
+
+/** Ordinary BRender MODEL bounds depend only on the current flags/RAW vertices.
+ * A source-layout host can use authored DAT positions before MAT/prepared tables
+ * exist. This creates no fabricated MODEL identity or material ordering. */
+export function nativeRawModelBounds(
+  flags: number,
+  positions: Iterable<readonly number[]>,
+): NativeActorValue<{ bounds: NativeActorBounds; radius: number }> {
+  if (!Number.isInteger(flags) || flags < 0 || flags > 0xffff)
+    throw new Error("Native MODEL bounds require uint16 flags");
+  if (flags & 0x400)
     return {
       resolved: false,
       requiredProvider: "native retained custom MODEL bounds/radius",
     };
-  if (!model.vertices.length)
+  const iterator = positions[Symbol.iterator]();
+  const first = iterator.next();
+  if (first.done)
     return {
       resolved: false,
       requiredProvider: "native empty MODEL retained bounds/radius",
     };
-  const min = [...model.vertices[0].position] as [number, number, number];
+  const min = [...first.value] as [number, number, number];
   const max = [...min] as [number, number, number];
   let maximumSquare = 0;
-  for (const vertex of model.vertices) {
-    const p = vertex.position;
+  for (
+    let next: IteratorResult<readonly number[]> = first;
+    !next.done;
+    next = iterator.next()
+  ) {
+    const p = next.value;
     if (
       p.length !== 3 ||
       !p.every((n) => Number.isFinite(n) && Math.fround(n) === n)

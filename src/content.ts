@@ -242,13 +242,16 @@ export class Assets {
     const group = new THREE.Group();
     group.name = stem;
     let missingModels = 0;
+    const sourceActorObjects = new Map<ActNode, THREE.Group>();
     function actor(
       node: ActNode,
       inheritedMaterial?: string,
       inheritedStyle = 4,
       childIndex = 0,
+      bindings?: Map<ActNode, THREE.Group>,
     ): THREE.Group {
       const object = new THREE.Group();
+      bindings?.set(node, object);
       object.name = node.name;
       object.userData.c2ActorType = node.type;
       object.userData.c2ActorRenderStyle = node.renderStyle;
@@ -303,17 +306,23 @@ export class Assets {
         } else missingModels++;
       }
       for (const [index, child] of node.children.entries())
-        object.add(actor(child, mat, style, index));
+        object.add(actor(child, mat, style, index, bindings));
       return object;
     }
     for (const [index, root] of roots.entries())
-      group.add(actor(root, undefined, 4, index));
+      group.add(actor(root, undefined, 4, index, sourceActorObjects));
     group.updateMatrixWorld(true);
     return {
       group,
       /** Authored ACT nodes before render defaults, batching or native load mutations.
        * Consumers borrow these source records; mutable native linked lists are separate. */
       sourceActors: roots as readonly ActNode[],
+      /** Identity crosswalk for authored ACT nodes in THIS initial scene. Extra
+       * actor templates borrow resources without replacing these live objects. */
+      sourceActorObjects: sourceActorObjects as ReadonlyMap<
+        ActNode,
+        THREE.Group
+      >,
       /** Authored MAT resources, with the same last-loaded lookup semantics as
        * rendered materials; native identity must not use renderer fallbacks. */
       sourceMaterials,

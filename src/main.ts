@@ -61,6 +61,7 @@ import {
 import type { RaceState, VehicleConfig } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
 import { captureWorldSource } from "./world-source";
+import { captureNativeTrackSceneLayout } from "./native-track-scene-layout";
 import { WorldFollowupRuntime, type FollowupDue } from "./world-followup";
 import { DamageSystem } from "./damage";
 import {
@@ -778,6 +779,13 @@ async function loadRace() {
     const trackText = await assets.text(currentTrack);
     const newTrack = parseTrackConfig(trackText);
     const world = await assets.scene(dirOf(currentTrack), stemOf(currentTrack));
+    // ExtractColumns computes this before model migration, FindNonCars and
+    // authored scale normalization. Never recalculate it from batched meshes.
+    const initialNativeLayout = captureNativeTrackSceneLayout(world);
+    if (!initialNativeLayout.resolved)
+      assets.warnings.push(
+        `Track column layout fallback: ${initialNativeLayout.requiredProvider}`,
+      );
     definition = (
       raceCatalogs.get(currentTrack.split("/")[0].toLowerCase())?.races ?? []
     ).find(
@@ -1076,6 +1084,9 @@ async function loadRace() {
     });
     const worldSource = captureWorldSource(world.group, {
       modelPreparation: "track",
+      initialNativeLayout: initialNativeLayout.resolved
+        ? initialNativeLayout
+        : undefined,
     });
     world.group = batchStaticWorld(world.group, [
       ...noncarBodies.map((body) => body.actor),

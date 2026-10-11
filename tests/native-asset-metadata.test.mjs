@@ -145,6 +145,18 @@ test("ACT scene objects retain raw actor metadata without changing effective sty
   assert.deepEqual(scene.sourceActors, parseAct(act));
   nativeBounds.userData.c2ActorBounds.min[0] = 99;
   assert.equal(scene.sourceActors[1].bounds.min[0], -2);
+  const [sourceDefault, sourceBounds] = scene.sourceActors;
+  assert.equal(scene.sourceActorObjects.get(sourceDefault), nativeDefault);
+  assert.equal(
+    scene.sourceActorObjects.get(sourceDefault.children[0]),
+    faceChild,
+  );
+  assert.equal(scene.sourceActorObjects.get(sourceBounds), nativeBounds);
+  const originalBindings = [...scene.sourceActorObjects];
+  const extra = await scene.loadActorFile("scene/scene.act");
+  assert.equal(extra.children[0].name, nativeDefault.name);
+  assert.notEqual(extra.children[0], nativeDefault);
+  assert.deepEqual([...scene.sourceActorObjects], originalBindings);
 });
 
 test("original Stock and Advanced scenes retain ACT source metadata", async (t) => {
@@ -212,5 +224,18 @@ test("original Stock and Advanced scenes retain ACT source metadata", async (t) 
     roots.forEach((root, index) =>
       visit(root, scene.group.children[index], index),
     );
+    let count = 0;
+    const checkBinding = (node, object) => {
+      count++;
+      assert.equal(scene.sourceActorObjects.get(node), object);
+      const children = object.children.filter(
+        (child) => child.userData.c2ActorName !== undefined,
+      );
+      node.children.forEach((child, i) => checkBinding(child, children[i]));
+    };
+    scene.sourceActors.forEach((root, i) =>
+      checkBinding(root, scene.group.children[i]),
+    );
+    assert.equal(scene.sourceActorObjects.size, count);
   }
 });
