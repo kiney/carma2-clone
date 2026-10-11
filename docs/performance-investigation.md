@@ -1,8 +1,12 @@
 # PERF-01: frame-time investigation
 
-Status: **analysis completed; optimization and exact policy remain open** in
-TASK-100 / PERF-01, priority 1, `wip`. No production engine behavior, resolution,
-simulation distance or collision safeguard was changed during this phase.
+Status: **initial analysis completed; optimization and exact policy remain open**.
+TASK-100 / PERF-01 remains priority 1, `wip`, for simulation/collision overhead and
+unresolved spikes. TASK-101 / PERF-02 owns scene-hierarchy work (P1, `next`), with
+no solution prescribed. TASK-103 / PERF-04 owns higher visual visibility (P2,
+`next`, after TASK-101); TASK-102 / PERF-03 owns resolution policy (P4, `backlog`).
+No production engine behavior, resolution, simulation distance or collision
+safeguard was changed during this phase.
 
 ## Findings
 
@@ -66,6 +70,43 @@ The controlled start drive advanced 3080 ms of simulation and skipped 360 ms of
 physics time through the existing five-step resynchronization budget. Long
 CPU frames can therefore produce both low FPS and visibly discontinuous motion.
 This does not show that interpolation itself is wrong.
+
+## Total physics cost and worker feasibility
+
+In the 3519.5 ms start-drive capture, `simulation.updateFrame` consumed 2696.1 ms
+across 25 calls: **76.6% of capture wall duration**, averaging 107.8 ms per call.
+This includes its frame-final damage/physics callbacks, not just the tick solver.
+Its 68 physics ticks consumed 2673.6 ms, averaging **39.3 ms per 40 ms native tick**.
+The two render calls per displayed frame consumed 576.9 ms in total (16.4% of
+capture wall duration). Their scene-matrix time is nested, not additional.
+These are short instrumented shared-host measurements, not universal shares for
+every race, a clean steady-state benchmark or a summed CPU utilization chart.
+The approximately 64% pair-guard figure is a share of **sampled physics CPU**,
+whereas 76.6% uses wall duration; do not confuse their denominators.
+
+TypeScript is compiled to JavaScript and can run in a browser Web Worker; WebAssembly
+is not required. Workers execute in a separate global context without direct DOM
+access and exchange messages/transferable data with the main thread. See
+[MDN: Using Web Workers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers).
+Live class instances, callback functions and scene identities cannot simply be
+sent as an intact engine: structured cloning does not retain prototype chains
+and cannot clone functions. See
+[MDN: Structured clone](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm).
+
+The current engine is not a drop-in worker module. `VehicleSimulation` updates
+car/noncar actor transforms, collects original ACT/MODEL faces with interleaved
+pull/StopGroovidelic callbacks, and flushes crush/smash state and gameplay effects.
+`WorldCollision` reads live scene transforms and geometry. Moving ownership
+requires a deliberate boundary for collision/world state, inputs, poses,
+deformed vertices and ordered events, preserving native clocks and callbacks.
+Rendering/input/UI/audio can consume results on the main thread, but synchronization,
+latency and snapshot costs must be measured before choosing that approach.
+
+A worker could prevent physics from blocking presentation and overlap work with
+rendering. It would not reduce the physics algorithm's CPU cost: the measured
+39.3 ms tick already nearly fills its 40 ms budget. Optimizing the measured
+collision overhead remains useful regardless of threading. This is a feasibility
+assessment, not a selected architecture or an implementation claim.
 
 ## Ranked bottlenecks and source evidence
 

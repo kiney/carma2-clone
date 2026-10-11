@@ -53,11 +53,20 @@ Existing PED-04, ANI-01, RAC-04, RAC-09 and PUP-11 retain asset, animation, rewa
 The split produced 99 tasks. After completing the three selected WIP tickets, the board contains 63 in `backlog`, 0 in `next`, 0 in `wip`, and 36 in `done`. The WIP limit remains 3. This completion does not resume or complete a paused broader Goal.
 
 PERF-01 / TASK-100 was subsequently added at priority 1 and taken directly into
-`wip` at the user's request. It owns the runtime performance investigation,
-subsequent validated optimizations and higher visual-visibility headroom. The
-initial [analysis](../docs/performance-investigation.md) is recorded; exact
-changes remain open. The board now has 100 tasks: 63 `backlog`, 0 `next`, 1 `wip`
-and 36 `done`. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
+`wip` at the user's request. The initial
+[analysis](../docs/performance-investigation.md) is recorded; implementation
+choices remain open. The user then separated upcoming work as follows:
+
+| Backlog ID | Issue | Priority | Status | Scope / order |
+| --- | --- | --- | --- | --- |
+| TASK-100 | PERF-01 | 1 | `wip` | Collision/simulation performance and unresolved frame-time spikes |
+| TASK-101 | PERF-02 | 1 | `next` | Scene-hierarchy CPU overhead; explicitly no solution prescribed |
+| TASK-103 | PERF-04 | 2 | `next` | Higher visual visibility, dependent on TASK-101 |
+| TASK-102 | PERF-03 | 4 | `backlog` | High-resolution rendering policy; deferred, measured gain was small |
+
+The board now has 103 tasks: 64 `backlog`, 2 `next`, 1 `wip` and 36 `done`.
+Only the simulation investigation remains active; queued tickets do not consume
+WIP slots. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
 memory and FPS-diagnostic scopes and user-edited priorities.
 
 ## Priorities and sorting
