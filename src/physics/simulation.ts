@@ -107,6 +107,7 @@ import {
   type SpecialVolumeConfig,
 } from "./volumes";
 import { scaleImpactVectors } from "./impact";
+import { NativeCrashRecord } from "./crash-record";
 import { detachedChildCenterOfMass } from "./detached-com";
 import {
   skillValue,
@@ -170,6 +171,8 @@ export interface SimulatedCar extends RigidBody {
   /** Separate native earnings attribution: never infer an attacker from time0. */
   lastAwardAttacker?: SimulatedCar;
   lastAwardImpactMs?: number;
+  /** Native outer-frame snapshot, first contact and pre-protection damage. */
+  crashRecord: NativeCrashRecord;
   armorLevel: number;
   offenseLevel: number;
   armorFactor?: number;
@@ -340,6 +343,7 @@ export function createSimulatedCar(
     knackered: false,
     recoveryHistory: new SafeCarHistory(state),
     lastAttributedImpactMs: 0,
+    crashRecord: new NativeCrashRecord(),
     armorLevel: human ? 1 : 0,
     offenseLevel: human ? 1 : 0,
     damageMultiplier: 1,
@@ -406,6 +410,11 @@ export class VehicleSimulation {
   onBeforeStep?: () => void;
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
+  /** First-seen body order, after both receivers' damage and before the next pair. */
+  onImpactPair?: (
+    a: Readonly<SimulatedCar> | undefined,
+    b: Readonly<SimulatedCar> | undefined,
+  ) => void;
   onWasted?: (car: SimulatedCar) => void;
   onWorldGeometryChanged?: () => void;
   settings?: UpgradeSettings;
@@ -1099,6 +1108,7 @@ export class VehicleSimulation {
     resetMotionSuspension(car.motion);
   }
   update(dt: number) {
+    this.beginCrashFrame();
     // updateFrame's accumulator is a pose fraction, not legacy step debt.
     if (this.frameWindowActive) {
       this.accumulator = 0;
@@ -1112,6 +1122,7 @@ export class VehicleSimulation {
       this.step();
       this.accumulator -= PHYSICS_STEP;
     }
+    this.finishCrashFrame();
   }
   /** Native absolute race-relative window; elapsed remains the physics tick.
    * A skipped interval advances timed physics state without inventing forces.
@@ -1123,6 +1134,7 @@ export class VehicleSimulation {
       framePeriodMs,
     );
     this.frameWindowActive = true;
+    this.beginCrashFrame();
     this.cameraContacts.begin();
     this.elapsed = window.stepStartMs / 1000;
     for (let i = 0; i < window.steps; i++) {
@@ -1132,7 +1144,24 @@ export class VehicleSimulation {
     this.cameraContacts.finish(window.lastPhysicsTickMs, window.frameEndMs);
     this.elapsed = window.lastPhysicsTickMs / 1000;
     this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
+    this.finishCrashFrame();
     return window;
+  }
+  private beginCrashFrame(): void {
+    for (const car of this.cars) {
+      if (!this.isCarPhysicsActive(car)) continue;
+      car.crashRecord.beginFrame(
+        car.knackered,
+        car.state.velocity
+          .clone()
+          .applyQuaternion(car.state.orientation.clone().invert()),
+      );
+    }
+  }
+  private finishCrashFrame(): void {
+    for (const car of this.cars)
+      if (this.isCarPhysicsActive(car))
+        car.crashRecord.finishFrame(car.state.velocity);
   }
   private recoverySurfaces(surfaces: readonly Surface[]) {
     return surfaces.map((surface) => ({
@@ -1940,19 +1969,24 @@ export class VehicleSimulation {
     return false;
   }
   private applyImpactDamage(impacts: ContactImpact[]) {
-    const groups = new Map<
-      SimulatedCar,
-      Map<
-        RigidBody | undefined,
-        {
-          contacts: Vector3[];
-          impulse: Vector3;
-          severity: number;
-          mean: Vector3;
-          weight: number;
-        }
-      >
-    >();
+    type Receiver = {
+      car: SimulatedCar;
+      other: RigidBody | undefined;
+      impact: {
+        contacts: Vector3[];
+        impulse: Vector3;
+        severity: number;
+        mean: Vector3;
+        weight: number;
+      };
+    };
+    type Pair = {
+      a: RigidBody;
+      b: RigidBody | undefined;
+      receivers: Receiver[];
+    };
+    const pairs: Pair[] = [];
+    const byBody = new Map<RigidBody, Map<RigidBody | undefined, Pair>>();
     for (const impact of impacts) {
       if (
         impact.sourceType === 9 ||
@@ -1960,26 +1994,38 @@ export class VehicleSimulation {
         impact.normalImpulse <= 0
       )
         continue;
+      let pair =
+        byBody.get(impact.a)?.get(impact.b) ??
+        (impact.b ? byBody.get(impact.b)?.get(impact.a) : undefined);
+      if (!pair) {
+        pair = { a: impact.a, b: impact.b, receivers: [] };
+        pairs.push(pair);
+        let others = byBody.get(impact.a);
+        if (!others) byBody.set(impact.a, (others = new Map()));
+        others.set(impact.b, pair);
+      }
       for (const [body, other, sign] of [
         [impact.a, impact.b, 1],
         [impact.b, impact.a, -1],
       ] as const) {
         if (!body || !("damage" in body)) continue;
         const car = body as SimulatedCar;
-        let byOther = groups.get(car);
-        if (!byOther) groups.set(car, (byOther = new Map()));
-        let group = byOther.get(other);
-        if (!group)
-          byOther.set(
+        let receiver = pair.receivers.find((entry) => entry.car === car);
+        if (!receiver) {
+          receiver = {
+            car,
             other,
-            (group = {
+            impact: {
               contacts: [],
               impulse: new Vector3(),
               severity: 0,
               mean: new Vector3(),
               weight: 0,
-            }),
-          );
+            },
+          };
+          pair.receivers.push(receiver);
+        }
+        const group = receiver.impact;
         const point = (
           sign === 1 ? impact.point : (impact.pointB ?? impact.point)
         )
@@ -2005,8 +2051,8 @@ export class VehicleSimulation {
         group.severity = Math.max(group.severity, impact.closingSpeed);
       }
     }
-    for (const [car, byOther] of groups)
-      for (const [other, impact] of byOther) {
+    for (const pair of pairs) {
+      for (const { car, other, impact } of pair.receivers) {
         const otherCar =
           other && "damage" in other ? (other as SimulatedCar) : undefined;
         const piece =
@@ -2070,6 +2116,23 @@ export class VehicleSimulation {
           },
         );
         const wasWasted = car.damage.wasted;
+        car.crashRecord.accumulate(
+          vectors.accumulatedDamage,
+          !!car.damage.damageContext.invulnerable,
+        );
+        if (otherCar && !car.damage.damageContext.invulnerable) {
+          const bounds = new Box3();
+          for (const shape of car.shapeVertices)
+            for (const vertex of shape) bounds.expandByPoint(vertex);
+          if (!bounds.isEmpty())
+            car.crashRecord.recordCarContact(
+              impact.mean.clone().divideScalar(impact.weight),
+              {
+                min: bounds.min.toArray() as [number, number, number],
+                max: bounds.max.toArray() as [number, number, number],
+              },
+            );
+        }
         car.damage.applyImpact(
           impact.contacts,
           vectors.damage,
@@ -2083,6 +2146,12 @@ export class VehicleSimulation {
           car.wastedByPlayer = !!awardAttacker?.human;
         this.onImpact?.(car, impact.severity);
       }
+      if (pair.receivers.length)
+        this.onImpactPair?.(
+          "damage" in pair.a ? (pair.a as SimulatedCar) : undefined,
+          pair.b && "damage" in pair.b ? (pair.b as SimulatedCar) : undefined,
+        );
+    }
     for (const car of this.cars)
       if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
   }

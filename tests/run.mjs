@@ -94,6 +94,12 @@ import "./barrier-release.test.mjs";
 import "./event-audio.test.mjs";
 
 import "./earnings-attribution.test.mjs";
+import "./crash-attribution.test.mjs";
+import "./crash-record.test.mjs";
+import "./crash-record-simulation.test.mjs";
+import "./ai-crash-reactions.test.mjs";
+import "./crash-attribution-reactions.test.mjs";
+import "./impact-pair-order.test.mjs";
 import "./opponent-selection.test.mjs";
 import "./engine-noise.test.mjs";
 
