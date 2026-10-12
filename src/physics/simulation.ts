@@ -2,6 +2,7 @@ import {
   BodyBroadphase,
   type BodyBroadphaseDiagnostics,
 } from "./body-broadphase";
+import { worldFaceSweepEnvelope } from "./world-face-envelope";
 import { CameraContactFrame } from "../camera/contact-frame";
 import {
   activateNativePedBody,
@@ -3133,9 +3134,24 @@ export class VehicleSimulation {
         const bounds = hullBounds(old[shape])
           .union(hullBounds(next[shape]))
           .expandByScalar(0.005);
-        const nearby = this.world
-          .querySurfaces(bounds.min, bounds.max)
-          .filter((surface) => !surface.owner);
+        const envelope = worldFaceSweepEnvelope(old[shape], next[shape]);
+        const nearby = (
+          envelope && this.world.queryLocalSurfaces
+            ? this.world.queryLocalSurfaces(
+                bounds.min,
+                bounds.max,
+                false,
+                envelope,
+              )
+            : this.world.querySurfaces(bounds.min, bounds.max)
+        ).filter((surface) => !surface.owner);
+        if (this.world.faceDiagnostics) {
+          this.world.faceDiagnostics.guardSweepFaces =
+            (this.world.faceDiagnostics.guardSweepFaces ?? 0) + nearby.length;
+          if (!envelope)
+            this.world.faceDiagnostics.guardEnvelopeFallbacks =
+              (this.world.faceDiagnostics.guardEnvelopeFallbacks ?? 0) + 1;
+        }
         const recovery =
           body.worldRecovery || body.worldOverlapDetected
             ? recoverWorldContacts(
@@ -3373,7 +3389,13 @@ export class VehicleSimulation {
     const worldDirection = worldPlacementDirection(
       worldPlacementContacts(
         transformed,
-        this.recoverySurfaces(this.world.querySurfaces(bounds.min, bounds.max)),
+        this.recoverySurfaces(
+          (this.world.queryLocalSurfaces ?? this.world.querySurfaces).call(
+            this.world,
+            bounds.min,
+            bounds.max,
+          ),
+        ),
         center,
       ),
       car.state.orientation,

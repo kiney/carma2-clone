@@ -49,6 +49,11 @@ separately tracked.
 native notifications from real collision changes. Reused unchanged tiles avoid
 world rebuilds; actual changes regenerate only affected collision owners.
 
+[World face locality](docs/world-face-performance.md) narrows static collision
+and camera candidates with conservative feature bounds and stable source order.
+Native wheel/face-cache semantics and uncertain or moving-owner paths retain
+their existing selection; collision safeguards and simulation limits are unchanged.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:

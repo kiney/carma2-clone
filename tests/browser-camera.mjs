@@ -388,9 +388,12 @@ try {
   await page.waitForTimeout(700);
   await page.keyboard.up("BracketLeft");
   const orbitLeft = await cameraState();
-  assert.notEqual(
-    orbitLeft.cameraRuntimeState.yawBRenderAngle,
-    orbitStart.cameraRuntimeState.yawBRenderAngle,
+  assert.ok(
+    Math.hypot(
+      orbitLeft.cameraFromCOM[0] - orbitStart.cameraFromCOM[0],
+      orbitLeft.cameraFromCOM[1] - orbitStart.cameraFromCOM[1],
+      orbitLeft.cameraFromCOM[2] - orbitStart.cameraFromCOM[2],
+    ) > 0.05,
     `BracketLeft did not orbit the native camera: ${JSON.stringify({ orbitStart, orbitLeft })}`,
   );
   assert.ok(
@@ -414,10 +417,13 @@ try {
   await page.waitForTimeout(500);
   await page.keyboard.up("BracketRight");
   const orbitAfterRelease = await cameraState();
-  assert.notEqual(
-    orbitAfterRelease.cameraRuntimeState.yawBRenderAngle,
-    orbitReleased.cameraRuntimeState.yawBRenderAngle,
-    "released bracket reset latch blocked a later orbit",
+  assert.ok(
+    Math.hypot(
+      orbitAfterRelease.cameraFromCOM[0] - orbitReleased.cameraFromCOM[0],
+      orbitAfterRelease.cameraFromCOM[1] - orbitReleased.cameraFromCOM[1],
+      orbitAfterRelease.cameraFromCOM[2] - orbitReleased.cameraFromCOM[2],
+    ) > 0.05,
+    `released bracket reset latch blocked a later orbit: ${JSON.stringify({ orbitReleased, orbitAfterRelease })}`,
   );
   await page.keyboard.down("BracketLeft");
   await page.keyboard.down("BracketRight");

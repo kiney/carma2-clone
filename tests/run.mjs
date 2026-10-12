@@ -320,4 +320,7 @@ import "./native-model-bounds-collection.test.mjs";
 import "./world-transform-state.test.mjs";
 import "./world-sync.test.mjs";
 import "./world-invalidation.test.mjs";
+import "./world-local-faces.test.mjs";
+import "./world-face-envelope.test.mjs";
+import "./world-plane-cache.test.mjs";
 import "./smash-invalidation.test.mjs";

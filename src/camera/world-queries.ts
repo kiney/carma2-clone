@@ -20,12 +20,17 @@ export function cameraWorldQueries(
       return cameraTriangleRay(
         from,
         delta,
-        world.querySurfaces(bounds.min, bounds.max, true),
+        (world.queryLocalSurfaces ?? world.querySurfaces).call(
+          world,
+          bounds.min,
+          bounds.max,
+          true,
+        ),
       );
     },
     faces(min: Vector3, max: Vector3) {
-      return world
-        .querySurfaces(min, max, true)
+      return (world.queryLocalSurfaces ?? world.querySurfaces)
+        .call(world, min, max, true)
         .filter(
           (surface) =>
             cameraSurfaceVisible(surface) &&

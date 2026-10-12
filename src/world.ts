@@ -10,6 +10,10 @@ import {
   sameColliderMesh,
   type ColliderMeshState,
 } from "./world-collider-state";
+import {
+  OrderedWorldFaceIndex,
+  type FaceIndexDiagnostics,
+} from "./world-face-index";
 import * as THREE from "three";
 import { DEFAULT_SURFACE, surfaceIndex } from "./physics/surfaces";
 import type { SurfaceModifier } from "./physics/surfaces";
@@ -90,6 +94,15 @@ export interface WorldSyncDiagnostics {
   nativeGeometryWrites: number;
   transform: WorldTransformDiagnostics;
 }
+export interface WorldFaceDiagnostics extends FaceIndexDiagnostics {
+  queryCalls?: number;
+  localQueries?: number;
+  cellVisits?: number;
+  legacyReferences?: number;
+  guardSweepFaces?: number;
+  guardEnvelopeFallbacks?: number;
+  ordinaryRayFaceTests?: number;
+}
 interface DynamicNodeState {
   object: THREE.Object3D;
   parent: THREE.Object3D | null;
@@ -120,6 +133,9 @@ interface StaticColliderState {
 export class WorldCollision {
   /** Cumulative, opt-in bounded work counters; no capture retained in gameplay. */
   syncDiagnostics?: WorldSyncDiagnostics;
+  /** Opt-in work counters; no physics/visibility policy changes. */
+  faceDiagnostics?: WorldFaceDiagnostics;
+  private faceIndex = new OrderedWorldFaceIndex();
   private transforms = new WorldTransformState();
   private nativeSync = new WeakMap<NativeOrderedActor, NativeSyncState>();
   private nativeLocalWritten = new WeakMap<
@@ -418,6 +434,7 @@ export class WorldCollision {
         const key = `${x},${z}`;
         let cell = this.cells.get(key);
         if (!cell) this.cells.set(key, (cell = []));
+        this.faceIndex.invalidate(cell);
         if (ordered && entry) {
           let lo = 0,
             hi = cell.length;
@@ -1285,6 +1302,49 @@ export class WorldCollision {
     max: THREE.Vector3,
     includeNonSolid = false,
   ): Surface[] {
+    return this.queryFaceCandidates(min, max, includeNonSolid);
+  }
+  /** Static face locality is opt-in: callers must bound their actual accepted
+   * feature paths. Cell ranges/Y gates and moving-owner snapshots stay legacy.
+   * Explicit envelopes cover inverse-frame sweeps; ordinary boxes include F32
+   * clipping coordinates. Native wheels/uncertified consumers stay broad. */
+  queryLocalSurfaces(
+    min: THREE.Vector3,
+    max: THREE.Vector3,
+    includeNonSolid = false,
+    envelope?: THREE.Box3,
+  ): Surface[] {
+    const bounds =
+      envelope?.clone() ?? new THREE.Box3(min.clone(), max.clone());
+    for (let axis = 0; axis < 3; axis++) {
+      bounds.min.setComponent(
+        axis,
+        Math.min(
+          bounds.min.getComponent(axis),
+          Math.fround(bounds.min.getComponent(axis)),
+        ),
+      );
+      bounds.max.setComponent(
+        axis,
+        Math.max(
+          bounds.max.getComponent(axis),
+          Math.fround(bounds.max.getComponent(axis)),
+        ),
+      );
+    }
+    return this.queryFaceCandidates(min, max, includeNonSolid, bounds);
+  }
+  private queryFaceCandidates(
+    min: THREE.Vector3,
+    max: THREE.Vector3,
+    includeNonSolid: boolean,
+    local?: THREE.Box3,
+  ): Surface[] {
+    const diagnostics = this.faceDiagnostics;
+    if (diagnostics) {
+      diagnostics.queryCalls = (diagnostics.queryCalls ?? 0) + 1;
+      if (local) diagnostics.localQueries = (diagnostics.localQueries ?? 0) + 1;
+    }
     const result = new Set<Surface>();
     const x0 = Math.floor(min.x / this.cellSize),
       x1 = Math.floor(max.x / this.cellSize);
@@ -1296,8 +1356,18 @@ export class WorldCollision {
     )
       return [];
     for (let x = x0; x <= x1; x++)
-      for (let z = z0; z <= z1; z++)
-        for (const s of this.cells.get(`${x},${z}`) ?? [])
+      for (let z = z0; z <= z1; z++) {
+        const cell = this.cells.get(`${x},${z}`);
+        if (!cell) continue;
+        if (diagnostics) {
+          diagnostics.cellVisits = (diagnostics.cellVisits ?? 0) + 1;
+          diagnostics.legacyReferences =
+            (diagnostics.legacyReferences ?? 0) + cell.length;
+        }
+        const rows = local
+          ? this.faceIndex.query(cell, local.min, local.max, diagnostics)
+          : cell;
+        for (const s of rows)
           if (
             s.enabled !== false &&
             s.maxY >= min.y &&
@@ -1305,6 +1375,7 @@ export class WorldCollision {
             (includeNonSolid || !/^[!>]/.test(s.material))
           )
             result.add(s);
+      }
     const bounds = new THREE.Box3(min, max);
     for (const [body, entry] of this.dynamic) {
       if (!entry.worldCollider || !entry.actor.visible) continue;
@@ -1365,7 +1436,7 @@ export class WorldCollision {
     const point = new THREE.Vector3();
     let best = miss;
     for (const face of [
-      ...this.querySurfaces(bounds.min, bounds.max, true),
+      ...this.queryLocalSurfaces(bounds.min, bounds.max, true),
       ...this.dynamicSurfaces(bounds),
     ]) {
       if (face.enabled === false || /^[!>]/.test(face.material)) continue;
@@ -1417,9 +1488,14 @@ export class WorldCollision {
     } | null = null;
     const point = new THREE.Vector3();
     for (const surface of [
-      ...this.querySurfaces(bounds.min, bounds.max, includeNonSolid),
+      ...(nativeWheel
+        ? this.querySurfaces(bounds.min, bounds.max, includeNonSolid)
+        : this.queryLocalSurfaces(bounds.min, bounds.max, includeNonSolid)),
       ...this.dynamicSurfaces(bounds),
     ]) {
+      if (!nativeWheel && this.faceDiagnostics)
+        this.faceDiagnostics.ordinaryRayFaceTests =
+          (this.faceDiagnostics.ordinaryRayFaceTests ?? 0) + 1;
       if (
         !includeNonSolid &&
         (surface.collisionMode === "edges" || surface.material.startsWith("?"))

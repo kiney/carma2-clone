@@ -81,6 +81,43 @@ export interface PairSweepOptions {
 }
 const EPS = 1e-7;
 const SWEEP_EXTENSION = 0.0010434782598167658;
+const worldTrianglePlanes = new WeakMap<
+  NonNullable<WorldSurfaceOptions["sourceSurface"]>,
+  { values: number[]; normal: Vector3; constant: number }
+>();
+/** Retain the exact existing cross-product arithmetic, rather than substituting
+ * native prepared/F32 planes. Captured surfaces are immutable; value checks
+ * also protect standalone providers that edit their vectors in place. */
+function worldTrianglePlane(
+  a: Vector3,
+  b: Vector3,
+  c: Vector3,
+  source?: WorldSurfaceOptions["sourceSurface"],
+) {
+  const shared = source && source.a === a && source.b === b && source.c === c;
+  const old = shared ? worldTrianglePlanes.get(source) : undefined;
+  if (
+    old &&
+    a.x === old.values[0] &&
+    a.y === old.values[1] &&
+    a.z === old.values[2] &&
+    b.x === old.values[3] &&
+    b.y === old.values[4] &&
+    b.z === old.values[5] &&
+    c.x === old.values[6] &&
+    c.y === old.values[7] &&
+    c.z === old.values[8]
+  )
+    return old;
+  const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+  const value = {
+    normal,
+    constant: normal.dot(a),
+    values: shared ? [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z] : [],
+  };
+  if (shared) worldTrianglePlanes.set(source, value);
+  return value;
+}
 
 /** Independent finite segment/triangle ray equations for local0x422610 and
  *0x45f1c0. Rays choose the first nearest cached face and orient its normal
@@ -101,7 +138,12 @@ function recoveryRay(
     if (surface.edgeOnly || /^[!>?]/.test(surface.materialIdentifier ?? ""))
       continue;
     const { a, b, c } = surface;
-    const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+    const normal = worldTrianglePlane(
+      a,
+      b,
+      c,
+      surface.sourceSurface,
+    ).normal.clone();
     if (!normal.lengthSq()) continue;
     const denominator = direction.dot(normal);
     const twoSided =
@@ -1465,9 +1507,10 @@ export function sweepHullTriangle(
 ): HullContact | null {
   const prefix = options.materialIdentifier?.[0];
   if (prefix === "!" || prefix === ">") return null;
-  const planeNormal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+  const plane = worldTrianglePlane(a, b, c, options.sourceSurface);
+  const planeNormal = plane.normal;
   if (!planeNormal.lengthSq()) return null;
-  const planeConstant = planeNormal.dot(a);
+  const planeConstant = plane.constant;
   const startInterval = projection(old.vertices, planeNormal, old.vertexOrder);
   const endInterval = projection(
     predicted.vertices,
