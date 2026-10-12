@@ -1,3 +1,15 @@
+import {
+  WorldTransformState,
+  ordinaryTransformMethods,
+  worldLocalValue,
+  sameWorldLocalValues,
+  type WorldTransformDiagnostics,
+} from "./world-transform-state";
+import {
+  captureColliderMesh,
+  sameColliderMesh,
+  type ColliderMeshState,
+} from "./world-collider-state";
 import * as THREE from "three";
 import { DEFAULT_SURFACE, surfaceIndex } from "./physics/surfaces";
 import type { SurfaceModifier } from "./physics/surfaces";
@@ -8,7 +20,10 @@ import {
   createNativeFindFacesProviders,
   findNativeFacesInBox,
 } from "./native-find-faces";
-import { knownNativeActorValue as known } from "./native-actor-order";
+import {
+  enumerateNativeActorChildren,
+  knownNativeActorValue as known,
+} from "./native-actor-order";
 import type { NativeOrderedActor } from "./native-actor-order";
 import type { NativeModelPickFace } from "./native-model-pick";
 import {
@@ -59,8 +74,47 @@ export interface Surface {
   native?: NativeModelPickFace;
   constant?: number;
 }
+export interface WorldSyncDiagnostics {
+  dynamicChecks: number;
+  dynamicUnchanged: number;
+  dynamicChanged: number;
+  hierarchyChecks: number;
+  triangleBuilds: number;
+  nativeActorChecks: number;
+  nativeActorWrites: number;
+  nativeGeometryChecks: number;
+  nativeGeometryWrites: number;
+  transform: WorldTransformDiagnostics;
+}
+interface DynamicNodeState {
+  object: THREE.Object3D;
+  parent: THREE.Object3D | null;
+  children: THREE.Object3D[];
+  localValues: number[];
+  auto: boolean;
+  worldAuto: boolean;
+  worldValues?: number[];
+  disabled: unknown;
+  skip: unknown;
+  mesh?: ColliderMeshState;
+}
+interface NativeSyncState {
+  revision: number;
+  hostParent: THREE.Object3D | null;
+  parent: NativeOrderedActor | null;
+  parentMatrix: THREE.Matrix4;
+  force: boolean;
+}
 /** A fixed broad phase over transformed original triangles. Geometry stays in C2 world units. */
 export class WorldCollision {
+  /** Cumulative, opt-in bounded work counters; no capture retained in gameplay. */
+  syncDiagnostics?: WorldSyncDiagnostics;
+  private transforms = new WorldTransformState();
+  private nativeSync = new WeakMap<NativeOrderedActor, NativeSyncState>();
+  private nativeLocalWritten = new WeakMap<
+    NativeOrderedActor,
+    readonly number[]
+  >();
   private cells = new Map<string, Surface[]>();
   private cellSize = 4;
   triangles = 0;
@@ -102,13 +156,31 @@ export class WorldCollision {
       for (const [actor, pose] of nativeScene.initialPoses)
         this.nativePoses.set(actor, pose);
     if (nativeScene?.initialGeometries)
-      for (const [actor, geo] of nativeScene.initialGeometries)
-        this.nativeGeometryRevisions.set(actor, {
-          geometry: geo,
-          version:
-            (geo.getAttribute("position") as THREE.BufferAttribute | undefined)
-              ?.version ?? 0,
+      for (const [actor, geo] of nativeScene.initialGeometries) {
+        const mesh = nativeScene.meshes.get(actor);
+        if (mesh && mesh.geometry === geo)
+          this.nativeGeometryRevisions.set(actor, captureColliderMesh(mesh));
+      }
+    this.transforms.beginPhase();
+    if (nativeScene)
+      for (const [actor, object] of nativeScene.actorObjects) {
+        const old = this.nativePoses.get(actor),
+          p = object.position,
+          q = object.quaternion,
+          z = object.scale;
+        const current = [p.x, p.y, p.z, q.x, q.y, q.z, q.w, z.x, z.y, z.z];
+        const resolved = this.transforms.resolve(object);
+        this.nativeSync.set(actor, {
+          revision: resolved.revision,
+          hostParent: object.parent,
+          parent: actor.parent,
+          parentMatrix: this.nativeParentWorldMatrix(actor.parent).clone(),
+          force:
+            !old ||
+            old.parent !== object.parent ||
+            current.some((v, i) => !Object.is(v, old.values[i])),
         });
+      }
     this.rebuildStatic();
   }
   rebuildStatic() {
@@ -141,7 +213,10 @@ export class WorldCollision {
       drivable: boolean;
       surfaces: Surface[];
       bounds: THREE.Box3;
-      pose: string;
+      nodes: DynamicNodeState[];
+      parentRevision: number;
+      ancestors: { object: THREE.Object3D; disabled: unknown }[];
+      force: boolean;
       worldCollider: boolean;
     }
   >();
@@ -165,9 +240,10 @@ export class WorldCollision {
     group: THREE.Object3D,
     owner?: RigidBody,
     singleMesh = false,
+    alreadyCurrent = false,
   ): Surface[] {
     const surfaces: Surface[] = [];
-    group.updateWorldMatrix(true, true);
+    if (!alreadyCurrent) group.updateWorldMatrix(true, true);
     const visit = (object: THREE.Object3D) => {
       if (!(object instanceof THREE.Mesh)) return;
       if (object.userData.skipWorldCollision) return;
@@ -273,7 +349,10 @@ export class WorldCollision {
       drivable,
       surfaces: [],
       bounds: new THREE.Box3(),
-      pose: "",
+      nodes: [],
+      parentRevision: -1,
+      ancestors: [],
+      force: true,
       worldCollider,
     });
     this.refreshDynamic(owner);
@@ -285,20 +364,136 @@ export class WorldCollision {
   }
   invalidateDynamic(owner?: RigidBody) {
     for (const [body, entry] of this.dynamic)
-      if (!owner || body === owner) entry.pose = "";
+      if (!owner || body === owner) entry.force = true;
     this.refreshDynamic(owner);
   }
   refreshDynamic(owner?: RigidBody) {
+    this.transforms.beginPhase();
     for (const [body, entry] of this.dynamic) {
       if (owner && body !== owner) continue;
-      entry.actor.updateWorldMatrix(true, true);
-      const pose = [...entry.actor.matrixWorld.elements].join(",");
-      if (entry.pose === pose) continue;
-      entry.pose = pose;
-      entry.surfaces = this.makeSurfaces(entry.actor, body);
-      entry.bounds.setFromPoints(
-        entry.surfaces.flatMap((s) => [s.a, s.b, s.c]),
-      );
+      const diagnostics = this.syncDiagnostics;
+      if (diagnostics) diagnostics.dynamicChecks++;
+      let changed = entry.force || !entry.nodes.length;
+      let ancestor = entry.actor.parent;
+      for (const old of entry.ancestors) {
+        if (
+          ancestor !== old.object ||
+          ancestor?.userData.worldSmashDisabled !== old.disabled
+        )
+          changed = true;
+        ancestor = ancestor?.parent ?? null;
+      }
+      if (ancestor) changed = true;
+      let opaque = !this.transforms.isOrdinary(entry.actor);
+      if (opaque) changed = true;
+      const parentState =
+        !opaque && entry.actor.parent
+          ? this.transforms.resolve(entry.actor.parent, diagnostics?.transform)
+          : null;
+      const parentRevision = parentState?.revision ?? 0;
+      if (entry.parentRevision !== parentRevision) changed = true;
+      for (const old of entry.nodes) {
+        if (diagnostics) diagnostics.hierarchyChecks++;
+        const object = old.object;
+        if (!ordinaryTransformMethods(object)) opaque = changed = true;
+        if (
+          opaque ||
+          object.matrixAutoUpdate !== old.auto ||
+          object.matrixWorldAutoUpdate !== old.worldAuto ||
+          !sameWorldLocalValues(object, old.localValues) ||
+          old.worldValues?.some(
+            (v, i) => !Object.is(v, object.matrixWorld.elements[i]),
+          ) ||
+          object.parent !== old.parent ||
+          object.children.length !== old.children.length ||
+          object.children.some((child, i) => child !== old.children[i]) ||
+          object.userData.worldSmashDisabled !== old.disabled ||
+          object.userData.skipWorldCollision !== old.skip ||
+          (object instanceof THREE.Mesh &&
+            (!old.mesh || !sameColliderMesh(object, old.mesh)))
+        )
+          changed = true;
+      }
+      if (!changed) {
+        if (diagnostics) diagnostics.dynamicUnchanged++;
+        continue;
+      }
+      if (diagnostics) diagnostics.dynamicChanged++;
+      // Custom subclasses retain the native update outlet; ordinary trees use
+      // exact retained physical matrices, independent of renderer interpolation.
+      const nodes: THREE.Object3D[] = [];
+      entry.actor.traverse((object) => nodes.push(object));
+      opaque ||= nodes.some((object) => !this.transforms.isOrdinary(object));
+      if (opaque) {
+        // Stateful custom update methods must run once, before generation, never
+        // again while capturing cache metadata. They remain uncached next phase.
+        if (diagnostics) diagnostics.transform.nativeUpdates++;
+        entry.actor.updateWorldMatrix(true, true);
+        this.transforms.invalidatePhase();
+        // A custom updater may have changed topology during the native outlet.
+        nodes.length = 0;
+        entry.actor.traverse((object) => nodes.push(object));
+      } else {
+        for (const object of nodes)
+          object.matrixWorld.copy(
+            this.transforms.resolve(object, diagnostics?.transform).matrix,
+          );
+      }
+      entry.surfaces = this.makeSurfaces(entry.actor, body, false, true);
+      if (diagnostics) diagnostics.triangleBuilds += entry.surfaces.length;
+      entry.bounds.makeEmpty();
+      for (const surface of entry.surfaces)
+        entry.bounds
+          .expandByPoint(surface.a)
+          .expandByPoint(surface.b)
+          .expandByPoint(surface.c);
+      entry.nodes = nodes.map((object, index) => {
+        const prior = entry.nodes[index];
+        const node: DynamicNodeState =
+          prior?.object === object
+            ? prior
+            : {
+                object,
+                parent: object.parent,
+                children: [],
+                localValues: [],
+                auto: object.matrixAutoUpdate,
+                worldAuto: object.matrixWorldAutoUpdate,
+                disabled: undefined,
+                skip: undefined,
+              };
+        node.parent = object.parent;
+        if (
+          node.children.length !== object.children.length ||
+          object.children.some((child, i) => child !== node.children[i])
+        )
+          node.children = [...object.children];
+        node.localValues.length = object.matrixAutoUpdate ? 10 : 16;
+        for (let i = 0; i < node.localValues.length; i++)
+          node.localValues[i] = worldLocalValue(object, i);
+        node.auto = object.matrixAutoUpdate;
+        node.worldAuto = object.matrixWorldAutoUpdate;
+        node.worldValues = object.matrixWorldAutoUpdate
+          ? undefined
+          : object.matrixWorld.toArray();
+        node.disabled = object.userData.worldSmashDisabled;
+        node.skip = object.userData.skipWorldCollision;
+        if (
+          object instanceof THREE.Mesh &&
+          (entry.force || !node.mesh || !sameColliderMesh(object, node.mesh))
+        )
+          node.mesh = captureColliderMesh(object);
+        return node;
+      });
+      entry.ancestors = [];
+      for (let object = entry.actor.parent; object; object = object.parent)
+        entry.ancestors.push({
+          object,
+          disabled: object.userData.worldSmashDisabled,
+        });
+      entry.parentRevision = parentRevision;
+      // A later return to ordinary methods must replace the opaque snapshot.
+      entry.force = opaque;
     }
   }
   private dynamicSurfaces(bounds: THREE.Box3): Surface[] {
@@ -348,35 +543,7 @@ export class WorldCollision {
       return result;
     }
     const scene = this.nativeScene;
-    this.syncNativeGeometry();
-    const changedActors = new Set<NativeOrderedActor>();
-    for (const [actor, object] of scene.actorObjects) {
-      const old = this.nativePoses.get(actor),
-        p = object.position,
-        q = object.quaternion,
-        s = object.scale;
-      const values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w, s.x, s.y, s.z];
-      let parentChanged = false;
-      for (let parent = actor.parent; parent; parent = parent.parent)
-        if (changedActors.has(parent)) {
-          parentChanged = true;
-          break;
-        }
-      if (
-        !old ||
-        old.parent !== object.parent ||
-        values.some((v, i) => old.values[i] !== v) ||
-        parentChanged
-      ) {
-        this.updateNativeActorMatrix(actor);
-        this.nativePoses.set(actor, { values, parent: object.parent });
-        changedActors.add(actor);
-      }
-      // Native NONE prunes the complete subtree while keeping its MODEL alive.
-      actor.renderStyle = object.userData.worldSmashDisabled
-        ? 1
-        : (object.userData.c2ActorRenderStyle ?? actor.renderStyle);
-    }
+    this.transforms.beginPhase();
     const base = createNativeFindFacesProviders(
       (identity) => {
         const resource = scene.resources.get(identity);
@@ -407,16 +574,38 @@ export class WorldCollision {
             ? (callbacks.pullActorFromWorld?.(object) ?? null)
             : null;
           if (pulled !== null) pullNativeWorldActor(scene, actor);
+          this.transforms.invalidatePhase();
           return known(pulled);
         },
         stopGroovidelic: (actor: NativeOrderedActor) => {
           const object = scene.actorObjects.get(actor);
           if (object) {
-            callbacks.stopGroovidelic?.(object);
+            if (callbacks.stopGroovidelic) {
+              callbacks.stopGroovidelic(object);
+              this.transforms.invalidatePhase();
+            }
             this.updateNativeActorMatrix(actor);
           }
         },
       }),
+      prepareActors: (roots) => {
+        // All selected locals precede callbacks. Lazy rebasing during emission
+        // would erase borrowed parent motion after StopGroovidelic, particularly
+        // when the renderer retained a child under a different Three parent.
+        const visited = new Set<NativeOrderedActor>();
+        const prepare = (actor: NativeOrderedActor) => {
+          if (visited.has(actor)) return;
+          visited.add(actor);
+          this.syncNativeActor(actor);
+          if (actor.renderStyle === 1) return;
+          this.syncNativeGeometry(actor);
+          enumerateNativeActorChildren(actor, (child) => {
+            prepare(child);
+            return 0;
+          });
+        };
+        for (const root of roots) prepare(root);
+      },
       providers: {
         modelBounds: base.modelBounds,
         emitModel: (input) => {
@@ -426,6 +615,7 @@ export class WorldCollision {
             const surface = this.nativeSurface(row);
             surfaces.push(surface);
             callbacks.onFace?.(surface);
+            if (callbacks.onFace) this.transforms.invalidatePhase();
           }
           return emitted;
         },
@@ -443,7 +633,7 @@ export class WorldCollision {
   nativeModelBoundsOptions?: NativeModelBoundsOptions;
   private nativeGeometryRevisions = new Map<
     NativeOrderedActor,
-    { geometry: THREE.BufferGeometry; version: number }
+    ColliderMeshState
   >();
   private nativeRuntimeFaceIndices = new WeakMap<
     NativeTrackModelResource,
@@ -459,20 +649,25 @@ export class WorldCollision {
   >();
   /** Geometry mutation outlets already own current topology and source IDs. Rebuild
    * their MODEL tables before collector use, with actual retained MAT bindings. */
-  private syncNativeGeometry(): void {
+  private syncNativeGeometry(selected?: NativeOrderedActor): void {
     const scene = this.nativeScene;
     if (!scene?.meshes) return;
-    for (const [actor, mesh] of scene.meshes) {
+    const selectedMesh = selected ? scene.meshes.get(selected) : undefined;
+    const entries: Iterable<readonly [NativeOrderedActor, THREE.Mesh]> =
+      selected
+        ? selectedMesh
+          ? [[selected, selectedMesh]]
+          : []
+        : scene.meshes;
+    for (const [actor, mesh] of entries) {
+      if (this.syncDiagnostics) this.syncDiagnostics.nativeGeometryChecks++;
       const geo = mesh.geometry,
         position = geo.getAttribute("position"),
         old = this.nativeGeometryRevisions.get(actor);
-      if (
-        !position ||
-        (old?.geometry === geo &&
-          old.version === ((position as THREE.BufferAttribute).version ?? 0))
-      )
+      if (!position || (old && sameColliderMesh(mesh, old, !selected)))
         continue;
       if (!actor.localModel.resolved || !actor.localModel.value) continue;
+      if (this.syncDiagnostics) this.syncDiagnostics.nativeGeometryWrites++;
       const resource = scene.resources.get(actor.localModel.value);
       if (!resource)
         throw new Error(
@@ -514,10 +709,7 @@ export class WorldCollision {
         }
         this.nativeRuntimeFaceIndices.set(replacement, mapping);
         this.nativeReplacementSourceFaces.set(actor, sourceMapping);
-        this.nativeGeometryRevisions.set(actor, {
-          geometry: geo,
-          version: (position as THREE.BufferAttribute).version ?? 0,
-        });
+        this.nativeGeometryRevisions.set(actor, captureColliderMesh(mesh));
         continue;
       }
       const allowed = new Map(
@@ -623,10 +815,7 @@ export class WorldCollision {
       scene.resources.set(current, current);
       actor.localModel = known(current);
       this.nativeRuntimeFaceIndices.set(current, mapping);
-      this.nativeGeometryRevisions.set(actor, {
-        geometry: geo,
-        version: (position as THREE.BufferAttribute).version ?? 0,
-      });
+      this.nativeGeometryRevisions.set(actor, captureColliderMesh(mesh));
     }
   }
   /** createModelGeometry copies canonical tables. Verify their data against the
@@ -656,44 +845,139 @@ export class WorldCollision {
       )
     );
   }
-  private updateNativeActorMatrix(actor: NativeOrderedActor): void {
-    const values = this.nativeActorLocalMatrix(actor),
-      storage = actor.matrix as number[];
-    for (let index = 0; index < 12; index++) storage[index] = values[index];
+  private nativeParentWorldMatrix(
+    actor: NativeOrderedActor | null,
+  ): THREE.Matrix4 {
+    if (!actor) return new THREE.Matrix4();
+    const object = this.nativeScene!.actorObjects.get(actor);
+    if (object)
+      return this.transforms.resolve(object, this.syncDiagnostics?.transform)
+        .matrix;
+    const m = actor.matrix,
+      local = new THREE.Matrix4().set(
+        m[0],
+        m[3],
+        m[6],
+        m[9],
+        m[1],
+        m[4],
+        m[7],
+        m[10],
+        m[2],
+        m[5],
+        m[8],
+        m[11],
+        0,
+        0,
+        0,
+        1,
+      );
+    return this.nativeParentWorldMatrix(actor.parent).clone().multiply(local);
   }
-  private nativeActorLocalMatrix(actor: NativeOrderedActor): number[] {
-    const scene = this.nativeScene!;
-    const worldMatrix = (current: NativeOrderedActor | null): THREE.Matrix4 => {
-      if (!current) return new THREE.Matrix4();
-      const object = scene.actorObjects.get(current);
-      if (object) {
-        object.updateWorldMatrix(true, false);
-        return object.matrixWorld.clone();
-      }
-      const m = current.matrix,
-        local = new THREE.Matrix4().set(
-          m[0],
-          m[3],
-          m[6],
-          m[9],
-          m[1],
-          m[4],
-          m[7],
-          m[10],
-          m[2],
-          m[5],
-          m[8],
-          m[11],
-          0,
-          0,
-          0,
-          1,
-        );
-      return worldMatrix(current.parent).multiply(local);
-    };
-    return nativeWorldMatrix(
-      worldMatrix(actor.parent).invert().multiply(worldMatrix(actor)),
-    );
+  private nativeParentForObject(
+    object: THREE.Object3D,
+    actor: NativeOrderedActor | null,
+  ): THREE.Matrix4 {
+    const mapped = actor && this.nativeScene!.actorObjects.get(actor);
+    if (mapped && !this.transforms.isOrdinary(object)) {
+      for (let parent = object.parent; parent; parent = parent.parent)
+        if (parent === mapped) return mapped.matrixWorld;
+    }
+    return this.nativeParentWorldMatrix(actor);
+  }
+  private syncNativeActor(actor: NativeOrderedActor): void {
+    const object = this.nativeScene!.actorObjects.get(actor);
+    if (!object) return;
+    if (this.syncDiagnostics) this.syncDiagnostics.nativeActorChecks++;
+    const state = this.transforms.resolve(
+        object,
+        this.syncDiagnostics?.transform,
+      ),
+      revision = state.revision,
+      worldMatrix = state.ordinary ? state.matrix : state.matrix.clone(),
+      old = this.nativeSync.get(actor),
+      parentMatrix = this.nativeParentForObject(object, actor.parent);
+    // Native remove/add intentionally leaves the borrowed local matrix intact.
+    const parentChanged =
+      old?.parent === actor.parent &&
+      parentMatrix.elements.some(
+        (v, i) => !Object.is(v, old.parentMatrix.elements[i]),
+      );
+    if (
+      !old ||
+      old.force ||
+      !state.ordinary ||
+      old.revision !== state.revision ||
+      old.hostParent !== object.parent ||
+      parentChanged
+    ) {
+      this.writeNativeActorMatrix(actor, worldMatrix, parentMatrix);
+      this.nativeSync.set(actor, {
+        revision,
+        hostParent: object.parent,
+        parent: actor.parent,
+        parentMatrix: parentMatrix.clone(),
+        force: !state.ordinary,
+      });
+    } else if (old.parent !== actor.parent) {
+      // Pull keeps the old local now, but the next Stop must rebase it against
+      // the new native parent. A prior write belongs to the old attachment.
+      this.nativeLocalWritten.delete(actor);
+      old.parent = actor.parent;
+      old.parentMatrix.copy(parentMatrix);
+    }
+    actor.renderStyle = object.userData.worldSmashDisabled
+      ? 1
+      : (object.userData.c2ActorRenderStyle ?? actor.renderStyle);
+  }
+  private updateNativeActorMatrix(actor: NativeOrderedActor): void {
+    const object = this.nativeScene!.actorObjects.get(actor);
+    if (!object) return;
+    const state = this.transforms.resolve(
+        object,
+        this.syncDiagnostics?.transform,
+      ),
+      revision = state.revision,
+      worldMatrix = state.ordinary ? state.matrix : state.matrix.clone(),
+      parentMatrix = this.nativeParentForObject(object, actor.parent);
+    const old = this.nativeSync.get(actor);
+    // The first stop retains the historical affine/Float32 rewrite. Subsequent
+    // unchanged notifications may reuse that same borrowed local storage.
+    const written = this.nativeLocalWritten.get(actor);
+    if (
+      written &&
+      written.every((v, i) => Object.is(v, actor.matrix[i])) &&
+      old &&
+      !old.force &&
+      state.ordinary &&
+      old.revision === revision &&
+      old.hostParent === object.parent &&
+      old.parent === actor.parent &&
+      parentMatrix.elements.every((v, i) =>
+        Object.is(v, old.parentMatrix.elements[i]),
+      )
+    )
+      return;
+    this.writeNativeActorMatrix(actor, worldMatrix, parentMatrix);
+    this.nativeSync.set(actor, {
+      revision,
+      hostParent: object.parent,
+      parent: actor.parent,
+      parentMatrix: parentMatrix.clone(),
+      force: !state.ordinary,
+    });
+  }
+  private writeNativeActorMatrix(
+    actor: NativeOrderedActor,
+    world: THREE.Matrix4,
+    parent: THREE.Matrix4,
+  ): void {
+    const matrix = parent.clone().invert().multiply(world),
+      values = nativeWorldMatrix(matrix),
+      storage = actor.matrix as number[];
+    for (let i = 0; i < 12; i++) storage[i] = values[i];
+    this.nativeLocalWritten.set(actor, values);
+    if (this.syncDiagnostics) this.syncDiagnostics.nativeActorWrites++;
   }
   private nativeSurface(row: NativeModelPickFace): Surface {
     const scene = this.nativeScene!,

@@ -56,6 +56,8 @@ export interface NativeFindFacesInput<Row> {
   emitModels: boolean;
   capacity: number;
   providers: NativeActorPickProviders<Row>;
+  /** Host synchronization snapshot, before any interleaved native callbacks. */
+  prepareActors?: (roots: readonly NativeOrderedActor[]) => void;
 }
 export interface NativeFindFacesResult<Row> extends NativeActorPickResult<Row> {
   query: NativeActorPickQuery;
@@ -262,6 +264,17 @@ export function findNativeFacesInBox<Row>(
     query,
     range,
   });
+  if (input.prepareActors) {
+    const roots: NativeOrderedActor[] = [];
+    for (let x = range.minX; x <= range.maxX; x++)
+      for (let z = range.minZ; z <= range.maxZ; z++) {
+        const actor = input.columns[z][x];
+        if (actor) roots.push(actor);
+      }
+    if (input.additionalActors.resolved && input.additionalActors.value)
+      roots.push(input.additionalActors.value);
+    input.prepareActors(roots);
+  }
   const pick = (actor: NativeOrderedActor) => {
     const prefix = rows.length,
       picked = pickNativeActorBox({

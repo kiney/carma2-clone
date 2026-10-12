@@ -314,3 +314,6 @@ import "./pair-working-set.test.mjs";
 
 import "./native-model-bounds-cache.test.mjs";
 import "./native-model-bounds-collection.test.mjs";
+
+import "./world-transform-state.test.mjs";
+import "./world-sync.test.mjs";
