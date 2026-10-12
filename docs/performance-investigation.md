@@ -1,6 +1,9 @@
 # PERF-01: frame-time investigation
 
 Status: **initial analysis completed; optimization and exact policy remain open**.
+The post-PERF-05 Timber! investigation finds a reproduced CPU-only 4-FPS case,
+global pair-discovery/correction amplification and independent redundant world
+invalidation. See [structural findings and measurement limits](timber-performance-findings.md).
 TASK-100 / PERF-01 remains priority 1, `wip`, for profiling, unresolved spikes and
 finding coordination. TASK-104 / PERF-05 physics hot-path optimization is
 implemented and validated; see [changes and measurements](physics-performance.md).

@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-11 22:36'
+updated_date: '2026-10-12 02:07'
 labels:
   - priority-1
   - PERF-01
@@ -13,6 +13,7 @@ labels:
 dependencies: []
 references:
   - docs/performance-investigation.md
+  - docs/timber-performance-findings.md
   - tools/profile-performance.mjs
   - tools/performance-probe.mjs
 priority: high
@@ -24,9 +25,11 @@ ordinal: 1000
 <!-- SECTION:DESCRIPTION:BEGIN -->
 User reports roughly 30 FPS in Chromium on modern hardware and severe frame-time spikes, notably when leaving the tunnel in Snow Way Out. Investigate first. Separate CPU simulation/collision/AI work, rendering and GPU cost, resource upload/shader compilation, garbage collection, frame pacing and development-versus-production overhead. Initial hardware evidence identifies expensive scene traversal and post-solver collision guarding as independent CPU bottlenecks.
 
-This active ticket owns cross-subsystem profiling, the unresolved tunnel-exit spike, ranked findings and coordination of implementation scopes. Scene-hierarchy implementation belongs to PERF-02 / TASK-101 (P1, next); code/algorithm physics optimization to PERF-05 / TASK-104 (P1, next); resolution policy to PERF-03 / TASK-102 (P4, backlog); higher visual visibility to PERF-04 / TASK-103 (P2, next, after TASK-101). Do not duplicate these implementation scopes. The user's physics policy is code/algorithm optimization first, with Web Workers reserved as a last resort if residual measurements justify the larger redesign.
+This active ticket owns cross-subsystem profiling, the unresolved tunnel-exit spike, ranked findings and coordination of implementation scopes. Scene-hierarchy implementation belongs to completed PERF-02 / TASK-101 (P1, done); the initial code/algorithm physics optimization belongs to completed PERF-05 / TASK-104 (P1, done); resolution policy to PERF-03 / TASK-102 (P4, backlog); higher visual visibility to PERF-04 / TASK-103 (P2, next, after TASK-101). Do not duplicate these implementation scopes. The user's physics policy is code/algorithm optimization first, with Web Workers reserved as a last resort if residual measurements justify the larger redesign.
 
 Use short, serial profiling captures and static algorithm review because the workstation is simultaneously used by the user; no sustained simulation or parallel stress workloads. Preserve C2 behavior, destruction, assets and existing gameplay. Existing QUA-05 hardware measurement, QUA-06 memory and QUA-10 FPS diagnostics retain their narrower scopes and user-edited priorities.
+
+Latest report: Timber! canyon/ravine drops to roughly 4 FPS after PERF-05. The user requests a fresh structural investigation and findings before implementation. Analyze global collision working sets, repeated correction/geometry work and event invalidation rather than selecting more coefficient/micro optimizations. No new engine change is authorized in this investigation phase.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -45,4 +48,10 @@ Initial analysis completed; implementation choices intentionally remain open. Ha
 User prioritization split on 2026-10-11: TASK-101 owns scene-hierarchy optimization (P1 next), TASK-102 owns resolution policy (P4 backlog), TASK-103 owns visual visibility (P2 next, dependent on TASK-101). Historical AC4/AC5 scope was split accordingly; AC1/AC2 remain verified, AC3 and the narrowed simulation AC4 remain open. In the start-drive capture, updateFrame took 2696.1 ms of 3519.5 ms wall duration (76.6%), including frame-final physics/damage callbacks. Mean tick CPU was 39.3 ms against a 40 ms native step. Worker execution is feasible in the browser, but current scene/geometry/callback ownership prevents a drop-in move; no threading decision or engine behavior changed.
 
 2026-10-12 user direction: physics implementation was extracted to PERF-05 / TASK-104 (P1 next). Optimize code and algorithms first; Web Workers remain a last resort for a separately justified larger redesign. TASK-100 now retains profiling/spike investigation and finding coordination. Historical worker feasibility is not an implementation decision. No production behavior changed.
+
+2026-10-12 Timber investigation (baseline 59e6d8f): no production engine changes. Short CPU-only ordinary route captures average 19-24 ms/tick. A controlled already-damaged/prepared-fence session with normal AI and seven detached Eagle parts reproduces 3.75 FPS with renderer.render suppressed: updateFrame consumes 1517.4 ms / 1601.8 ms wall (~95%), mean tick 57.52 ms, max 139.5 ms; up to eight correction passes. A subsequent state after removing CPU profiling and detailed wrappers still gives 3.97 FPS, mean 48.73 ms/tick, max 150.3 ms, and +640 ms skipped physics time. These are serial CPU diagnostics on SwiftShader, not hardware rendering/FPS benchmarks or a clean reproduction of the exact reported canyon route. MCP/X11 automation stalled; EGL/Vulkan checks supplied no WebGL context. Isolated browser/server closed.
+
+Verified structural opportunities: all-pairs body discovery scans 114,960 combinations at 480 bodies; first heavy ticks have 466 immovable props, making 94.2% of opportunities immovable/immovable. GuardBodyTrajectories repeats discovery and pair-local geometry transforms, using conservative radius bounds even for constant prop paths. Sampled heavy tick costs: body guard 545 ms inclusive, nested pair guard 374 ms, collectBodyContacts 306 ms, mask predicate 144 ms self, SAT 98 ms, contact-group solver 28 ms; inclusive rows overlap. Main direction is retained spatial discovery and immutable per-body geometry snapshots, preserving pair/contact order, attachments, wake-up, crush and native timing. Normal refreshDynamic also visits all 466 props several times per tick/frame. Small world queries admit 203 versus 4 tighter-XZ candidates at node 4 and 104 versus 4 at quarry node 178; conservative face indexing is another candidate, not an implemented filter.
+
+Independent original-material reproduction: second/third below-threshold TEZFEN contacts leave geometry identity/version and damage tier unchanged, yet trigger global geometry revisions and rebuild/invalidate-all work costing 15.8/24.0 ms. Preserve the binary-verified native restart output while separating actual geometry dirtiness and owner-specific invalidation. Zero world rebuilds in the slow capture rule out this defect as its cause. Long-session private MODEL retention and hardware GPU/4K canyon cost remain candidates. Full evidence, limitations and proposed sequencing: docs/timber-performance-findings.md. PERF-01 stays wip for exact canyon/tunnel attribution and coordination; no implementation ticket was started and no worker migration selected.
 <!-- SECTION:NOTES:END -->
