@@ -319,7 +319,12 @@ test("live geometry mutation invalidates prepared MODEL while preserving immutab
   world.collectFaces(query, 4, true); // First explicit admission of this mutable mesh.
   geometry.getAttribute("position").setY(0, 2);
   geometry.getAttribute("position").needsUpdate = true;
-  world.rebuildStatic();
+  world.invalidateActors([mesh]);
+  assert.notEqual(
+    actor.localModel.value,
+    resource,
+    "explicit local mutation synchronizes MODEL before the next collector callback",
+  );
   const emitted = world.collectFaces(query, 4, true)[0];
   assert.equal(emitted.a.y, 2);
   assert.equal(emitted.native.sourceFaceIndex, 0);
@@ -337,6 +342,20 @@ test("live geometry mutation invalidates prepared MODEL while preserving immutab
   assert.equal(
     emitted.native.model.prepared.revision,
     emitted.native.model.revision,
+  );
+  const preparedOwner = actor.localModel.value;
+  geometry.userData.sourceFaceFlags[0] = 5;
+  world.invalidateActors([mesh]);
+  assert.notEqual(
+    actor.localModel.value,
+    preparedOwner,
+    "explicit mutation detects in-place RAW metadata without scanning unrelated MODELs",
+  );
+  assert.equal(world.collectFaces(query, 4, true)[0].faceFlags, 5);
+  assert.equal(
+    emitted.faceFlags,
+    3,
+    "old callback surfaces remain independent snapshots",
   );
 });
 

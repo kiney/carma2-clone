@@ -82,7 +82,7 @@ implementation subtasks of TASK-100, selected by the user at priority 1 and plac
 in `next`. They precede P2 visibility work. Stored ordinals define the proposed
 implementation order; dependencies record technical prerequisites separately.
 Creating this queue does not start implementation or occupy additional WIP slots.
-PERF-06, PERF-07, PERF-08 and PERF-09 were completed on 2026-10-12; the following scopes remain in
+PERF-06 through PERF-10 were completed on 2026-10-12; the following scopes remain in
 `next`.
 
 | Order | Backlog ID | Issue   | Priority / status | Scope                                                              |
@@ -91,14 +91,16 @@ PERF-06, PERF-07, PERF-08 and PERF-09 were completed on 2026-10-12; the followin
 | 2     | TASK-100.2 | PERF-07 | P1 / `done`       | Shared immutable body geometry snapshots across pairs              |
 | 3     | TASK-100.3 | PERF-08 | P1 / `done`       | Retained native MODEL bounds with mutation validity                |
 | 4     | TASK-100.4 | PERF-09 | P1 / `done`       | Synchronization of changed world actors/geometry only              |
-| 5     | TASK-100.5 | PERF-10 | P1 / `next`       | Native smash restart versus actual owner-specific invalidation     |
+| 5     | TASK-100.5 | PERF-10 | P1 / `done`       | Native smash restart versus actual owner-specific invalidation     |
 | 6     | TASK-100.6 | PERF-11 | P1 / `next`       | Conservative local world-face discovery for physics/camera queries |
 | 7     | TASK-100.7 | PERF-12 | P1 / `next`       | Reuse of unchanged collision work between correction passes        |
 
 [World synchronization](../docs/world-sync-performance.md) now retains unchanged
 geometry and synchronizes query-selected native subtrees before callbacks.
 PERF-01 remains the active profiling/coordinating ticket; the later scopes are
-queued, and completing PERF-09 does not assert that all frame-time spikes are fixed.
+queued. [Smash invalidation](../docs/smash-invalidation-performance.md) separates
+unchanged notifications from actual owner changes. Completing these scopes does
+not assert that all frame-time spikes are fixed.
 
 Native MODEL bounds are separated from broader synchronization so their narrower
 cache validity can be reviewed independently. Correction-pass reuse follows the

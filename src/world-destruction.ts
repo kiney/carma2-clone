@@ -105,6 +105,8 @@ export interface WorldDestructionChange {
   level?: number;
   affectedFaceIndices: number[];
   geometryChanged: boolean;
+  /** Legacy name: requests the existing solver restart, even for unchanged
+   * prepared texture tiles. Collision dirtiness is geometryChanged instead. */
   requiresRebuild: boolean;
   collisionMode?: SmashCollisionMode;
   connotations?: SmashConnotations;
@@ -406,6 +408,14 @@ function writeFaces(mesh: Mesh, data: MeshData): void {
 export class WorldDestruction {
   /** Changes consumed by the simulation's collision-cache flush barrier. */
   geometryRevision = 0;
+  private collisionChanges = new Set<Object3D>();
+  /** Single collision adapter consumer; preserve notifications independently
+   * of physical mesh/topology/eligibility changes, including deferred commits. */
+  drainCollisionChanges(): Object3D[] {
+    const actors = [...this.collisionChanges];
+    this.collisionChanges.clear();
+    return actors;
+  }
   readonly retainActors: Object3D[] = [];
   readonly requiredModels: string[];
   readonly diagnostics: string[] = [];
@@ -597,7 +607,10 @@ export class WorldDestruction {
   ): void {
     out.changed = true;
     out.changes.push(change);
-    if (change.requiresRebuild) this.geometryRevision++;
+    if (change.geometryChanged) {
+      this.geometryRevision++;
+      this.collisionChanges.add(change.actor);
+    }
     this.assets.onChange?.(change);
     for (let repeat = 0; repeat < (change.connotationRepeats ?? 1); repeat++)
       this.effects(
@@ -1213,7 +1226,7 @@ export class WorldDestruction {
           affectedFaceIndices: data.faces.flatMap((f, i) =>
             f.patch === patchId ? [i] : [],
           ),
-          geometryChanged: spec.mode !== "decal",
+          geometryChanged: !old && spec.mode !== "decal",
           requiresRebuild: spec.mode !== "decal",
           decal: patch.decal,
         },

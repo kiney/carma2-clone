@@ -22,6 +22,15 @@ Queued execution applies the final map and tier before callbacks, then repeats f
 
 ## Limits and validation
 
+PERF-10 separates the unchanged preparation notification from actual collision
+dirtiness; see [owner-specific invalidation and measurements](smash-invalidation-performance.md).
+`changed` and callbacks remain notifications, `requiresRebuild` retains the
+browser's existing solver-restart mapping, and `geometryChanged`/`geometryRevision`
+now reflect real collision representation changes. The installed output write
+also includes decals and is consumed by dispatcher event piping; that write
+alone does not establish an exact native solver-restart rule. Existing decal
+solver behavior is preserved by this optimization.
+
 Browser patch ownership remains per mesh, source triangle pair and UV bounds. Native decal reuse instead searches the authored linked list and compares four generated corner XYZ positions with strict tolerance `0.01` (`0x4f2793–0x4f281c`, double at `0x589fc8`); exact coincident cross-actor decal reuse is unimplemented. Existing face-edge reconstruction, texture transform randomization and effect class support are not expanded by this integration. Final collision modes continue to be written at tier commit. Missing local pixelmaps reject preparation without consuming random draws, an explicit browser loading safeguard.
 
 `tests/world-smash-queue.test.mjs` covers mixed car/world capacity, upgrade and duplicate cap behavior, preparation before random/effect execution, first vector/matrix snapshots, per-record live clocks, final-payload repetition, live count/tier/model gates, model replacement, decal activation eligibility and direct nochange dispatch. Existing `world-destruction.test.mjs` passes, including original-installation geometry/UV tests when installed assets are available.

@@ -75,6 +75,10 @@ export interface Surface {
   constant?: number;
 }
 export interface WorldSyncDiagnostics {
+  staticRebuilds?: number;
+  staticOwnerRebuilds?: number;
+  staticTriangleBuilds?: number;
+  staticOrderRebuilds?: number;
   dynamicChecks: number;
   dynamicUnchanged: number;
   dynamicChanged: number;
@@ -105,6 +109,13 @@ interface NativeSyncState {
   parentMatrix: THREE.Matrix4;
   force: boolean;
 }
+interface StaticColliderState {
+  surfaces: Surface[];
+  cells: Set<string>;
+  indexed: number;
+  order: number;
+  parents: THREE.Object3D[];
+}
 /** A fixed broad phase over transformed original triangles. Geometry stays in C2 world units. */
 export class WorldCollision {
   /** Cumulative, opt-in bounded work counters; no capture retained in gameplay. */
@@ -116,6 +127,11 @@ export class WorldCollision {
     readonly number[]
   >();
   private cells = new Map<string, Surface[]>();
+  private staticOwners = new Map<THREE.Mesh, StaticColliderState>();
+  private staticMembership = new Map<THREE.Object3D, Set<THREE.Mesh>>();
+  private staticChildren = new Map<THREE.Object3D, readonly THREE.Object3D[]>();
+  private nativeActorsByMesh = new Map<THREE.Mesh, NativeOrderedActor[]>();
+  private nativeMeshesByActor = new WeakMap<NativeOrderedActor, THREE.Mesh>();
   private cellSize = 4;
   triangles = 0;
   private readonly sourceMeshes: readonly THREE.Mesh[] | undefined;
@@ -137,6 +153,10 @@ export class WorldCollision {
     readonly sourceSnapshot?: WorldSourceSnapshot,
     readonly nativeScene?: NativeWorldScene,
   ) {
+    if (nativeScene?.meshes)
+      for (const [actor, mesh] of nativeScene.meshes) {
+        this.rememberNativeMesh(actor, mesh);
+      }
     if (sourceSnapshot) {
       for (const triangle of sourceSnapshot.triangles) {
         let meshFaces = this.sourceTriangles.get(triangle.mesh);
@@ -184,7 +204,13 @@ export class WorldCollision {
     this.rebuildStatic();
   }
   rebuildStatic() {
+    if (this.syncDiagnostics)
+      this.syncDiagnostics.staticRebuilds =
+        (this.syncDiagnostics.staticRebuilds ?? 0) + 1;
     this.cells.clear();
+    this.staticOwners.clear();
+    this.staticMembership.clear();
+    this.staticChildren.clear();
     this.triangles = 0;
     this.syncNativeGeometry();
     // Render batches discard ACT hierarchy and reorder material groups. Keep
@@ -204,7 +230,163 @@ export class WorldCollision {
           this.makeSurfaces(mesh, undefined, true),
         )
       : this.makeSurfaces(this.sourceRoot);
-    for (const surface of surfaces) this.indexSurface(surface);
+    const meshes: THREE.Mesh[] = [];
+    if (this.sourceMeshes) meshes.push(...this.sourceMeshes, ...additional);
+    else
+      this.sourceRoot.traverse((object) => {
+        if (object instanceof THREE.Mesh) meshes.push(object);
+      });
+    for (const [order, mesh] of meshes.entries())
+      this.staticOwners.set(mesh, {
+        order,
+        surfaces: [],
+        cells: new Set(),
+        indexed: 0,
+        parents: [],
+      });
+    for (const surface of surfaces) {
+      const entry = this.staticOwners.get(surface.actor!)!;
+      entry.surfaces.push(surface);
+      this.indexSurface(surface, entry);
+    }
+    for (const [mesh, entry] of this.staticOwners)
+      this.rememberStaticOwner(mesh, entry);
+  }
+  private rememberStaticOwner(mesh: THREE.Mesh, entry: StaticColliderState) {
+    for (const parent of entry.parents) {
+      const members = this.staticMembership.get(parent);
+      members?.delete(mesh);
+      if (!members?.size) this.staticMembership.delete(parent);
+    }
+    entry.parents = [];
+    for (let node: THREE.Object3D | null = mesh; node; node = node.parent) {
+      entry.parents.push(node);
+      let members = this.staticMembership.get(node);
+      if (!members) this.staticMembership.set(node, (members = new Set()));
+      members.add(mesh);
+      this.staticChildren.set(node, [...node.children]);
+    }
+  }
+  private rememberNativeMesh(actor: NativeOrderedActor, mesh: THREE.Mesh) {
+    const old = this.nativeMeshesByActor.get(actor);
+    if (old === mesh) return;
+    if (old) {
+      const remaining = this.nativeActorsByMesh
+        .get(old)!
+        .filter((a) => a !== actor);
+      if (remaining.length) this.nativeActorsByMesh.set(old, remaining);
+      else this.nativeActorsByMesh.delete(old);
+    }
+    const actors = this.nativeActorsByMesh.get(mesh);
+    if (actors) actors.push(actor);
+    else this.nativeActorsByMesh.set(mesh, [actor]);
+    this.nativeMeshesByActor.set(actor, mesh);
+  }
+  /** Explicit mutation outlet. Retain unrelated triangle snapshots, native
+   * MODEL resources and dynamic owners; native face-ring policy stays separate. */
+  invalidateActors(actors: readonly THREE.Object3D[]): void {
+    if (!actors.length) return;
+    const affected = new Set<THREE.Mesh>();
+    const dynamic = new Set<RigidBody>();
+    let orderChanged = false;
+    for (const actor of actors) {
+      for (const mesh of this.staticMembership.get(actor) ?? [])
+        affected.add(mesh);
+      actor.traverse((node) => {
+        const children = this.staticChildren.get(node);
+        if (
+          !children ||
+          children.length !== node.children.length ||
+          node.children.some((child, i) => child !== children[i])
+        )
+          orderChanged = true;
+        if (node instanceof THREE.Mesh && !node.userData.worldRenderBatch)
+          affected.add(node);
+        const body = this.dynamicOwners.get(node);
+        if (body) dynamic.add(body);
+      });
+      for (let node: THREE.Object3D | null = actor; node; node = node.parent) {
+        const body = this.dynamicOwners.get(node);
+        if (body) dynamic.add(body);
+      }
+    }
+    for (const mesh of affected) {
+      const entry = this.staticOwners.get(mesh);
+      if (!entry) {
+        orderChanged = true;
+        this.staticOwners.set(mesh, {
+          order: this.staticOwners.size,
+          surfaces: [],
+          cells: new Set(),
+          indexed: 0,
+          parents: [],
+        });
+      } else {
+        for (const parent of entry.parents) {
+          const body = this.dynamicOwners.get(parent);
+          if (body) dynamic.add(body);
+        }
+        let node: THREE.Object3D | null = mesh;
+        for (const parent of entry.parents) {
+          if (node !== parent) orderChanged = true;
+          node = node?.parent ?? null;
+        }
+        if (node) orderChanged = true;
+      }
+    }
+    // New/relinked browser subtrees require the canonical mesh order. Ordinary
+    // tile/material rewrites do not traverse the rest of the scene.
+    if (orderChanged) {
+      const meshes = this.sourceMeshes ? [...this.sourceMeshes] : [];
+      this.sourceRoot.traverse((node) => {
+        if (
+          node instanceof THREE.Mesh &&
+          (!this.sourceMeshes ||
+            (!node.userData.worldRenderBatch &&
+              !this.sourceTriangles.has(node)))
+        )
+          meshes.push(node);
+      });
+      for (const [order, mesh] of meshes.entries()) {
+        const entry = this.staticOwners.get(mesh);
+        if (entry) entry.order = order;
+      }
+      if (this.syncDiagnostics)
+        this.syncDiagnostics.staticOrderRebuilds =
+          (this.syncDiagnostics.staticOrderRebuilds ?? 0) + 1;
+    }
+    for (const mesh of affected) {
+      const entry = this.staticOwners.get(mesh)!;
+      for (const key of entry.cells) {
+        const cell = this.cells.get(key);
+        if (!cell) continue;
+        const remaining = cell.filter((s) => s.actor !== mesh);
+        if (remaining.length) this.cells.set(key, remaining);
+        else this.cells.delete(key);
+      }
+      this.triangles -= entry.indexed;
+      entry.cells.clear();
+      entry.indexed = 0;
+      let retained = this.sourceTriangles.has(mesh);
+      for (let node: THREE.Object3D | null = mesh; node; node = node.parent)
+        if (node === this.sourceRoot) retained = true;
+      entry.surfaces = retained
+        ? this.makeSurfaces(mesh, undefined, !!this.sourceMeshes, false, true)
+        : [];
+      for (const actor of this.nativeActorsByMesh.get(mesh) ?? [])
+        this.syncNativeGeometry(actor, true);
+      for (const surface of entry.surfaces)
+        this.indexSurface(surface, entry, true);
+      this.rememberStaticOwner(mesh, entry);
+      if (this.syncDiagnostics) {
+        this.syncDiagnostics.staticOwnerRebuilds =
+          (this.syncDiagnostics.staticOwnerRebuilds ?? 0) + 1;
+        this.syncDiagnostics.staticTriangleBuilds =
+          (this.syncDiagnostics.staticTriangleBuilds ?? 0) +
+          entry.surfaces.length;
+      }
+    }
+    for (const body of dynamic) this.invalidateDynamic(body);
   }
   private dynamic = new Map<
     RigidBody,
@@ -220,7 +402,11 @@ export class WorldCollision {
       worldCollider: boolean;
     }
   >();
-  private indexSurface(s: Surface) {
+  private indexSurface(
+    s: Surface,
+    entry?: StaticColliderState,
+    ordered = false,
+  ) {
     const { a, b, c } = s;
     const minX = Math.floor(Math.min(a.x, b.x, c.x) / this.cellSize),
       maxX = Math.floor(Math.max(a.x, b.x, c.x) / this.cellSize);
@@ -232,15 +418,33 @@ export class WorldCollision {
         const key = `${x},${z}`;
         let cell = this.cells.get(key);
         if (!cell) this.cells.set(key, (cell = []));
-        cell.push(s);
+        if (ordered && entry) {
+          let lo = 0,
+            hi = cell.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >>> 1,
+              other = cell[mid],
+              order = this.staticOwners.get(other.actor!)!.order;
+            if (
+              order < entry.order ||
+              (order === entry.order && other.faceIndex! <= s.faceIndex!)
+            )
+              lo = mid + 1;
+            else hi = mid;
+          }
+          cell.splice(lo, 0, s);
+        } else cell.push(s);
+        entry?.cells.add(key);
       }
     this.triangles++;
+    if (entry) entry.indexed++;
   }
   private makeSurfaces(
     group: THREE.Object3D,
     owner?: RigidBody,
     singleMesh = false,
     alreadyCurrent = false,
+    onlyMesh = singleMesh,
   ): Surface[] {
     const surfaces: Surface[] = [];
     if (!alreadyCurrent) group.updateWorldMatrix(true, true);
@@ -330,7 +534,7 @@ export class WorldCollision {
         surfaces.push(s);
       }
     };
-    if (singleMesh) visit(group);
+    if (onlyMesh) visit(group);
     else group.traverse(visit);
     return surfaces;
   }
@@ -649,7 +853,10 @@ export class WorldCollision {
   >();
   /** Geometry mutation outlets already own current topology and source IDs. Rebuild
    * their MODEL tables before collector use, with actual retained MAT bindings. */
-  private syncNativeGeometry(selected?: NativeOrderedActor): void {
+  private syncNativeGeometry(
+    selected?: NativeOrderedActor,
+    deepMetadata = !selected,
+  ): void {
     const scene = this.nativeScene;
     if (!scene?.meshes) return;
     const selectedMesh = selected ? scene.meshes.get(selected) : undefined;
@@ -660,11 +867,12 @@ export class WorldCollision {
           : []
         : scene.meshes;
     for (const [actor, mesh] of entries) {
+      this.rememberNativeMesh(actor, mesh);
       if (this.syncDiagnostics) this.syncDiagnostics.nativeGeometryChecks++;
       const geo = mesh.geometry,
         position = geo.getAttribute("position"),
         old = this.nativeGeometryRevisions.get(actor);
-      if (!position || (old && sameColliderMesh(mesh, old, !selected)))
+      if (!position || (old && sameColliderMesh(mesh, old, deepMetadata)))
         continue;
       if (!actor.localModel.resolved || !actor.localModel.value) continue;
       if (this.syncDiagnostics) this.syncDiagnostics.nativeGeometryWrites++;

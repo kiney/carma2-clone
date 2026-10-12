@@ -45,6 +45,10 @@ and attachment constraints remain guarded; the native impulse/damage formulas
 are unchanged. Terrain support traps and other crushed-hull issues remain
 separately tracked.
 
+[Smash invalidation](docs/smash-invalidation-performance.md) now distinguishes
+native notifications from real collision changes. Reused unchanged tiles avoid
+world rebuilds; actual changes regenerate only affected collision owners.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:

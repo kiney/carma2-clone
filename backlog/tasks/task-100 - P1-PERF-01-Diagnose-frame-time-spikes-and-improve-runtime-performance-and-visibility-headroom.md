@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-12 13:06'
+updated_date: '2026-10-12 19:18'
 labels:
   - priority-1
   - PERF-01
@@ -60,4 +60,6 @@ Independent original-material reproduction: second/third below-threshold TEZFEN 
 PERF-06 and PERF-07 are implemented and verified, now done. See docs/body-pair-performance.md for indexed pair discovery, phase-local geometry sharing, exact crash comparisons and bounded hardware Chromium evidence. Remaining frame spikes are documented, including adverse samples; PERF-08 through PERF-12 remain next in their existing order. No universal FPS improvement or completion of the parent performance investigation is claimed.
 
 PERF-08 completed: native MODEL bounds/radius retention and mutation ownership validated; see docs/model-bounds-performance.md. Warm hardware original-track queries perform zero raw-vertex scans with unchanged faces/callbacks. Actor synchronization and further structural costs remain PERF-09 onward. An independent whole-smash Carrier actor-name assertion reproduces on unchanged c89adfa and is recorded in WLD-05; no broad FPS or full-world compatibility completion is claimed.
+
+2026-10-12 PERF-10 / TASK-100.5 completed: actual owner invalidation is separate from native notification/restart. Original Stock/Advanced TEZFEN reuse rebuilds zero triangles, and first preparation regenerates one155-triangle mesh/two native MODELs instead of full static/dynamic world. 2657 tests, build, identical15 original crash reports and serial Chromium smash/debris/crash/render checks pass. Short frozen CPU comparisons retain all samples and do not claim hardware FPS or repair the earlier zero-rebuild canyon capture. See docs/smash-invalidation-performance.md. PERF-11 and PERF-12 remain next; PERF-01 stays wip.
 <!-- SECTION:NOTES:END -->

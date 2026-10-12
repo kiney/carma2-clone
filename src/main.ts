@@ -2091,7 +2091,6 @@ function dispatchFollowupSmash(
   const source = context.face.source as
     | { actor: THREE.Object3D; faceIndex: number; material: string }
     | undefined;
-  const revision = destruction.geometryRevision;
   const bodyActor = context.sourcePhysics.actor as THREE.Object3D;
   destruction.handleFollowup(
     {
@@ -2114,12 +2113,7 @@ function dispatchFollowupSmash(
     context.targetSpec,
     context.route === "numbered",
   );
-  if (revision !== destruction.geometryRevision) {
-    activeSimulation.world.rebuildStatic();
-    activeSimulation.world.invalidateDynamic();
-    activeSimulation.invalidateWorldFaceCache();
-    activeSimulation.onWorldGeometryChanged?.();
-  }
+  activeSimulation.synchronizeWorldDestruction();
 }
 
 function bindWamEffects(

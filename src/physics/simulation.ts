@@ -1904,7 +1904,7 @@ export class VehicleSimulation {
         }
         const surface = selected?.hit?.surface;
         if (!surface?.actor) return;
-        const result = this.destruction.handleContact({
+        this.destruction.handleContact({
           actor: surface.actor,
           faceIndex: surface.faceIndex,
           material: surface.material,
@@ -1920,12 +1920,6 @@ export class VehicleSimulation {
           timeMs: this.smashClock(),
         });
         this.flushSmashEffectsBarrier();
-        if (result.changes.some((change) => change.requiresRebuild)) {
-          this.world.rebuildStatic();
-          this.invalidateWorldFaceCache();
-          this.world.invalidateDynamic();
-          this.onWorldGeometryChanged?.();
-        }
       },
       springReaction: (
         hit: import("./motion").MotionGroundHit,
@@ -2800,7 +2794,6 @@ export class VehicleSimulation {
   }
   /** Native argument-one barriers retain configured queue ownership. */
   private flushSmashEffectsBarrier(mode: 0 | 1 = 1): number {
-    const revision = this.destruction?.geometryRevision;
     const count = flushWamSmashQueue(
       this.smashQueue,
       this.smashClock,
@@ -2811,13 +2804,24 @@ export class VehicleSimulation {
             )
         : undefined,
     );
-    if (revision !== this.destruction?.geometryRevision) {
-      this.world.rebuildStatic();
-      this.invalidateWorldFaceCache();
-      this.world.invalidateDynamic();
-      this.onWorldGeometryChanged?.();
-    }
+    this.synchronizeWorldDestruction();
     return count;
+  }
+  /** Native notification/restart is independent of physical dirtiness. Keep
+   * finite-ring invalidation on genuine changes at the established barriers;
+   * narrow its geometry work without inventing spatial ring/callback policy. */
+  synchronizeWorldDestruction(): boolean {
+    const actors = this.destruction?.drainCollisionChanges?.() ?? [];
+    if (!actors.length) return false;
+    if (this.world.invalidateActors) this.world.invalidateActors(actors);
+    else {
+      // Legacy standalone adapters without explicit owner invalidation.
+      this.world.rebuildStatic();
+      this.world.invalidateDynamic();
+    }
+    this.invalidateWorldFaceCache();
+    this.onWorldGeometryChanged?.();
+    return true;
   }
   /** Installed4360c0 consumes retained car-local events after outer physics,
    * then commits candidate hulls. Explicit single-step diagnostic calls keep
@@ -3876,17 +3880,14 @@ export class VehicleSimulation {
           impacteeTransform: bodyActor?.matrixWorld,
         });
         if (!result.changed) continue;
-        const rebuild = result.changes.some((change) => change.requiresRebuild);
-        if (rebuild) {
-          this.world.rebuildStatic();
-          this.invalidateWorldFaceCache();
-          this.world.invalidateDynamic();
-          this.onWorldGeometryChanged?.();
-        }
+        const restartRequested = result.changes.some(
+          (change) => change.requiresRebuild,
+        );
+        this.synchronizeWorldDestruction();
         const capped =
           result.threshold !== undefined &&
           result.threshold < impact.normalImpulse;
-        if (!rebuild && !capped) continue;
+        if (!restartRequested && !capped) continue;
         // Installed41c1d0 returns BEFORE crush/split on a smash cap. Native
         // 4ba2f0 sums up to20 positive rows from its first threshold onward;
         // old type9 rows carry this cap but do not apply stale velocities.

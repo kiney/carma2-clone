@@ -10,8 +10,9 @@ selected authored columns and the additional-actor container, before callbacks.
 Exact physical transforms, ordered faces and callback snapshots are preserved.
 This removes synchronization work without changing simulation clocks, contact
 limits, activation distances or correction passes. It does not promise stable
-FPS throughout Timber; restart invalidation and broader face discovery remain
-PERF-10 and PERF-11.
+FPS throughout Timber; broader face discovery remains PERF-11.
+PERF-10's [owner-specific smash invalidation](smash-invalidation-performance.md)
+now separates native notifications from real collision changes.
 
 ## Validity and ownership
 
@@ -38,7 +39,8 @@ RAW metadata edits require the existing explicit invalidation outlets or
 `geometry.userData.c2CollisionRevision`; they are not detected by scanning every
 triangle on every query. `rebuildStatic()` also checks retained face metadata.
 Current smash/replacement paths replace geometry/metadata and notify the world;
-their broad rebuild policy is deliberately unchanged for PERF-10.
+their broad rebuild policy was left for PERF-10, which now updates only notified
+collision owners as described in the separate invalidation note.
 
 Custom Three matrix-update methods use a conservative native hierarchy update.
 They are classified without invoking them and remain uncached. Dynamic generation
