@@ -53,6 +53,49 @@ export interface NativeTrackModelResource {
   revision: number;
   prepared: NativePreparedTrackModel | null;
 }
+export interface NativeModelBoundsDiagnostics {
+  requests: number;
+  cacheHits: number;
+  computations: number;
+  verticesVisited: number;
+  unmanagedRequests: number;
+}
+export interface NativeModelBoundsOptions {
+  diagnostics?: NativeModelBoundsDiagnostics;
+  /** Opt-in diagnostics can compare the identical uncached calculation. */
+  cache?: boolean;
+}
+type RawBoundsResult = NativeActorValue<{
+  bounds: NativeActorBounds;
+  radius: number;
+}>;
+interface RetainedRawBounds {
+  revision: number;
+  model: CurrentModel;
+  identity: object;
+  vertices: CurrentModel["vertices"];
+  count: number;
+  flags: number;
+  result: RawBoundsResult;
+}
+const managedBoundsOwners = new WeakSet<NativeTrackModelResource>();
+const retainedRawBounds = new WeakMap<
+  NativeTrackModelResource,
+  RetainedRawBounds
+>();
+const boundsMutationDepth = new WeakMap<NativeTrackModelResource, number>();
+
+/** Admit an engine-owned resource with the existing revision mutation contract.
+ * In-place RAW XYZ, slot or table-order edits must invalidate first. Unknown
+ * external structural resources remain live/uncached unless explicitly admitted.
+ * Registration never inherits another owner's cached bounds. */
+export function manageNativeTrackBounds(
+  resource: NativeTrackModelResource,
+): void {
+  managedBoundsOwners.add(resource);
+  retainedRawBounds.delete(resource);
+}
+
 export type NativeTrackResourceResult<T> =
   | { resolved: true; value: T }
   | { resolved: false; requiredProviders: readonly string[] };
@@ -173,6 +216,7 @@ export function createNativeTrackModelResource(
     })),
     faces,
   };
+  manageNativeTrackBounds(resource);
   return { resolved: true, value: resource };
 }
 
@@ -201,7 +245,7 @@ export function mungeNativeTrackResourceEdges(
   });
 }
 
-/** Every host mutation of current tables must invalidate the cached preparation. */
+/** Every host mutation of current tables must invalidate preparation and bounds. */
 export function invalidateNativeTrackResource(
   resource: NativeTrackModelResource,
 ): void {
@@ -213,6 +257,7 @@ export function invalidateNativeTrackResource(
     throw new Error("Native track MODEL revision overflow");
   resource.revision++;
   resource.prepared = null;
+  retainedRawBounds.delete(resource);
 }
 
 /** Installed BrModelUpdate51effe..51f0de consumes ALL raw vertices, before
@@ -220,11 +265,62 @@ export function invalidateNativeTrackResource(
  * Empty MODEL allocation fields cannot be recovered as invented geometric bounds. */
 export function nativeTrackRawBounds(
   resource: NativeTrackModelResource,
-): NativeActorValue<{ bounds: NativeActorBounds; radius: number }> {
-  return nativeRawModelBounds(
-    resource.current.flags,
-    resource.current.vertices.map((vertex) => vertex.position),
-  );
+  options?: NativeModelBoundsOptions,
+): RawBoundsResult {
+  const diagnostics = options?.diagnostics;
+  if (diagnostics) diagnostics.requests++;
+  const model = resource.current,
+    vertices = model.vertices;
+  const managed = managedBoundsOwners.has(resource);
+  if (diagnostics && !managed) diagnostics.unmanagedRequests++;
+  const cacheable =
+    managed &&
+    options?.cache !== false &&
+    !boundsMutationDepth.has(resource) &&
+    Number.isSafeInteger(resource.revision) &&
+    resource.revision >= 0;
+  const cached = cacheable ? retainedRawBounds.get(resource) : undefined;
+  if (
+    cached &&
+    cached.revision === resource.revision &&
+    cached.model === model &&
+    cached.identity === model.identity &&
+    cached.vertices === vertices &&
+    cached.count === vertices.length &&
+    cached.flags === model.flags
+  ) {
+    if (diagnostics) diagnostics.cacheHits++;
+    return cached.result;
+  }
+  if (diagnostics) diagnostics.computations++;
+  // Lazy iteration preserves custom-owner/empty diagnostics without mapping or
+  // touching RAW records first. The original Float32 arithmetic is unchanged.
+  function* positions() {
+    for (const vertex of vertices) {
+      if (diagnostics) diagnostics.verticesVisited++;
+      yield vertex.position;
+    }
+  }
+  const result = nativeRawModelBounds(model.flags, positions());
+  if (cacheable) {
+    if (result.resolved && result.value) {
+      Object.freeze(result.value.bounds.min);
+      Object.freeze(result.value.bounds.max);
+      Object.freeze(result.value.bounds);
+      Object.freeze(result.value);
+    }
+    Object.freeze(result);
+    retainedRawBounds.set(resource, {
+      revision: resource.revision,
+      model,
+      identity: model.identity,
+      vertices,
+      count: vertices.length,
+      flags: model.flags,
+      result,
+    });
+  }
+  return result;
 }
 
 /** Ordinary BRender MODEL bounds depend only on the current flags/RAW vertices.
@@ -290,35 +386,50 @@ export function migrateNativeTrackResource(
   specs: readonly NativeTrackSmashSpec<MatMaterial>[],
   providers: NativeTrackMigrationProviders<MatMaterial, null, DatFace>,
 ): NativeTrackResourceMigration {
-  // Callbacks may mutate live material/spec state or fail after partial effects.
-  // Invalidate before invoking them; failed preparation must never stay usable.
-  invalidateNativeTrackResource(resource);
-  const migration = migrateNativeTrackModel(resource.current, specs, providers);
-  resource.current = {
-    ...resource.current,
-    ...migration.remaining,
-    actorRenderStyle: migration.remainingActorRenderStyle,
-  };
-  let generated: NativeTrackModelResource | null = null;
-  if (migration.generated) {
-    const model = migration.generated.model;
-    generated = {
-      source: null,
-      revision: 0,
-      prepared: null,
-    } as NativeTrackModelResource;
-    generated.current = {
-      ...model,
-      identity: generated,
-      actorRenderStyle: migration.generated.actor.renderStyle,
+  const depth = boundsMutationDepth.get(resource) ?? 0;
+  boundsMutationDepth.set(resource, depth + 1);
+  try {
+    // Callbacks may mutate live material/spec state or fail after partial effects.
+    // Invalidate before invoking them; failed preparation must never stay usable.
+    invalidateNativeTrackResource(resource);
+    const migration = migrateNativeTrackModel(
+      resource.current,
+      specs,
+      providers,
+    );
+    resource.current = {
+      ...resource.current,
+      ...migration.remaining,
+      actorRenderStyle: migration.remainingActorRenderStyle,
     };
+    let generated: NativeTrackModelResource | null = null;
+    if (migration.generated) {
+      const model = migration.generated.model;
+      generated = {
+        source: null,
+        revision: 0,
+        prepared: null,
+      } as NativeTrackModelResource;
+      generated.current = {
+        ...model,
+        identity: generated,
+        actorRenderStyle: migration.generated.actor.renderStyle,
+      };
+      manageNativeTrackBounds(generated);
+    }
+    return {
+      generated,
+      remainingActorModelPresent: migration.remainingActorModelPresent,
+      remainingActorRenderStyle: migration.remainingActorRenderStyle,
+      actions: migration.actions,
+    };
+  } finally {
+    // A callback can query, then mutate the same RAW table before the next
+    // callback. No cached observations may escape success or partial failure.
+    retainedRawBounds.delete(resource);
+    if (depth) boundsMutationDepth.set(resource, depth);
+    else boundsMutationDepth.delete(resource);
   }
-  return {
-    generated,
-    remainingActorModelPresent: migration.remainingActorModelPresent,
-    remainingActorRenderStyle: migration.remainingActorRenderStyle,
-    actions: migration.actions,
-  };
 }
 
 /** NULL is less than every real pointer; with at most one non-NULL identity that

@@ -18,6 +18,8 @@ import {
 } from "./native-world-scene";
 import {
   invalidateNativeTrackResource,
+  manageNativeTrackBounds,
+  type NativeModelBoundsOptions,
   prepareNativeTrackResource,
   type NativeTrackModelResource,
 } from "./native-track-resources";
@@ -383,6 +385,7 @@ export class WorldCollision {
           : { resolved: false, requiredProvider: "native-world-current-MODEL" };
       },
       { writePlingFace: () => {} },
+      this.nativeModelBoundsOptions,
     );
     const surfaces: Surface[] = [];
     const result = findNativeFacesInBox({
@@ -436,6 +439,8 @@ export class WorldCollision {
   }
   /** Renderer retention can attach an ACT to a different Three parent. Keep
    * its native local transform relative to the original mutable ACT links. */
+  /** Optional bounded diagnostics; absent in normal gameplay. */
+  nativeModelBoundsOptions?: NativeModelBoundsOptions;
   private nativeGeometryRevisions = new Map<
     NativeOrderedActor,
     { geometry: THREE.BufferGeometry; version: number }
@@ -607,6 +612,7 @@ export class WorldCollision {
         current: { ...resource.current, vertices, faces: nativeFaces },
       };
       current.current.identity = current;
+      manageNativeTrackBounds(current);
       invalidateNativeTrackResource(current);
       const prepared = prepareNativeTrackResource(
         current,

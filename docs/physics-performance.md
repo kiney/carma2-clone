@@ -128,3 +128,7 @@ ownership redesign has been established. Web Workers remain a last resort.
 ## Spatial pair discovery and phase-local geometry
 
 PERF-06 and PERF-07 additionally index resting/moving body bounds and share immutable hull snapshots within commit/projection guards. See [implementation, exact comparisons and hardware measurements](body-pair-performance.md). Correction-pass reuse and world synchronization remain separate scopes.
+
+## Retained native MODEL bounds
+
+PERF-08 caches exact raw bounds/radius for revision-managed MODEL resources while retaining live generic providers and callback semantics. See [ownership, mutation validity and collection measurements](model-bounds-performance.md). Actor synchronization remains PERF-09.

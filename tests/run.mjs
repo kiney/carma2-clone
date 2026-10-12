@@ -311,3 +311,6 @@ import "./ai-native-fallen.test.mjs";
 
 import "./body-broadphase.test.mjs";
 import "./pair-working-set.test.mjs";
+
+import "./native-model-bounds-cache.test.mjs";
+import "./native-model-bounds-collection.test.mjs";

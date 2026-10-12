@@ -22,7 +22,10 @@ import type {
   NativeModelPickFace,
   NativeModelPickOptions,
 } from "./native-model-pick";
-import { nativeTrackRawBounds } from "./native-track-resources";
+import {
+  nativeTrackRawBounds,
+  type NativeModelBoundsOptions,
+} from "./native-track-resources";
 import type { NativeTrackModelResource } from "./native-track-resources";
 
 export interface NativeFindFacesLayout {
@@ -187,6 +190,7 @@ export function createNativeFindFacesProviders(
     identity: object,
   ) => NativeActorValue<NativeTrackModelResource>,
   options: NativeModelPickOptions = {},
+  boundsOptions?: NativeModelBoundsOptions,
 ): NativeActorPickProviders<NativeModelPickFace> {
   return {
     modelBounds(identity) {
@@ -199,7 +203,7 @@ export function createNativeFindFacesProviders(
           resolved: false,
           requiredProvider: "native-find-faces-model-resource",
         };
-      const result = nativeTrackRawBounds(binding.value);
+      const result = nativeTrackRawBounds(binding.value, boundsOptions);
       return result.resolved
         ? knownNativeActorValue(result.value?.bounds ?? null)
         : result;

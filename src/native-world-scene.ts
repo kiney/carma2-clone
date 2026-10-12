@@ -21,6 +21,7 @@ import {
 } from "./native-track-actor-load";
 import {
   createNativeTrackModelResource,
+  manageNativeTrackBounds,
   invalidateNativeTrackResource,
   migrateNativeTrackResource,
   mungeNativeTrackResourceEdges,
@@ -302,6 +303,7 @@ export function prepareNativeWorldScene(
               },
             };
             duplicate.current.identity = duplicate;
+            manageNativeTrackBounds(duplicate);
             for (const face of duplicate.current.faces)
               if (face.material)
                 options.retainChangingPowerupMaterial?.(face.material);
