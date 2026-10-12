@@ -65,7 +65,7 @@ choices remain open. The user then separated upcoming work as follows:
 | TASK-103 | PERF-04 | 2 | `next` | Higher visual visibility, dependent on TASK-101 |
 | TASK-102 | PERF-03 | 4 | `backlog` | High-resolution rendering policy; deferred, measured gain was small |
 
-The board now has 104 tasks: 64 `backlog`, 1 `next`, 1 `wip` and 38 `done`.
+The board now has 111 tasks: 64 `backlog`, 8 `next`, 1 `wip` and 38 `done`.
 Only the profiling investigation remains active; queued tickets do not consume
 WIP slots. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
 memory and FPS-diagnostic scopes and user-edited priorities.
@@ -74,6 +74,33 @@ PERF-05 / TASK-104 owns physics implementation separately from PERF-01's analysi
 Prioritize code and algorithm improvements while preserving collision decisions,
 native timing and anti-tunneling/interlock safeguards. Consider a separately scoped
 worker redesign only as a last resort if measurements after optimization justify it.
+
+## Timber structural performance queue
+
+The [Timber investigation](../docs/timber-performance-findings.md) produced seven
+implementation subtasks of TASK-100, selected by the user at priority 1 and placed
+in `next`. They precede P2 visibility work. Stored ordinals define the proposed
+implementation order; dependencies record technical prerequisites separately.
+Creating this queue does not start implementation or occupy additional WIP slots.
+
+| Order | Backlog ID | Issue   | Priority / status | Scope                                                              |
+| ----- | ---------- | ------- | ----------------- | ------------------------------------------------------------------ |
+| 1     | TASK-100.1 | PERF-06 | P1 / `next`       | Spatial body-pair discovery and tighter constant-prop bounds       |
+| 2     | TASK-100.2 | PERF-07 | P1 / `next`       | Shared immutable body geometry snapshots across pairs              |
+| 3     | TASK-100.3 | PERF-08 | P1 / `next`       | Retained native MODEL bounds with mutation validity                |
+| 4     | TASK-100.4 | PERF-09 | P1 / `next`       | Synchronization of changed world actors/geometry only              |
+| 5     | TASK-100.5 | PERF-10 | P1 / `next`       | Native smash restart versus actual owner-specific invalidation     |
+| 6     | TASK-100.6 | PERF-11 | P1 / `next`       | Conservative local world-face discovery for physics/camera queries |
+| 7     | TASK-100.7 | PERF-12 | P1 / `next`       | Reuse of unchanged collision work between correction passes        |
+
+Native MODEL bounds are separated from broader synchronization so their narrower
+cache validity can be reviewed independently. Correction-pass reuse follows the
+ownership/index work because its validity depends on impulses, activation,
+geometry and attachment changes. Every task requires meaningful conformance and
+short Chromium validation; skipping safeguards or changing iteration/native
+timing limits does not qualify as optimization. PERF-01 retains exact canyon/
+tunnel attribution and profiling coordination; PERF-03/04 and existing QA scopes
+keep their user-assigned priorities.
 
 ## Priorities and sorting
 

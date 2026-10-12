@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-12 02:07'
+updated_date: '2026-10-12 07:37'
 labels:
   - priority-1
   - PERF-01
@@ -54,4 +54,6 @@ User prioritization split on 2026-10-11: TASK-101 owns scene-hierarchy optimizat
 Verified structural opportunities: all-pairs body discovery scans 114,960 combinations at 480 bodies; first heavy ticks have 466 immovable props, making 94.2% of opportunities immovable/immovable. GuardBodyTrajectories repeats discovery and pair-local geometry transforms, using conservative radius bounds even for constant prop paths. Sampled heavy tick costs: body guard 545 ms inclusive, nested pair guard 374 ms, collectBodyContacts 306 ms, mask predicate 144 ms self, SAT 98 ms, contact-group solver 28 ms; inclusive rows overlap. Main direction is retained spatial discovery and immutable per-body geometry snapshots, preserving pair/contact order, attachments, wake-up, crush and native timing. Normal refreshDynamic also visits all 466 props several times per tick/frame. Small world queries admit 203 versus 4 tighter-XZ candidates at node 4 and 104 versus 4 at quarry node 178; conservative face indexing is another candidate, not an implemented filter.
 
 Independent original-material reproduction: second/third below-threshold TEZFEN contacts leave geometry identity/version and damage tier unchanged, yet trigger global geometry revisions and rebuild/invalidate-all work costing 15.8/24.0 ms. Preserve the binary-verified native restart output while separating actual geometry dirtiness and owner-specific invalidation. Zero world rebuilds in the slow capture rule out this defect as its cause. Long-session private MODEL retention and hardware GPU/4K canyon cost remain candidates. Full evidence, limitations and proposed sequencing: docs/timber-performance-findings.md. PERF-01 stays wip for exact canyon/tunnel attribution and coordination; no implementation ticket was started and no worker migration selected.
+
+2026-10-12 user selected the structural implementation decomposition: PERF-06 / TASK-100.1, PERF-07 / TASK-100.2, PERF-08 / TASK-100.3, PERF-09 / TASK-100.4, PERF-10 / TASK-100.5, PERF-11 / TASK-100.6, PERF-12 / TASK-100.7. All seven are parented to TASK-100, P1/high with priority-1 labels, in next, ordered by ordinals 1110 through 1170. The queue is body-pair discovery, shared body geometry, retained native MODEL bounds, selective world synchronization, actual geometry invalidation distinct from native restart, local world-face discovery, then cross-correction-pass reuse. Technical dependencies are recorded separately; early independent work is not artificially blocked. Implementation has not started and WIP stays at one profiling ticket. Exact canyon/tunnel attribution remains here; the child tasks own implementation and conformance, without reopening completed PERF-02/05 or changing other priorities. See backlog/README.md for the selected queue.
 <!-- SECTION:NOTES:END -->
