@@ -1,9 +1,10 @@
 ---
 id: TASK-100.2
 title: '[P1] PERF-07: Share immutable body geometry snapshots across collision pairs'
-status: next
+status: done
 assignee: []
 created_date: '2026-10-12 07:36'
+updated_date: '2026-10-12 12:25'
 labels:
   - priority-1
   - PERF-07
@@ -32,8 +33,14 @@ This is selected P1 implementation work extracted from PERF-01 / TASK-100 after 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Counters demonstrate fewer transforms and allocations for shared bodies/fractions and constant props, with bounded phase-local cache lifetime.
-- [ ] #2 Exact numerical oracle comparisons retain axis/contact ordering, signed-zero/NaN/tolerance behavior, depth allowances and safe fractions; mutation and custom-path cases cannot reuse stale data.
-- [ ] #3 Validate original Eagle3, Buggy and Bigdump plus detached/split parts, activation and repair using meaningful headless and Chromium regressions.
-- [ ] #4 Short serial heavy-state captures demonstrate reduced transform/guard cost; preserve all samples and record measured limitations.
+- [x] #1 Counters demonstrate fewer transforms and allocations for shared bodies/fractions and constant props, with bounded phase-local cache lifetime.
+- [x] #2 Exact numerical oracle comparisons retain axis/contact ordering, signed-zero/NaN/tolerance behavior, depth allowances and safe fractions; mutation and custom-path cases cannot reuse stale data.
+- [x] #3 Validate original Eagle3, Buggy and Bigdump plus detached/split parts, activation and repair using meaningful headless and Chromium regressions.
+- [x] #4 Short serial heavy-state captures demonstrate reduced transform/guard cost; preserve all samples and record measured limitations.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented per-invocation shared geometry snapshots keyed by body/path/fraction, with explicit stable/constant-pose certificates and private pair-specific penetration/escape history. No geometry survives solver corrections, crush, split, repair or projection phases. Prepared original Timber480 guard: 2,027 baseline transforms versus 1,879 optimized, 818 snapshot hits; shared-partner fixture reduces source cloning from 13,856 to 4,224. Exact oracle covers custom paths, in-place mutations/repair and Float32 sphere tolerance. 2,600 headless tests and build pass. Production Chromium validates Eagle/Buggy/Bigdump, Advanced Mach1, detached Eagle bumpers and Porker split/repair; hardware MCP captures and screenshots inspected. All timings and caveats are in docs/body-pair-performance.md; static preparation remains linear and cross-pass reuse stays PERF-12.
+<!-- SECTION:FINAL_SUMMARY:END -->

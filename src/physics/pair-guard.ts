@@ -1,6 +1,10 @@
 import { Box3, Quaternion, Vector3 } from "three";
 import type { RigidBody } from "./contact";
 import {
+  BodyBroadphase,
+  type BodyBroadphaseDiagnostics,
+} from "./body-broadphase";
+import {
   isNativeSphereBody,
   nativeBodyWorldBounds,
   nativeSpherePairRows,
@@ -14,6 +18,7 @@ import {
 } from "./geometry";
 
 export type HullBody = RigidBody & { hulls: CollisionHull[] };
+/** Pure filter: spatial discovery omits calls for non-contacting pairs. */
 export type BodyPairPredicate = (a: HullBody, b: HullBody) => boolean;
 export interface GuardPose {
   position: Vector3;
@@ -22,6 +27,11 @@ export interface GuardPose {
 export type PosePath = ((fraction: number) => GuardPose) & {
   /** Total travel bounds, needed when a path makes complete rotations. */
   angularTravel?: number;
+  /** Pure poses and immutable source geometry for this synchronous guard phase.
+   * Uncertified custom paths retain private samples and conservative bounds. */
+  stable?: boolean;
+  /** Captured constant pose; never infer stationarity from immovability alone. */
+  constantPose?: GuardPose;
 };
 const DEPTH_EPSILON = 1e-6;
 
@@ -63,6 +73,50 @@ function at(body: HullBody, path: PosePath, fraction: number) {
   );
 }
 
+export interface BodyGuardDiagnostics extends BodyBroadphaseDiagnostics {
+  hullTransforms: number;
+  snapshotHits: number;
+  pairGuardCalls: number;
+  maskTests: number;
+  maskRejected: number;
+  attachmentPairs: number;
+}
+interface GeometrySnapshot {
+  hulls: CollisionHull[];
+  bounds: Box3[];
+}
+/** Geometry has phase lifetime, not body/hull identity lifetime. Never carry
+ * samples through crush, solver correction, repair or joint projection. */
+class GuardWorkingSet {
+  private samples = new Map<
+    HullBody,
+    Map<PosePath, Map<number, GeometrySnapshot>>
+  >();
+  constructor(private diagnostics?: BodyGuardDiagnostics) {}
+  sample(body: HullBody, path: PosePath, fraction: number): GeometrySnapshot {
+    const key = path.constantPose ? 0 : fraction;
+    let paths = this.samples.get(body);
+    if (!paths) this.samples.set(body, (paths = new Map()));
+    let samples = paths.get(path);
+    if (!samples) paths.set(path, (samples = new Map()));
+    let value = samples.get(key);
+    if (value) {
+      if (this.diagnostics) this.diagnostics.snapshotHits++;
+      return value;
+    }
+    const pose = path.constantPose ?? path(fraction);
+    value = {
+      hulls: body.hulls.map((hull) =>
+        transformHull(hull, pose.position, pose.orientation),
+      ),
+      bounds: [],
+    };
+    if (this.diagnostics) this.diagnostics.hullTransforms += body.hulls.length;
+    samples.set(key, value);
+    return value;
+  }
+}
+
 /** Independent commit safety guard, NOT an alternative impulse/damage solver.
  * The original feature emitter/normal equations remain authoritative. Verify
  * the actual post-solver integration path so exhausting recollection passes
@@ -74,6 +128,7 @@ export function guardPairTrajectory(
   pathA: PosePath,
   pathB: PosePath,
   pairAllowed?: BodyPairPredicate,
+  workingSet?: GuardWorkingSet,
 ): number {
   if (pairAllowed && !pairAllowed(a, b)) return 1;
   if (isNativeSphereBody(a) || isNativeSphereBody(b))
@@ -93,17 +148,21 @@ export function guardPairTrajectory(
   ) => {
     let value = cache.get(t);
     if (!value) {
-      value = { hulls: at(body, path, t), bounds: [], depths: [] };
+      const geometry =
+        path.stable && workingSet
+          ? workingSet.sample(body, path, t)
+          : { hulls: at(body, path, t), bounds: [] };
+      // Penetration and escape allowances belong to this pair alone.
+      value = { ...geometry, depths: [] };
       cache.set(t, value);
     }
     return value;
   };
   const getA = (t: number) => sample(a, pathA, cacheA, t),
     getB = (t: number) => sample(b, pathB, cacheB, t);
-  // These transformed samples are private to this invocation. Persistent caches
-  // keyed by source hull identity would miss in-place crush/pedestrian changes.
-  // Store auxiliary results beside the existing pose samples instead of adding
-  // a separate fraction Map and per-hull WeakMap in this short-lived hot path.
+  // Hulls/bounds may be shared in this immutable phase; depths stay private to
+  // this pair. Source identity alone cannot validate crush/pedestrian geometry.
+  // Auxiliary results live beside pose samples rather than a persistent cache.
   const bounds = (value: Sample, i: number) =>
     (value.bounds[i] ??= hullBounds(value.hulls[i]));
   const depthAt = (sa: Sample, sb: Sample, i: number, j: number) => {
@@ -311,65 +370,128 @@ function guardSpherePairTrajectory(
  * pair clamps can themselves introduce a new crossing when only A is slowed.
  * Broadphase spheres enclose the entire rotation arc about the moving COM,
  * unlike a union of endpoint AABBs. Each child's own hinge path is retained. */
+/** Only the broadphase index survives phases. Geometry is rebuilt per run. */
+export class BodyTrajectoryGuard {
+  private broadphase = new BodyBroadphase();
+  clear() {
+    this.broadphase = new BodyBroadphase();
+  }
+  run(
+    bodies: readonly HullBody[],
+    paths: Map<HullBody, PosePath>,
+    pairAllowed?: BodyPairPredicate,
+    diagnostics?: BodyGuardDiagnostics,
+  ): Map<HullBody, number> {
+    if (diagnostics) {
+      diagnostics.hullTransforms =
+        diagnostics.snapshotHits =
+        diagnostics.pairGuardCalls =
+        diagnostics.maskRejected =
+        diagnostics.maskTests =
+        diagnostics.attachmentPairs =
+          0;
+    }
+    const workingSet = new GuardWorkingSet(diagnostics);
+    const parents = bodies.map((_, i) => i);
+    const roots = bodies.map(attachmentRoot);
+    const find = (i: number): number =>
+      parents[i] === i ? i : (parents[i] = find(parents[i]));
+    const union = (i: number, j: number) => {
+      parents[find(j)] = find(i);
+    };
+    // Analytic sphere emitters have float/tolerance contacts outside tight hull
+    // bounds. Preserve the previous envelope whenever any sphere participates.
+    const hasSphere = bodies.some(isNativeSphereBody);
+    const bounds = bodies.map((body) => {
+      const path = paths.get(body)!;
+      if (
+        !hasSphere &&
+        body.properties.immovable &&
+        path.stable &&
+        path.constantPose
+      ) {
+        const sample = workingSet.sample(body, path, 0);
+        const box = new Box3();
+        for (let i = 0; i < sample.hulls.length; i++)
+          box.union((sample.bounds[i] ??= hullBounds(sample.hulls[i])));
+        return box.expandByScalar(DEPTH_EPSILON);
+      }
+      const center = (pose: GuardPose) =>
+        body.properties.centerOfMass
+          .clone()
+          .applyQuaternion(pose.orientation)
+          .add(pose.position);
+      return new Box3()
+        .setFromPoints([0, 0.25, 0.5, 0.75, 1].map((t) => center(path(t))))
+        .expandByScalar(
+          radius(body) +
+            2 * body.properties.centerOfMass.length() +
+            DEPTH_EPSILON,
+        );
+    });
+    const candidates = this.broadphase.pairs(bodies, bounds, diagnostics);
+    // Mask-sensitive attachment unions apply even for nonoverlapping/static
+    // siblings. Enumerate only each ancestry group, then restore source i,j order.
+    const groups = new Map<RigidBody, number[]>();
+    roots.forEach((root, i) => {
+      const indices = groups.get(root);
+      if (indices) indices.push(i);
+      else groups.set(root, [i]);
+    });
+    for (const indices of groups.values())
+      for (let a = 0; a < indices.length; a++)
+        for (let b = a + 1; b < indices.length; b++) {
+          candidates.push([indices[a], indices[b]]);
+          if (diagnostics) diagnostics.attachmentPairs++;
+        }
+    candidates.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const pairs: [number, number][] = [];
+    let previousI = -1,
+      previousJ = -1;
+    for (const [i, j] of candidates) {
+      if (i === previousI && j === previousJ) continue;
+      previousI = i;
+      previousJ = j;
+      if (diagnostics) diagnostics.maskTests++;
+      if (pairAllowed && !pairAllowed(bodies[i], bodies[j])) {
+        if (diagnostics) diagnostics.maskRejected++;
+        continue;
+      }
+      if (roots[i] === roots[j]) {
+        union(i, j);
+        continue;
+      }
+      if (!bodies[i].properties.immovable && !bodies[j].properties.immovable)
+        union(i, j);
+      pairs.push([i, j]);
+    }
+    const limits = new Map<number, number>();
+    for (const [i, j] of pairs) {
+      if (diagnostics) diagnostics.pairGuardCalls++;
+      const fraction = guardPairTrajectory(
+        bodies[i],
+        bodies[j],
+        paths.get(bodies[i])!,
+        paths.get(bodies[j])!,
+        pairAllowed,
+        workingSet,
+      );
+      for (const index of [i, j])
+        if (!bodies[index].properties.immovable)
+          limits.set(
+            find(index),
+            Math.min(limits.get(find(index)) ?? 1, fraction),
+          );
+    }
+    return new Map(bodies.map((body, i) => [body, limits.get(find(i)) ?? 1]));
+  }
+}
+
+/** pairAllowed is a pure predicate; omitted far/static pairs cannot contact. */
 export function guardBodyTrajectories(
   bodies: readonly HullBody[],
   paths: Map<HullBody, PosePath>,
   pairAllowed?: BodyPairPredicate,
 ): Map<HullBody, number> {
-  const parents = bodies.map((_, i) => i);
-  const roots = bodies.map(attachmentRoot);
-  const find = (i: number): number =>
-    parents[i] === i ? i : (parents[i] = find(parents[i]));
-  const union = (i: number, j: number) => {
-    parents[find(j)] = find(i);
-  };
-  const bounds = bodies.map((body) => {
-    const path = paths.get(body)!;
-    const center = (pose: GuardPose) =>
-      body.properties.centerOfMass
-        .clone()
-        .applyQuaternion(pose.orientation)
-        .add(pose.position);
-    return new Box3()
-      .setFromPoints([0, 0.25, 0.5, 0.75, 1].map((t) => center(path(t))))
-      .expandByScalar(
-        radius(body) +
-          2 * body.properties.centerOfMass.length() +
-          DEPTH_EPSILON,
-      );
-  });
-  const pairs: [number, number][] = [];
-  for (let i = 0; i < bodies.length; i++)
-    for (let j = i + 1; j < bodies.length; j++) {
-      if (pairAllowed && !pairAllowed(bodies[i], bodies[j])) continue;
-      if (roots[i] === roots[j]) {
-        union(i, j);
-        continue;
-      }
-      if (bodies[i].properties.immovable && bodies[j].properties.immovable)
-        continue;
-      if (!bounds[i].intersectsBox(bounds[j])) continue;
-      // An immovable prop does not need its time scaled and must not join distant
-      // vehicles through a large scenery hull. It still constrains each car.
-      if (!bodies[i].properties.immovable && !bodies[j].properties.immovable)
-        union(i, j);
-      pairs.push([i, j]);
-    }
-  const limits = new Map<number, number>();
-  for (const [i, j] of pairs) {
-    const fraction = guardPairTrajectory(
-      bodies[i],
-      bodies[j],
-      paths.get(bodies[i])!,
-      paths.get(bodies[j])!,
-      pairAllowed,
-    );
-    for (const index of [i, j])
-      if (!bodies[index].properties.immovable)
-        limits.set(
-          find(index),
-          Math.min(limits.get(find(index)) ?? 1, fraction),
-        );
-  }
-  return new Map(bodies.map((body, i) => [body, limits.get(find(i)) ?? 1]));
+  return new BodyTrajectoryGuard().run(bodies, paths, pairAllowed);
 }

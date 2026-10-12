@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-12 07:37'
+updated_date: '2026-10-12 12:25'
 labels:
   - priority-1
   - PERF-01
@@ -56,4 +56,6 @@ Verified structural opportunities: all-pairs body discovery scans 114,960 combin
 Independent original-material reproduction: second/third below-threshold TEZFEN contacts leave geometry identity/version and damage tier unchanged, yet trigger global geometry revisions and rebuild/invalidate-all work costing 15.8/24.0 ms. Preserve the binary-verified native restart output while separating actual geometry dirtiness and owner-specific invalidation. Zero world rebuilds in the slow capture rule out this defect as its cause. Long-session private MODEL retention and hardware GPU/4K canyon cost remain candidates. Full evidence, limitations and proposed sequencing: docs/timber-performance-findings.md. PERF-01 stays wip for exact canyon/tunnel attribution and coordination; no implementation ticket was started and no worker migration selected.
 
 2026-10-12 user selected the structural implementation decomposition: PERF-06 / TASK-100.1, PERF-07 / TASK-100.2, PERF-08 / TASK-100.3, PERF-09 / TASK-100.4, PERF-10 / TASK-100.5, PERF-11 / TASK-100.6, PERF-12 / TASK-100.7. All seven are parented to TASK-100, P1/high with priority-1 labels, in next, ordered by ordinals 1110 through 1170. The queue is body-pair discovery, shared body geometry, retained native MODEL bounds, selective world synchronization, actual geometry invalidation distinct from native restart, local world-face discovery, then cross-correction-pass reuse. Technical dependencies are recorded separately; early independent work is not artificially blocked. Implementation has not started and WIP stays at one profiling ticket. Exact canyon/tunnel attribution remains here; the child tasks own implementation and conformance, without reopening completed PERF-02/05 or changing other priorities. See backlog/README.md for the selected queue.
+
+PERF-06 and PERF-07 are implemented and verified, now done. See docs/body-pair-performance.md for indexed pair discovery, phase-local geometry sharing, exact crash comparisons and bounded hardware Chromium evidence. Remaining frame spikes are documented, including adverse samples; PERF-08 through PERF-12 remain next in their existing order. No universal FPS improvement or completion of the parent performance investigation is claimed.
 <!-- SECTION:NOTES:END -->

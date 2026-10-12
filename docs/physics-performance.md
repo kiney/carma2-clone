@@ -124,3 +124,7 @@ World face/actor synchronization, broadphase/allocation costs and the unresolved
 tunnel transition still deserve PERF-01 measurements. Present evidence supports
 further targeted code optimization; no measured need for the larger worker
 ownership redesign has been established. Web Workers remain a last resort.
+
+## Spatial pair discovery and phase-local geometry
+
+PERF-06 and PERF-07 additionally index resting/moving body bounds and share immutable hull snapshots within commit/projection guards. See [implementation, exact comparisons and hardware measurements](body-pair-performance.md). Correction-pass reuse and world synchronization remain separate scopes.

@@ -1,3 +1,7 @@
+import {
+  BodyBroadphase,
+  type BodyBroadphaseDiagnostics,
+} from "./body-broadphase";
 import { CameraContactFrame } from "../camera/contact-frame";
 import {
   activateNativePedBody,
@@ -186,7 +190,8 @@ import {
 import { advanceRigidBody } from "./integrate";
 import {
   attachmentRoot,
-  guardBodyTrajectories,
+  BodyTrajectoryGuard,
+  type BodyGuardDiagnostics,
   type HullBody,
   type PosePath,
 } from "./pair-guard";
@@ -334,6 +339,12 @@ export interface DetachedBody extends RigidBody {
   worldOverlapDetected: boolean;
   splitRevision?: number;
   specialVolume?: BodyVolumeState;
+}
+export interface BodyContactDiagnostics extends BodyBroadphaseDiagnostics {
+  maskRejected: number;
+  jointRejected: number;
+  spherePairs: number;
+  contactRows: number;
 }
 export type SimulationBody =
   | SimulatedCar
@@ -823,6 +834,13 @@ export class VehicleSimulation {
   readonly motionContext = sharedMotionContext;
   private detachmentScheduling = createDetachmentSchedulingContext();
   private contactSurfaces = new Map<RigidBody, Surface[]>();
+  private bodyBroadphase = new BodyBroadphase();
+  private bodyTrajectoryGuard = new BodyTrajectoryGuard();
+  /** Opt-in diagnostics; no counters or retained captures in normal gameplay. */
+  bodyPairDiagnostics?: (
+    phase: "contacts" | "commit" | "projection",
+    counters: BodyContactDiagnostics | BodyGuardDiagnostics,
+  ) => void;
   private dormantPoses = new WeakMap<
     NonCarBody,
     { old: CollisionHull[]; next: CollisionHull[]; bounds: Box3 }
@@ -3635,78 +3653,100 @@ export class VehicleSimulation {
         return [body, result] as const;
       }),
     );
-    for (let i = 0; i < bodies.length; i++)
-      for (let j = i + 1; j < bodies.length; j++) {
-        const a = bodies[i],
-          b = bodies[j];
-        if (!nativePairAllowed(a, b)) continue;
-        if (a.properties.immovable && b.properties.immovable) continue;
-        const pa = poses.get(a)!,
-          pb = poses.get(b)!;
-        if (!pa.bounds.intersectsBox(pb.bounds)) continue;
-        if (
-          ("joint" in a && a.joint?.parent === b) ||
-          ("joint" in b && b.joint?.parent === a)
-        )
-          continue;
-        if (isNativeSphereBody(a) || isNativeSphereBody(b)) {
-          contacts.push(...nativeSpherePairRows(a, b));
-          continue;
-        }
-        const oldA = pa.old,
-          oldB = pb.old,
-          nextA = pa.next,
-          nextB = pb.next;
-        for (let ai = 0; ai < oldA.length; ai++)
-          for (let bi = 0; bi < oldB.length; bi++) {
-            if (
-              !hullBounds(oldA[ai])
-                .union(hullBounds(nextA[ai]))
-                .intersectsBox(
-                  hullBounds(oldB[bi]).union(hullBounds(nextB[bi])),
-                )
-            )
-              continue;
-            const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
-              ...(a.overlapRecovery || b.overlapRecovery
-                ? {
-                    recovery: {
-                      a,
-                      b,
-                      sameAttachmentGroup:
-                        attachmentRoot(a) === attachmentRoot(b),
-                      // HW0x427b56..427c67 transforms each LOCAL bounds
-                      // center. World AABB centers differ under rotation/crush.
-                      boundsCenterA: hullsBounds(a.hulls)
-                        .getCenter(new Vector3())
-                        .applyQuaternion(a.state.orientation)
-                        .add(a.state.position),
-                      boundsCenterB: hullsBounds(b.hulls)
-                        .getCenter(new Vector3())
-                        .applyQuaternion(b.state.orientation)
-                        .add(b.state.position),
-                    },
-                  }
-                : {}),
-              onOverlap: () => {
-                a.overlapDetected = true;
-                b.overlapDetected = true;
-              },
-            });
-            if (hit)
-              hit.points.forEach((point, index) =>
-                contacts.push({
-                  a,
-                  b,
-                  point,
-                  pointB: hit.pointsB?.[index] ?? point,
-                  normal: hit.pointNormals?.[index] ?? hit.normal,
-                  sourceType: hit.contactTypes?.[index],
-                  penetration: hit.penetration,
-                }),
-              );
-          }
+    const diagnostics = this.bodyPairDiagnostics
+      ? ({} as BodyContactDiagnostics)
+      : undefined;
+    const pairs = this.bodyBroadphase.pairs(
+      bodies,
+      bodies.map((body) => poses.get(body)!.bounds),
+      diagnostics,
+    );
+    if (diagnostics) {
+      diagnostics.maskRejected =
+        diagnostics.jointRejected =
+        diagnostics.spherePairs =
+        diagnostics.contactRows =
+          0;
+    }
+    for (const [i, j] of pairs) {
+      const a = bodies[i],
+        b = bodies[j];
+      if (!nativePairAllowed(a, b)) {
+        if (diagnostics) diagnostics.maskRejected++;
+        continue;
       }
+      if (a.properties.immovable && b.properties.immovable) continue;
+      const pa = poses.get(a)!,
+        pb = poses.get(b)!;
+      if (!pa.bounds.intersectsBox(pb.bounds)) continue;
+      if (
+        ("joint" in a && a.joint?.parent === b) ||
+        ("joint" in b && b.joint?.parent === a)
+      ) {
+        if (diagnostics) diagnostics.jointRejected++;
+        continue;
+      }
+      if (isNativeSphereBody(a) || isNativeSphereBody(b)) {
+        if (diagnostics) diagnostics.spherePairs++;
+        contacts.push(...nativeSpherePairRows(a, b));
+        continue;
+      }
+      const oldA = pa.old,
+        oldB = pb.old,
+        nextA = pa.next,
+        nextB = pb.next;
+      for (let ai = 0; ai < oldA.length; ai++)
+        for (let bi = 0; bi < oldB.length; bi++) {
+          if (
+            !hullBounds(oldA[ai])
+              .union(hullBounds(nextA[ai]))
+              .intersectsBox(hullBounds(oldB[bi]).union(hullBounds(nextB[bi])))
+          )
+            continue;
+          const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
+            ...(a.overlapRecovery || b.overlapRecovery
+              ? {
+                  recovery: {
+                    a,
+                    b,
+                    sameAttachmentGroup:
+                      attachmentRoot(a) === attachmentRoot(b),
+                    // HW0x427b56..427c67 transforms each LOCAL bounds
+                    // center. World AABB centers differ under rotation/crush.
+                    boundsCenterA: hullsBounds(a.hulls)
+                      .getCenter(new Vector3())
+                      .applyQuaternion(a.state.orientation)
+                      .add(a.state.position),
+                    boundsCenterB: hullsBounds(b.hulls)
+                      .getCenter(new Vector3())
+                      .applyQuaternion(b.state.orientation)
+                      .add(b.state.position),
+                  },
+                }
+              : {}),
+            onOverlap: () => {
+              a.overlapDetected = true;
+              b.overlapDetected = true;
+            },
+          });
+          if (hit)
+            hit.points.forEach((point, index) =>
+              contacts.push({
+                a,
+                b,
+                point,
+                pointB: hit.pointsB?.[index] ?? point,
+                normal: hit.pointNormals?.[index] ?? hit.normal,
+                sourceType: hit.contactTypes?.[index],
+                penetration: hit.penetration,
+              }),
+            );
+        }
+    }
+    if (diagnostics) {
+      diagnostics.contactRows = contacts.length;
+      this.bodyPairDiagnostics!("contacts", diagnostics);
+    }
     return contacts;
   }
   private processImpactDamage(
@@ -4757,6 +4797,8 @@ export class VehicleSimulation {
             }
             return pose;
           };
+          path.stable = true;
+          if (body.properties.immovable) path.constantPose = path(0);
           // Momentum / smallest principal inertia bounds all midpoint angular
           // rates, including full turns hidden by identical endpoint quaternions.
           const inertia = body.properties.inertia;
@@ -4774,11 +4816,16 @@ export class VehicleSimulation {
           return [body, path];
         }),
       );
-      const pairFractions = guardBodyTrajectories(
+      const pairDiagnostics = this.bodyPairDiagnostics
+        ? ({} as BodyGuardDiagnostics)
+        : undefined;
+      const pairFractions = this.bodyTrajectoryGuard.run(
         committing,
         paths,
         nativePairAllowed,
+        pairDiagnostics,
       );
+      if (pairDiagnostics) this.bodyPairDiagnostics!("commit", pairDiagnostics);
       for (const body of committing) {
         if (!body.properties.immovable)
           advance(
@@ -4845,27 +4892,31 @@ export class VehicleSimulation {
             const before = projected.get(body as (typeof joined)[number]);
             const position = body.state.position.clone(),
               orientation = body.state.orientation.clone();
-            return [
-              body,
-              (fraction) =>
-                before
-                  ? {
-                      position: before.position
-                        .clone()
-                        .lerp(position, fraction),
-                      orientation: before.orientation
-                        .clone()
-                        .slerp(orientation, fraction),
-                    }
-                  : { position, orientation },
-            ];
+            const path: PosePath = (fraction) =>
+              before
+                ? {
+                    position: before.position.clone().lerp(position, fraction),
+                    orientation: before.orientation
+                      .clone()
+                      .slerp(orientation, fraction),
+                  }
+                : { position, orientation };
+            path.stable = true;
+            if (!before) path.constantPose = { position, orientation };
+            return [body, path];
           }),
         );
-        const fractions = guardBodyTrajectories(
+        const projectionDiagnostics = this.bodyPairDiagnostics
+          ? ({} as BodyGuardDiagnostics)
+          : undefined;
+        const fractions = this.bodyTrajectoryGuard.run(
           this.allBodies(),
           projectionPaths,
           nativePairAllowed,
+          projectionDiagnostics,
         );
+        if (projectionDiagnostics)
+          this.bodyPairDiagnostics!("projection", projectionDiagnostics);
         for (const { body } of beforeProjection) {
           const fraction = fractions.get(body)!;
           if (fraction < 1) {
@@ -5090,6 +5141,9 @@ export class VehicleSimulation {
     }
   }
   dispose() {
+    this.bodyBroadphase = new BodyBroadphase();
+    this.bodyTrajectoryGuard.clear();
+    this.bodyPairDiagnostics = undefined;
     this.smashPowerupQueue.initialize();
     this.worldActivations.dispose();
     this.ordinaryCrushQueue.initialize();

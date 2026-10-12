@@ -3,9 +3,10 @@ id: TASK-100.1
 title: >-
   [P1] PERF-06: Discover collision pairs spatially instead of scanning all
   bodies
-status: next
+status: done
 assignee: []
 created_date: '2026-10-12 07:36'
+updated_date: '2026-10-12 12:25'
 labels:
   - priority-1
   - PERF-06
@@ -33,8 +34,14 @@ This is selected P1 implementation work extracted from PERF-01 / TASK-100 after 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Demonstrate reduced pair enumeration on recorded Timber populations and heavy debris/opponent cases; count actual argument lengths and rejection reasons, not just allBodies census.
-- [ ] #2 Preserve accepted candidate order, attachment grouping, masks, sleeping-prop wake-up and conservative bounds for rotation arcs, full turns and joint-projection/custom trajectories.
-- [ ] #3 Deterministic numerical comparisons cover car/car, car/prop, repeated impacts, overlap escape, tunneling, activation and materially different original cars without changing physical/damage results.
-- [ ] #4 Build and relevant regressions pass; short Chromium driving/crash captures show lower discovery/tick cost without fatal errors. Record backend, population, buffer dimensions and unfavorable samples.
+- [x] #1 Demonstrate reduced pair enumeration on recorded Timber populations and heavy debris/opponent cases; count actual argument lengths and rejection reasons, not just allBodies census.
+- [x] #2 Preserve accepted candidate order, attachment grouping, masks, sleeping-prop wake-up and conservative bounds for rotation arcs, full turns and joint-projection/custom trajectories.
+- [x] #3 Deterministic numerical comparisons cover car/car, car/prop, repeated impacts, overlap escape, tunneling, activation and materially different original cars without changing physical/damage results.
+- [x] #4 Build and relevant regressions pass; short Chromium driving/crash captures show lower discovery/tick cost without fatal errors. Record backend, population, buffer dimensions and unfavorable samples.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented retained resting/moving AABB trees in contact collection and commit/projection discovery. Source order, masks, attachment unions, wake-up and custom/full-turn bounds are preserved; analytic sphere tolerance retains the legacy envelope. Hardware Timber480 frozen comparison: 114,960 old pair opportunities become 38 collector leaf tests plus 292 node tests; guard64 leaf/302 node tests. Ordered rows and fractions exactly equal the baseline. 2,600 headless tests and production build pass; 15 original-car crash reports exactly match the old engine. Chromium crash matrix and hardware MCP driving/damaged-state validation pass. See docs/body-pair-performance.md for all samples, the 30.7ms outlier, evolving-tick caveats and remaining performance scopes.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -82,11 +82,13 @@ implementation subtasks of TASK-100, selected by the user at priority 1 and plac
 in `next`. They precede P2 visibility work. Stored ordinals define the proposed
 implementation order; dependencies record technical prerequisites separately.
 Creating this queue does not start implementation or occupy additional WIP slots.
+PERF-06 and PERF-07 were completed on 2026-10-12; the following scopes remain in
+`next`.
 
 | Order | Backlog ID | Issue   | Priority / status | Scope                                                              |
 | ----- | ---------- | ------- | ----------------- | ------------------------------------------------------------------ |
-| 1     | TASK-100.1 | PERF-06 | P1 / `next`       | Spatial body-pair discovery and tighter constant-prop bounds       |
-| 2     | TASK-100.2 | PERF-07 | P1 / `next`       | Shared immutable body geometry snapshots across pairs              |
+| 1     | TASK-100.1 | PERF-06 | P1 / `done`       | Spatial body-pair discovery and tighter constant-prop bounds       |
+| 2     | TASK-100.2 | PERF-07 | P1 / `done`       | Shared immutable body geometry snapshots across pairs              |
 | 3     | TASK-100.3 | PERF-08 | P1 / `next`       | Retained native MODEL bounds with mutation validity                |
 | 4     | TASK-100.4 | PERF-09 | P1 / `next`       | Synchronization of changed world actors/geometry only              |
 | 5     | TASK-100.5 | PERF-10 | P1 / `next`       | Native smash restart versus actual owner-specific invalidation     |

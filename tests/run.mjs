@@ -308,3 +308,6 @@ import "./ped-population-accounting.test.mjs";
 import "./wld-native-collector.test.mjs";
 import "./native-material-render.test.mjs";
 import "./ai-native-fallen.test.mjs";
+
+import "./body-broadphase.test.mjs";
+import "./pair-working-set.test.mjs";
