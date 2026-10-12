@@ -864,8 +864,9 @@ function projection(
 ): [number, number] {
   let lo = Infinity,
     hi = -Infinity;
-  for (const index of vertexOrder ?? points.map((_, index) => index)) {
-    const p = points[index];
+  const count = vertexOrder?.length ?? points.length;
+  for (let i = 0; i < count; i++) {
+    const p = points[vertexOrder ? vertexOrder[i] : i];
     const d = p.dot(axis);
     lo = Math.min(lo, d);
     hi = Math.max(hi, d);
@@ -955,37 +956,49 @@ function manifold(
     ).reduce((p, q) => (q.dot(normal) > p.dot(normal) ? q : p));
   return [project(av.clone().add(bv).multiplyScalar(0.5))];
 }
-function axes(a: CollisionHull, b: CollisionHull): Vector3[] {
+/** Visit the original ordered/deduplicated SAT prefix. A separating axis avoids
+ * constructing the remaining edge crosses; no axis or tolerance is omitted. */
+function visitAxes(
+  a: CollisionHull,
+  b: CollisionHull,
+  visit: (axis: Vector3) => boolean,
+): boolean {
   const result: Vector3[] = [];
   const add = (v: Vector3) => {
-    if (v.lengthSq() < 1e-12) return;
+    if (v.lengthSq() < 1e-12) return true;
     v.normalize();
-    if (!result.some((p) => Math.abs(p.dot(v)) > 1 - EPS)) result.push(v);
+    if (result.some((p) => Math.abs(p.dot(v)) > 1 - EPS)) return true;
+    result.push(v);
+    return visit(v);
   };
-  a.faces.forEach((f) => add(f.normal.clone()));
-  b.faces.forEach((f) => add(f.normal.clone()));
-  for (const [a0, a1] of a.edges)
-    for (const [b0, b1] of b.edges)
-      add(
-        a.vertices[a1]
-          .clone()
-          .sub(a.vertices[a0])
-          .cross(b.vertices[b1].clone().sub(b.vertices[b0])),
-      );
-  return result;
+  for (const f of a.faces) if (!add(f.normal.clone())) return false;
+  for (const f of b.faces) if (!add(f.normal.clone())) return false;
+  // Subtract the actual world vertices as before. Rotating local edge vectors
+  // would change rounding, particularly for translated/deformed hulls.
+  const edgesA = a.edges.map(([i, j]) =>
+    a.vertices[j].clone().sub(a.vertices[i]),
+  );
+  const edgesB = b.edges.map(([i, j]) =>
+    b.vertices[j].clone().sub(b.vertices[i]),
+  );
+  for (const edgeA of edgesA)
+    for (const edgeB of edgesB)
+      if (!add(edgeA.clone().cross(edgeB))) return false;
+  return true;
 }
 /** Depth-only solid-hull SAT for placement/integration verification. Wire
  * shapes retain their native feature contacts; they have no solid volume. */
 export function hullPenetration(a: CollisionHull, b: CollisionHull): number {
   if (!a.faces.length || !b.faces.length) return 0;
   let depth = Infinity;
-  for (const axis of axes(a, b)) {
+  const overlap = visitAxes(a, b, (axis) => {
     const [al, ah] = projection(a.vertices, axis, a.vertexOrder),
       [bl, bh] = projection(b.vertices, axis, b.vertexOrder);
-    if (ah <= bl || bh <= al) return 0;
+    if (ah <= bl || bh <= al) return false;
     depth = Math.min(depth, ah - bl, bh - al);
-  }
-  return Number.isFinite(depth) ? depth : 0;
+    return true;
+  });
+  return overlap && Number.isFinite(depth) ? depth : 0;
 }
 /** Full convex SAT, including edge-edge axes. Normal points from B into A. */
 export function collideHulls(
@@ -995,18 +1008,19 @@ export function collideHulls(
 ): HullContact | null {
   let penetration = Infinity,
     normal: Vector3 | undefined;
-  for (const axis of axes(a, b)) {
+  const overlap = visitAxes(a, b, (axis) => {
     const [al, ah] = projection(a.vertices, axis, a.vertexOrder),
       [bl, bh] = projection(b.vertices, axis, b.vertexOrder);
-    if (ah < bl - tolerance || bh < al - tolerance) return null;
+    if (ah < bl - tolerance || bh < al - tolerance) return false;
     const left = ah - bl,
       right = bh - al;
     if (Math.min(left, right) < penetration) {
       penetration = Math.min(left, right);
       normal = axis.clone().multiplyScalar(right < left ? 1 : -1);
     }
-  }
-  if (!normal) return null;
+    return true;
+  });
+  if (!overlap || !normal) return null;
   return {
     normal,
     points: manifold(a, b, normal),

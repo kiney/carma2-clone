@@ -61,11 +61,11 @@ choices remain open. The user then separated upcoming work as follows:
 | --- | --- | --- | --- | --- |
 | TASK-100 | PERF-01 | 1 | `wip` | Cross-subsystem profiling, unresolved frame-time spikes and finding coordination |
 | TASK-101 | PERF-02 | 1 | `done` | Shared render preparation and dormant pedestrian subtree pruning, measured and validated |
-| TASK-104 | PERF-05 | 1 | `next` | Physics code/algorithm optimization; Web Workers reserved as a last resort |
+| TASK-104 | PERF-05 | 1 | `done` | Lazy SAT and per-invocation guard caches, numerical and Chromium validation |
 | TASK-103 | PERF-04 | 2 | `next` | Higher visual visibility, dependent on TASK-101 |
 | TASK-102 | PERF-03 | 4 | `backlog` | High-resolution rendering policy; deferred, measured gain was small |
 
-The board now has 104 tasks: 64 `backlog`, 2 `next`, 1 `wip` and 37 `done`.
+The board now has 104 tasks: 64 `backlog`, 1 `next`, 1 `wip` and 38 `done`.
 Only the profiling investigation remains active; queued tickets do not consume
 WIP slots. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
 memory and FPS-diagnostic scopes and user-edited priorities.

@@ -2,8 +2,9 @@
 
 Status: **initial analysis completed; optimization and exact policy remain open**.
 TASK-100 / PERF-01 remains priority 1, `wip`, for profiling, unresolved spikes and
-finding coordination. TASK-104 / PERF-05 owns physics code/algorithm optimization
-(P1, `next`), with Web Workers reserved as a last resort.
+finding coordination. TASK-104 / PERF-05 physics hot-path optimization is
+implemented and validated; see [changes and measurements](physics-performance.md).
+Web Workers remain a last resort.
 TASK-101 / PERF-02 scene-hierarchy work is implemented and validated; see the
 [implementation and measurements](render-hierarchy-performance.md).
 TASK-103 / PERF-04 owns higher visual visibility (P2,

@@ -37,7 +37,7 @@ The engine runs directly in the browser. See [architecture notes](docs/architect
 
 Tasks, evidence and priorities are maintained with [Backlog.md](backlog/README.md). Run `backlog board` for the terminal board or `backlog browser` for the editable local board. Columns are `backlog`, `next`, `wip`, `done`, sorted with priority 1 first. Original issue IDs and numeric priorities 1–5 are preserved; completed tasks remain in `done`. The `wip` column is limited to **3 actively worked-on tickets** by the project workflow; inactive partial implementations belong in `backlog`.
 
-Priority-1 PERF-01 tracks frame-time spikes and coordinates the separate performance scopes. [Scene-hierarchy preparation](docs/render-hierarchy-performance.md) now avoids duplicate sky/main traversal and unseen pedestrian subtree updates, with roughly 90% less matrix CPU work in short hardware comparisons. Driving can still be physics-bound; PERF-05 owns code/algorithm optimization. The [performance investigation](docs/performance-investigation.md) records measurements and short profiling commands; resolution and distance policies remain open.
+Priority-1 PERF-01 tracks frame-time spikes and coordinates the separate performance scopes. [Scene-hierarchy preparation](docs/render-hierarchy-performance.md) avoids duplicate sky/main traversal and unseen pedestrian subtree updates. [Physics hot-path optimization](docs/physics-performance.md) now evaluates SAT axes lazily and reuses per-invocation bounds/depths while preserving numerical collision results. Short hardware comparisons show lower CPU cost, with workload and cold-frame limitations documented; remaining spikes still need investigation. Resolution and distance policies remain open.
 
 ## Run it
 

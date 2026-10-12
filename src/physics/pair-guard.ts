@@ -62,9 +62,6 @@ function at(body: HullBody, path: PosePath, fraction: number) {
     transformHull(hull, pose.position, pose.orientation),
   );
 }
-function depth(a: CollisionHull, b: CollisionHull) {
-  return hullBounds(a).intersectsBox(hullBounds(b)) ? hullPenetration(a, b) : 0;
-}
 
 /** Independent commit safety guard, NOT an alternative impulse/damage solver.
  * The original feature emitter/normal equations remain authoritative. Verify
@@ -81,26 +78,47 @@ export function guardPairTrajectory(
   if (pairAllowed && !pairAllowed(a, b)) return 1;
   if (isNativeSphereBody(a) || isNativeSphereBody(b))
     return guardSpherePairTrajectory(a, b, pathA, pathB);
-  const cacheA = new Map<number, CollisionHull[]>(),
-    cacheB = new Map<number, CollisionHull[]>();
+  interface Sample {
+    hulls: CollisionHull[];
+    bounds: Box3[];
+    depths: number[][];
+  }
+  const cacheA = new Map<number, Sample>(),
+    cacheB = new Map<number, Sample>();
   const sample = (
     body: HullBody,
     path: PosePath,
-    cache: Map<number, CollisionHull[]>,
+    cache: Map<number, Sample>,
     t: number,
   ) => {
-    let hulls = cache.get(t);
-    if (!hulls) {
-      hulls = at(body, path, t);
-      cache.set(t, hulls);
+    let value = cache.get(t);
+    if (!value) {
+      value = { hulls: at(body, path, t), bounds: [], depths: [] };
+      cache.set(t, value);
     }
-    return hulls;
+    return value;
   };
   const getA = (t: number) => sample(a, pathA, cacheA, t),
     getB = (t: number) => sample(b, pathB, cacheB, t);
-  let oldA = getA(0),
-    oldB = getB(0);
-  let allowed = oldA.map((ah) => oldB.map((bh) => depth(ah, bh)));
+  // These transformed samples are private to this invocation. Persistent caches
+  // keyed by source hull identity would miss in-place crush/pedestrian changes.
+  // Store auxiliary results beside the existing pose samples instead of adding
+  // a separate fraction Map and per-hull WeakMap in this short-lived hot path.
+  const bounds = (value: Sample, i: number) =>
+    (value.bounds[i] ??= hullBounds(value.hulls[i]));
+  const depthAt = (sa: Sample, sb: Sample, i: number, j: number) => {
+    const row = (sa.depths[i] ??= []);
+    return (row[j] ??= bounds(sa, i).intersectsBox(bounds(sb, j))
+      ? hullPenetration(sa.hulls[i], sb.hulls[j])
+      : 0);
+  };
+  let oldSampleA = getA(0),
+    oldSampleB = getB(0);
+  let oldA = oldSampleA.hulls,
+    oldB = oldSampleB.hulls;
+  let allowed = oldA.map((_, i) =>
+    oldB.map((_, j) => depthAt(oldSampleA, oldSampleB, i, j)),
+  );
   const travel = (path: PosePath) => {
     const poses = [0, 0.25, 0.5, 0.75, 1].map(path);
     return {
@@ -140,16 +158,22 @@ export function guardPairTrajectory(
   const exceeds = (t: number) => {
     const ha = getA(t),
       hb = getB(t);
-    return ha.some((ah, i) =>
-      hb.some((bh, j) => depth(ah, bh) > allowed[i][j] + DEPTH_EPSILON),
+    return ha.hulls.some((_, i) =>
+      hb.hulls.some(
+        (_, j) => depthAt(ha, hb, i, j) > allowed[i][j] + DEPTH_EPSILON,
+      ),
     );
   };
   let safe = 0;
   for (let step = 1; step <= steps; step++) {
     const end = step / steps,
-      nextA = getA(end),
-      nextB = getB(end);
+      nextSampleA = getA(end),
+      nextSampleB = getB(end),
+      nextA = nextSampleA.hulls,
+      nextB = nextSampleB.hulls;
     let blocked = exceeds(end) ? end : Infinity;
+    const sweptA: Box3[] = [],
+      sweptB: Box3[] = [];
     for (let i = 0; i < oldA.length; i++)
       for (let j = 0; j < oldB.length; j++) {
         if (
@@ -159,14 +183,15 @@ export function guardPairTrajectory(
         )
           continue;
         if (
-          !hullBounds(oldA[i])
-            .union(hullBounds(nextA[i]))
-            .expandByScalar(0.001)
-            .intersectsBox(
-              hullBounds(oldB[j])
-                .union(hullBounds(nextB[j]))
-                .expandByScalar(0.001),
-            )
+          !(sweptA[i] ??= bounds(oldSampleA, i)
+            .clone()
+            .union(bounds(nextSampleA, i))
+            .expandByScalar(0.001)).intersectsBox(
+            (sweptB[j] ??= bounds(oldSampleB, j)
+              .clone()
+              .union(bounds(nextSampleB, j))
+              .expandByScalar(0.001)),
+          )
         )
           continue;
         const hit = sweepHulls(oldA[i], nextA[i], oldB[j], nextB[j]);
@@ -192,11 +217,15 @@ export function guardPairTrajectory(
       return lo;
     }
     // Each local overlap must not deepen; after it clears, re-entry is new.
-    allowed = nextA.map((ah, i) =>
-      nextB.map((bh, j) => Math.min(allowed[i][j], depth(ah, bh))),
+    allowed = nextA.map((_, i) =>
+      nextB.map((_, j) =>
+        Math.min(allowed[i][j], depthAt(nextSampleA, nextSampleB, i, j)),
+      ),
     );
     oldA = nextA;
     oldB = nextB;
+    oldSampleA = nextSampleA;
+    oldSampleB = nextSampleB;
     safe = end;
   }
   return 1;
