@@ -216,6 +216,8 @@ import "./native-resource-registry.test.mjs";
 import "./wasted.test.mjs";
 import "./spawn.test.mjs";
 import "./pair-guard.test.mjs";
+import "./guard-coupling.test.mjs";
+import "./guard-coupling-budget.test.mjs";
 
 import "./barrier-release.test.mjs";
 import "./event-audio.test.mjs";

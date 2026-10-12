@@ -39,6 +39,12 @@ Tasks, evidence and priorities are maintained with [Backlog.md](backlog/README.m
 
 Priority-1 PERF-01 tracks frame-time spikes and coordinates the separate performance scopes. [Scene-hierarchy preparation](docs/render-hierarchy-performance.md) avoids duplicate sky/main traversal and unseen pedestrian subtree updates. [Physics hot-path optimization](docs/physics-performance.md) now evaluates SAT axes lazily and reuses per-invocation bounds/depths while preserving numerical collision results. [Spatial body-pair discovery and shared phase geometry](docs/body-pair-performance.md) remove global pair scans and repeated transforms while preserving crash results. [Retained native MODEL bounds](docs/model-bounds-performance.md) avoid repeated raw-vertex scans for unchanged resources. [World synchronization](docs/world-sync-performance.md) retains unchanged collision geometry and prepares only query-selected native actors while preserving callback snapshots. Short hardware comparisons show lower CPU cost, with workload and cold-frame limitations documented; remaining spikes still need investigation. Resolution and distance policies remain open.
 
+[PHY-12](docs/guard-coupling-fix.md) corrects a trajectory-guard defect where a
+nearby blocked prop could freeze a collision-free airborne car. Actual contact
+and attachment constraints remain guarded; the native impulse/damage formulas
+are unchanged. Terrain support traps and other crushed-hull issues remain
+separately tracked.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:

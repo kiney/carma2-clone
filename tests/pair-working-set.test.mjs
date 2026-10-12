@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Euler, Quaternion, Vector3 } from "three";
 import { buildBoxHull } from "../src/physics/box-hull.ts";
-import { BodyTrajectoryGuard } from "../src/physics/pair-guard.ts";
+import {
+  BodyTrajectoryGuard,
+  guardPairTrajectory,
+} from "../src/physics/pair-guard.ts";
 import { DamageSystem } from "../src/damage.ts";
 import { createSimulatedCar } from "../src/physics/simulation.ts";
 import { originalCar } from "./support/original-car.mjs";
@@ -147,14 +150,49 @@ test("shared multi-hull bodies retain independent escaping-overlap and clear-hul
       [b, path(b)],
       [c, path(c)],
     ]);
-  const expected = compare(
-    bodies,
-    paths,
-    "two-hull shared-body overlap allowances",
+  const legacy = legacyGuardBodyTrajectories(bodies, paths),
+    actual = retainedGuard.run(bodies, paths);
+  assert.ok(actual.get(a) > 0 && actual.get(a) < 1);
+  assert.equal(
+    actual.get(a),
+    legacy.get(a),
+    "real obstruction keeps its original limit",
   );
-  assert.ok(expected.get(a) > 0 && expected.get(a) < 1);
-  assert.ok(Object.is(expected.get(a), expected.get(b)));
-  assert.ok(Object.is(expected.get(a), expected.get(c)));
+  assert.equal(
+    actual.get(a),
+    actual.get(b),
+    "the obstructing body stays coupled",
+  );
+  assert.equal(
+    actual.get(c),
+    1,
+    "an escaping overlap must not inherit an unrelated obstruction",
+  );
+  assert.ok(
+    legacy.get(c) < 1,
+    "legacy broadphase coupling demonstrates the corrected bug",
+  );
+  const clipped = new Map(
+    [...paths].map(([item, trajectory]) => [
+      item,
+      (t) => trajectory(t * actual.get(item)),
+    ]),
+  );
+  for (const [first, second] of [
+    [a, b],
+    [a, c],
+    [b, c],
+  ])
+    assert.equal(
+      guardPairTrajectory(
+        first,
+        second,
+        clipped.get(first),
+        clipped.get(second),
+      ),
+      1,
+      "the independently accepted prefixes remain collision-safe",
+    );
 
   a.hulls = [embedded];
   const escaped = compare(

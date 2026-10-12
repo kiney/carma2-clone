@@ -137,6 +137,14 @@ Data issues do not request changes to original files. `carma2_orig/` remains rea
 
 ## Maintaining tasks
 
+PHY-12 / TASK-105 was inserted at priority 1 for the reproduced airborne freeze
+beside blocked, non-contacting props. Its verified fix replaces proximity-based
+guard coupling with actual trajectory constraints and revalidation; see
+[implementation and validation](../docs/guard-coupling-fix.md). PHY-10 terrain
+support traps and PHY-11 degenerate crush hulls retain their independent scope
+and user-edited priorities. This bugfix does not complete PERF-01 or the broader
+engine-fidelity work.
+
 Use the CLI or browser to edit tasks rather than manually rewriting task Markdown. Move selected work to `next`, active work to `wip`, and verified finished scope to `done`. Leave finished tasks on the board; archiving removes them from `done`.
 
 ```sh

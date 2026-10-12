@@ -80,6 +80,9 @@ export interface BodyGuardDiagnostics extends BodyBroadphaseDiagnostics {
   maskTests: number;
   maskRejected: number;
   attachmentPairs: number;
+  dependencyMerges: number;
+  revalidationCalls: number;
+  conservativeFallbacks: number;
 }
 interface GeometrySnapshot {
   hulls: CollisionHull[];
@@ -366,11 +369,10 @@ function guardSpherePairTrajectory(
   return 1;
 }
 
-/** Give each broadphase-connected group a common path parameter. Independent
- * pair clamps can themselves introduce a new crossing when only A is slowed.
- * Broadphase spheres enclose the entire rotation arc about the moving COM,
- * unlike a union of endpoint AABBs. Each child's own hinge path is retained. */
-/** Only the broadphase index survives phases. Geometry is rebuilt per run. */
+/** Couple attachment and actual conflicting trajectories, not broadphase
+ * proximity. Revalidate unequal prefixes: slowing one body can create a new
+ * crossing. Full-path bounds enclose every tested prefix and rotation arc.
+ * Only the broadphase index survives phases. Geometry is rebuilt per run. */
 export class BodyTrajectoryGuard {
   private broadphase = new BodyBroadphase();
   clear() {
@@ -389,6 +391,9 @@ export class BodyTrajectoryGuard {
         diagnostics.maskRejected =
         diagnostics.maskTests =
         diagnostics.attachmentPairs =
+        diagnostics.dependencyMerges =
+        diagnostics.revalidationCalls =
+        diagnostics.conservativeFallbacks =
           0;
     }
     const workingSet = new GuardWorkingSet(diagnostics);
@@ -461,12 +466,11 @@ export class BodyTrajectoryGuard {
         union(i, j);
         continue;
       }
-      if (!bodies[i].properties.immovable && !bodies[j].properties.immovable)
-        union(i, j);
       pairs.push([i, j]);
     }
-    const limits = new Map<number, number>();
-    for (const [i, j] of pairs) {
+    // A full-path pair result certifies every common prefix up to its limit.
+    // Record all certificates before assigning different component prefixes.
+    const certificates = pairs.map(([i, j]) => {
       if (diagnostics) diagnostics.pairGuardCalls++;
       const fraction = guardPairTrajectory(
         bodies[i],
@@ -476,14 +480,138 @@ export class BodyTrajectoryGuard {
         pairAllowed,
         workingSet,
       );
-      for (const index of [i, j])
-        if (!bodies[index].properties.immovable)
-          limits.set(
-            find(index),
-            Math.min(limits.get(find(index)) ?? 1, fraction),
+      if (
+        fraction < 1 &&
+        !bodies[i].properties.immovable &&
+        !bodies[j].properties.immovable
+      )
+        union(i, j);
+      return fraction;
+    });
+    const caps = new Map<number, number>();
+    const assignCaps = () => {
+      caps.clear();
+      for (let k = 0; k < pairs.length; k++)
+        for (const index of pairs[k])
+          if (!bodies[index].properties.immovable) {
+            const root = find(index);
+            caps.set(root, Math.min(caps.get(root) ?? 1, certificates[k]));
+          }
+    };
+    assignCaps();
+    const limit = (i: number) =>
+      bodies[i].properties.immovable ? 1 : (caps.get(find(i)) ?? 1);
+    const fallback = (seed?: number) => {
+      // An independent clamp can introduce contacts across candidate edges.
+      // Fall back over the complete allowed broadphase component, never just
+      // the currently known interaction group. Original certificates suffice.
+      let affected: Set<number> | undefined;
+      if (seed !== undefined) {
+        const broadParents = bodies.map((_, i) => find(i));
+        const broadFind = (i: number): number =>
+          broadParents[i] === i
+            ? i
+            : (broadParents[i] = broadFind(broadParents[i]));
+        for (const [i, j] of pairs)
+          if (
+            !bodies[i].properties.immovable &&
+            !bodies[j].properties.immovable
+          )
+            broadParents[broadFind(j)] = broadFind(i);
+        const root = broadFind(seed);
+        affected = new Set(
+          bodies.map((_, i) => i).filter((i) => broadFind(i) === root),
+        );
+      }
+      for (const [i, j] of pairs)
+        if (
+          (!affected || affected.has(i)) &&
+          !bodies[i].properties.immovable &&
+          !bodies[j].properties.immovable
+        )
+          union(i, j);
+      assignCaps();
+      if (diagnostics) diagnostics.conservativeFallbacks++;
+    };
+    if (
+      bodies.some(
+        (body) => body.properties.immovable && !paths.get(body)!.constantPose,
+      )
+    ) {
+      // Arbitrary moving immovable providers have no common-prefix proof;
+      // retain their previous conservative behavior. Runtime static paths
+      // explicitly supply constantPose, including post-projection guards.
+      fallback();
+    } else {
+      const wrappers = new Map<HullBody, { limit: number; path: PosePath }>();
+      const prefix = (i: number, value: number): PosePath => {
+        const body = bodies[i],
+          source = paths.get(body)!;
+        if (value === 1 || source.constantPose) return source;
+        const old = wrappers.get(body);
+        if (old?.limit === value) return old.path;
+        const path: PosePath = (t) => source(t * value);
+        path.stable = source.stable;
+        // Total angular travel is a bound, not a promise of uniform rate.
+        path.angularTravel = source.angularTravel;
+        wrappers.set(body, { limit: value, path });
+        return path;
+      };
+      const checked = pairs.map(() => [-1, -1]);
+      let checks = 0,
+        changed = true;
+      const budget = Math.max(64, pairs.length * 4);
+      while (changed) {
+        changed = false;
+        for (let k = 0; k < pairs.length; k++) {
+          const [i, j] = pairs[k],
+            a = limit(i),
+            b = limit(j);
+          // All same-component paths have the same prefix. Static paths are
+          // constant, so their movable partner also retains its certificate.
+          if (
+            a === b ||
+            bodies[i].properties.immovable ||
+            bodies[j].properties.immovable
+          )
+            continue;
+          if (checked[k][0] === a && checked[k][1] === b) continue;
+          if (++checks > budget) {
+            fallback(i);
+            // This component is now certified; retain the exhausted global
+            // budget and seal other unresolved components without more sweeps.
+            changed = true;
+            continue;
+          }
+          checked[k] = [a, b];
+          if (diagnostics) {
+            diagnostics.pairGuardCalls++;
+            diagnostics.revalidationCalls++;
+          }
+          const fraction = guardPairTrajectory(
+            bodies[i],
+            bodies[j],
+            prefix(i, a),
+            prefix(j, b),
+            pairAllowed,
+            workingSet,
           );
+          if (fraction >= 1) continue;
+          const first = find(i),
+            second = find(j);
+          const common = Math.min(caps.get(first) ?? 1, caps.get(second) ?? 1);
+          union(first, second);
+          caps.delete(first);
+          caps.delete(second);
+          caps.set(find(i), common);
+          // Their original trajectories were certified at a common prefix;
+          // applying fraction again would clip the wrong relative-time paths.
+          changed = true;
+          if (diagnostics) diagnostics.dependencyMerges++;
+        }
+      }
     }
-    return new Map(bodies.map((body, i) => [body, limits.get(find(i)) ?? 1]));
+    return new Map(bodies.map((body, i) => [body, caps.get(find(i)) ?? 1]));
   }
 }
 
