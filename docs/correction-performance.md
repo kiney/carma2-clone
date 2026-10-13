@@ -1,6 +1,8 @@
 # Correction-pass reuse (PERF-12)
 
 PERF-12 / TASK-100.7, compared with accepted engine `a3b27d0`.
+This records the historical cache baseline. PERF-15 replaces its eight global
+correction rounds; see [local response orchestration](local-response-performance.md).
 
 ## Implementation
 
@@ -70,12 +72,12 @@ kinematics, hull hashes, damage/structural revisions, attachment state and every
 guard fraction. Both traverse eight correction passes and ten body collections
 (including restart work). The collection calls themselves remain live.
 
-| Work per first heavy tick | Stock off → on | Advanced off → on |
-| --- | --- | --- |
-| Body hull transformations | 298 → 95 | 370 → 93 |
-| Pair emitters computed | 109 → 87 | 109 → 78 |
-| Static-world guard collections computed | 135 → 78 | 171 → 82 |
-| World-guard hull transformations | 660 → 401 | 754 → 409 |
+| Work per first heavy tick               | Stock off → on | Advanced off → on |
+| --------------------------------------- | -------------- | ----------------- |
+| Body hull transformations               | 298 → 95       | 370 → 93          |
+| Pair emitters computed                  | 109 → 87       | 109 → 78          |
+| Static-world guard collections computed | 135 → 78       | 171 → 82          |
+| World-guard hull transformations        | 660 → 401      | 754 → 409         |
 
 Traced first-tick CPU times were 169.5→112.9 ms stock and 62.2→58.8 ms Advanced.
 Traced frame maxima were 175.6→131.7 ms stock and **65.4→81.1 ms Advanced**;
@@ -84,19 +86,19 @@ the adverse Advanced frame sample is retained.
 Separate minimally instrumented ABBA first-heavy-tick samples, in off/on/on/off
 order:
 
-| Capture | Four first-heavy-tick times (ms) |
-| --- | --- |
-| Stock | 145.3 / 103.5 / 103.7 / 70.8 |
-| Advanced | 126.4 / 117.1 / 159.9 / 199.5 |
+| Capture  | Four first-heavy-tick times (ms) |
+| -------- | -------------------------------- |
+| Stock    | 145.3 / 103.5 / 103.7 / 70.8     |
+| Advanced | 126.4 / 117.1 / 159.9 / 199.5    |
 
 The corresponding 250 ms CPU-only frame samples retain this full distribution:
 
-| Capture | Mode | Frames | Frame p50 / p95 / max (ms) | Tick p50 / p95 / max (ms) |
-| --- | --- | --- | --- | --- |
-| Stock | off | 16 | 24.4 / 239.3 / 239.3 | 37.9 / 71.2 / 71.2 |
-| Stock | on | 15 | 44.6 / 197.7 / 197.7 | 40.0 / 89.2 / 89.2 |
-| Advanced | off | 11 | 59.3 / 361.4 / 361.4 | 74.1 / 100.3 / 100.3 |
-| Advanced | on | 11 | 35.8 / 282.6 / 282.6 | 63.0 / 87.7 / 87.7 |
+| Capture  | Mode | Frames | Frame p50 / p95 / max (ms) | Tick p50 / p95 / max (ms) |
+| -------- | ---- | ------ | -------------------------- | ------------------------- |
+| Stock    | off  | 16     | 24.4 / 239.3 / 239.3       | 37.9 / 71.2 / 71.2        |
+| Stock    | on   | 15     | 44.6 / 197.7 / 197.7       | 40.0 / 89.2 / 89.2        |
+| Advanced | off  | 11     | 59.3 / 361.4 / 361.4       | 74.1 / 100.3 / 100.3      |
+| Advanced | on   | 11     | 35.8 / 282.6 / 282.6       | 63.0 / 87.7 / 87.7        |
 
 Heavy-tick maxima and these frame maxima improve, but several medians and stock
 frame-tick tails worsen. Small samples, JIT/GC and shared-workstation load make

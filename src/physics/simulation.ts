@@ -1,4 +1,8 @@
 import {
+  runLocalResponses,
+  type LocalResponseDiagnostics,
+} from "./local-response";
+import {
   BodyBroadphase,
   type BodyBroadphaseDiagnostics,
 } from "./body-broadphase";
@@ -168,6 +172,7 @@ import {
 } from "./motion";
 import {
   resolveContactGroups,
+  DeferredContactFriction,
   type RigidBody,
   type Contact,
   type ContactImpact,
@@ -875,14 +880,19 @@ export class VehicleSimulation {
   private bodyBroadphase = new BodyBroadphase();
   private bodyTrajectoryGuard = new BodyTrajectoryGuard();
   private hierarchyMotion?: HierarchyMotionPhase;
+  private collisionTraversalRevision = 0;
   /** Diagnostic A/B switch; production defaults to validated reuse. */
   correctionReuse = true;
   correctionDiagnostics?: CorrectionDiagnostics &
-    StationaryBoundsDiagnostics & {
+    StationaryBoundsDiagnostics &
+    LocalResponseDiagnostics & {
       correctionPasses?: number;
       contactCollections?: number;
       worldCollections?: number;
       worldHullTransforms?: number;
+      deferredFrictionRows?: number;
+      deferredFrictionOverflow?: number;
+      deferredFrictionApplied?: number;
     };
   private correctionWorkingSet?: CorrectionWorkingSet;
   private correctionGeometry = new CorrectionWorkingSet();
@@ -1240,6 +1250,7 @@ export class VehicleSimulation {
   /** Discontinuous placement/world topology changes invalidate retained faces.
    * Normal pose motion uses GetFacesNearObject's containment and ring lifetime. */
   invalidateWorldFaceCache(body?: RigidBody): void {
+    if (!body) this.collisionTraversalRevision++;
     if (body) {
       const state = this.worldFaceStates.get(body);
       if (state) this.worldFaceCache.invalidate(state);
@@ -1352,6 +1363,7 @@ export class VehicleSimulation {
     if (this.grooves.stopActor(actor, this.worldGrooveOptions)) {
       this.prepareMovingWorldPoses();
       this.world.refreshDynamic?.();
+      this.collisionTraversalRevision++;
     }
   }
   private pullWorldActor(actor: Object3D): object | null {
@@ -1359,6 +1371,7 @@ export class VehicleSimulation {
     const body = this.noncars.find((body) => body.actor === actor);
     if (!body || actor.userData.noncarPulled) return null;
     if (!this.admitPulledNonCar(body)) return null;
+    this.collisionTraversalRevision++;
     actor.userData.noncarPulled = true;
     actor.userData.c2ActorTypeData = body;
     body.state.velocity.set(0, 0, 0);
@@ -1392,6 +1405,7 @@ export class VehicleSimulation {
       // above retain their vertices and captured CCD pose for this query.
       this.prepareMovingWorldPoses();
       this.world.refreshDynamic?.();
+      this.collisionTraversalRevision++;
     }
   }
   private movingSurfaceContact(
@@ -3772,7 +3786,10 @@ export class VehicleSimulation {
     contacts.push(...this.collectBodyContacts(bodies));
     return contacts;
   }
-  private collectBodyContacts(bodies: SimulationBody[]): Contact[] {
+  private collectBodyContacts(
+    bodies: SimulationBody[],
+    incidentBodies?: ReadonlySet<SimulationBody>,
+  ): Contact[] {
     const contacts: Contact[] = [];
     if (this.correctionDiagnostics)
       this.correctionDiagnostics.contactCollections =
@@ -3893,7 +3910,12 @@ export class VehicleSimulation {
     const diagnostics = this.bodyPairDiagnostics
       ? ({} as BodyContactDiagnostics)
       : undefined;
-    const pairs = this.bodyBroadphase.pairs(bodies, bounds, diagnostics);
+    const pairs = this.bodyBroadphase.pairs(
+      bodies,
+      bounds,
+      diagnostics,
+      incidentBodies,
+    );
     if (diagnostics) {
       diagnostics.maskRejected =
         diagnostics.jointRejected =
@@ -4919,119 +4941,126 @@ export class VehicleSimulation {
         body.overlapDetected = false;
         body.worldOverlapDetected = false;
       }
-      this.predictHierarchy(bodies);
+      // Installed4ba450 traverses OLD-X primaries and retries their response
+      // rings; it does not recollect every scene object eight times. Friction
+      // records survive retries and are applied after normal pose commitment.
+      const friction = new DeferredContactFriction();
+      const responseInputs = new CorrectionWorkingSet();
       const restartGroups: Set<SimulationBody>[] = [];
-      const beforeApply = (
-        impacts: ContactImpact[],
-        jointImpacts: JointConstraintImpact[],
-      ) => {
-        const accepted = this.processImpactDamage(
-          impacts,
-          jointImpacts,
-          restartGroups,
-        );
-        if (accepted !== false) this.processPedContactDamage(impacts);
-        return accepted;
-      };
-      const joints = this.allJoints();
-      this.lastImpacts = resolveContactGroups(
-        this.preparePedContacts(this.collectContacts(bodies)),
-        PHYSICS_STEP,
-        joints,
-        beforeApply,
-      );
-      // Source split invalidates the old contact solve. Rebuild the changed group
-      // immediately, with the original 30-pass guard, before advancing this tick.
-      const restartCounts = new Map<SimulationBody, number>();
-      const resolveRestarts = () => {
-        while (restartGroups.length) {
-          const members = restartGroups.shift()!;
-          const changed = [...members].filter(
-            (body) => "hulls" in body && !this.disabledWorldActor(body),
-          );
-          if (changed.some((body) => (restartCounts.get(body) ?? 0) >= 30))
-            continue;
-          for (const body of changed)
-            restartCounts.set(body, (restartCounts.get(body) ?? 0) + 1);
-          this.predictHierarchy(this.allBodies());
-          const changedJoints = [...this.debris, ...this.noncars].flatMap(
-            (b) => (b.joint && members.has(b) ? [b.joint] : []),
-          );
-          this.lastImpacts.push(
-            ...resolveContactGroups(
-              this.preparePedContacts(this.collectContacts(changed)),
-              PHYSICS_STEP,
-              changedJoints,
-              beforeApply,
-            ),
-          );
-        }
-      };
-      resolveRestarts();
-      for (const car of this.cars)
-        if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
-      // Recollect after impulses, rather than advancing an unchecked trajectory.
-      // The bounded final sweep conservatively stops at the actual triangle;
-      // it neither assumes an infinite floor nor changes authored body shapes.
-      let guardResults = new Map<
-        SimulationBody,
-        ReturnType<VehicleSimulation["advanceWorldContacts"]>
-      >();
-      for (let pass = 0; pass < 8; pass++) {
-        if (this.correctionDiagnostics)
-          this.correctionDiagnostics.correctionPasses =
-            (this.correctionDiagnostics.correctionPasses ?? 0) + 1;
-        // Every solve can redirect a pair trajectory, including props which
-        // intentionally ignore world faces. Their predicted pose must not be
-        // inherited from the pre-impulse solve or an early-returning world guard.
-        // Collection is synchronous: take one ordered roster for this phase.
-        // Rebuild it on the next pass, after contact preparation, damage and
-        // restart callbacks can activate/remove bodies or detach new parts.
-        // The diagnostic uncached path retains the original collection calls.
-        const passBodies = this.correctionReuse ? this.allBodies() : undefined;
-        this.predictHierarchy(passBodies ?? this.allBodies());
-        guardResults = new Map(
-          (passBodies ?? this.allBodies()).map((body) => [
-            body,
-            this.advanceWorldContacts(body),
-          ]),
-        );
-        const contacts = [...guardResults.values()].flatMap(
-          (guard) => guard.contacts,
-        );
-        // Impulses may create a body-pair crossing which was absent from the
-        // first trajectory. Recollect the same authored hulls, not only roads.
-        contacts.push(
-          ...this.collectBodyContacts(passBodies ?? this.allBodies()),
-        );
-        if (this.movingWorld.length)
-          for (const body of passBodies ?? this.allBodies())
-            contacts.push(
-              ...this.worldContacts(body, body.hulls).filter(
-                (contact) =>
-                  contact.b &&
-                  "kind" in contact.b &&
-                  contact.b.kind === "moving-world",
-              ),
-            );
-        if (!contacts.length) break;
-        this.lastImpacts.push(
-          ...resolveContactGroups(
-            this.preparePedContacts(contacts),
-            PHYSICS_STEP,
-            this.allJoints(),
-            beforeApply,
+      let revision = this.world.getStaticGuardRevision?.();
+      let traversalRevision = this.collisionTraversalRevision;
+      let worldToken = {};
+      const defaultCollector = (provider: unknown, native: unknown) =>
+        provider === native ||
+        (typeof provider === "function" &&
+          (provider as { correctionObserverSource?: unknown })
+            .correctionObserverSource === native);
+      this.lastImpacts = runLocalResponses<SimulationBody>({
+        roster: () => this.allBodies(),
+        joints: () => this.allJoints(),
+        input: (body) => responseInputs.responseInput(body),
+        // Default world collection mutations are ACT-pull/StopGroovidelic;
+        // both explicitly advance the traversal epoch. Custom providers retain
+        // the full scan, so hidden mutations cannot use this fast protocol.
+        worldCollectionVersion:
+          this.world.collectFaces === WorldCollision.prototype.collectFaces &&
+          this.world.queryLocalSurfaces ===
+            WorldCollision.prototype.queryLocalSurfaces &&
+          this.world.querySurfaces === WorldCollision.prototype.querySurfaces &&
+          this.world.modifier === WorldCollision.prototype.modifier &&
+          defaultCollector(
+            this.worldContacts,
+            VehicleSimulation.prototype.worldContacts,
+          ) &&
+          defaultCollector(
+            this.advanceWorldContacts,
+            VehicleSimulation.prototype.advanceWorldContacts,
+          )
+            ? () => this.collisionTraversalRevision
+            : undefined,
+        emptyPreparationIsPure:
+          this.preparePedContacts ===
+            VehicleSimulation.prototype.preparePedContacts &&
+          defaultCollector(
+            this.collectBodyContacts,
+            VehicleSimulation.prototype.collectBodyContacts,
           ),
-        );
-        resolveRestarts();
-        guardResults.clear();
-      }
-      this.finishNonCarQuietLeaves();
-      this.finishPedBoneQuiet();
-      this.finishPedQuiet();
-      this.finishNonCarQuietRings();
+        worldVersion: () => {
+          const next = this.world.getStaticGuardRevision?.();
+          if (
+            !Object.is(next, revision) ||
+            traversalRevision !== this.collisionTraversalRevision
+          ) {
+            revision = next;
+            traversalRevision = this.collisionTraversalRevision;
+            worldToken = {};
+          }
+          return worldToken;
+        },
+        predict: (roster, changed) => {
+          if (changed || !this.hierarchyMotion) this.predictHierarchy(roster);
+          else this.hierarchyMotion.writeCandidates(roster);
+        },
+        worldRows: (body) => {
+          // Native finite surface collection remains live. Angular CCD adds
+          // missing directions, including a wall while the floor supports the
+          // body. Its safe-prefix writes are not a normal-response candidate:
+          // every pair must see the same OLD-reintegrated endpoints this phase.
+          const native = this.worldContacts(body, body.hulls);
+          const position = body.state.predictedPosition!.clone();
+          const orientation = body.state.predictedOrientation!.clone();
+          const angular = this.advanceWorldContacts(body).contacts;
+          body.state.predictedPosition!.copy(position);
+          body.state.predictedOrientation!.copy(orientation);
+          return [
+            ...native,
+            ...angular.filter(
+              (row) =>
+                !native.some(
+                  (other) =>
+                    other.b === row.b &&
+                    other.normal.dot(row.normal) > 1 - 1e-8,
+                ),
+            ),
+          ];
+        },
+        pairRows: (roster, incident) =>
+          this.collectBodyContacts(roster, incident),
+        prepare: (rows) => this.preparePedContacts(rows),
+        solve: (rows, joints) => {
+          let rejected = false,
+            positiveJointImpulse = false;
+          const impacts = resolveContactGroups(
+            rows,
+            PHYSICS_STEP,
+            joints,
+            (impacts, jointImpacts) => {
+              positiveJointImpulse ||= jointImpacts.some(
+                (row) => Math.abs(row.normalImpulse) > 0,
+              );
+              const accepted = this.processImpactDamage(
+                impacts,
+                jointImpacts,
+                restartGroups,
+              );
+              if (accepted !== false) this.processPedContactDamage(impacts);
+              rejected ||= accepted === false;
+              return accepted;
+            },
+            friction,
+          );
+          // Geometry/COM/attachment changes are visible at the next local
+          // collection barrier. Never keep rows against a pre-split shape.
+          for (const car of this.cars)
+            if (this.isCarPhysicsActive(car)) this.syncStructuralState(car);
+          rejected ||= restartGroups.length > 0;
+          restartGroups.length = 0;
+          return { impacts, rejected, positiveJointImpulse };
+        },
+        diagnostics: this.correctionDiagnostics,
+      });
       const committing = this.allBodies();
-      // The final solve/quiet phase may have changed velocities, ancestry or
+      // The final normal solve may have changed velocities, ancestry or
       // immovability. Its trajectory must not reuse the pre-response phase.
       this.predictHierarchy(committing);
       const worldFractions = new Map(
@@ -5063,11 +5092,34 @@ export class VehicleSimulation {
       // Commit exactly the jointly constrained paths verified above. Supported
       // native joints already align their anchors during prediction; a second
       // independent post-commit projection would create an unexamined trajectory.
+      const oldOrientations = new Map<RigidBody, Quaternion>(
+        [...committing, ...this.movingWorld].map((body) => [
+          body,
+          body.state.orientation.clone(),
+        ]),
+      );
       commitMotion.commit(committing, pairFractions);
       for (const body of committing) {
         body.overlapRecovery = body.overlapDetected;
         body.worldRecovery = body.worldOverlapDetected;
       }
+      for (const body of this.movingWorld) commitMovingWorldPose(body);
+      const frictionBodies = new Set<RigidBody>([
+        ...committing,
+        ...this.movingWorld,
+      ]);
+      friction.flush(oldOrientations, (body) => frictionBodies.has(body));
+      if (this.correctionDiagnostics) {
+        this.correctionDiagnostics.deferredFrictionRows = friction.queued;
+        this.correctionDiagnostics.deferredFrictionOverflow = friction.overflow;
+        this.correctionDiagnostics.deferredFrictionApplied = friction.applied;
+      }
+      // Source4ba688 friction precedes4ba6ab quiet/postprocessing. Friction
+      // changes velocities for the next tick, never reintegrates this pose.
+      this.finishNonCarQuietLeaves();
+      this.finishPedBoneQuiet();
+      this.finishPedQuiet();
+      this.finishNonCarQuietRings();
       for (const car of this.cars) {
         if (!this.isCarPhysicsActive(car)) continue;
         const forward = new Vector3(0, 0, -1).applyQuaternion(
@@ -5132,7 +5184,6 @@ export class VehicleSimulation {
         this.syncActor(body);
       }
       this.world.refreshDynamic?.();
-      for (const body of this.movingWorld) commitMovingWorldPose(body);
       // PHILDoPhysics consumes the current debt, then subtracts40. Its final
       // outer-frame exit restores1; direct standalone steps have that same exit.
       this.mechanicsTimeSync = this.collectingOrdinaryCrush

@@ -78,9 +78,9 @@ sets header2, world recovery and gravity1. It introduces no car kick or spin.
 These steps reuse the engine's existing additional trajectory recollection and
 commit safety guards. Their bounded extra solves are host safety behavior;
 this integration does not claim to replace the complete original PHIL loop.
-The native first50-row flag queue is implemented, while the shared existing
-contact solver's friction application does not yet enforce that global queue
-capacity. This is a distinct remaining generic-solver compatibility gap.
+PERF-15 now applies normal collision friction through the same shared first50
+record capacity, after normal pose commitment and before quiet processing.
+Exceptional native filter byte+1dd is still unmapped.
 
 ## Public ownership and providers
 
@@ -153,7 +153,7 @@ original human `blokebl` mass `.06800000369548798` and dog `twolf` mass
 `.04699999839067459`, authored moments and centered plane impulse; exact40ms
 gravity/no drag; original Eagle hull contact activating a flag0x40-clear
 passive body with copied character V and zero added omega; source world-contact
-flags, quiet zeroing before commitment and one halt callback after a three-step
+flags, normal commitment followed by deferred friction and quiet zeroing and one halt callback after a three-step
 outer frame; exclusions in contact/commit guards; and whole emitted pair-ring
 sleep with conservative rejection for an unknown external member. Original
 installation tests read only and skip when absent. Nine existing pair-guard

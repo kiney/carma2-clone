@@ -61,6 +61,12 @@ native callbacks and final collision safeguards remain live. Heavy Timber tests
 show fewer transformations and repeated guard queries, with mixed frame-time
 results documented rather than a steady-FPS guarantee.
 
+[Local response orchestration](docs/local-response-performance.md) now replaces
+those eight global rounds with C2-informed collision rings and deferred friction.
+Saved Cerby work is localized while preserving movement, joints and repair.
+Whole-tick timings are mixed, including an Advanced regression; PERF-01 remains
+open and PERF-16 next addresses the still-loaded inactive physics roster.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:

@@ -102,16 +102,20 @@ function buildTree(
  * static/static discovery. Storage is O(B + P), excluding temporary build slices.
  * Dense overlap can still produce quadratic output. Exceptional boxes conservatively
  * scan eligible bodies to preserve Three's exact NaN/infinity/inverted-box semantics.
+ * An incident set restricts discovery to pairs touching that set: changed moving
+ * bodies query both trees, while changed fixed bodies query only moving bodies.
+ * The full roster still validates the static tree and supplies potential neighbors.
  */
 export class BodyBroadphase {
   private snapshots: StaticSnapshot[] = [];
   private staticTree?: BoundsNode;
   private exceptionalStatic: number[] = [];
 
-  pairs(
-    bodies: readonly BroadphaseBody[],
+  pairs<Body extends BroadphaseBody>(
+    bodies: readonly Body[],
     bounds: readonly Box3[],
     diagnostics?: BodyBroadphaseDiagnostics,
+    incidentBodies?: ReadonlySet<Body>,
   ): [number, number][] {
     if (bodies.length !== bounds.length)
       throw new Error("Body broadphase requires one bound per body");
@@ -130,10 +134,12 @@ export class BodyBroadphase {
     const moving: number[] = [],
       ordinaryMoving: number[] = [],
       exceptionalMoving: number[] = [];
+    const incident: number[] | undefined = incidentBodies ? [] : undefined;
     let staticCount = 0,
       rebuild = false;
     for (let i = 0; i < bodies.length; i++) {
       const body = bodies[i];
+      if (incidentBodies?.has(body)) incident!.push(i);
       if (body.properties.immovable) {
         const old = this.snapshots[staticCount++];
         if (
@@ -179,10 +185,19 @@ export class BodyBroadphase {
       diagnostics.exceptionalBounds =
         exceptionalMoving.length + this.exceptionalStatic.length;
     }
-    const movingTree = buildTree(ordinaryMoving, bounds);
+    const movingTree =
+      incident?.length === 0 ? undefined : buildTree(ordinaryMoving, bounds);
     const pairs: [number, number][] = [];
     const check = (source: number, target: number, movingTarget: boolean) => {
-      if (movingTarget && target <= source) return;
+      if (incidentBodies) {
+        // Either dirty endpoint may discover this pair. Let its lower dirty
+        // index own it; an unchanged lower endpoint must still be discovered.
+        if (
+          target === source ||
+          (target < source && incidentBodies.has(bodies[target]))
+        )
+          return;
+      } else if (movingTarget && target <= source) return;
       const i = Math.min(source, target),
         j = Math.max(source, target);
       if (diagnostics) {
@@ -209,11 +224,14 @@ export class BodyBroadphase {
         query(node.right, source, movingTarget, ordinary);
       }
     };
-    for (const source of moving) {
+    for (const source of incident ?? moving) {
       const ordinary = ordinaryBounds(bounds[source]);
-      query(this.staticTree, source, false, ordinary);
+      const movingSource = !bodies[source].properties.immovable;
+      if (movingSource) query(this.staticTree, source, false, ordinary);
       query(movingTree, source, true, ordinary);
-      for (const target of this.exceptionalStatic) check(source, target, false);
+      if (movingSource)
+        for (const target of this.exceptionalStatic)
+          check(source, target, false);
       for (const target of exceptionalMoving) check(source, target, true);
     }
     pairs.sort(([ai, aj], [bi, bj]) => ai - bi || aj - bj);

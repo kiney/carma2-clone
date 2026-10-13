@@ -526,6 +526,8 @@ try {
           entry.userData.worldSmashSpecIndices?.includes(specIndex),
       );
       if (!actor) throw new Error("Stock Carrier core actor is not live");
+      const sourceNames = [];
+      actor.traverse((object) => sourceNames.push(object.name));
       const point = actor.getWorldPosition(new actor.position.constructor());
       const player = c.player;
       player.state.position.copy(point).add(new point.constructor(1, 0, 0));
@@ -546,6 +548,8 @@ try {
       });
       return {
         actor: actor.name,
+        sourceNames,
+        sourceTrigger: destruction.specs[specIndex].trigger.name,
         point: point.toArray(),
         changed: result.changed,
         missionBefore: before,
@@ -555,7 +559,13 @@ try {
         status: c.race.status,
       };
     });
-    assert.equal(core.actor, "&coR0122.ACT");
+    // PHIL admission can change the encoded slot suffix. The retained source
+    // ACT binding, not an incidental first runtime name, identifies the Core.
+    assert.equal(core.sourceTrigger?.toLowerCase(), "&core.act");
+    assert.ok(
+      core.sourceNames.some((name) => name.toLowerCase() === "&core.act"),
+      `the selected retained actor contains the authored Core model: ${JSON.stringify(core)}`,
+    );
     assert.equal(core.changed, true);
     assert.equal(core.missionBefore, 17);
     assert.equal(core.missionAfter, 18);

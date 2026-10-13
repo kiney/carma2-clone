@@ -146,7 +146,10 @@ for (const name of ["EAGLE3", "monsterbug"]) {
       }
       car.input.throttle = 0;
       car.input.handbrake = true;
-      for (let i = 0; i < 60; i++) sim.step();
+      // Deferred friction no longer adds tangential damping before this tick's
+      // pose integration. Give the original suspension a bounded4.8s settling
+      // window; require restored wheel support and upright state below.
+      for (let i = 0; i < 120; i++) sim.step();
       assert.ok(
         car.state.position.z > 0,
         `reverse leaves plateau and crosses the ramp seam again: ${JSON.stringify({ position: car.state.position.toArray(), velocity: car.state.velocity.toArray(), speed: car.state.speed, gear: car.state.gear, wheels: car.state.groundedWheelCount, up: new Vector3(0, 1, 0).applyQuaternion(car.state.orientation).toArray(), split: car.damage.snapped, knackered: car.knackered })}`,

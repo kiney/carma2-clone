@@ -339,3 +339,10 @@ import "./immutable-car-shapes.test.mjs";
 import "./correction-simulation.test.mjs";
 import "./correction-integration.test.mjs";
 import "./smash-invalidation.test.mjs";
+
+import "./deferred-friction.test.mjs";
+import "./incident-broadphase.test.mjs";
+import "./probe-window.test.mjs";
+import "./local-response.test.mjs";
+import "./local-response-integration.test.mjs";
+import "./response-input.test.mjs";

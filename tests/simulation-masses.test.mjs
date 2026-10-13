@@ -170,21 +170,20 @@ test("source off-center Eagle/dump-truck side impact spins bodies according to c
         .multiplyScalar(eagle.properties.mass)
         .addScaledVector(freeTruck, truck.properties.mass),
     );
-    // Solver lever arms refer to the original actor/COM frame. The rigid-body
-    // integrator then applies the source gyroscopic step to the impulse response.
+    // Normal levers use OLD actor/COM coordinates. Native local retries commit
+    // their normal-only rotation/gyro before 0x4ba688 applies retained friction.
     const angular = new Vector3(),
       center = truck.properties.centerOfMass
         .clone()
         .applyQuaternion(initialOrientation)
         .add(initialPosition);
     for (const impact of sim.lastImpacts) {
-      if (impact.sourceType === 9) continue;
+      if (!impact.solverAccepted || impact.sourceType === 9) continue;
       const sign = impact.a === truck ? 1 : impact.b === truck ? -1 : 0;
       if (!sign) continue;
       const impulse = impact.normal
         .clone()
         .multiplyScalar(impact.normalImpulse)
-        .add(impact.tangentImpulse)
         .multiplyScalar(sign);
       angular.add(
         (sign === 1 ? impact.point : (impact.pointB ?? impact.point))
@@ -208,6 +207,32 @@ test("source off-center Eagle/dump-truck side impact spins bodies according to c
       properties: truck.properties,
     };
     advanceRigidBody(reference, PHYSICS_STEP);
+    near(truck.state.orientation.angleTo(reference.state.orientation), 0, 1e-7);
+    // Friction retains the OLD-local COM lever but transforms each tangential
+    // impulse through the accepted candidate basis. It updates next-tick omega
+    // after gyro/pose commitment; it does not reintegrate this tick's rotation.
+    const candidate = reference.state.orientation;
+    for (const impact of sim.lastImpacts) {
+      if (!impact.solverAccepted || impact.sourceType === 9) continue;
+      const sign = impact.a === truck ? 1 : impact.b === truck ? -1 : 0;
+      if (!sign) continue;
+      const oldLocalLever = (
+        sign === 1 ? impact.point : (impact.pointB ?? impact.point)
+      )
+        .clone()
+        .sub(initialPosition)
+        .applyQuaternion(initialOrientation.clone().invert())
+        .sub(truck.properties.centerOfMass);
+      const candidateLocalImpulse = impact.tangentImpulse
+        .clone()
+        .multiplyScalar(sign)
+        .applyQuaternion(candidate.clone().invert());
+      const delta = oldLocalLever
+        .cross(candidateLocalImpulse)
+        .divide(truck.properties.inertia)
+        .applyQuaternion(candidate);
+      reference.state.angularVelocity.add(delta);
+    }
     nearVector(
       truck.state.angularVelocity,
       reference.state.angularVelocity,
@@ -299,13 +324,11 @@ for (const name of ["EAGLE3", "buggy", "bigdump"]) {
         "Broad coplanar contact does not satisfy the authored split-edge gate",
       );
       const raw = sim.lastImpacts
-        .filter(
-          (i) =>
-            i.sourceType !== 9 && i.normalImpulse > 0,
-        )
+        .filter((i) => i.sourceType !== 9 && i.normalImpulse > 0)
         .reduce(
           // The native force-row lambda operand is Float32 before grouping.
-          (sum, i) => sum.addScaledVector(i.normal, Math.fround(i.normalImpulse)),
+          (sum, i) =>
+            sum.addScaledVector(i.normal, Math.fround(i.normalImpulse)),
           new Vector3(),
         );
       nearVector(calls[0].damage, raw.clone().multiplyScalar(0.2));

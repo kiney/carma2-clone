@@ -1,9 +1,165 @@
-/** Bounded in-page PERF-12 capture. Call only from a loopback Chromium harness. */
+/** Bounded in-page correction capture. Call only from a loopback Chromium harness. */
 const PLAYER_START = [-84.45, 1.53, 7.8355];
 const MATERIAL = "TEZFEN";
 const TEXTURE_CONTACT_IMPULSE = 0.54;
 const FRAME_CAPTURE_MS = 250;
 const MAX_CASE_MS = 2000;
+const MAX_TRACE_ROWS = 8192;
+const WORK_COUNTERS = Object.freeze([
+  "correctionPasses",
+  "contactCollections",
+  "worldCollections",
+  "worldHullTransforms",
+  "validityChecks",
+  "validityChanges",
+  "geometryTransforms",
+  "geometryHits",
+  "pairTests",
+  "pairHits",
+  "worldTests",
+  "worldHits",
+  "localCollections",
+  "responseSolves",
+  "retryRounds",
+  "traversalRestarts",
+  "consideredBodies",
+  "worldContactCollections",
+  "pairIncidentCollections",
+  "activeRoots",
+  "deferredFrictionRows",
+  "deferredFrictionOverflow",
+  "deferredFrictionApplied",
+  "inputScans",
+  "responseChangedBodies",
+  "retryExhaustions",
+  "normalResponseSolves",
+  "jointResponseSolves",
+]);
+
+/** Missing baseline counters are unknown, not zero work. */
+export function correctionWorkCounts(diagnostics) {
+  return Object.fromEntries(
+    WORK_COUNTERS.map((key) => {
+      const value = diagnostics?.[key];
+      if (value === undefined) return [key, null];
+      if (!Number.isSafeInteger(value) || value < 0)
+        throw new Error(`Invalid correction work counter ${key}`);
+      return [key, value];
+    }),
+  );
+}
+
+/** Coarse bounded observation: two timer reads per tick/update, none per hull,
+ * contact or dormant guard. Counts actual completed step calls rather than
+ * inferring ticks from elapsed time or a returned planned window. */
+export function installPhysicsWindowProbe(
+  sim,
+  {
+    now = () => performance.now(),
+    maximumUpdates = 128,
+    maximumTicks = 512,
+  } = {},
+) {
+  for (const value of [maximumUpdates, maximumTicks])
+    if (!Number.isInteger(value) || value < 1 || value > 512)
+      throw new Error("Probe retention bounds must be integers from 1 to 512");
+  if (typeof sim?.step !== "function" || typeof sim?.updateFrame !== "function")
+    throw new Error("Physics window probe needs step and updateFrame methods");
+  const originals = { step: sim.step, updateFrame: sim.updateFrame };
+  const descriptors = Object.fromEntries(
+    Object.keys(originals).map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(sim, key),
+    ]),
+  );
+  const updates = [],
+    stepSamples = [],
+    active = [];
+  let stopped = false,
+    updateCalls = 0,
+    tickCalls = 0,
+    completedTicks = 0;
+  let droppedUpdates = 0,
+    droppedTicks = 0;
+  const wrappers = {
+    step(...args) {
+      if (stopped) return originals.step.apply(this, args);
+      tickCalls++;
+      for (const window of active) window.tickCalls++;
+      const start = now();
+      let completed = false;
+      try {
+        const result = originals.step.apply(this, args);
+        completed = true;
+        completedTicks++;
+        for (const window of active) window.ticks++;
+        return result;
+      } finally {
+        const cpuMs = now() - start;
+        for (const window of active) window.tickCpuMs += cpuMs;
+        if (stepSamples.length < maximumTicks) stepSamples.push(cpuMs);
+        else droppedTicks++;
+        if (!completed) for (const window of active) window.failed = true;
+      }
+    },
+    updateFrame(...args) {
+      if (stopped) return originals.updateFrame.apply(this, args);
+      updateCalls++;
+      const row = {
+        frameStartMs: args[0],
+        requestedPeriodMs: args[1],
+        ticks: 0,
+        tickCalls: 0,
+        tickCpuMs: 0,
+        cpuMs: 0,
+        plannedTicks: null,
+        skippedMs: null,
+        failed: false,
+      };
+      const start = now();
+      active.push(row);
+      let completed = false;
+      try {
+        const result = originals.updateFrame.apply(this, args);
+        row.plannedTicks = result?.steps ?? null;
+        row.skippedMs = result?.skippedMs ?? null;
+        completed = true;
+        return result;
+      } finally {
+        active.pop();
+        row.cpuMs = now() - start;
+        row.failed ||= !completed;
+        if (updates.length < maximumUpdates) updates.push(row);
+        else droppedUpdates++;
+      }
+    },
+  };
+  sim.step = wrappers.step;
+  sim.updateFrame = wrappers.updateFrame;
+  return {
+    updates,
+    stepSamples,
+    counts() {
+      return {
+        updateCalls,
+        tickCalls,
+        completedTicks,
+        droppedUpdates,
+        droppedTicks,
+      };
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      for (const name of Object.keys(originals)) {
+        if (sim[name] !== wrappers[name]) continue;
+        if (descriptors[name])
+          Object.defineProperty(sim, name, descriptors[name]);
+        else delete sim[name];
+      }
+    },
+  };
+}
 const RECONSTRUCTED_ANGULAR_STATE = {
   source:
     "artifacts/timber-investigation/gentle-fence-population.json; recreated diagnostic state, not an exact scene snapshot",
@@ -333,13 +489,19 @@ export async function runCorrectionVariant({
     savedPaused = c.paused,
     savedRandom = Math.random;
   let fractionRows = [],
-    stepDescriptor,
     worldGuardDescriptor,
-    stepWrapper,
+    worldGuardWrapper,
+    measuredSimulation,
+    manualWindowProbe,
+    frameWindowProbe,
     prepared,
     manualStepMs = [],
     tracedDiagnostics,
     tracedFractions,
+    tracedCollectionWork,
+    collectionRestores = [],
+    manualFrameDiagnostics,
+    manualFrameState,
     frameIntervals = [],
     frameStepMs = [],
     animationFrame = 0,
@@ -409,6 +571,7 @@ export async function runCorrectionVariant({
 
     const sim = c.simulation,
       player = c.player;
+    measuredSimulation = sim;
     if (!player || !sim.cars.includes(player))
       throw new Error("Loaded race has no registered player car");
     const V = player.state.position.constructor,
@@ -496,15 +659,12 @@ export async function runCorrectionVariant({
         body.overlapDetected,
         body.worldOverlapDetected,
       ]),
-      { advanceRigidBody } = await import("/src/physics/integrate.ts");
-    for (const body of bodies) {
-      if (body.properties.immovable) {
-        (body.state.predictedPosition ??= new V()).copy(body.state.position);
-        (body.state.predictedOrientation ??= new Q()).copy(
-          body.state.orientation,
-        );
-      } else advanceRigidBody(body, 0.04, true);
-    }
+      { createHierarchyMotionPhase } = await import(
+        "/src/physics/hierarchy-motion.ts"
+      );
+    createHierarchyMotionPhase(bodies, sim.allJoints(), 0.04).writeCandidates(
+      bodies,
+    );
     sim.correctionReuse = reuse;
     sim.correctionWorkingSet = reuse
       ? new (
@@ -537,21 +697,87 @@ export async function runCorrectionVariant({
       "advanceWorldContacts",
     );
     const originalWorldGuard = sim.advanceWorldContacts;
-    if (traceFirstTick)
-      sim.advanceWorldContacts = function (body, refine = false) {
+    if (traceFirstTick) {
+      tracedCollectionWork = {
+        worldGuardCalls: 0,
+        movableWorldGuardCalls: 0,
+        refinedWorldGuardCalls: 0,
+        worldGuardContactRows: 0,
+        droppedFractionRows: 0,
+        pairCollections: 0,
+        pairConsideredBodies: 0,
+        pairContactRows: 0,
+        worldContactCollections: 0,
+        worldContactRows: 0,
+      };
+      worldGuardWrapper = function (body, refine = false) {
         const result = originalWorldGuard.call(this, body, refine);
-        fractionRows.push({ body, result, refine });
+        if (
+          !Number.isFinite(result.fraction) ||
+          result.fraction < 0 ||
+          result.fraction > 1
+        )
+          throw new Error(
+            "World guard returned a nonfinite or out-of-range fraction",
+          );
+        tracedCollectionWork.worldGuardCalls++;
+        tracedCollectionWork.movableWorldGuardCalls += Number(
+          !body.properties.immovable,
+        );
+        tracedCollectionWork.refinedWorldGuardCalls += Number(refine);
+        tracedCollectionWork.worldGuardContactRows += result.contacts.length;
+        if (fractionRows.length < MAX_TRACE_ROWS)
+          fractionRows.push({ body, result, refine });
+        else tracedCollectionWork.droppedFractionRows++;
         return result;
       };
+      Object.defineProperty(worldGuardWrapper, "correctionObserverSource", {
+        value: originalWorldGuard,
+      });
+      sim.advanceWorldContacts = worldGuardWrapper;
+      for (const name of ["collectBodyContacts", "worldContacts"]) {
+        const descriptor = Object.getOwnPropertyDescriptor(sim, name);
+        const original = sim[name];
+        const wrapper = function (...args) {
+          const rows = original.apply(this, args);
+          if (name === "collectBodyContacts") {
+            tracedCollectionWork.pairCollections++;
+            tracedCollectionWork.pairConsideredBodies += args[0].length;
+            tracedCollectionWork.pairContactRows += rows.length;
+          } else {
+            tracedCollectionWork.worldContactCollections++;
+            tracedCollectionWork.worldContactRows += rows.length;
+          }
+          return rows;
+        };
+        Object.defineProperty(wrapper, "correctionObserverSource", {
+          value: original,
+        });
+        sim[name] = wrapper;
+        collectionRestores.push(() => {
+          if (sim[name] !== wrapper) return;
+          if (descriptor) Object.defineProperty(sim, name, descriptor);
+          else delete sim[name];
+        });
+      }
+    }
     let before = performance.now();
     sim.step();
     manualStepMs.push(performance.now() - before);
     tracedDiagnostics = structuredClone(sim.correctionDiagnostics ?? {});
     tracedFractions = fractionSnapshot(sim, fractionRows);
     fractionRows = [];
-    if (worldGuardDescriptor)
-      Object.defineProperty(sim, "advanceWorldContacts", worldGuardDescriptor);
-    else delete sim.advanceWorldContacts;
+    for (const restore of collectionRestores.reverse()) restore();
+    collectionRestores = [];
+    if (worldGuardWrapper) {
+      if (worldGuardDescriptor)
+        Object.defineProperty(
+          sim,
+          "advanceWorldContacts",
+          worldGuardDescriptor,
+        );
+      else delete sim.advanceWorldContacts;
+    }
 
     sim.correctionDiagnostics = undefined;
     before = performance.now();
@@ -559,21 +785,35 @@ export async function runCorrectionVariant({
     manualStepMs.push(performance.now() - before);
     const deterministicState = physicsSnapshot(sim);
 
+    // Keep the historical two step() samples/state above. This additional
+    // deterministic one-tick frame measures queue/finalization work owned by
+    // updateFrame; its timing includes that tick rather than adding to it.
+    if (performance.now() - measurementStarted >= MAX_CASE_MS)
+      throw new Error("Manual ticks exhausted the two-second case budget");
+    sim.correctionDiagnostics = traceFirstTick ? {} : undefined;
+    manualWindowProbe = installPhysicsWindowProbe(sim, {
+      maximumUpdates: 1,
+      maximumTicks: 5,
+    });
+    try {
+      sim.updateFrame(Math.round(sim.elapsed * 1000), 40);
+    } finally {
+      manualWindowProbe.stop();
+    }
+    manualFrameDiagnostics = structuredClone(sim.correctionDiagnostics ?? {});
+    manualFrameState = physicsSnapshot(sim);
+    sim.correctionDiagnostics = undefined;
+
     // A quarter-second frame sample leaves normal AI and application callbacks
-    // running. It follows the deterministic manual ticks and is timing-only.
+    // running. It follows the two manual ticks AND explicit frame probe; the
+    // extra advance is reported, so old frame captures are not matched inputs.
     if (frameMs) {
-      const oldStepDescriptor = Object.getOwnPropertyDescriptor(sim, "step"),
-        rawStep = sim.step;
-      stepWrapper = function (...args) {
-        const start = performance.now();
-        try {
-          return rawStep.apply(this, args);
-        } finally {
-          frameStepMs.push(performance.now() - start);
-        }
-      };
-      sim.step = stepWrapper;
-      stepDescriptor = oldStepDescriptor;
+      if (performance.now() - measurementStarted + frameMs >= MAX_CASE_MS)
+        throw new Error(
+          "Insufficient two-second budget for the requested frame capture",
+        );
+      frameWindowProbe = installPhysicsWindowProbe(sim);
+      frameStepMs = frameWindowProbe.stepSamples;
       c.paused = false;
       let previous = performance.now();
       const sampleFrame = () => {
@@ -591,8 +831,7 @@ export async function runCorrectionVariant({
         throw new Error("Frame capture exceeded the two-second case budget");
       cancelAnimationFrame(animationFrame);
       c.paused = true;
-      if (stepDescriptor) Object.defineProperty(sim, "step", stepDescriptor);
-      else delete sim.step;
+      frameWindowProbe.stop();
     }
     const elapsedMs = performance.now() - measurementStarted,
       gl = renderer.getContext(),
@@ -622,12 +861,39 @@ export async function runCorrectionVariant({
       manualTickMs: distribution(manualStepMs),
       deterministicState,
       tracedDiagnostics,
+      tracedWorkCounts: correctionWorkCounts(tracedDiagnostics),
       tracedFractions,
+      tracedCollectionWork: tracedCollectionWork ?? null,
+      manualFrameUpdates: manualWindowProbe.updates,
+      manualFrameUpdateMs: manualWindowProbe.updates.map(
+        (entry) => entry.cpuMs,
+      ),
+      manualFrameTickSamples: manualWindowProbe.stepSamples,
+      manualFrameCounts: manualWindowProbe.counts(),
+      manualFrameDiagnostics,
+      manualFrameWorkCounts: correctionWorkCounts(manualFrameDiagnostics),
+      manualFrameState,
       frameCaptureMs: frameMs,
       frameIntervals,
       frameStepSamples: frameStepMs,
       frameMs: distribution(frameIntervals),
       frameStepMs: distribution(frameStepMs),
+      frameUpdates: frameWindowProbe?.updates ?? [],
+      frameUpdateSamples:
+        frameWindowProbe?.updates.map((entry) => entry.cpuMs) ?? [],
+      frameUpdateMs: distribution(
+        frameWindowProbe?.updates.map((entry) => entry.cpuMs) ?? [],
+      ),
+      ticksPerFrameUpdate: distribution(
+        frameWindowProbe?.updates.map((entry) => entry.ticks) ?? [],
+      ),
+      frameWindowCounts: frameWindowProbe?.counts() ?? null,
+      measurementNotes: [
+        "Two historical manual step samples precede a new deterministic 40ms updateFrame probe; the timed normal frame capture starts after that additional advance.",
+        "updateFrame CPU is inclusive of its ticks, queue finalization and callbacks; do not add tick CPU to update CPU.",
+        "Tick counts are completed step calls, with attempted calls and retention drops reported separately. Missing engine work counters are null rather than zero.",
+        "First-tick collection wrappers count work without per-contact/guard timers; normal-frame timing uses only coarse step/update wrappers.",
+      ],
       gpu: rendererInfo
         ? gl.getParameter(rendererInfo.UNMASKED_RENDERER_WEBGL)
         : gl.getParameter(gl.RENDERER),
@@ -648,25 +914,28 @@ export async function runCorrectionVariant({
     }
     clearTimeout(frameTimer);
     cancelAnimationFrame(animationFrame);
-    if (stepWrapper && c.simulation) {
-      if (stepDescriptor)
-        Object.defineProperty(c.simulation, "step", stepDescriptor);
-      else delete c.simulation.step;
-    }
-    if (c.simulation) {
-      if (worldGuardDescriptor)
-        Object.defineProperty(
-          c.simulation,
-          "advanceWorldContacts",
-          worldGuardDescriptor,
-        );
-      else delete c.simulation.advanceWorldContacts;
-      c.simulation.correctionDiagnostics = savedDiagnostics;
-      c.simulation.correctionReuse = savedReuse;
-      c.simulation.correctionWorkingSet = savedWorkingSet;
-      if (savedCrashClock) c.simulation.crashClock = savedCrashClock;
+    manualWindowProbe?.stop();
+    frameWindowProbe?.stop();
+    for (const restore of collectionRestores.reverse()) restore();
+    if (measuredSimulation) {
+      if (
+        worldGuardWrapper &&
+        measuredSimulation.advanceWorldContacts === worldGuardWrapper
+      ) {
+        if (worldGuardDescriptor)
+          Object.defineProperty(
+            measuredSimulation,
+            "advanceWorldContacts",
+            worldGuardDescriptor,
+          );
+        else delete measuredSimulation.advanceWorldContacts;
+      }
+      measuredSimulation.correctionDiagnostics = savedDiagnostics;
+      measuredSimulation.correctionReuse = savedReuse;
+      measuredSimulation.correctionWorkingSet = savedWorkingSet;
+      if (savedCrashClock) measuredSimulation.crashClock = savedCrashClock;
       if (savedStopTimer !== undefined)
-        c.simulation.motionContext.stopTimer = savedStopTimer;
+        measuredSimulation.motionContext.stopTimer = savedStopTimer;
     }
     c.paused = savedPaused;
     renderer.render = savedRender;

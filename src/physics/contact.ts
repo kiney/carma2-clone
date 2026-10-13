@@ -345,16 +345,110 @@ interface FrictionBody {
   localOmega: Vector3;
   candidate: Quaternion;
 }
+interface DeferredFrictionGeometry {
+  aLever: Vector3;
+  bLever?: Vector3;
+  normal: Vector3;
+}
+interface DeferredFrictionEntry extends DeferredFrictionGeometry {
+  impact: ContactImpact;
+  contact: ContactImpact;
+}
+interface DeferredFrictionContext extends DeferredFrictionGeometry {
+  oldOrientations: ReadonlyMap<RigidBody, Quaternion>;
+}
+/** Installed4bbcb2..4bbcf7 appends up to50 accepted normal records;4ba688
+ * flushes them after local responses. Saved levers precede damage callbacks,
+ * while friction reads the latest accepted candidate basis and properties.
+ * Native additional +1dd suppression flags have no mapped browser provider.
+ * Fractional accepted poses remain the browser trajectory-guard extension. */
+export class DeferredContactFriction {
+  private entries: DeferredFrictionEntry[] = [];
+  private flushed = false;
+  overflow = 0;
+  /** Records which apply a nonzero tangential impulse. */
+  applied = 0;
+  readonly affectedBodies = new Set<RigidBody>();
+  get queued(): number {
+    return this.entries.length;
+  }
+  enqueue(impact: ContactImpact, geometry: DeferredFrictionGeometry): void {
+    if (this.flushed)
+      throw new Error("Deferred friction requires a fresh response-phase pool");
+    if (
+      !impact.solverAccepted ||
+      !(impact.normalImpulse > 0) ||
+      impact.sourceType === 9 ||
+      impact.sourceType === 11
+    )
+      return;
+    if (this.entries.length >= 50) {
+      this.overflow++;
+      return;
+    }
+    this.entries.push({
+      ...geometry,
+      impact,
+      contact: {
+        ...impact,
+        normal: geometry.normal,
+        tangentImpulse: new Vector3(),
+      },
+    });
+  }
+  /** Commit normal-motion poses/gyro first. The old bases initialize native
+   * solver-local linear velocity; accepted current bases transport friction.
+   * Removed bodies are filtered without changing queue order or normal work. */
+  flush(
+    oldOrientations: ReadonlyMap<RigidBody, Quaternion>,
+    allowedBody: (body: RigidBody) => boolean = () => true,
+  ): void {
+    if (this.flushed) return;
+    this.flushed = true;
+    const velocities = new Map<RigidState, Vector3>();
+    for (const entry of this.entries) {
+      const { contact } = entry;
+      if (!allowedBody(contact.a) || (contact.b && !allowedBody(contact.b)))
+        continue;
+      const bodies = contact.b ? [contact.a, contact.b] : [contact.a];
+      const before = bodies.map((body) => ({
+        velocity: body.state.velocity.clone(),
+        omega: body.state.angularVelocity.clone(),
+      }));
+      const applied = resolveFriction(contact, velocities, {
+        ...entry,
+        oldOrientations,
+      });
+      entry.impact.tangentImpulse.copy(contact.tangentImpulse);
+      if (contact.tangentImpulse.lengthSq() > 0) this.applied++;
+      if (contact.b || applied) limitFrictionOmega(contact.a);
+      if (contact.b) limitFrictionOmega(contact.b);
+      bodies.forEach((body, i) => {
+        if (
+          !body.state.velocity.equals(before[i].velocity) ||
+          !body.state.angularVelocity.equals(before[i].omega)
+        )
+          this.affectedBodies.add(body);
+      });
+    }
+  }
+}
 function frictionBody(
   body: RigidBody,
   point: Vector3,
   velocities: Map<RigidState, Vector3>,
+  deferred?: {
+    localLever: Vector3;
+    oldOrientations: ReadonlyMap<RigidBody, Quaternion>;
+  },
 ): FrictionBody {
   let localVelocity = velocities.get(body.state);
   if (!localVelocity) {
     localVelocity = rotate(
       body.state.velocity,
-      body.state.orientation,
+      deferred
+        ? (deferred.oldOrientations.get(body) ?? body.state.orientation)
+        : body.state.orientation,
       new Vector3(),
       true,
     );
@@ -363,19 +457,23 @@ function frictionBody(
   return {
     body,
     localVelocity,
-    localLever: rotate(
-      point.clone().sub(body.state.position),
-      body.state.orientation,
-      new Vector3(),
-      true,
-    ).sub(body.properties.centerOfMass),
+    localLever:
+      deferred?.localLever ??
+      rotate(
+        point.clone().sub(body.state.position),
+        body.state.orientation,
+        new Vector3(),
+        true,
+      ).sub(body.properties.centerOfMass),
     localOmega: rotate(
       body.state.angularVelocity,
       body.state.orientation,
       new Vector3(),
       true,
     ),
-    candidate: body.state.predictedOrientation ?? body.state.orientation,
+    candidate: deferred
+      ? body.state.orientation
+      : (body.state.predictedOrientation ?? body.state.orientation),
   };
 }
 function frictionSlip(entry: FrictionBody, leverScale = 1): Vector3 {
@@ -434,11 +532,28 @@ function limitFrictionOmega(body: RigidBody): void {
 function resolveFriction(
   contact: ContactImpact,
   velocities: Map<RigidState, Vector3>,
+  deferred?: DeferredFrictionContext,
 ): boolean {
   if (contact.normalImpulse <= 0) return false;
-  const a = frictionBody(contact.a, contact.point, velocities);
+  const a = frictionBody(
+    contact.a,
+    contact.point,
+    velocities,
+    deferred && {
+      localLever: deferred.aLever,
+      oldOrientations: deferred.oldOrientations,
+    },
+  );
   const b = contact.b
-    ? frictionBody(contact.b, contact.pointB ?? contact.point, velocities)
+    ? frictionBody(
+        contact.b,
+        contact.pointB ?? contact.point,
+        velocities,
+        deferred && {
+          localLever: deferred.bLever!,
+          oldOrientations: deferred.oldOrientations,
+        },
+      )
     : undefined;
   const slip = frictionSlip(
     a,
@@ -514,6 +629,7 @@ export function resolveContacts(
   _dt = ORIGINAL_STEP,
   joints: RigidJoint[] = [],
   beforeApply?: BeforeContactApply,
+  deferredFriction?: DeferredContactFriction,
 ): ContactImpact[] {
   if (!contacts.length && !joints.length) return [];
   // C2's hidden quick-hinge rows are already satisfied before it measures
@@ -580,6 +696,29 @@ export function resolveContacts(
       );
     return values;
   });
+  const frictionGeometry = deferredFriction
+    ? contacts.map(
+        (contact): DeferredFrictionGeometry => ({
+          aLever: rotate(
+            contact.point.clone().sub(contact.a.state.position),
+            contact.a.state.orientation,
+            new Vector3(),
+            true,
+          ).sub(contact.a.properties.centerOfMass),
+          bLever: contact.b
+            ? rotate(
+                (contact.pointB ?? contact.point)
+                  .clone()
+                  .sub(contact.b.state.position),
+                contact.b.state.orientation,
+                new Vector3(),
+                true,
+              ).sub(contact.b.properties.centerOfMass)
+            : undefined,
+          normal: contact.normal.clone(),
+        }),
+      )
+    : undefined;
   for (const joint of jointConstraints)
     rows.push(
       joint.jacobians.map((entry) => ({
@@ -629,6 +768,12 @@ export function resolveContacts(
       impact.sourceType === 9 ? 0 : impact.normalImpulse,
     ),
   );
+  if (deferredFriction) {
+    impacts.forEach((impact, i) =>
+      deferredFriction.enqueue(impact, frictionGeometry![i]),
+    );
+    return impacts;
+  }
   const frictionVelocities = new Map<RigidState, Vector3>();
   for (const contact of impacts) {
     if (contact.sourceType === 9 || contact.normalImpulse === 0) continue;
@@ -647,6 +792,7 @@ export function resolveContactGroups(
   dt = ORIGINAL_STEP,
   joints: RigidJoint[] = [],
   beforeApply?: BeforeContactApply,
+  deferredFriction?: DeferredContactFriction,
 ): ContactImpact[] {
   const parents = new Map<RigidState, RigidState>();
   const find = (state: RigidState): RigidState => {
@@ -688,6 +834,7 @@ export function resolveContactGroups(
       dt,
       value.joints,
       beforeApply,
+      deferredFriction,
     );
     for (let i = 0; i < impacts.length; i++)
       results.set(value.contacts[i], impacts[i]);

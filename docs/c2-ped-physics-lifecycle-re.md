@@ -292,8 +292,9 @@ phase marker `f0`, passive flag0x20, quiet state, collision flags, pre-contact
 world V/local omega, mutable solver local V, auxiliary local omega, physical
 root pose and first cached world face. Resolve phase-marker/passive flag
 effects before invoking the leaf kernel. Clear/snapshot every40ms after
-forces and before normal application; queue friction flags, evaluate quiet,
-fold whole contact groups, then integrate only awake bodies. Outer-frame
+forces and before normal application; commit normal poses, flush deferred friction,
+queue collision flags and evaluate quiet,
+fold whole contact groups without another pose integration. Outer-frame
 callbacks still decide whether pedestrian sleep is accepted or rejected.
 
 Remaining essential providers are complete halt/get-up/severing move branches and

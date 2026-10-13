@@ -31,22 +31,22 @@ Chromium DevTools confirmed original New City/Eagle loading and rendering. Contr
 
 ## Current function map
 
-| Subsystem        | Local HW VA | Local SW VA / rec2 symbol                | Evidence and behavior                                                                                                                                       |
-| ---------------- | ----------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tick             | 0x4b63d0    | SW 0x4b2330; PHILDoPhysics rec2 0x4b6630 | Verified shared flow; 40 ms tick, maximum five catch-up steps, 30 retries per contact group and three reported impact solves; pre, integrate, collide, post |
-| Collision        | 0x4ba450    | SW 0x4b63b0; DoCollisions rec2 0x4ba6b0  | Verified prologue/flow; rec2 stub; contact group solver and friction                                                                                        |
-| Contact matrix   | 0x4bf230    | rec2 collision core stub                 | Normal effective inverse mass includes both lever-arm/inertia terms                                                                                         |
-| Contact RHS      | 0x4bac60    | —                                        | Impact group if any closing >0.01; RHS 0.01+1.001\*max(closing,0). Rest group uses start/predicted transform drift times 25                                 |
-| Normal apply     | 0x4b7700    | —                                        | Delta v = impulse / mass; delta omega = inverse inertia times r cross impulse; local diagonal inertia, rotation-lock flag 0x800                             |
-| Friction         | 0x4c0870    | —                                        | Pair cap 0.35*normalImpulse*(1+objectFrictionA)\*(1+objectFrictionB); world cap includes face friction and 1+worldFriction                                  |
-| Impact callback  | 0x41c1d0    | SW 0x41c1f0; ProcessForcesCallback       | Crush/smash/damage callback before normal application; not the wheel-force integrator                                                                       |
-| Car frame        | 0x4168e0    | not reconstructed in rec2                | Ordinary motion calls controls 0x415320 and wheel forces 0x418870                                                                                           |
-| Wheel forces     | 0x418870    | rec2 unfinished                          | Verified ordinary road load/friction equations, metric/model conversions, drivetrain and fault episodes; implemented                                        |
-| Crush queue      | 0x42d350    | QueueCarCrush                            | Impulse magnitude times car softness; reject <=0.06, queue cap10, max4 contact points/events                                                                |
-| Crush            | 0x436340    | CrushCar rec2 0x4363f0                   | rec2 stub; calls actor callback0x431d70 and vertex deformation0x432ad0                                                                                      |
-| Vertex region    | 0x42b410    | CrushLimitNumber                         | Original packs MIN in low2/MAX in high2 bits per axis; rec2 has swapped bits and invalid initialization discrepancy                                         |
-| Detached setup   | 0x433640    | SetUpDetachedBitObject                   | Inherits parent velocity plus omega cross COM offset, transformed consistently; original part mass and box inertia, no random launch kick                   |
-| Component damage | 0x43f820    | DoDamage rec20x43f930                    | Ignore increments<5; twelve units capped99; increment<10 crossing99 is rejected                                                                             |
+| Subsystem        | Local HW VA | Local SW VA / rec2 symbol                | Evidence and behavior                                                                                                                                                              |
+| ---------------- | ----------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tick             | 0x4b63d0    | SW 0x4b2330; PHILDoPhysics rec2 0x4b6630 | Verified shared flow; 40 ms tick, maximum five catch-up steps, 30 local retries; three normal-solver failure reports (not three successful impacts); pre, integrate, collide, post |
+| Collision        | 0x4ba450    | SW 0x4b63b0; DoCollisions rec2 0x4ba6b0  | Verified prologue/flow; rec2 stub; contact group solver and friction                                                                                                               |
+| Contact matrix   | 0x4bf230    | rec2 collision core stub                 | Normal effective inverse mass includes both lever-arm/inertia terms                                                                                                                |
+| Contact RHS      | 0x4bac60    | —                                        | Impact group if any closing >0.01; RHS 0.01+1.001\*max(closing,0). Rest group uses start/predicted transform drift times 25                                                        |
+| Normal apply     | 0x4b7700    | —                                        | Delta v = impulse / mass; delta omega = inverse inertia times r cross impulse; local diagonal inertia, rotation-lock flag 0x800                                                    |
+| Friction         | 0x4c0870    | —                                        | Pair cap 0.35*normalImpulse*(1+objectFrictionA)\*(1+objectFrictionB); world cap includes face friction and 1+worldFriction                                                         |
+| Impact callback  | 0x41c1d0    | SW 0x41c1f0; ProcessForcesCallback       | Crush/smash/damage callback before normal application; not the wheel-force integrator                                                                                              |
+| Car frame        | 0x4168e0    | not reconstructed in rec2                | Ordinary motion calls controls 0x415320 and wheel forces 0x418870                                                                                                                  |
+| Wheel forces     | 0x418870    | rec2 unfinished                          | Verified ordinary road load/friction equations, metric/model conversions, drivetrain and fault episodes; implemented                                                               |
+| Crush queue      | 0x42d350    | QueueCarCrush                            | Impulse magnitude times car softness; reject <=0.06, queue cap10, max4 contact points/events                                                                                       |
+| Crush            | 0x436340    | CrushCar rec2 0x4363f0                   | rec2 stub; calls actor callback0x431d70 and vertex deformation0x432ad0                                                                                                             |
+| Vertex region    | 0x42b410    | CrushLimitNumber                         | Original packs MIN in low2/MAX in high2 bits per axis; rec2 has swapped bits and invalid initialization discrepancy                                                                |
+| Detached setup   | 0x433640    | SetUpDetachedBitObject                   | Inherits parent velocity plus omega cross COM offset, transformed consistently; original part mass and box inertia, no random launch kick                                          |
+| Component damage | 0x43f820    | DoDamage rec20x43f930                    | Ignore increments<5; twelve units capped99; increment<10 crossing99 is rejected                                                                                                    |
 
 ## Data and equations established
 
@@ -356,3 +356,46 @@ is removed. See [implementation, limitations and validation](hierarchy-motion-pe
 Flag0x400 inherited-affine metadata and upward descendant WORLD-joint corrections
 remain unsupported variants; this does not claim full hierarchy parity or a
 completed PHY-13 lockup fix.
+
+## Local collision traversal and deferred friction (PERF-15)
+
+Verified against the installed HW executable, using rec2 symbols as the map:
+`DoCollisions 0x4ba450`, stable OLD actor-X insertion sort `0x4ba4bb–0x4ba568`,
+local response `0x4bac60`, geometry collector `0x4bd780`, ring join `0x4bdb70`.
+Geometry joins/wakes before lambda application (`0x4bd970–0x4bda86`). World
+contacts do not join every object through an infinite world body.
+
+The zero-count exit at `0x4bafb8` counts world/body geometry and active authored
+angular/travel-limit rows (`0x4bc7b0`). Stored bilateral anchor/hinge constraints
+are gathered **after** that exit (`0x4bb1a5–0x4bb1fe`); a free joint's residual
+alone must not schedule repeated collision solves. Normal response callbacks
+precede impulse application (`0x4bbbf5`, joint callback `0x4bbc13`, apply
+`0x4bbc30`). Shape/split invalidation stops the stale solve. Ring reintegration
+`0x4bbe7a–0x4bbef5` replaces candidate poses from saved OLD at literal40ms.
+
+Local retries are bounded30. Counter692734 increments only when the normal
+solver `0x4c3900` returns nonzero (`0x4bb869`); the native internal50-iteration
+failure path returns−1 (`0x4c43cb–0x4c43e2`). Ordinary positive impulses are
+not failure reports. The browser active-set solver does not expose that native
+failure status; it does not invent a three-successful-impact cap. Conditional
+traversal restart `0x4ba670` is a prepared-list update, not another full physics
+preparation or an unconditional reset of all processed tags.
+
+Accepted positive normal rows except types9/11 append to a shared50-record
+friction pool (`0x4bbcb2–0x4bbcf7`); retries append, never deduplicate/overwrite.
+The pool resets at entry `0x4ba486`, not list restart `0x4ba578`, and flushes
+at `0x4ba688–0x4ba6a3`, before quiet/postprocessing `0x4ba6ab`. Records retain
+OLD-local COM levers and normals, but friction reads the latest accepted
+candidate orientation (`0x4c09a0–0x4c09c0`) and candidate-local gyro. The shared
+local linear-velocity cache initializes with OLD basis. Friction updates V/omega
+for the next tick without another pose integration. Additional native filter
+byte+1dd remains unmapped; the browser filters removed registered bodies.
+
+Implemented in `src/physics/local-response.ts`, `DeferredContactFriction` and
+`VehicleSimulation.step`. Eager support-ring closure, exact zero-response early
+exit, a tick-bounded per-seed30 allowance, conservative traversal restart on
+fixed/world edits, and final CCD guards are explicit browser adaptations. Source
+saved-next ring traversal, native active-set failure reporting and exceptional
+joint/PHIL metadata are not claimed exact. Collection-time activation and
+geometry changes discard stale rows and rediscover against the full roster.
+See [PERF-15 evidence](local-response-performance.md) for validation and costs.

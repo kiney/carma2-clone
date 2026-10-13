@@ -206,7 +206,7 @@ test("active PHIL body has exact40ms gravity, no header0 air drag, passive pose 
   assert.ok(!sim.pedBodies.includes(passive));
 });
 
-test("active world contacts populate source flags and quiet zeros before commit, halt once per outer frame", () => {
+test("active world contacts populate source flags and quiet zeros after commit, halt once per outer frame", () => {
   const sim = simulation([plane]),
     ped = body([-0.1, 0.051, -0.1]);
   sim.addPedBody(ped);
@@ -418,7 +418,7 @@ test("actual Eagle hull contact activates flag40-clear passive body BEFORE solve
   assert.ok(ped.state.velocity.z < 0);
 });
 
-test("whole emitted pair ring sleeps together before movement; unknown external members block partial sleep", () => {
+test("whole emitted pair ring commits normal motion before sleeping; unknown external members block partial sleep", () => {
   const sim = simulation(),
     a = body([-0.019, 2, 0]),
     b = body([0.019, 2, 0]);
@@ -430,6 +430,15 @@ test("whole emitted pair ring sleeps together before movement; unknown external 
     ped.properties.rotationLocked = true; // Isolate ring decision from angular response.
     sim.addPedBody(ped);
   }
+  const old = new Map(
+    [a, b].map((ped) => [
+      ped,
+      {
+        position: ped.state.position.clone(),
+        velocity: ped.state.velocity.clone(),
+      },
+    ]),
+  );
   sim.step();
   assert.ok(sim.lastImpacts.some((row) => row.a === a && row.b === b));
   assert.equal(a.doNothing, true);
@@ -438,8 +447,35 @@ test("whole emitted pair ring sleeps together before movement; unknown external 
   assert.equal(b.quietState, 0);
   assert.equal(a.state.velocity.length(), 0);
   assert.equal(b.state.velocity.length(), 0);
-  assert.equal(a.state.position.x, -0.019);
-  assert.equal(b.state.position.x, 0.019);
+  // Native normal-motion commitment and 0x4ba688 friction precede 0x4ba6ab quiet.
+  // Rotation is locked, gravity/drag are zero, so each COM moves for the
+  // literal 40ms with its incoming velocity plus accepted normal impulses.
+  for (const ped of [a, b]) {
+    const velocity = old.get(ped).velocity.clone();
+    for (const impact of sim.lastImpacts) {
+      if (!impact.solverAccepted || impact.sourceType === 9) continue;
+      const sign = impact.a === ped ? 1 : impact.b === ped ? -1 : 0;
+      velocity.addScaledVector(
+        impact.normal,
+        (sign * impact.normalImpulse) / ped.properties.mass,
+      );
+    }
+    const expected = old
+      .get(ped)
+      .position.clone()
+      .addScaledVector(velocity, 0.04);
+    near(ped.state.position.distanceTo(expected), 0, 1e-10);
+  }
+  assert.ok(a.state.position.x < -0.019 && b.state.position.x > 0.019);
+  const sleepingPositions = [a, b].map((ped) => ped.state.position.clone());
+  sim.step();
+  [a, b].forEach((ped, i) => {
+    assert.ok(
+      ped.state.position.equals(sleepingPositions[i]),
+      "the next sleeping step preserves the committed pose",
+    );
+    assert.equal(ped.doNothing, true);
+  });
 
   // The source ring joins emitted geometry even if lambda0 is not in the flag
   // queue. An external member without +1df cannot authorize partial ring sleep.

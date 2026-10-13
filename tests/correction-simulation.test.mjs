@@ -174,14 +174,15 @@ function traceCollections(sim, cars) {
     }));
   for (const name of ["collectContacts", "collectBodyContacts"]) {
     const original = sim[name];
-    sim[name] = function (bodies) {
+    sim[name] = function (bodies, ...rest) {
       const before = flags(),
-        result = original.call(this, bodies);
+        result = original.call(this, bodies, ...rest);
       events.push({
         method: name,
         phase,
         elapsed: sim.elapsed,
         bodies: bodies.map(id),
+        incident: rest[0] ? [...rest[0]].map(id) : null,
         before,
         after: flags(),
         rows: rows(result),
@@ -330,13 +331,21 @@ async function compareModes(t, mode) {
   assert.deepEqual(cachedState, uncachedState);
   assert.ok(cachedDiagnostics, "simulation exposes correction diagnostics");
   assert.ok(
-    cachedDiagnostics.correctionPasses >= 1,
-    `expected at least one correction pass: ${JSON.stringify(cachedDiagnostics)}`,
+    cachedDiagnostics.localCollections >= 1 &&
+      cachedDiagnostics.responseSolves >= 1,
+    `expected local discovery and a real response solve: ${JSON.stringify(cachedDiagnostics)}`,
   );
   assert.ok(
     cached.decisions.filter((event) => event.method === "collectBodyContacts")
       .length >= 2,
-    "ordered comparison includes initial and iterative body collections",
+    "ordered comparison includes local incident discovery and response recollection",
+  );
+  assert.ok(
+    cached.decisions.some(
+      (event) =>
+        event.method === "collectBodyContacts" && event.incident?.length,
+    ),
+    "tracing preserves the incident filter instead of silently expanding local work to every pair",
   );
   assert.ok(
     cached.decisions.some((event) => event.method === "advanceWorldContacts"),
@@ -396,8 +405,9 @@ test("stock Eagle road and wall contact survives a full-turn correction path", a
     "finite road or wall scenery contacts the Eagle",
   );
   assert.ok(
-    result.diagnostics.correctionPasses >= 1,
-    "the case traverses the correction loop",
+    result.diagnostics.localCollections >= 1 &&
+      result.diagnostics.responseSolves >= 1,
+    "the finite world crossing enters local discovery and response",
   );
   assert.ok(
     result.bodies.some((body) => body.jointParent === 0),
@@ -418,8 +428,8 @@ test("source-edge Eagle split, full repair and reset retain exact correction dec
     result.decisions.some(
       (event) =>
         event.phase === "impact" &&
-        event.method === "collectContacts" &&
-        event.bodies.includes(3),
+        event.method === "collectBodyContacts" &&
+        event.incident?.includes(3),
     ),
     "the split secondary participates in immediate changed-group recollection",
   );
@@ -427,7 +437,7 @@ test("source-edge Eagle split, full repair and reset retain exact correction dec
     result.decisions.some(
       (event) =>
         event.phase === "after-repair-step" &&
-        event.method === "collectContacts",
+        event.method === "collectBodyContacts",
     ),
     "the next tick recollects repaired and reset geometry",
   );

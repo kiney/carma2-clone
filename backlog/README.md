@@ -253,6 +253,17 @@ change in that scope. Current board: 121 tasks, 66 `backlog`, 5 `next`, 1 `wip`,
 49 `done`. PERF-01 alone remains active; WIP limit3 and the broader paused Goal
 are unchanged.
 
+PERF-15 / TASK-100.10 is now `done`: local OLD-X/response-ring scheduling,
+incident discovery and mutation barriers replace eight global correction rounds;
+shared50-row friction follows normal commitment and precedes quiet processing.
+[Evidence and costs](../docs/local-response-performance.md) retain the saved
+Cerby response, original-car regressions and mixed hardware comparisons,
+including slower Advanced cases. This does not close the actual-route
+performance investigation. PERF-16 is the next P1 checkpoint after user
+playtesting; its inactive/static participation bridge remains essential.
+Current board:121 tasks,66 `backlog`,4 `next`,1 `wip`,50 `done`. PERF-01 alone
+remains active; WIP limit3 and the broader paused Goal remain unchanged.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip

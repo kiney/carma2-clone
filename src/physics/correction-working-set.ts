@@ -1,5 +1,10 @@
 import { Box3, Quaternion, Vector3 } from "three";
-import type { Contact, RigidBody } from "./contact";
+import type {
+  Contact,
+  RigidBody,
+  RigidProperties,
+  RigidState,
+} from "./contact";
 import {
   hullBounds,
   hullsBounds,
@@ -135,6 +140,129 @@ interface OptionalShape {
   endpoints?: readonly (readonly number[])[];
   edge?: readonly number[];
 }
+interface ScalarVector {
+  source: Vector3;
+  x: number;
+  y: number;
+  z: number;
+}
+interface FixedResponseInput {
+  state: RigidState;
+  properties: RigidProperties;
+  hulls: CollisionHull[];
+  px: number;
+  py: number;
+  pz: number;
+  qx: number;
+  qy: number;
+  qz: number;
+  qw: number;
+  velocity: ScalarVector;
+  omega: ScalarVector;
+  com: ScalarVector;
+  inertia: ScalarVector;
+  mass: number;
+  immovable: boolean | undefined;
+  rotationLocked: boolean | undefined;
+  worldFriction: number;
+  objectFriction: number | undefined;
+  filterA: number | null | undefined;
+  filterB: number | null | undefined;
+  kind: string | undefined;
+  overlapRecovery: boolean | undefined;
+  worldRecovery: boolean | undefined;
+  suppressWorldFaces: boolean | undefined;
+  suppressSelfSentinel: boolean | undefined;
+  suppressJointConstraints: boolean | undefined;
+  mechanics: CollisionBody["mechanics"];
+  ignoreWorldCollisions: boolean | undefined;
+}
+function scalarVector(value: Vector3): ScalarVector {
+  return { source: value, x: value.x, y: value.y, z: value.z };
+}
+function sameScalarVector(old: ScalarVector, value: Vector3): boolean {
+  return (
+    old.source === value &&
+    Object.is(old.x, value.x) &&
+    Object.is(old.y, value.y) &&
+    Object.is(old.z, value.z)
+  );
+}
+/** Only producer-certified fixed noncars enter this path. All hot comparisons
+ * are direct identities/scalars, with no ancestry or ExactValues visitor walk.
+ * Their own joint is excluded from the simulation's active joint roster; wake
+ * invalidates eligibility before that joint can affect response prediction. */
+function sameFixedResponse(
+  old: FixedResponseInput,
+  body: CollisionBody,
+): boolean {
+  const { state, properties } = body;
+  return (
+    old.state === state &&
+    old.properties === properties &&
+    old.hulls === body.hulls &&
+    Object.is(old.px, state.position.x) &&
+    Object.is(old.py, state.position.y) &&
+    Object.is(old.pz, state.position.z) &&
+    Object.is(old.qx, state.orientation.x) &&
+    Object.is(old.qy, state.orientation.y) &&
+    Object.is(old.qz, state.orientation.z) &&
+    Object.is(old.qw, state.orientation.w) &&
+    sameScalarVector(old.velocity, state.velocity) &&
+    sameScalarVector(old.omega, state.angularVelocity) &&
+    sameScalarVector(old.com, properties.centerOfMass) &&
+    sameScalarVector(old.inertia, properties.inertia) &&
+    Object.is(old.mass, properties.mass) &&
+    Object.is(old.immovable, properties.immovable) &&
+    Object.is(old.rotationLocked, properties.rotationLocked) &&
+    Object.is(old.worldFriction, properties.worldFriction) &&
+    Object.is(old.objectFriction, properties.objectFriction) &&
+    Object.is(old.filterA, body.filterA) &&
+    Object.is(old.filterB, body.filterB) &&
+    Object.is(old.kind, body.kind) &&
+    Object.is(old.overlapRecovery, body.overlapRecovery) &&
+    Object.is(old.worldRecovery, body.worldRecovery) &&
+    Object.is(old.suppressWorldFaces, body.suppressWorldFaces) &&
+    Object.is(old.suppressSelfSentinel, body.suppressSelfSentinel) &&
+    Object.is(old.suppressJointConstraints, body.suppressJointConstraints) &&
+    old.mechanics === body.mechanics &&
+    Object.is(old.ignoreWorldCollisions, body.mechanics?.ignoreWorldCollisions)
+  );
+}
+function fixedResponseInput(body: CollisionBody): FixedResponseInput {
+  const { state, properties } = body;
+  return {
+    state,
+    properties,
+    hulls: body.hulls,
+    px: state.position.x,
+    py: state.position.y,
+    pz: state.position.z,
+    qx: state.orientation.x,
+    qy: state.orientation.y,
+    qz: state.orientation.z,
+    qw: state.orientation.w,
+    velocity: scalarVector(state.velocity),
+    omega: scalarVector(state.angularVelocity),
+    com: scalarVector(properties.centerOfMass),
+    inertia: scalarVector(properties.inertia),
+    mass: properties.mass,
+    immovable: properties.immovable,
+    rotationLocked: properties.rotationLocked,
+    worldFriction: properties.worldFriction,
+    objectFriction: properties.objectFriction,
+    filterA: body.filterA,
+    filterB: body.filterB,
+    kind: body.kind,
+    overlapRecovery: body.overlapRecovery,
+    worldRecovery: body.worldRecovery,
+    suppressWorldFaces: body.suppressWorldFaces,
+    suppressSelfSentinel: body.suppressSelfSentinel,
+    suppressJointConstraints: body.suppressJointConstraints,
+    mechanics: body.mechanics,
+    ignoreWorldCollisions: body.mechanics?.ignoreWorldCollisions,
+  };
+}
 type CollisionBody = HullBody & {
   kind?: string;
   shape?: OptionalShape;
@@ -183,6 +311,7 @@ function motionValues(
   body: CollisionBody,
   visit: Visit,
   ancestry: RigidBody[],
+  response = false,
 ) {
   const { state, properties } = body;
   visit(state);
@@ -200,9 +329,9 @@ function motionValues(
   visit(body.filterA);
   visit(body.filterB);
   visit(body.overlapRecovery);
-  visit(body.overlapDetected);
+  if (!response) visit(body.overlapDetected);
   visit(body.worldRecovery);
-  visit(body.worldOverlapDetected);
+  if (!response) visit(body.worldOverlapDetected);
   visit(body.suppressWorldFaces);
   visit(body.suppressSelfSentinel);
   visit(body.suppressJointConstraints);
@@ -227,6 +356,19 @@ function motionValues(
       vector(joint.parentAxis, visit);
       vector(joint.translationAxis, visit);
       visit(joint.translationTravel);
+      if (response) {
+        visit(joint.allowNearBoundary);
+        visit(joint.planeLimits);
+        visit(joint.planeLimits?.length);
+        for (const limit of joint.planeLimits ?? []) {
+          vector(limit.childDirection, visit);
+          vector(limit.parentNormal, visit);
+        }
+        for (const basis of [joint.hingeBasis, joint.translationTransverse]) {
+          visit(basis);
+          for (const axis of basis ?? []) vector(axis, visit);
+        }
+      }
       const parent = joint.parent;
       visit(parent.state);
       poseNumbers(parent.state.position, visit);
@@ -258,10 +400,12 @@ interface BodyEntry {
   nextPose: ExactValues;
   motion: ExactValues;
   ancestry: RigidBody[];
+  response: ExactValues;
   snapshot?: CorrectionBodySnapshot;
   old?: PoseGeometry;
   next?: PoseGeometry;
   geometry?: CorrectionGeometry;
+  fixedResponse?: FixedResponseInput;
 }
 interface PairEntry {
   a: CorrectionToken;
@@ -303,8 +447,7 @@ export class CorrectionWorkingSet {
     if (this.diagnostics)
       this.diagnostics[key] = (this.diagnostics[key] ?? 0) + amount;
   }
-  capture(body: HullBody, cacheable = true): CorrectionBodySnapshot {
-    this.count("validityChecks");
+  private entry(body: HullBody): BodyEntry {
     let entry = this.bodies.get(body);
     if (!entry) {
       entry = {
@@ -312,10 +455,43 @@ export class CorrectionWorkingSet {
         oldPose: new ExactValues(),
         nextPose: new ExactValues(),
         motion: new ExactValues(),
+        response: new ExactValues(),
         ancestry: [],
       };
       this.bodies.set(body, entry);
     }
+    return entry;
+  }
+  /** Response inputs, not derived NEXT slots/detection accumulation. A fresh
+   * candidate or repeated overlap detection is not a new physical response.
+   * Includes unversioned shape edits and every ordinary joint solver field. */
+  responseInput(body: HullBody): CorrectionToken {
+    const entry = this.entry(body),
+      shaped = body as CollisionBody;
+    const fixed =
+      shaped.kind === "noncar" &&
+      !!body.properties.immovable &&
+      shaped.shape === undefined &&
+      hasImmutableCollisionHulls(body.hulls);
+    if (
+      fixed &&
+      entry.fixedResponse &&
+      sameFixedResponse(entry.fixedResponse, shaped)
+    )
+      return entry.response.token;
+    entry.shape.update((visit) => shapeValues(shaped, visit));
+    entry.response.update((visit) => {
+      visit(entry.shape.token);
+      poseNumbers(body.state.position, visit);
+      poseNumbers(body.state.orientation, visit);
+      motionValues(shaped, visit, entry.ancestry, true);
+    });
+    entry.fixedResponse = fixed ? fixedResponseInput(shaped) : undefined;
+    return entry.response.token;
+  }
+  capture(body: HullBody, cacheable = true): CorrectionBodySnapshot {
+    this.count("validityChecks");
+    const entry = this.entry(body);
     const shaped = body as CollisionBody;
     // Unknown analytic shape providers need an explicit uncached fallback.
     cacheable &&=
