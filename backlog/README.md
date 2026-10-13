@@ -163,6 +163,14 @@ engine-fidelity work.
 
 Use the CLI or browser to edit tasks rather than manually rewriting task Markdown. Move selected work to `next`, active work to `wip`, and verified finished scope to `done`. Leave finished tasks on the board; archiving removes them from `done`.
 
+PHY-13 / TASK-106 was added at priority 1 in `backlog` after a user-driven Timber
+session captured a road lockup caused by deeply overlapping detached own debris.
+Clone-only probes separate it from the PHY-12 non-contact coupling fix and retain
+the original paused game. See [diagnostic evidence](../docs/own-debris-lockup.md).
+It has no implemented fix and does not reproduce the PERF-01 frame-time failure;
+visibility remains deferred. The new task makes 113 tasks: 65 `backlog`, 1 `next`,
+1 `wip`, 46 `done`, with existing priorities unchanged.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip
