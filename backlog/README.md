@@ -171,6 +171,14 @@ It has no implemented fix and does not reproduce the PERF-01 frame-time failure;
 visibility remains deferred. The new task makes 113 tasks: 65 `backlog`, 1 `next`,
 1 `wip`, 46 `done`, with existing priorities unchanged.
 
+The subsequent real user-driven 6 FPS capture confirms dominant physics CPU
+and global correction/catch-up amplification. PERF-13 / TASK-100.8 is P1 in
+`next`, ordinal 1180, ahead of P2 visibility. Its implementation is open; do
+not simply lower iteration caps. [Live evidence](../docs/live-timber-drop.md)
+includes observer overhead and the unresolved 180-degree direction correlation.
+PERF-01 remains the only WIP ticket. The board now has 114 tasks: 65 `backlog`,
+2 `next`, 1 `wip`, 46 `done`; existing priorities are unchanged.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip

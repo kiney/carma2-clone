@@ -12,6 +12,8 @@ entire stall's cause or exclude a transient restart/solver/GC/rendering spike.
 
 The user's page stayed paused. No repair, reset, reload, simulation tick or live
 transform/velocity change was performed. No engine behavior change is made.
+The subsequent actual running capture below supersedes the earlier lack of
+timing evidence; it does not turn frozen probes into an exact replay.
 
 ## Captured state
 
@@ -111,3 +113,79 @@ review found no blockers. MCP confirms the live page remains paused at its
 exact captured position/time, recorder counts stay zero in pause, world query
 identities are intact, console is clean and WebGL error is zero. No production
 engine change/build is required for this opt-in diagnostic tool.
+
+## Actual subsequent 6 FPS / opposite-direction capture
+
+The user resumed, reported about 6 FPS versus 20 FPS after turning 180 degrees,
+and paused at elapsed 145.68 seconds. Version-2 rings retain 388 updates, 387
+running frame intervals and the last 512 ticks. The complete capture stays
+ignored in `artifacts/perf01-directional-live-capture.json`. The latest paused
+FPS (42) does not represent running performance. The scene has 641 draws/19,070
+triangles; collision population remains 483 bodies/10 parts.
+
+| Actual recorded work          |     Mean |      p95 |  Maximum |
+| ----------------------------- | -------: | -------: | -------: |
+| Running RAF interval          | 82.65 ms | 200.0 ms | 266.6 ms |
+| Physics updateFrame           | 68.95 ms | 178.9 ms | 263.1 ms |
+| Ticks per update              |     2.06 |        5 |        5 |
+| Tick CPU, last 512 ticks only | 33.53 ms |  58.3 ms |  82.9 ms |
+| Render CPU, two passes        |  4.86 ms |   9.1 ms |  27.1 ms |
+| Matrix preparation CPU        |  1.37 ms |   2.0 ms |  16.7 ms |
+| Opponent update CPU           |  0.38 ms |   0.7 ms |   6.5 ms |
+| Pedestrian update CPU         |  0.60 ms |   1.1 ms |   4.3 ms |
+
+Physics updates comprise roughly 83% of the average frame interval. The worst
+update has five ticks/262.7 ms tick CPU out of 263.1 ms total. Physics/catch-up
+amplification therefore dominates CPU work in this actual capture. GPU time
+remains unmeasured; this does not prove zero GPU contribution.
+
+At elapsed 130.04–132.24, updates average 34.38 ms/1.15 ticks, with 30.02 ms/tick.
+At 139.32–145.69, updates average 112.83 ms/3.26 ticks, with 34.59 ms/tick.
+The large frame difference includes more ticks per frame, with a much smaller
+change in cost per tick. These are recorded time windows, **not** exact logged
+turn timestamps. Version 2 retained no heading/camera history. Do not infer
+that stationary camera rotation alone changed physics.
+
+Last-512-tick means: commit guard 7.78 ms, projection guard 1.15 ms, world guard
+5.61 ms, pair collection 8.04 ms. Most ticks have exactly 4,347 world-guard
+calls, nine pair collections and 483 initial world-contact collections.
+Source audit explains this residual amplification:
+
+- `simulation.ts:4941` permits eight global correction passes. The only early
+  exit is an empty contact list, not convergence/no changes.
+- Eight passes plus final refined commitment give `483 * 9 = 4347` calls;
+  initial pair collection plus eight passes gives nine collections.
+- Cached raw contacts remain nonempty and are replayed into solver/damage
+  callbacks. Cache hits do not eliminate full-scene correction rounds.
+- Rest rows use minimum RHS 0.01 (HW impact/rest map 0x4bac60); repeated-looking
+  rows need not be no-ops. Do not terminate on raw row identity or lower caps.
+- Final-state 57 impacts include six Cerby/hood pair rows and fourteen
+  front-wing/hood rows, positive impulses in five/nine respectively. These
+  accumulate across the step and are not a pass-by-pass trace.
+- At pause, moving-world population is zero and static-world certification
+  is eligible. The global moving-world cache bypass is absent in this state;
+  no active physical pedestrians are present.
+
+Camera direction affects GROOVE visibility (`PointOutOfSight` 0x4e5aa0);
+driving also changes trajectories/contacts. The cause of the user's directional
+correlation remains unisolated. The eight-round integration safeguard itself
+has no established native C2 equivalent in this audit. Further work must
+preserve real solver impulses, damage ordering and final collision guards.
+
+### Instrumentation overhead and recorder version 3
+
+Version 2 timed every immovable early return. A bounded pure-return microprobe
+(4,347 calls per block, no simulation) measured original/timed/count-only
+blocks at 0.9/21.2/0.9 ms cold and 0.4/2.5/0.2 ms warm. All samples are retained;
+the cold spike has warm-up/scheduling uncertainty. This measures one observer
+site, not total recorder overhead. The warm added cost is about 2.1 ms per
+block and may amplify catch-up near the budget boundary. It cannot be used
+to subtract a universal correction from the complete trace.
+
+Version 3 counts immovable calls without clock reads; their CPU remains in
+whole-tick timing. Movable calls stay timed. World-guard totals therefore
+differ in definition between versions 2/3. Bounded frame scalars now retain
+player heading/position, camera pose, draws/triangles and moving-world count.
+The previous history was saved before recorder replacement. Targeted
+lifecycle/count tests pass; the user remains paused at the same time/pose.
+No physics behavior, iteration limit, activation or visibility change is made.

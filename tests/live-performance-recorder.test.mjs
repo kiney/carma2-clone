@@ -35,7 +35,10 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
       this.elapsed += 0.04;
       assert.equal(this.bodyTrajectoryGuard.run("commit"), "commit");
       assert.equal(this.bodyTrajectoryGuard.run("projection"), "projection");
-      assert.equal(this.advanceWorldContacts(), "world");
+      assert.equal(
+        this.advanceWorldContacts({ properties: { immovable: true } }),
+        "world",
+      );
       this.collectBodyContacts();
       return value;
     }
@@ -92,6 +95,7 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
     assert.equal(snapshot.rows.updates[0][4], 1);
     assert.equal(snapshot.rows.updates[0][7], 40);
     assert.equal(snapshot.rows.ticks[0][7], 1);
+    assert.equal(snapshot.rows.ticks[0][6], 0);
     assert.equal(snapshot.rows.ticks[0][9], 1);
     window.carma.paused = true;
     frame(1000);

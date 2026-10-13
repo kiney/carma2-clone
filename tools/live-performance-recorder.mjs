@@ -49,6 +49,18 @@ export function installLivePerformanceRecorder(capacity = 512) {
       "worldAnimationCpuMs",
       "gamePeriodMs",
       "totalSkippedMs",
+      "playerHeading",
+      "playerX",
+      "playerZ",
+      "cameraX",
+      "cameraZ",
+      "cameraQX",
+      "cameraQY",
+      "cameraQZ",
+      "cameraQW",
+      "drawCalls",
+      "triangles",
+      "movingWorldBodies",
     ],
   };
   const rings = Object.fromEntries(
@@ -173,6 +185,13 @@ export function installLivePerformanceRecorder(capacity = 512) {
       wrap(sim, name, function (original, args) {
         const current = tick;
         if (!current) return original.apply(this, args);
+        // Dormant props take a pure immediate return. Thousands of timer
+        // reads here would inflate the very catch-up work being diagnosed.
+        // Count these calls; their CPU remains inside the enclosing tick.
+        if (name === "advanceWorldContacts" && args[0]?.properties.immovable) {
+          current[countSlot]++;
+          return original.apply(this, args);
+        }
         const start = performance.now();
         try {
           return original.apply(this, args);
@@ -222,6 +241,18 @@ export function installLivePerformanceRecorder(capacity = 512) {
           ...frame,
           c.stats?.framePeriodMs ?? NaN,
           c.stats?.physicsSkippedMs ?? NaN,
+          c.player?.state?.heading ?? NaN,
+          c.player?.state?.position.x ?? NaN,
+          c.player?.state?.position.z ?? NaN,
+          c.camera?.position.x ?? NaN,
+          c.camera?.position.z ?? NaN,
+          c.camera?.quaternion.x ?? NaN,
+          c.camera?.quaternion.y ?? NaN,
+          c.camera?.quaternion.z ?? NaN,
+          c.camera?.quaternion.w ?? NaN,
+          c.stats?.drawCalls ?? NaN,
+          c.stats?.triangles ?? NaN,
+          sim.movingWorld?.length ?? NaN,
         ]);
       lastFrame = now;
     } else lastFrame = undefined;
@@ -229,7 +260,7 @@ export function installLivePerformanceRecorder(capacity = 512) {
     raf = requestAnimationFrame(onFrame);
   }
   const recorder = {
-    version: 2,
+    version: 3,
     capacity,
     columns,
     rings,
@@ -241,11 +272,11 @@ export function installLivePerformanceRecorder(capacity = 512) {
     },
     snapshot() {
       return {
-        version: 2,
+        version: 3,
         generation,
         stopped,
         paused: window.carma?.paused,
-        note: "Inclusive CPU timings, fixed scalar rings; generation changes on race/owner replacement. Frame buckets span recorder RAF callbacks, not the internal game frame boundary. No GPU timings.",
+        note: "Inclusive CPU timings, fixed scalar rings; generation changes on race/owner replacement. Frame buckets span recorder RAF callbacks, not the internal game frame boundary. No GPU timings. World guard time excludes counted immovable early returns; full tick time includes them.",
         columns,
         rows: Object.fromEntries(
           Object.entries(rings).map(([key, ring]) => {
