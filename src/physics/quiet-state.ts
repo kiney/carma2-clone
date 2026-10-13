@@ -116,7 +116,7 @@ export function evaluateNativeQuietLeaf(
   if (
     mass <= 0 ||
     inertia.some((n) => n <= 0) ||
-    max.some((n, i) => n <= min[i])
+    max.some((n, i) => n < min[i])
   )
     throw new Error("Invalid native quiet body");
   if (input.doNothing)

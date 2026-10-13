@@ -68,8 +68,11 @@ Whole-tick timings are mixed, including an Advanced regression; PERF-01 remains
 open. [Local NONCAR participation](docs/noncar-participation-performance.md)
 now keeps loaded scenery static until actual admission, rather than walking all
 466 Timber props as physics bodies. Shared physical slots, retained static return
-and repull preserve scenery collisions; unsupported hierarchy sleep remains
-PERF-17. Short whole-update timings improve, with cold-frame limits documented.
+and repull preserve scenery collisions. [Hierarchy quiet ownership](docs/hierarchy-quiet-performance.md)
+now connects native car/part/jointed-prop sleep and wake while retaining
+physical resting debris. Grounded cars still run their original wheel-force
+path. Short-session evidence and the explicit split startup correction are documented;
+PERF-01 remains open.
 
 ## Run it
 
@@ -198,9 +201,11 @@ source contact-ring sleep and registered wake/static repull with real car-body
 impulses. Authored launch snapshots remain separate; the previous city station
 ledge fixture is not proof of unobstructed velocity exchange. `npm run test:noncar-participation` checks original Stock/Advanced
 static approaches and retained-ACT reclaim/repull. Local slot admission and
-free-prop reclaim are integrated; jointed hierarchy quiet state, native physical
-memory aliasing and positive-material preparation order still have documented
-gaps. See [wake and repull evidence](docs/c2-noncar-wake-pull-re.md).
+free-prop reclaim and supported jointed hierarchy quiet state are integrated.
+`npm run test:hierarchy-quiet` checks original Eagle/Cerby settling, retained
+parts, actual impact wake, force-work resumption, repair and controlled airborne
+split startup. Native pool-memory aliasing, tumble eligibility and
+positive-material preparation order still have documented gaps. See [wake and repull evidence](docs/c2-noncar-wake-pull-re.md).
 
 ## Asset and license notes
 

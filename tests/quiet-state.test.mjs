@@ -167,6 +167,57 @@ test("all-corner squared speed uses f32 .0004 and preserves the plus-COM express
     true,
   );
 });
+for (const [name, bounds] of [
+  ["X plane", { min: [0, -1, -1], max: [0, 1, 1] }],
+  ["Y plane", { min: [-1, 0, -1], max: [1, 0, 1] }],
+  ["Z plane", { min: [-1, -1, 0], max: [1, 1, 0] }],
+  ["line", { min: [0, -1, 0], max: [0, 1, 0] }],
+  ["point", { min: [1, 2, 3], max: [1, 2, 3] }],
+  ["signed-zero point", { min: [-0, -0, -0], max: [0, 0, 0] }],
+  [
+    "Float32-collapsed X extent",
+    { min: [1, -1, -1], max: [1 + 2 ** -25, 1, 1] },
+  ],
+]) {
+  test(`finite ${name} bounds preserve native quiet and motion gates`, () => {
+    const input = { ...base, bounds };
+    const quiet = evaluateNativeQuietLeaf(input);
+    assert.equal(quiet.quietEligible, true);
+    assert.equal(quiet.quietState, 3);
+    assert.equal(quiet.gate, "quiet");
+    assert.deepEqual(quiet.zeroVelocities, {
+      worldVelocity: [0, 0, 0],
+      localOmega: [0, 0, 0],
+      auxiliaryLocalOmega: [0, 0, 0],
+    });
+    assert.equal(
+      evaluateNativeQuietLeaf({ ...input, worldVelocity: [0.04, 0, 0] }).gate,
+      "linear-speed",
+    );
+    const movingCorners = evaluateNativeQuietLeaf({
+      ...input,
+      localVelocity: [0.03, 0, 0],
+    });
+    assert.equal(movingCorners.gate, "corner-speed");
+    assert.equal(movingCorners.rejectedCorner, 0);
+    assert.equal(movingCorners.zeroVelocities, null);
+    if (name === "Float32-collapsed X extent") {
+      assert.ok(bounds.max[0] > bounds.min[0]);
+      assert.equal(f(bounds.max[0]), f(bounds.min[0]));
+    }
+  });
+}
+test("planar bounds still reject angular corner motion below the energy gate", () => {
+  const result = evaluateNativeQuietLeaf({
+    ...base,
+    bounds: { min: [-3, -1, 0], max: [3, 1, 0] },
+    localOmega: [0, 0, 0.008],
+  });
+  assert.ok(result.angularEnergy < 0.00009);
+  assert.equal(result.gate, "corner-speed");
+  assert.equal(result.rejectedCorner, 0);
+  assert.equal(result.zeroVelocities, null);
+});
 test("retained quiet state bypasses fresh checks but singleton and collision flag differ", () => {
   const moving = {
     ...retained,
@@ -284,7 +335,7 @@ test("invalid source packets cannot return non-finite state", () => {
     { worldVelocity: [NaN, 0, 0] },
     { previousQuietState: 256 },
     { collisionFlags: -1 },
-    { bounds: { min: [0, 0, 0], max: [0, 1, 1] } },
+    { bounds: { min: [1, 0, 0], max: [0, 1, 1] } },
   ])
     assert.throws(() => evaluateNativeQuietLeaf({ ...base, ...patch }));
   assert.throws(() => foldNativeQuietHierarchy(1, [256]));

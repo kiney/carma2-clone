@@ -509,6 +509,7 @@ test("whole emitted pair ring commits normal motion before sleeping; unknown ext
   ]);
   sim.lastImpacts = [];
   sim.finishPedQuiet();
+  sim.finishHierarchyQuiet();
   assert.equal(a.doNothing, false);
   assert.ok(a.diagnostics.has("mixed-contact-ring-quiet-provider-unavailable"));
 });

@@ -177,6 +177,15 @@ test("flush uses old linear-velocity basis and accepted candidate gyro/response 
   near(a.state.velocity.y, -0.8);
   near(a.state.angularVelocity.y, 1);
   near(a.state.angularVelocity.z, 0.2);
+  const local = queue.solverLocalVelocities.get(a.state);
+  assert.ok(local);
+  near(local.x, 0.2);
+  near(local.y, 0);
+  near(local.z, 0);
+  assert.ok(
+    local.distanceTo(a.state.velocity) > 0.5,
+    "OLD-basis recomputation loses candidate-basis friction transport",
+  );
   assert.ok(a.state.position.equals(position));
   assert.ok(a.state.orientation.equals(orientation));
   assert.ok(a.state.predictedOrientation.equals(predicted));
@@ -199,6 +208,11 @@ test("one local velocity cache spans the deferred pool after candidate rotation"
   near(a.state.velocity.x, 3);
   near(a.state.velocity.y, -3);
   assert.equal(queue.applied, 2);
+  const local = queue.solverLocalVelocities.get(a.state);
+  assert.ok(local);
+  assert.ok(local.length() < 1e-9);
+  queue.flush(bases);
+  assert.equal(queue.solverLocalVelocities.get(a.state), local);
 });
 
 test("removed-body predicate skips the entire pair and cannot mutate retained poses", () => {
@@ -213,6 +227,8 @@ test("removed-body predicate skips the entire pair and cannot mutate retained po
   assert.equal(queue.queued, 1);
   assert.equal(queue.applied, 0);
   assert.equal(queue.affectedBodies.size, 0);
+  assert.equal(queue.collisionFlagsMap.size, 0);
+  assert.equal(queue.solverLocalVelocities.size, 0);
   assert.ok(a.state.velocity.equals(aVelocity));
   assert.ok(b.state.velocity.equals(bVelocity));
 });
@@ -233,4 +249,90 @@ test("zero material friction retains a queued row without reporting an applied i
   assert.equal(queue.applied, 0);
   assert.equal(queue.affectedBodies.size, 0);
   near(a.state.velocity.x, 2);
+});
+
+test("live deferred records publish collision bits even below the slip gate", () => {
+  const a = body(1, v(0, -2)),
+    b = body(1),
+    c = body(1, v(0, -2)),
+    anchor = body(1),
+    queue = new DeferredContactFriction(),
+    bases = oldBases(a, b, c, anchor);
+  resolveContacts([contact(a)], 0.04, [], undefined, queue);
+  a.state.velocity.y = -2;
+  resolveContacts(
+    [{ ...contact(a), b, sourceType: 5 }],
+    0.04,
+    [],
+    undefined,
+    queue,
+  );
+  resolveContacts(
+    [{ ...contact(c), b: anchor, sourceType: 14 }],
+    0.04,
+    [],
+    undefined,
+    queue,
+  );
+  for (const value of [a, b, c, anchor]) value.state.velocity.set(0, 0, 0);
+  assert.equal(queue.collisionFlagsMap.size, 0, "flags belong to the flush");
+  queue.flush(bases);
+  assert.equal(queue.applied, 0, "every retained row has zero tangential slip");
+  assert.equal(queue.collisionFlagsMap.get(a.state), 3);
+  assert.equal(queue.collisionFlagsMap.get(b.state), 2);
+  assert.equal(queue.collisionFlagsMap.get(c.state), 1);
+  assert.equal(queue.collisionFlagsMap.has(anchor.state), false);
+  assert.equal(queue.solverLocalVelocities.size, 4);
+});
+
+test("collision flags exclude overflow, removed pairs and rejected rows", () => {
+  const retained = body(1, v(0, -2)),
+    removedA = body(1, v(0, -2)),
+    removedB = body(1),
+    overflow = body(1, v(0, -2)),
+    disabled = body(1, v(0, -2)),
+    rejected = body(1, v(0, -2)),
+    queue = new DeferredContactFriction(),
+    bases = oldBases(
+      retained,
+      removedA,
+      removedB,
+      overflow,
+      disabled,
+      rejected,
+    );
+  resolveContacts(
+    [{ ...contact(removedA), b: removedB, sourceType: 5 }],
+    0.04,
+    [],
+    undefined,
+    queue,
+  );
+  resolveContacts(
+    [{ ...contact(disabled), sourceType: 9 }],
+    0.04,
+    [],
+    undefined,
+    queue,
+  );
+  resolveContacts([contact(rejected)], 0.04, [], () => false, queue);
+  for (let index = 0; index < 49; index++) {
+    retained.state.velocity.y = -2;
+    resolveContacts([contact(retained)], 0.04, [], undefined, queue);
+  }
+  const [overflowImpact] = resolveContacts(
+    [contact(overflow)],
+    0.04,
+    [],
+    undefined,
+    queue,
+  );
+  assert.ok(overflowImpact.solverAccepted && overflowImpact.normalImpulse > 0);
+  assert.equal(queue.queued, 50);
+  assert.equal(queue.overflow, 1);
+  retained.state.velocity.set(0, 0, 0);
+  queue.flush(bases, (value) => value !== removedB);
+  assert.deepEqual([...queue.collisionFlagsMap], [[retained.state, 1]]);
+  assert.deepEqual([...queue.solverLocalVelocities.keys()], [retained.state]);
+  assert.equal(queue.applied, 0);
 });

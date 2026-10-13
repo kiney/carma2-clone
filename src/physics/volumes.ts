@@ -370,6 +370,11 @@ export function applyGenericVolumeForces(
     throw new Error("Invalid global gravity");
   const gravity =
     (volume ? volume.gravityMultiplier * depth : 1) * globalGravityMultiplier;
+  const gravityIncrement = new Vector3(
+    0,
+    Math.fround(-(9.8 / 6.9) * gravity * dt),
+    0,
+  );
   body.state.velocity.y -= (9.8 / 6.9) * gravity * dt;
   const viscosity = volume ? volume.viscosityMultiplier * depth : 1;
   const dragPass = () => {
@@ -397,6 +402,7 @@ export function applyGenericVolumeForces(
   };
   dragPass();
   if (extraWaterTransitionDrag) dragPass();
+  return gravityIncrement;
 }
 export interface WaterSurface {
   a: Vector3;

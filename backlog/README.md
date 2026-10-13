@@ -273,3 +273,18 @@ backlog task create "[P2] New issue title" --status backlog --priority high --la
 ```
 
 Descriptions retain distinctions between reported symptoms, reproduced defects, approximations, outstanding validation and verified fixes. Preserve technical evidence and source links when updating scope. Board movement is separate from exact priority; user changes take precedence over the initial ordering.
+
+PERF-17 / TASK-100.12 is now `done`: production car/part/jointed-prop quiet
+ownership joins native energy/gravity/child folds with complete contact rings.
+Resting pieces retain physical and graphical ownership while skipping independent
+forces/response; actual impacts, wheel support, release, repair and replacement
+wake them. Grounded cars still run source WheelForces.
+[Evidence and validation](../docs/hierarchy-quiet-performance.md) record natural
+original-part sleep, actual bumper/root hits, resumed force work, source creation
+packets and the explicit one-phase split startup correction. Native pool-memory
+aliasing and unknown/tumble eligibility remain documented; no FPS guarantee is
+claimed from the short mixed SwiftShader comparison. Hardware page creation and
+a final async DevTools probe failed separately from the passing application checks.
+PERF-18 is the next P1 checkpoint after user playtesting; PERF-01 alone stays
+`wip`, with the WIP limit3 and broader paused Goal unchanged.
+Current board:121 tasks,66 `backlog`,2 `next`,1 `wip`,52 `done`.

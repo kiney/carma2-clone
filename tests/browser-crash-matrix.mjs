@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 
 const executable = process.env.CHROMIUM_PATH || "/usr/bin/chromium";
 const assetRoot = process.env.CARMA2_ROOT || "carma2_orig";
+// Short serial regression excludes the extended split/part search loops.
+const coreOnly = process.argv.includes("--core-only");
 try {
   await access(executable);
   await access(assetRoot);
@@ -25,10 +27,28 @@ let serverLog = "";
 let browser;
 let page;
 const report = { catalog: {}, cases: [], errors: [], failedRequests: [] };
+
+async function finishReport(variant) {
+  report.variant = variant;
+  const glError = await page.evaluate(() =>
+    document.querySelector("#view").getContext("webgl2").getError(),
+  );
+  assert.equal(glError, 0, `WebGL error ${glError}`);
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.failedRequests, []);
+  report.glError = glError;
+  await writeFile(
+    coreOnly
+      ? "artifacts/browser-crash-matrix-core.json"
+      : "artifacts/browser-crash-matrix.json",
+    JSON.stringify(report, null, 2),
+  );
+  console.log(JSON.stringify(report, null, 2));
+}
 server.stdout.on("data", (data) => (serverLog += data));
 server.stderr.on("data", (data) => (serverLog += data));
 
-try {
+const runCases = async () => {
   let ready = false;
   for (let i = 0; i < 200; i++) {
     try {
@@ -222,7 +242,12 @@ try {
         c.simulation.reset(rival);
         rival.state.velocity.set(0, 0, 0);
         rival.state.angularVelocity.set(0, 0, 0);
+        // Controlled initial roll ensures a damage-producing crash across
+        // original gearing and rival rosters; actual W input still drives.
+        player.state.velocity.copy(forward).multiplyScalar(2);
         const record = {
+          fixture:
+            "Controlled initial forward roll2 model units/s (~31mph), then actual W input",
           scenario: name,
           track: document.querySelector("#track-select").value,
           player: player.group.name,
@@ -284,7 +309,18 @@ try {
     await page.keyboard.down("w");
     await page.waitForFunction(
       () =>
-        window.__crashMatrix.record.attribution.length > 0 ||
+        (window.__crashMatrix.record.attribution.some(
+          (event) =>
+            event.attacker === window.__crashMatrix.record.player &&
+            event.victim === window.__crashMatrix.record.rival,
+        ) &&
+          (window.__crashMatrix.player.damage.componentLevels.some(
+            (value, index) => value > window.__crashMatrix.record.before[index],
+          ) ||
+            window.__crashMatrix.rival.damage.componentLevels.some(
+              (value, index) =>
+                value > window.__crashMatrix.record.rivalBefore[index],
+            ))) ||
         window.carma.simulation.elapsed >= window.__crashMatrixUntil,
       null,
       { timeout: 25000 },
@@ -545,6 +581,10 @@ try {
       });
     }
     report.cases.push(result);
+  }
+  if (coreOnly) {
+    await finishReport("bounded-four-car-core");
+    return;
   }
 
   // The stock Porker2 WAM has authored positive snappability. Build component
@@ -1120,18 +1160,11 @@ try {
     multipleJointLinksObserved: jointCase.peakJointCount >= 2,
   };
 
-  const glError = await page.evaluate(() =>
-    document.querySelector("#view").getContext("webgl2").getError(),
-  );
-  assert.equal(glError, 0, `WebGL error ${glError}`);
-  assert.deepEqual(report.errors, []);
-  assert.deepEqual(report.failedRequests, []);
-  report.glError = glError;
-  await writeFile(
-    "artifacts/browser-crash-matrix.json",
-    JSON.stringify(report, null, 2),
-  );
-  console.log(JSON.stringify(report, null, 2));
+  await finishReport("full-crash-matrix");
+};
+
+try {
+  await runCases();
 } catch (error) {
   report.failure = String(error);
   if (page && !page.isClosed())

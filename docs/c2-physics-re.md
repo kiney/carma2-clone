@@ -409,7 +409,9 @@ occupancy is shared with connotation debris. Supported source-quiet leaves
 return to static native columns/root/additional while retaining ACT resources,
 then can be pulled again. Reclaim uses authored OWN MODEL and retained face-query
 cache bounds at the original outer-frame cadence, with a process-lifetime clock.
-Unknown hierarchy quiet state is retained for PERF-17. Native header-failure
+Supported car/part/jointed-prop quiet ownership is integrated in PERF-17;
+unknown/tumble eligibility still cannot authorize sleep. See
+[hierarchy gates and the explicit split startup correction](c2-hierarchy-quiet-re.md). Native header-failure
 rollback, Three/native matrix rebasing and broad face-cache invalidation are
 explicit browser adaptations, not verified original unchecked-failure behavior.
 See [runtime and numerical evidence](noncar-participation-performance.md),

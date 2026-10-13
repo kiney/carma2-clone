@@ -95,6 +95,9 @@ test("one simulation propagates global gravity into both original car force path
   for (const factor of [0, 0.2, 4]) {
     simulation.gravityMultiplier = factor;
     for (const car of cars) {
+      // Each force sample starts awake. Zero gravity can now legitimately
+      // quiet an airborne car; changing this test parameter is not a wake call.
+      simulation.reset(car);
       car.state.velocity.set(0, 0, 0);
       car.state.angularVelocity.set(0, 0, 0);
     }

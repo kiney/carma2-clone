@@ -96,6 +96,9 @@ export interface MotionGroundHit {
   surface?: import("../world").Surface;
 }
 export interface MotionGround {
+  /** Installed419551: wheel queries run asleep; grounded support wakes the
+   * previous contact ring before gravity. False preserves the no-support ec path. */
+  awakeFromSupport?(grounded: number): boolean;
   stopTyreEffects?(): void;
   /** Native axle effect outlet, before force application; rear precedes front. */
   tyreAxle?(input: {
@@ -168,6 +171,8 @@ export interface MotionParameters {
   random?: () => number;
 }
 export interface MotionDebug {
+  /** Native +54..5c gravity-only hint. Absent means the source retained it. */
+  gravityIncrement?: Vector3;
   /** Exact selected wheel faces at this force step; normals/points are world-space. */
   wheelContacts?: readonly (MotionGroundHit | null)[];
   /** Original material_index[] friction and field_0x195c recovery gates. */
@@ -697,10 +702,13 @@ export function applyVehicleForces(
       point: wheelSmashPoints[i],
     })),
   );
+  const awake = ground.awakeFromSupport?.(grounded) ?? true;
+  let gravityIncrement: Vector3 | undefined;
   const wallClimb = !!s.wallClimb && (s.driver ?? 8) > 5;
   // HW41958a: test the raw local support sum before normalization. A tiny
   // nonzero sum uses local Y; an exactly zero sum retains ordinary gravity.
   if (
+    awake &&
     wallClimb &&
     (normalSum.x !== 0 || normalSum.y !== 0 || normalSum.z !== 0)
   ) {
@@ -709,7 +717,18 @@ export function applyVehicleForces(
     if (length > EPS) support.divideScalar(length);
     else support.set(0, 1, 0);
     F.addScaledVector(support, -p.mass * 10);
-  } else {
+  } else if (awake) {
+    gravityIncrement = new Vector3(
+      0,
+      Math.fround(
+        (-10 *
+          (s.volumeGravityFactor ?? 1) *
+          (s.globalGravityMultiplier ?? 1) *
+          dt) /
+          S,
+      ),
+      0,
+    );
     F.add(
       new Vector3(
         0,
@@ -1125,6 +1144,7 @@ export function applyVehicleForces(
   }
   s.curvature -= steeringDamage;
   return {
+    gravityIncrement,
     wheelContacts: hits,
     wheelSpringLoads: loads,
     wheelRoadFrictions: hits.map((hit) => hit?.friction ?? 0),

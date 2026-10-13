@@ -47,7 +47,8 @@
     "test:ped-bones": "npm run build && node tests/browser-ped-bone-runtime.mjs",
     "test:ped-gameplay": "npm run build && node tests/browser-ped-native-gameplay.mjs",
     "test:render-matrices": "npm run build && node tests/browser-render-matrices.mjs",
-    "test:noncar-participation": "npm run build && node tests/browser-noncar-participation.mjs"
+    "test:noncar-participation": "npm run build && node tests/browser-noncar-participation.mjs",
+    "test:hierarchy-quiet": "npm run build && node tests/browser-hierarchy-quiet.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

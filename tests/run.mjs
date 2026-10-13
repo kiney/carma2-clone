@@ -1,3 +1,5 @@
+import "./hierarchy-quiet-integration.test.mjs";
+import "./hierarchy-quiet.test.mjs";
 import "./native-noncar-clone.test.mjs";
 import "./noncar-slots.test.mjs";
 import "./native-noncar-return.test.mjs";

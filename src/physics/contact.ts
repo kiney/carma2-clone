@@ -369,6 +369,11 @@ export class DeferredContactFriction {
   /** Records which apply a nonzero tangential impulse. */
   applied = 0;
   readonly affectedBodies = new Set<RigidBody>();
+  /** Native solver-local V, initialized in the OLD basis and updated by
+   * candidate-basis friction. Quiet evaluation must retain this exact cache. */
+  readonly solverLocalVelocities = new Map<RigidState, Vector3>();
+  /** Native +1dd world/body bits from live retained records, before slip gates. */
+  readonly collisionFlagsMap = new Map<RigidState, number>();
   get queued(): number {
     return this.entries.length;
   }
@@ -405,17 +410,27 @@ export class DeferredContactFriction {
   ): void {
     if (this.flushed) return;
     this.flushed = true;
-    const velocities = new Map<RigidState, Vector3>();
     for (const entry of this.entries) {
       const { contact } = entry;
       if (!allowedBody(contact.a) || (contact.b && !allowedBody(contact.b)))
         continue;
+      const worldLike = !contact.b || contact.sourceType === 14;
+      this.collisionFlagsMap.set(
+        contact.a.state,
+        (this.collisionFlagsMap.get(contact.a.state) ?? 0) |
+          (worldLike ? 1 : 2),
+      );
+      if (contact.b && !worldLike)
+        this.collisionFlagsMap.set(
+          contact.b.state,
+          (this.collisionFlagsMap.get(contact.b.state) ?? 0) | 2,
+        );
       const bodies = contact.b ? [contact.a, contact.b] : [contact.a];
       const before = bodies.map((body) => ({
         velocity: body.state.velocity.clone(),
         omega: body.state.angularVelocity.clone(),
       }));
-      const applied = resolveFriction(contact, velocities, {
+      const applied = resolveFriction(contact, this.solverLocalVelocities, {
         ...entry,
         oldOrientations,
       });

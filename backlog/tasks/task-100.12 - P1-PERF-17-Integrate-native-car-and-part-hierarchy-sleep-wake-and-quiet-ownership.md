@@ -3,9 +3,10 @@ id: TASK-100.12
 title: >-
   [P1] PERF-17: Integrate native car and part hierarchy sleep, wake and quiet
   ownership
-status: next
+status: done
 assignee: []
 created_date: '2026-10-13 11:29'
+updated_date: '2026-10-13 22:44'
 labels:
   - priority-1
   - PERF-17
@@ -42,10 +43,16 @@ The user explicitly authorizes substantial, reversible physics and rendering red
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Document native quiet-energy/contact/hierarchy gates and wake callers, and implement authoritative production providers for the supported car/part/jointed-NONCAR paths.
-- [ ] #2 Demonstrate eligible settled groups leaving expensive active force/candidate/response work while retaining contact discoverability and rendering; unresolved eligibility must be explicit.
-- [ ] #3 Verify wake and momentum exchange on later impacts, active forces, parent motion, detach/repair and mixed-ring transitions; do not quiet the moving Cerby cluster solely to reduce cost.
-- [ ] #4 Feed genuine quiet state into PERF-16 lifecycle/reclaim without reclaiming driver-2/3 vehicle pieces as ordinary NONCARs or deleting them by lifetime.
-- [ ] #5 Exercise multiple original cars, attached parts, free debris and props in headless numerical and Chromium settle-hit-repair scenarios, with clean runtime diagnostics.
-- [ ] #6 Record short-session active/resting population and repeated guard/force-work differences, and provide a checkpoint plus a user-playtest focus for persistent debris, reactivation and repair.
+- [x] #1 Document native quiet-energy/contact/hierarchy gates and wake callers, and implement authoritative production providers for the supported car/part/jointed-NONCAR paths.
+- [x] #2 Demonstrate eligible settled groups leaving expensive active force/candidate/response work while retaining contact discoverability and rendering; unresolved eligibility must be explicit.
+- [x] #3 Verify wake and momentum exchange on later impacts, active forces, parent motion, detach/repair and mixed-ring transitions; do not quiet the moving Cerby cluster solely to reduce cost.
+- [x] #4 Feed genuine quiet state into PERF-16 lifecycle/reclaim without reclaiming driver-2/3 vehicle pieces as ordinary NONCARs or deleting them by lifetime.
+- [x] #5 Exercise multiple original cars, attached parts, free debris and props in headless numerical and Chromium settle-hit-repair scenarios, with clean runtime diagnostics.
+- [x] #6 Record short-session active/resting population and repeated guard/force-work differences, and provide a checkpoint plus a user-playtest focus for persistent debris, reactivation and repair.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented production generic hierarchy/contact-ring quiet providers; exact car wheel support wake, own/descendant folds, world-joint gates, retained rest discovery, actual deferred-friction cache/flags, moment restoration and repair ownership. Ordinary detached/pulled-body creation hints verified from HW. Explicit one-phase browser split hint correction prevents reproduced airborne startup freeze without extra force; native pooled-memory aliasing and tumble/custom eligibility remain documented. Final 2910 tests/build pass, focused review17 pass; original Eagle/Cerby natural sleep-hit-repair (9ticks each), 3tick airborne split, four-car core crashes and four Stock/Advanced prop quiet/reclaim cases pass with clean GL/console/network. Sleeping-piece forces/own world contact calls0; next awake tick1/2. SwiftShader short A/B moving fixture preserves exact state/fractions and work counts but timing is mixed/adverse; hardware page creation and final async MCP probe failed before usable measurement. No hardware-FPS improvement claimed. docs/hierarchy-quiet-performance.md and docs/c2-hierarchy-quiet-re.md record evidence, limitations and playtest focus.
+<!-- SECTION:NOTES:END -->
