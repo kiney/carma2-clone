@@ -1,5 +1,11 @@
 # PERF-01: frame-time investigation
 
+Latest user-paused Timber drop: [live evidence and recorder](live-timber-drop.md).
+The isolated post-drop trajectory exposes expensive rotating-part pair guards;
+attribution of the preceding full frame remains open. Use the durable live
+recorder for subsequent playtests; wrapping world query methods disables
+PERF-12 static-guard cache certification.
+
 Status: **initial analysis completed; optimization and exact policy remain open**.
 The post-PERF-05 Timber! investigation finds a reproduced CPU-only 4-FPS case,
 global pair-discovery/correction amplification and independent redundant world

@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-13 00:39'
+updated_date: '2026-10-13 01:06'
 labels:
   - priority-1
   - PERF-01
@@ -16,6 +16,7 @@ references:
   - docs/timber-performance-findings.md
   - tools/profile-performance.mjs
   - tools/performance-probe.mjs
+  - docs/live-timber-drop.md
 priority: high
 ordinal: 1000
 ---
@@ -70,4 +71,6 @@ PERF-11 / TASK-100.6 completed: ordered conservative static face locality and re
 2026-10-13 user still reproduces <=4 FPS severe stalls after PERF-12, with the latest Timber screenshot showing a clustered collision state and overturned cars. Visibility work is deferred until the cause is isolated. Prepared an isolated hardware Chromium production Timber/EAGLEGREEN session for user-driven reproduction, with ordinary collision/damage behavior, frozen race timer only, and bounded 512-row scalar timing rings for rendered frame intervals, updateFrame CPU and step CPU. No detailed profiling, simulation loop or source behavior change is running. Await user pause to inspect the actual failing live application state before repair/reset/reload; no clean route or root-cause claim yet.
 
 User-driven controlled Timber session did not reproduce the <=4FPS performance problem. It instead yielded a reproducible smooth-road vehicle lockup, now tracked separately as P1 PHY-13 / TASK-106 (backlog). Captured live state149.44s, actual512-row timing history and screenshot are ignored in artifacts/perf01-user-stuck*. Last512 frames p50~16.7ms,p95~33.4ms,max50.1ms; individual ticks p50~10.1ms,p95~28.3ms,max34.8ms. The clone diagnosis isolates deep overlap with a fully detached own wing: world movement allowed1, direct car/wing pair fraction~4.15e-6, no solver contact rows, removing only that wing from the cloned guard restores1. Actual gameplay remains paused and unchanged. PERF-01 remains open for a genuine user-provoked performance stall; these timings must not be described as its reproduction or as proof that performance is solved. PERF-04 is deferred.
+
+2026-10-13 actual user-paused Timber drop captured at113.56s, separate from PHY-13: 7 active cars,10 parts,466 dormant props; hardware AMD buffer2098x1466; last game period170ms, cumulative skipped800ms. Previous recorder was stopped/bound to old race, so no preceding full-frame timing exists. Corrected read-only cloned next-trajectory probes isolate a residual rotating-part body-guard cost29.6ms warm (35.7ms with per-pair timing), versus world2.2ms/pair8.6ms/solver0.3ms.55pair guards,22revalidations,3308hull transforms. Zero-spin CLONES reduce guard15ms/1419transforms but alter contacts/fractions; not a behavior fix. Exact stall attribution remains open. Durable512-row opt-in recorder now preserves pause history, auto-rebinds in-page race/Simulation replacements and leaves world-query cache identities intact. User game remains paused and unchanged; no engine fix or visibility work. Evidence and invalid exploratory-probe exclusions: docs/live-timber-drop.md.
 <!-- SECTION:NOTES:END -->
