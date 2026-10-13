@@ -16,6 +16,7 @@ const { values } = parseArgs({
     samples: { type: "string", default: "4" },
     root: { type: "string" },
     "cpu-profile": { type: "boolean", default: false },
+    "allow-motion-changes": { type: "boolean", default: false },
   },
 });
 for (const input of [values.url, values.baseline]) {
@@ -31,6 +32,9 @@ if (!["2", "4"].includes(values.samples))
 if (values.root && !["data", "adv_data"].includes(values.root))
   throw new Error("Use the data or adv_data catalog root");
 const report = {
+  outcomePolicy: values["allow-motion-changes"]
+    ? "Equal initial fixture required; intentional native movement differences are reported, not rejected. This is timing evidence, not native conformance."
+    : "Exact old/new initial state, outcomes and guard fractions required.",
   note: "Two exact manual physics ticks per prepared case and a separate bounded250ms CPU-only frame sample; this recreated fixture is not the exact preceding user frame. No long-running simulation. Traced first-tick time includes attribution overhead; second tick disables counters/guard tracing. Hardware/software backend is recorded, never inferred from launch flags.",
   cases: [],
   errors: [],
@@ -198,13 +202,19 @@ try {
         bodyCount: r.deterministicState.bodies.length,
         impactCount: r.deterministicState.impacts.length,
         cpuProfile: r.cpuProfile,
+        ...(values["allow-motion-changes"]
+          ? {
+              resultingState: r.deterministicState,
+              fractions: r.tracedFractions,
+            }
+          : {}),
       })),
     };
     report.cases.push(comparison);
     assert(
       comparison.exactInitial &&
-        comparison.exactState &&
-        comparison.exactFractions,
+        (values["allow-motion-changes"] ||
+          (comparison.exactState && comparison.exactFractions)),
       "Numerical fixture changed",
     );
   }

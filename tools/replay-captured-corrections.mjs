@@ -1,6 +1,8 @@
 /** Bounded, serial body-pair + joint correction diagnostic from an ignored
  * captured state. Run with node --import tsx. This never calls step(), loads a
  * browser or writes original assets; it is not a whole-tick/FPS replay.
+ * Retains independent free-body candidate paths for historical PERF-13
+ * diagnosis. PERF-14 production hierarchy motion is not replayed by this tool.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname, relative, isAbsolute } from "node:path";

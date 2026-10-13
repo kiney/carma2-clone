@@ -106,6 +106,29 @@ test("rotation arcs are checked against authored hulls, not endpoint boxes", () 
   assert.ok(pathDepth(a, b, pa, pb, fraction) <= 1.01e-6);
 });
 
+test("physical joint time is coupled even when parent-child collision masks reject", () => {
+  const parent = box(-1, 0.1),
+    child = box(-0.5, 0.1),
+    wall = box(0.1, 0.1);
+  wall.properties.immovable = true;
+  const group = {};
+  const a = path(parent, v(1.5)),
+    b = path(child, v(1.5));
+  a.temporalGroup = b.temporalGroup = group;
+  const paths = new Map([
+    [parent, a],
+    [child, b],
+    [wall, path(wall)],
+  ]);
+  const fractions = guardBodyTrajectories(
+    [parent, child, wall],
+    paths,
+    (a, b) => !((a === parent && b === child) || (a === child && b === parent)),
+  );
+  assert.ok(fractions.get(child) < 1);
+  assert.equal(fractions.get(parent), fractions.get(child));
+});
+
 test("complete rotations cannot alias clear endpoint quaternions", () => {
   const a = box(0),
     b = box(0, 0.05);

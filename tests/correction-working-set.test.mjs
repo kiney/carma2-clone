@@ -28,6 +28,39 @@ function body(x = 0) {
 const collectPair = (set, a, b, emit) =>
   set.pair(a, b, set.capture(a), set.capture(b), emit);
 
+test("hierarchy certificates include ancestor motion and mutable joint geometry", () => {
+  const set = new CorrectionWorkingSet(),
+    child = body(),
+    parent = body(2);
+  child.joint = {
+    type: "ball",
+    parent,
+    child,
+    childAnchor: v(0.2, 0.1),
+    parentAnchor: v(-0.2),
+  };
+  let snapshot = set.capture(child);
+  const changed = (mutate) => {
+    mutate();
+    const next = set.capture(child);
+    assert.notEqual(next, snapshot);
+    snapshot = next;
+    assert.equal(set.capture(child), next);
+  };
+  changed(() => (parent.state.velocity.z += 1));
+  changed(() => (parent.state.angularVelocity.y += (2 * Math.PI) / 0.04));
+  changed(() => (parent.state.position.x += 0.25));
+  changed(() => parent.state.orientation.setFromAxisAngle(v(0, 1), 0.3));
+  changed(() => (parent.properties.centerOfMass.x += 0.1));
+  changed(() => (parent.properties.inertia.y *= 2));
+  changed(() => (child.joint.childAnchor.z += 0.2));
+  changed(() => (child.joint.parentAnchor.y -= 0.1));
+  changed(() => (child.joint.type = "hinge"));
+  changed(() => (child.joint.childAxis = v(1)));
+  changed(() => (child.joint.quickHinge = true));
+  changed(() => (parent.properties.immovable = true));
+});
+
 test("stable correction snapshots reuse old and predicted geometry", () => {
   const diagnostics = {},
     set = new CorrectionWorkingSet(diagnostics),
@@ -103,7 +136,8 @@ test("pose, velocity, COM, inertia, masks, ancestry, and recovery invalidate pai
   collectPair(set, a, b, () => (emissions++, emit()));
   a.joint.parent = b;
   collectPair(set, a, b, () => (emissions++, emit()));
-  assert.equal(emissions, 1 + invalidations.length + 2);
+  // Parent movement now changes the child's actual candidate trajectory too.
+  assert.equal(emissions, 1 + invalidations.length + 3);
 });
 
 test("empty pair results replay overlap state and changed shape recollects", () => {

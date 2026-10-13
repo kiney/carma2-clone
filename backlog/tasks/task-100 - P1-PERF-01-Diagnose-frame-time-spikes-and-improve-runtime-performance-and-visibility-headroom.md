@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-13 11:32'
+updated_date: '2026-10-13 12:38'
 labels:
   - priority-1
   - PERF-01
@@ -84,4 +84,6 @@ Subsequent actual user 6 FPS / opposite-direction ~20 FPS capture succeeded at e
 2026-10-13 reviewed follow-up: source-only analysis checkpoint b6b2a47 and further exact allocation/roster reductions implemented under PERF-13. Actual hardware MCP now reconnects; bounded recreated Stock fixture has exact numerical state/fractions and lower typical tick costs with mixed/adverse samples retained.2733 tests and production build pass;15 original-car crash reports unchanged. Actual rendered user-route6FPS issue remains unverified/unresolved; visibility work stays deferred. See docs/guard-kernel-performance.md.
 
 2026-10-13 user selected fundamental redesign rather than further micro-optimization. Ordered P1/next queue: PERF14/TASK100.9 hierarchy-aware native joint candidate movement (1190); reused PHY13/TASK106 native overlap recovery and guard-policy redesign (1200); PERF15/TASK100.10 change-local native collision orchestration (1210); PERF16/TASK100.11 retained static ACT/local PHIL admission and authoritative reclaim bridge (1220); PERF17/TASK100.12 generic hierarchy sleep/wake (1230); PERF18/TASK100.13 dormant render-pose work and batch locality (1240). Significant reversible algorithm/guard changes are explicitly authorized with separate Git checkpoints and user playtests between tickets. Exact preservation of browser-only safeguards is superseded, while original-data/gameplay acceptance and native evidence remain important. PERF13 moves to backlog for residual whole-route integration, avoiding duplicate active implementation scope. PERF04 remains after that validation; no new engine change or completion is claimed.
+
+PERF-14 completed: hierarchy-aware native-informed candidate/probe/commit movement, stock original WAM joint tests and final production/MCP crash/repair validation. Bounded AMD hardware CPU medians improve but adverse 123.2 ms tick remains; do not declare the rendered Timber stall fixed. See docs/hierarchy-motion-performance.md. PHY-13 then PERF-15 retain old-overlap guard and global retry redesign. Separate Git checkpoint for damaged-part playtesting; PERF-01 remains wip.
 <!-- SECTION:NOTES:END -->

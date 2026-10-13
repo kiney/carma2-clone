@@ -42,6 +42,26 @@ function prop({
 const near = (a, b, e = 1e-8) =>
   assert.ok(Math.abs(a - b) <= e, `${a} != ${b}`);
 
+test("smashed jointed scenery leaves the candidate hierarchy until re-enabled", () => {
+  const scene = new Group(),
+    body = prop({ bend: 30 });
+  scene.add(body.actor);
+  const sim = new VehicleSimulation(new WorldCollision(scene), scene);
+  sim.addNonCar(body);
+  body.motor.sleeping = false;
+  body.properties.immovable = false;
+  assert.ok(body.joint);
+  body.actor.userData.worldSmashDisabled = true;
+  assert.ok(!sim.allBodies().includes(body));
+  assert.ok(!sim.allJoints().includes(body.joint));
+  assert.doesNotThrow(() => sim.step());
+  delete body.actor.userData.worldSmashDisabled;
+  assert.ok(sim.allBodies().includes(body));
+  assert.ok(sim.allJoints().includes(body.joint));
+  assert.doesNotThrow(() => sim.step());
+  sim.dispose();
+});
+
 test("sleeping original props remain separate from static geometry and refresh finite drivable faces", () => {
   const source = new Group(),
     body = prop({ keywords: "DRIVABLE_ON" });

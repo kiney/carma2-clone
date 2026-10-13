@@ -7,6 +7,7 @@ import {
   type CollisionHull,
 } from "./geometry";
 import type { HullBody } from "./pair-guard";
+import type { RigidJoint } from "./joint";
 import { hasImmutableCollisionHulls } from "./immutable-hulls";
 
 /** Contact/world maps last one tick. Exact source/pose certificates and weakly
@@ -137,7 +138,7 @@ interface OptionalShape {
 type CollisionBody = HullBody & {
   kind?: string;
   shape?: OptionalShape;
-  joint?: { parent: RigidBody };
+  joint?: Partial<RigidJoint> & { parent: RigidBody };
   filterA?: number | null;
   filterB?: number | null;
   overlapRecovery?: boolean;
@@ -217,6 +218,27 @@ function motionValues(
     const joint = (current as CollisionBody).joint;
     visit(joint);
     visit(joint?.parent);
+    if (joint) {
+      visit(joint.type);
+      visit(joint.quickHinge);
+      vector(joint.childAnchor, visit);
+      vector(joint.parentAnchor, visit);
+      vector(joint.childAxis, visit);
+      vector(joint.parentAxis, visit);
+      vector(joint.translationAxis, visit);
+      visit(joint.translationTravel);
+      const parent = joint.parent;
+      visit(parent.state);
+      poseNumbers(parent.state.position, visit);
+      poseNumbers(parent.state.orientation, visit);
+      vector(parent.state.velocity, visit);
+      vector(parent.state.angularVelocity, visit);
+      visit(parent.properties);
+      vector(parent.properties.centerOfMass, visit);
+      vector(parent.properties.inertia, visit);
+      visit(parent.properties.immovable);
+      visit(parent.properties.rotationLocked);
+    }
     length++;
     if (!joint) break;
     current = joint.parent;

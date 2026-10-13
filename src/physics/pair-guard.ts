@@ -29,11 +29,18 @@ export interface GuardPose {
 export type PosePath = ((fraction: number) => GuardPose) & {
   /** Total travel bounds, needed when a path makes complete rotations. */
   angularTravel?: number;
+  /** Existing world-sweep angular-rate heuristic, including driven ancestors.
+   * Separate from the conservative pair-guard momentum bound above. */
+  worldAngularSampling?: number;
   /** Pure poses and immutable source geometry for this synchronous guard phase.
    * Uncertified custom paths retain private samples and conservative bounds. */
   stable?: boolean;
   /** Captured constant pose; never infer stationarity from immovability alone. */
   constantPose?: GuardPose;
+  /** Physical joints share time even when their contact masks exclude each other. */
+  temporalGroup?: object;
+  /** Conservative COM enclosure for parent-driven motion, including full turns. */
+  centerBounds?: Box3;
 };
 const DEPTH_EPSILON = 1e-6;
 
@@ -506,6 +513,14 @@ export class BodyTrajectoryGuard {
     const union = (i: number, j: number) => {
       parents[find(j)] = find(i);
     };
+    const temporalGroups = new Map<object, number>();
+    bodies.forEach((body, i) => {
+      const group = paths.get(body)!.temporalGroup;
+      if (!group) return;
+      const previous = temporalGroups.get(group);
+      if (previous === undefined) temporalGroups.set(group, i);
+      else union(previous, i);
+    });
     // Analytic sphere emitters have float/tolerance contacts outside tight hull
     // bounds. Preserve the previous envelope whenever any sphere participates.
     const hasSphere = bodies.some(isNativeSphereBody);
@@ -528,13 +543,16 @@ export class BodyTrajectoryGuard {
           .clone()
           .applyQuaternion(pose.orientation)
           .add(pose.position);
-      return new Box3()
-        .setFromPoints([0, 0.25, 0.5, 0.75, 1].map((t) => center(path(t))))
-        .expandByScalar(
-          radius(body) +
-            2 * body.properties.centerOfMass.length() +
-            DEPTH_EPSILON,
-        );
+      return (
+        path.centerBounds?.clone() ??
+        new Box3().setFromPoints(
+          [0, 0.25, 0.5, 0.75, 1].map((t) => center(path(t))),
+        )
+      ).expandByScalar(
+        radius(body) +
+          2 * body.properties.centerOfMass.length() +
+          DEPTH_EPSILON,
+      );
     });
     const candidates = this.broadphase.pairs(bodies, bounds, diagnostics);
     // Mask-sensitive attachment unions apply even for nonoverlapping/static

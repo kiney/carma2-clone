@@ -327,7 +327,7 @@ separate joint field/path. Parent prediction precedes recursive child movement
 at `0x4b9397`–`0x4b93ba`. The selected ancestor at child `+0x230` normally is
 the direct parent; flag0x400 inherited-motion paths need separate handling.
 
-Browser `candidate()` and `createRigidBodyPosePath()` currently integrate each
+At baseline `f3ee9c3`, browser `candidate()` and `createRigidBodyPosePath()` integrate each
 body independently; `projectJointPositions()` aligns poses only after guarded
 commitment. `prepareJointVelocities()` constrains instantaneous velocity rather
 than finite-step anchor coincidence. This is a verified structural discrepancy.
@@ -345,3 +345,12 @@ The user authorizes reversible structural/guard changes with Git checkpoints
 and intermediate playtests. Native/gameplay expectations supersede mandatory
 bitwise preservation of browser-only guards or eight global correction rounds.
 PHY-13 owns the recovery/guard remedy; PERF-15 owns local retry orchestration.
+
+PERF-14 now connects parent-first candidate, guard and commitment paths through
+an isolated hierarchy phase. Ordinary ball/universal, hinge/quick-hinge and
+world-translation formulas are implemented; shared temporal caps and ancestor
+cache certificates keep those phases coherent. The old later anchor projection
+is removed. See [implementation, limitations and validation](hierarchy-motion-performance.md).
+Flag0x400 inherited-affine metadata and upward descendant WORLD-joint corrections
+remain unsupported variants; this does not claim full hierarchy parity or a
+completed PHY-13 lockup fix.

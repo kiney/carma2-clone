@@ -195,12 +195,13 @@ import {
   createOrdinaryDetachJoint,
   createSdbHingeJoint,
   createTranslationJoint,
-  projectJointPositions,
   prepareJointVelocities,
   type RigidJoint,
 } from "./joint";
-import { advanceRigidBody } from "./integrate";
-import { createRigidBodyPosePath } from "./rigid-path";
+import {
+  createHierarchyMotionPhase,
+  type HierarchyMotionPhase,
+} from "./hierarchy-motion";
 import {
   attachmentRoot,
   BodyTrajectoryGuard,
@@ -555,17 +556,6 @@ export function createSimulatedCar(
   car.crashRecord.resetDirection(state.orientation);
   return car;
 }
-function candidate(body: RigidBody, dt: number) {
-  if (body.properties.immovable) {
-    (body.state.predictedPosition ??= new Vector3()).copy(body.state.position);
-    (body.state.predictedOrientation ??= new Quaternion()).copy(
-      body.state.orientation,
-    );
-  } else advanceRigidBody(body, dt, true);
-}
-function advance(body: RigidBody, dt: number) {
-  advanceRigidBody(body, dt);
-}
 function transformHulls(
   body: RigidBody,
   hulls: CollisionHull[],
@@ -884,6 +874,7 @@ export class VehicleSimulation {
   private contactSurfaces = new Map<RigidBody, Surface[]>();
   private bodyBroadphase = new BodyBroadphase();
   private bodyTrajectoryGuard = new BodyTrajectoryGuard();
+  private hierarchyMotion?: HierarchyMotionPhase;
   /** Diagnostic A/B switch; production defaults to validated reuse. */
   correctionReuse = true;
   correctionDiagnostics?: CorrectionDiagnostics &
@@ -1676,10 +1667,23 @@ export class VehicleSimulation {
   }
   private allJoints(): RigidJoint[] {
     return [...this.debris, ...this.noncars].flatMap((b) =>
-      b.joint && !b.properties.immovable && !this.attachedToInactiveCar(b)
+      b.joint &&
+      !b.properties.immovable &&
+      !this.attachedToInactiveCar(b) &&
+      !("kind" in b && b.kind === "noncar" && this.disabledWorldActor(b))
         ? [b.joint]
         : [],
     );
+  }
+  /** Rebuild after every response/mutation barrier. A child is predicted from
+   * its parent's candidate, not from a later unguarded anchor projection. */
+  private predictHierarchy(bodies: readonly SimulationBody[]): void {
+    this.hierarchyMotion = createHierarchyMotionPhase(
+      bodies,
+      this.allJoints(),
+      PHYSICS_STEP,
+    );
+    this.hierarchyMotion.writeCandidates(bodies);
   }
   private attachedToInactiveCar(body: DetachedBody | NonCarBody): boolean {
     let parent: RigidBody | undefined = body.joint?.parent;
@@ -3169,15 +3173,31 @@ export class VehicleSimulation {
     if (this.correctionDiagnostics)
       this.correctionDiagnostics.worldCollections =
         (this.correctionDiagnostics.worldCollections ?? 0) + 1;
+    const phase = this.hierarchyMotion?.paths.has(body)
+      ? this.hierarchyMotion
+      : createHierarchyMotionPhase(
+          [...this.allBodies(), body],
+          this.allJoints(),
+          PHYSICS_STEP,
+        );
+    const path = phase.paths.get(body)!;
     const samples = Math.min(
       128,
       Math.max(
         1,
-        Math.ceil((body.state.angularVelocity.length() * PHYSICS_STEP) / 0.05),
+        Math.ceil(
+          ("joint" in body && body.joint
+            ? (path.worldAngularSampling ?? path.angularTravel ?? 0)
+            : body.state.angularVelocity.length() * PHYSICS_STEP) / 0.05,
+        ),
       ),
     );
     const pose = (fraction: number) => {
-      candidate(body, PHYSICS_STEP * fraction);
+      const sample = path(fraction);
+      (body.state.predictedPosition ??= new Vector3()).copy(sample.position);
+      (body.state.predictedOrientation ??= new Quaternion()).copy(
+        sample.orientation,
+      );
       return {
         position: body.state.predictedPosition!,
         orientation: body.state.predictedOrientation!,
@@ -3470,7 +3490,7 @@ export class VehicleSimulation {
           faceFriction: hit.faceFriction,
         });
       }
-      // candidate() reuses its predicted pose objects. Retain values across
+      // World sampling reuses predicted pose objects. Retain values across
       // angular samples; otherwise the next prediction also mutates OLD and
       // erases every sweep after the first subinterval.
       previous = {
@@ -4684,6 +4704,7 @@ export class VehicleSimulation {
     this.onBeforeStep?.();
     this.physicsQueryDepth++;
     const previousWorkingSet = this.correctionWorkingSet;
+    const previousHierarchyMotion = this.hierarchyMotion;
     this.correctionWorkingSet = this.correctionReuse
       ? this.correctionGeometry.createTick(this.correctionDiagnostics)
       : undefined;
@@ -4897,8 +4918,8 @@ export class VehicleSimulation {
       for (const body of bodies) {
         body.overlapDetected = false;
         body.worldOverlapDetected = false;
-        candidate(body, PHYSICS_STEP);
       }
+      this.predictHierarchy(bodies);
       const restartGroups: Set<SimulationBody>[] = [];
       const beforeApply = (
         impacts: ContactImpact[],
@@ -4932,7 +4953,7 @@ export class VehicleSimulation {
             continue;
           for (const body of changed)
             restartCounts.set(body, (restartCounts.get(body) ?? 0) + 1);
-          for (const body of changed) candidate(body, PHYSICS_STEP);
+          this.predictHierarchy(this.allBodies());
           const changedJoints = [...this.debris, ...this.noncars].flatMap(
             (b) => (b.joint && members.has(b) ? [b.joint] : []),
           );
@@ -4968,8 +4989,7 @@ export class VehicleSimulation {
         // restart callbacks can activate/remove bodies or detach new parts.
         // The diagnostic uncached path retains the original collection calls.
         const passBodies = this.correctionReuse ? this.allBodies() : undefined;
-        for (const body of passBodies ?? this.allBodies())
-          candidate(body, PHYSICS_STEP);
+        this.predictHierarchy(passBodies ?? this.allBodies());
         guardResults = new Map(
           (passBodies ?? this.allBodies()).map((body) => [
             body,
@@ -5011,26 +5031,25 @@ export class VehicleSimulation {
       this.finishPedQuiet();
       this.finishNonCarQuietRings();
       const committing = this.allBodies();
+      // The final solve/quiet phase may have changed velocities, ancestry or
+      // immovability. Its trajectory must not reuse the pre-response phase.
+      this.predictHierarchy(committing);
       const worldFractions = new Map(
         committing.map((body) => [
           body,
-          (guardResults.get(body) ?? this.advanceWorldContacts(body, true))
-            .fraction,
+          this.advanceWorldContacts(body, true).fraction,
         ]),
       );
-      // Final pair commitment and joint projection own fresh path/coupling
-      // certificates. No correction result survives into those phases.
+      // Final hierarchy commitment owns fresh path/coupling certificates.
+      // No correction result survives into that phase.
       this.correctionWorkingSet = undefined;
-      const paths = new Map<HullBody, PosePath>(
-        committing.map((body) => [
-          body,
-          createRigidBodyPosePath(
-            body,
-            PHYSICS_STEP,
-            worldFractions.get(body)!,
-          ),
-        ]),
+      const commitMotion = createHierarchyMotionPhase(
+        committing,
+        this.allJoints(),
+        PHYSICS_STEP,
+        worldFractions,
       );
+      const paths = commitMotion.paths as Map<HullBody, PosePath>;
       const pairDiagnostics = this.bodyPairDiagnostics
         ? ({} as BodyGuardDiagnostics)
         : undefined;
@@ -5041,105 +5060,13 @@ export class VehicleSimulation {
         pairDiagnostics,
       );
       if (pairDiagnostics) this.bodyPairDiagnostics!("commit", pairDiagnostics);
+      // Commit exactly the jointly constrained paths verified above. Supported
+      // native joints already align their anchors during prediction; a second
+      // independent post-commit projection would create an unexamined trajectory.
+      commitMotion.commit(committing, pairFractions);
       for (const body of committing) {
-        if (!body.properties.immovable)
-          advance(
-            body,
-            PHYSICS_STEP * worldFractions.get(body)! * pairFractions.get(body)!,
-          );
         body.overlapRecovery = body.overlapDetected;
         body.worldRecovery = body.worldOverlapDetected;
-      }
-      const joined = [...this.debris, ...this.noncars].filter(
-        (body) => body.joint && !body.properties.immovable,
-      );
-      const beforeProjection = joined.map((body) => ({
-        body,
-        position: body.state.position.clone(),
-        orientation: body.state.orientation.clone(),
-      }));
-      projectJointPositions(joined.map((body) => body.joint!));
-      // Anchor/hinge projection is a second transform mutation after integration.
-      // A constrained part must not teleport through a track face to satisfy it.
-      for (const { body, position, orientation } of beforeProjection) {
-        const projectedPosition = body.state.position.clone();
-        const projectedOrientation = body.state.orientation.clone();
-        if (
-          position.distanceToSquared(projectedPosition) < 1e-14 &&
-          orientation.angleTo(projectedOrientation) < 1e-7
-        )
-          continue;
-        const samples = Math.min(
-          128,
-          Math.max(
-            1,
-            Math.ceil(orientation.angleTo(projectedOrientation) / 0.05),
-          ),
-        );
-        const pose = (fraction: number) => ({
-          position: position.clone().lerp(projectedPosition, fraction),
-          orientation: orientation
-            .clone()
-            .slerp(projectedOrientation, fraction),
-        });
-        const guard = this.sweepWorldTrajectory(
-          body,
-          samples,
-          pose,
-          position,
-          orientation,
-        );
-        if (guard.fraction < 1) {
-          const accepted = pose(guard.fraction);
-          body.state.position.copy(accepted.position);
-          body.state.orientation.copy(accepted.orientation);
-          body.worldRecovery = true;
-        }
-      }
-      // Joint projection can otherwise put an already-safe flap/roof through
-      // another car. Verify this second trajectory as well, without impulses.
-      if (beforeProjection.length) {
-        const projected = new Map(
-          beforeProjection.map((entry) => [entry.body, entry]),
-        );
-        const projectionPaths = new Map<HullBody, PosePath>(
-          this.allBodies().map((body) => {
-            const before = projected.get(body as (typeof joined)[number]);
-            const position = body.state.position.clone(),
-              orientation = body.state.orientation.clone();
-            const path: PosePath = (fraction) =>
-              before
-                ? {
-                    position: before.position.clone().lerp(position, fraction),
-                    orientation: before.orientation
-                      .clone()
-                      .slerp(orientation, fraction),
-                  }
-                : { position, orientation };
-            path.stable = true;
-            if (!before) path.constantPose = { position, orientation };
-            return [body, path];
-          }),
-        );
-        const projectionDiagnostics = this.bodyPairDiagnostics
-          ? ({} as BodyGuardDiagnostics)
-          : undefined;
-        const fractions = this.bodyTrajectoryGuard.run(
-          this.allBodies(),
-          projectionPaths,
-          nativePairAllowed,
-          projectionDiagnostics,
-        );
-        if (projectionDiagnostics)
-          this.bodyPairDiagnostics!("projection", projectionDiagnostics);
-        for (const { body } of beforeProjection) {
-          const fraction = fractions.get(body)!;
-          if (fraction < 1) {
-            const pose = projectionPaths.get(body)!(fraction);
-            body.state.position.copy(pose.position);
-            body.state.orientation.copy(pose.orientation);
-          }
-        }
       }
       for (const car of this.cars) {
         if (!this.isCarPhysicsActive(car)) continue;
@@ -5215,6 +5142,7 @@ export class VehicleSimulation {
         this.finishPedFrame(PHYSICS_STEP * 1000);
     } finally {
       this.correctionWorkingSet = previousWorkingSet;
+      this.hierarchyMotion = previousHierarchyMotion;
       this.physicsQueryDepth--;
     }
   }

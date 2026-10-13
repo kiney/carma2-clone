@@ -228,6 +228,17 @@ The board contains 120 tasks:65 `backlog`,7 `next`,1 `wip`,47 `done`.
 No implementation ticket has been started or engine behavior changed by this
 queue update. The WIP limit remains3; the broader paused Goal is unchanged.
 
+PERF-14 / TASK-100.9 is now `done`: installed-native parent-first candidate
+movement is shared by collision probes and commitment; ordinary part anchors
+are aligned during that trajectory rather than by a second post-commit guard.
+[Hierarchy movement evidence](../docs/hierarchy-motion-performance.md) records
+numerical/original-data tests, production Chromium crash/repair validation and
+bounded AMD hardware comparisons, including adverse timing samples. It does
+not resolve the old-overlap guard or the full Timber FPS collapse. PHY-13 remains
+the next P1 ticket for a separate checkpoint after user playtesting. Current
+board: 120 tasks, 65 `backlog`, 6 `next`, 1 `wip`, 48 `done`. PERF-01 alone
+remains active; the broader paused Goal is unchanged.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip
