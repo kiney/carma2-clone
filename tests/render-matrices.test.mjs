@@ -5,6 +5,90 @@ import {
   prepareSceneMatrices,
   renderScenePasses,
 } from "../src/render-matrices.ts";
+import { hasGraphicalPoseOwner } from "../src/render-ownership.ts";
+
+test("frame-local dormant roots prune presentation but retain native explicit updates", () => {
+  const scene = new THREE.Scene();
+  const world = new THREE.Group();
+  const dormant = new THREE.Group();
+  const leaf = new THREE.Object3D();
+  const moving = new THREE.Object3D();
+  scene.add(world);
+  world.add(dormant, moving);
+  dormant.add(leaf);
+  scene.updateMatrixWorld(true);
+  let visits = 0;
+  const native = dormant.updateMatrixWorld;
+  dormant.updateMatrixWorld = function (...args) {
+    visits++;
+    return native.apply(this, args);
+  };
+  const certificate = {
+    matrixSkipRoots: new Set([dormant]),
+    matrixSkipAncestors: new Set([world]),
+  };
+  moving.position.x = 4;
+  prepareSceneMatrices(scene, undefined, undefined, certificate);
+  assert.equal(visits, 0);
+  assert.equal(moving.matrixWorld.elements[12], 4);
+  scene.updateMatrixWorld(true);
+  assert.equal(visits, 1, "explicit physics matrix queries remain native");
+  certificate.matrixSkipRoots.clear();
+  leaf.position.y = 3;
+  prepareSceneMatrices(scene, undefined, undefined, certificate);
+  assert.equal(
+    visits,
+    2,
+    "expired certificates refresh the subtree immediately",
+  );
+  assert.equal(leaf.matrixWorld.elements[13], 3);
+});
+
+test("custom ancestor matrix updates keep their ordinary subtree behavior", () => {
+  const scene = new THREE.Scene();
+  const parent = new THREE.Group();
+  const child = new THREE.Object3D();
+  scene.add(parent);
+  parent.add(child);
+  let updates = 0;
+  const native = parent.updateMatrixWorld;
+  parent.updateMatrixWorld = function (...args) {
+    updates++;
+    child.position.x = updates;
+    return native.apply(this, args);
+  };
+  prepareSceneMatrices(scene, undefined, undefined, {
+    matrixSkipRoots: new Set(),
+    matrixSkipAncestors: new Set([parent]),
+  });
+  assert.equal(updates, 1);
+  assert.equal(child.matrixWorld.elements[12], 1);
+});
+
+test("GROOVE graphical ownership follows the live ACT parent chain", () => {
+  const scene = new THREE.Scene();
+  const groove = new THREE.Group();
+  const nested = new THREE.Group();
+  const actor = new THREE.Object3D();
+  scene.add(groove);
+  groove.add(nested);
+  nested.add(actor);
+  const owners = new Set([groove]);
+  assert.ok(hasGraphicalPoseOwner(actor, owners));
+  assert.ok(hasGraphicalPoseOwner(groove, owners));
+  assert.equal(
+    hasGraphicalPoseOwner(actor, owners, false),
+    false,
+    "native pulled children stop inheriting retained Three GROOVE ancestry",
+  );
+  assert.ok(
+    hasGraphicalPoseOwner(groove, owners, false),
+    "exact GROOVE ACT ownership survives native physical admission",
+  );
+  scene.add(actor);
+  assert.equal(hasGraphicalPoseOwner(actor, owners), false);
+  assert.equal(hasGraphicalPoseOwner(actor, undefined), false);
+});
 
 const matrix = (object) => object.matrixWorld.toArray();
 const closeMatrix = (actual, expected, message) => {

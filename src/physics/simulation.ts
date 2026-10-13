@@ -627,6 +627,19 @@ export class VehicleSimulation {
   isNonCarPhysicsActive(body: NonCarBody): boolean {
     return this.phil.getHeader(body) !== null;
   }
+  /** Native pull severs ACT ancestry while Three retains its source parent.
+   * Rebase committed physics after that parent's graphical motion, before
+   * temporary interpolation saves/restores this actor. Own GROOVE ACTs retain
+   * their authored graphical pose; no physics state is changed here. */
+  syncCommittedNonCarActor(body: NonCarBody): void {
+    if (
+      !this.isNonCarPhysicsActive(body) ||
+      this.grooves?.actors.has(body.actor)
+    )
+      return;
+    this.syncActor(body);
+    this.world.refreshDynamic?.(body);
+  }
   activeNonCars(): NonCarBody[] {
     return [...this.admittedNoncars].filter(
       (body) =>

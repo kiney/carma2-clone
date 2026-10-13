@@ -102,6 +102,7 @@ import {
   PHYSICS_STEP,
 } from "./physics/simulation";
 import { RenderPoses } from "./render-pose";
+import { hasGraphicalPoseOwner } from "./render-ownership";
 import { parseSurfaceModifiers, DEFAULT_SURFACE } from "./physics/surfaces";
 import {
   parseDefaultWaterVolume,
@@ -421,8 +422,19 @@ const debug = {
     return renderer;
   },
   /** Shared render preparation is exposed for opt-in CPU timing captures. */
-  prepareRenderMatrices() {
-    prepareSceneMatrices(scene, pedestrians?.group, pedestrians?.renderActors);
+  prepareRenderMatrices(forceFull = false) {
+    prepareSceneMatrices(
+      scene,
+      pedestrians?.group,
+      pedestrians?.renderActors,
+      forceFull ? undefined : (noncarRenderBatch ?? undefined),
+    );
+  },
+  get renderPoses() {
+    return renderPoses;
+  },
+  get noncarRenderBatch() {
+    return noncarRenderBatch;
   },
   get collision() {
     return collision;
@@ -3073,6 +3085,7 @@ function worldGrooveVisible(
 
 function animate(now: number) {
   requestAnimationFrame(animate);
+  let renderAlpha = 1;
   const frameSeconds = (now - lastTime) / 1000;
   lastTime = now;
   const gameFrame = gameClock.sample(
@@ -3280,7 +3293,7 @@ function animate(now: number) {
       paused || race.status !== "racing",
       player?.state.engineFactor ?? 1,
     );
-    const renderAlpha =
+    renderAlpha =
       paused || race.status !== "racing"
         ? 1
         : (simulation?.accumulator ?? 0) / PHYSICS_STEP;
@@ -3296,7 +3309,6 @@ function animate(now: number) {
       renderOrientation.copy(vehicle.orientation);
     }
     if (simulation) {
-      noncarRenderBatch?.update();
       for (const body of simulation.cars)
         renderPoses.apply(
           body,
@@ -3304,10 +3316,6 @@ function animate(now: number) {
           simulation.isCarPhysicsActive(body) ? renderAlpha : 1,
         );
       for (const body of simulation.debris)
-        renderPoses.apply(body, body.actor, renderAlpha);
-      // Native GROOVE owns its outer-frame graphical pose. Interpolating the
-      // helper body's previous physics transform here would overwrite it.
-      for (const body of simulation.noncars)
         renderPoses.apply(body, body.actor, renderAlpha);
       for (const body of simulation.mineBodies)
         if (body.actor.parent) renderPoses.apply(body, body.actor, renderAlpha);
@@ -3567,6 +3575,33 @@ function animate(now: number) {
     skyCamera.layers.set(1);
     skyCamera.far = 1800;
     skyCamera.updateProjectionMatrix();
+    // Validate after GROOVE, smash and effect mutations, then consume the same
+    // certificates for pose admission and the shared sky/main matrix traversal.
+    if (simulation?.grooves?.actors.size)
+      for (const body of simulation.activeNonCars())
+        if (
+          !simulation.grooves.actors.has(body.actor) &&
+          hasGraphicalPoseOwner(body.actor, simulation.grooves.actors)
+        )
+          // A native pulled ACT has left its authored parent. Rebase committed
+          // presentation against the retained Three parent before interpolation
+          // saves its restore pose. Dynamic queries receive committed geometry.
+          simulation.syncCommittedNonCarActor(body);
+    noncarRenderBatch?.update();
+    if (stats.ready && !loading && simulation)
+      for (const body of simulation.noncars)
+        if (
+          !noncarRenderBatch?.isBatched(body) &&
+          !hasGraphicalPoseOwner(
+            body.actor,
+            simulation.grooves?.actors,
+            // Native pull severs inherited ACT ancestry, although Three keeps
+            // the source parent for collision/render retention. An exact own
+            // GROOVE ACT remains graphical-owned (HW478beb–478cac).
+            !simulation.isNonCarPhysicsActive(body),
+          )
+        )
+          renderPoses.apply(body, body.actor, renderAlpha);
     renderScenePasses(renderer, scene, [skyCamera, camera], () =>
       debug.prepareRenderMatrices(),
     );

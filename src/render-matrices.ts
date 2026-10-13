@@ -1,4 +1,12 @@
-import type { Camera, Object3D, Scene, WebGLRenderer } from "three";
+import { Object3D, type Camera, type Scene, type WebGLRenderer } from "three";
+
+/** Frame-local certificates supplied after scenery mutation/animation. Native
+ * explicit matrix APIs are untouched; only the presentation traversal prunes
+ * source subtrees whose transforms and membership were just validated. */
+export interface DormantRenderMatrices {
+  matrixSkipRoots: ReadonlySet<Object3D>;
+  matrixSkipAncestors: ReadonlySet<Object3D>;
+}
 
 /** Prepare the shared sky/main pose once. Only registered, invisible population
  * actors may defer descendant updates; explicit physics matrix APIs stay native.
@@ -7,11 +15,26 @@ export function prepareSceneMatrices(
   scene: Scene,
   pedestrianGroup?: Object3D,
   pedestrianActors?: ReadonlySet<Object3D>,
+  dormant?: DormantRenderMatrices,
 ): void {
+  const update = (object: Object3D): void => {
+    if (dormant?.matrixSkipRoots.has(object)) return;
+    if (
+      dormant?.matrixSkipAncestors.has(object) &&
+      object.updateMatrixWorld === Object3D.prototype.updateMatrixWorld &&
+      object.updateWorldMatrix === Object3D.prototype.updateWorldMatrix &&
+      object.updateMatrix === Object3D.prototype.updateMatrix
+    ) {
+      object.updateWorldMatrix(false, false);
+      for (const child of object.children) update(child);
+    } else {
+      object.updateMatrixWorld(true);
+    }
+  };
   scene.updateWorldMatrix(false, false);
   for (const child of scene.children) {
     if (child !== pedestrianGroup || !pedestrianActors) {
-      child.updateMatrixWorld(true);
+      update(child);
       continue;
     }
     child.updateWorldMatrix(false, false);
@@ -22,7 +45,7 @@ export function prepareSceneMatrices(
         actor.updateWorldMatrix(false, false);
       } else {
         // Blood, flames, rays and visible population actors remain ordinary.
-        actor.updateMatrixWorld(true);
+        update(actor);
       }
     }
   }

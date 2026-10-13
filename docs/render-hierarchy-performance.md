@@ -4,7 +4,7 @@ Implemented and validated on 2026-10-12. Physics optimization, higher visibility
 and resolution policy remain separate tickets; this change does not select their
 implementation or claim that all driving frame-time spikes are resolved.
 
-## Ownership and implementation
+## PERF-02 ownership and implementation
 
 `src/render-matrices.ts` prepares matrices once, after interpolation, camera,
 GROOVE and effects have established the render pose, before the sky/main passes.
@@ -86,3 +86,114 @@ Ignored evidence: `artifacts/perf02-validation.json`,
 and before/after images are in `/tmp/perf02-*`. The opt-in performance probe now
 times `scene.prepareRenderMatrices` outside the render calls, so its CPU duration
 must be included when comparing old inclusive renderer timings with new ones.
+
+## PERF-18: dormant scenery presentation
+
+The previous bridge applied and restored temporary poses for the entire retained
+NONCAR population on every displayed frame, including pause. Timber's frozen
+user capture had 466 retained props, 6 physical props and 7 pieces: 480 apply calls,
+1,239 recursive node visits in each apply/restore phase and 3,123 preparation
+visits per frame. Batch validation also revisited the same ancestor and its
+unrelated child list for every retained object. Physics sleep did not certify
+graphical immobility.
+
+The new bridge consumes frame-local batch certificates after GROOVE, smash and
+effects have established presentation. Certified source subtrees skip temporary
+pose application/restoration and the additional presentation matrix traversal.
+Shared ancestor paths and geometry validate once per frame; own-node transforms,
+membership, visibility, manual/world matrices, matrix modes and uploaded buffer
+versions remain checked. Unrelated ancestor siblings no longer invalidate every
+object. Wake, removal, reparenting, custom matrix outlets, geometry/material edits
+and destruction return affected objects permanently to ordinary drawing.
+`worldSmashDisabled` stays hidden when batch-owned hiding is relinquished.
+
+`RenderPoses.apply()` separately detects an unchanged target local pose before
+allocating restore snapshots or updating the subtree. Its relative component tolerance of 64 × Number.EPSILON handles world-to-local roundoff, not a gameplay motion
+threshold; manual-matrix equality remains exact. Changed poses and opaque custom
+outlets preserve committed restoration. The presentation-only traversal leaves
+explicit Three matrix methods and collision/animation queries native.
+
+GROOVE is a separate graphical owner. Installed HW 478beb–478cac writes the exact
+GROOVE ACT independently of PHIL membership; native pull retains that pointer but
+severs inherited ACT parentage. Three deliberately retains source parents, so an
+admitted child must stop inheriting graphical ownership from those parents.
+After parent animation, the existing committed actor-sync outlet rebases such a
+child before interpolation saves its restore pose. Dynamic queries refresh from
+that committed geometry, never from an interpolated pose. Exact own-GROOVE ACTs
+stay graphical-owned. This is a browser/native hierarchy adapter correction;
+no collision, force, quiet-state or damage formula changed.
+
+### Bounded measurements and locality decision
+
+Chrome DevTools MCP: AMD Radeon `radeonsi gfx1150`, ANGLE OpenGL 4.6, buffer
+2100x1466, DPR 1.484375. Captures last 350–500 ms, at most 24 frames. Only one test tab
+animates during the serial comparisons; the peer's RAF is temporarily parked
+and restored. Other workstation activity, JIT/GC and the small sample count still
+matter. The opt-in probe times inclusive apply/restore, batch/certificate work,
+matrix preparation and both draw passes separately; visit counting has an
+explicit off mode. There are no per-node clocks. GPU queries read asynchronously
+every eighth paired sky/main frame and never wait for the GPU.
+
+| Fresh paused Timber, per frame          | c27935a baseline |     PERF-18 |
+| --------------------------------------- | ---------------: | ----------: |
+| Render-pose apply calls                 |              473 |           8 |
+| Apply/restore recursive node visits     |     1,249 /1,249 |        0 /0 |
+| Shared matrix preparation visits        |            3,361 |       2,434 |
+| Presentation span p50 /p95, ms          |         6.0 /9.2 |   7.1 /13.6 |
+| Main draw calls /triangles              |      259 /18,141 | 248 /18,007 |
+| Paired GPU mean, ms (two ready queries) |             0.90 |        0.74 |
+
+These are separately loaded populations, not identical simulation snapshots.
+Procedural population differences explain the different draw counts; camera,
+original track/car, Yon and buffer are held fixed. The first production capture
+does **not** show a paused CPU-span improvement despite removing the redundant
+work. An earlier optimized development capture at 259 draws measured 4.7 ms p50,
+10.4 ms p95 and 2,422 preparation visits; compilation/population and scheduling
+differences prevent treating that as an exact speedup. With visit instrumentation
+off, its p50/p95 were 5.3/9.6 ms, so no constant profiling-overhead subtraction is
+claimed. The reliable result is the removed work, supported by exact pixel and
+matrix comparisons on each scene, rather than a universal FPS promise.
+
+Short normal W-input production captures (350 ms) advance native simulation
+0.40/0.36 s. Baseline/optimized presentation p50 is 12.0/9.8 ms, p95
+49.5/46.7 ms; frame intervals p50 are 17.3/16.0 ms and p95 are 61.2/43.8 ms.
+Apply calls fall 473→8. GPU samples are 0.80/0.83 ms, only one ready query each.
+These fresh-start samples do not reproduce the user's canyon/crash stall.
+
+A one-shot camera/frustum diagnostic counts 20 global groups,466 slots,
+9,294 submitted triangles, 465 eligible source instances but only 20
+sphere-intersecting sources/256 triangles. The actual groups produce 49 main
+draw calls. Omitting all those batches solely for a bounded diagnostic drops
+main calls 248→199 and triangles 18,007→8,713, yet main CPU p50 stays 3.3 ms;
+paired GPU mean changes 0.74→0.70 ms (two ready queries each). This supports leaving
+spatial regrouping unchanged at current distances: its maximum measured benefit
+is small, while extra local groups can increase draw calls. This is not evidence
+that global batches are optimal at greater Yon or on every GPU. PERF-04 retains
+the visibility task and can repeat the estimator there. No track-wide bounding
+sphere was introduced as a purported solution.
+
+### Validation and reproduction
+
+`npm test` passed 2,936 tests, including the final ownership/destruction
+regressions. Six additional submission-probe conformance tests pass and are
+registered for subsequent full runs. Production build passes.
+`npm run test:render-presentation` loads original Stock Timber/Eagle3 and Advanced
+Carrier/Eagle3 and compares 4,096,000 RGBA bytes per scene: zero differences against
+full native matrix preparation. Visible and retained-source matrices agree
+exactly. Real source ACT transform/child/reparent/ancestor edits and physical wake
+leave the batch; unchanged car interpolation is a no-op and changed poses restore
+exact committed state. A real source child also exercises manual-matrix policy
+under an explicitly temporary diagnostic flag, not a claim that stock NONCAR
+roots currently use that mode. Reports/screenshots stay in ignored artifacts.
+
+The probe is self-contained for `page.evaluate(captureRenderPresentation,
+{durationMs:500,maxFrames:24,countVisits:true})`; it uses the application's actual
+diagnostic instances in production. `estimateScenerySubmission()` is a one-shot
+source-sphere/submission estimate, not a GPU timing inference. Both are exported
+from `tools/render-presentation-probe.mjs`. Ignored captures are named
+`artifacts/perf18-*`; correctness artifacts use
+`artifacts/browser-render-presentation-*`. The user's tentative delayed piece
+contact observation is separately tracked as PHY-15/TASK-109; the paused capture
+does not establish its cause or original-game parity.
+
+Final existing browser regressions also pass: Stock Snow/Advanced Carrier pedestrian matrix preparation and four Stock/Advanced NONCAR participation, wake/reclaim, debris and repair cases. Final hardware MCP production validation uses the final bundle, real keyboard driving and clean console/WebGL; final screenshots are inspected. No increased distances, changed framebuffer policy or physical activation policy is shipped.

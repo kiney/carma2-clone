@@ -3,9 +3,10 @@ id: TASK-100.13
 title: >-
   [P1] PERF-18: Remove dormant render-pose work and improve scenery batch
   locality
-status: next
+status: done
 assignee: []
 created_date: '2026-10-13 11:29'
+updated_date: '2026-10-13 23:46'
 labels:
   - priority-1
   - PERF-18
@@ -39,10 +40,16 @@ The user explicitly authorizes substantial, reversible physics and rendering red
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Attribute apply/restore, batch validation, descendant matrix visits and submission/GPU costs separately at a frozen Timber pose; distinguish current hardware, software rendering and instrument overhead.
-- [ ] #2 Eliminate repeated render-pose/matrix work for certified unchanged dormant scenery while correctly handling wake, transforms, parent changes, removal, smash and GROOVE updates.
-- [ ] #3 Assess global batch visibility and implement a justified locality/culling improvement or record measured evidence that it contributes negligibly; do not assume enabling a track-wide bounding sphere solves it.
-- [ ] #4 Verify interpolation, committed-pose restoration, camera behavior, static/moving scenery and material/texture presentation in Stock/Advanced Chromium with screenshots and clean console/WebGL.
-- [ ] #5 Report running and paused frame CPU distributions, scene traversal/draw work and relevant GPU results in short serial captures without silently increasing visibility or simulation activation.
-- [ ] #6 Provide a separate checkpoint and user-playtest focus for view changes, scenery motion/destruction and visual regressions; retain PERF-04 as the later visibility-range task.
+- [x] #1 Attribute apply/restore, batch validation, descendant matrix visits and submission/GPU costs separately at a frozen Timber pose; distinguish current hardware, software rendering and instrument overhead.
+- [x] #2 Eliminate repeated render-pose/matrix work for certified unchanged dormant scenery while correctly handling wake, transforms, parent changes, removal, smash and GROOVE updates.
+- [x] #3 Assess global batch visibility and implement a justified locality/culling improvement or record measured evidence that it contributes negligibly; do not assume enabling a track-wide bounding sphere solves it.
+- [x] #4 Verify interpolation, committed-pose restoration, camera behavior, static/moving scenery and material/texture presentation in Stock/Advanced Chromium with screenshots and clean console/WebGL.
+- [x] #5 Report running and paused frame CPU distributions, scene traversal/draw work and relevant GPU results in short serial captures without silently increasing visibility or simulation activation.
+- [x] #6 Provide a separate checkpoint and user-playtest focus for view changes, scenery motion/destruction and visual regressions; retain PERF-04 as the later visibility-range task.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented certified dormant presentation: Timber pose applications473→8/frame, redundant apply/restore subtree visits1249+1249→0, shared parent/geometry checks once per frame and freshly certified source-root matrix skipping. Wake/transform/hierarchy/custom-method/geometry/material/smash changes revoke ownership. GROOVE own-ACT versus native-pulled inherited ancestry now uses explicit graphical ownership and committed rebasing before interpolation; force/collision/damage/quiet formulas unchanged. Global locality was assessed with original source spheres:49 batch draws/9294 triangles but only20 sphere-visible sources; omitting all batch drawing did not materially improve main CPU/GPU here, so spatial grouping and distances remain unchanged. 2936 full tests plus6 new probe cases pass; production build; Stock/Advanced exact matrix/pixel parity, scenery mutation/physical wake, existing population matrices and four NONCAR participation/repair regressions pass. Hardware MCP driving, screenshots and clean console/GL verified. Short serial captures retain adverse paused CPU timing and tiny GPU samples honestly; no universal FPS or canyon-stall claim. Evidence:docs/render-hierarchy-performance.md. Separate user observation of delayed debris contact recorded as P2 PHY-15/TASK-109, unreproduced. PERF-01 stays WIP and PERF-04 stays P2 next; no broader Goal completed.
+<!-- SECTION:FINAL_SUMMARY:END -->

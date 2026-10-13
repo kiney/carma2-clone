@@ -7,6 +7,8 @@ import "./noncar-participation.test.mjs";
 import "./assets.test.mjs";
 import "./live-performance-recorder.test.mjs";
 import "./render-matrices.test.mjs";
+import "./noncar-render-ownership.test.mjs";
+import "./scenery-submission.test.mjs";
 import "./sat-optimization.test.mjs";
 import "./sat-scalar-kernel.test.mjs";
 import "./rigid-path.test.mjs";
