@@ -303,3 +303,45 @@ SAT commitment gate, but permitting penetration to increase would change its
 safety behavior. Third-body/new-hull crossings, clearance/re-entry and projection
 must remain protected; no such exemption is implemented by this performance
 follow-up. This remains PHY-13 evidence and validation work.
+
+## Hierarchy-aware candidate movement discrepancy
+
+Verified from the installed HW disassembly during the 2026-10-13 structural
+audit; binary hash/PE metadata is recorded above. rec2 supplies symbols/types.
+No original code or instruction dump is reproduced. Implementation is queued
+as PERF-14 / TASK-100.9, before PHY-13 recovery and guard redesign.
+
+`MoveJointedObject 0x4b8c80` enters child mover `0x4b8fd0`. Null/type0 child
+joints take free/root translation. Ordinary type3 ball and type2 universal
+children rotate through `0x4c1990`, then align anchors at
+`0x4b9298`–`0x4b9317`:
+
+```text
+childCandidatePosition += parentCandidateAnchor - childCandidateAnchor
+```
+
+That branch has no independent child-world-velocity translation. Hinge/type1
+and quick-hinge/type4 share `0x4b9156`: inherit parent finite rotation and add
+relative hinge-axis motion before alignment. Type5 world translation uses a
+separate joint field/path. Parent prediction precedes recursive child movement
+at `0x4b9397`–`0x4b93ba`. The selected ancestor at child `+0x230` normally is
+the direct parent; flag0x400 inherited-motion paths need separate handling.
+
+Browser `candidate()` and `createRigidBodyPosePath()` currently integrate each
+body independently; `projectJointPositions()` aligns poses only after guarded
+commitment. `prepareJointVelocities()` constrains instantaneous velocity rather
+than finite-step anchor coincidence. This is a verified structural discrepancy.
+Exact original runtime flags are absent from the saved Cerby snapshot; ordinary
+ball-joint construction supports the mapping, rather than an observed native run.
+
+A clone-only 40ms candidate probe after preparing the three ball joints produces
+front-bumper anchor error0.026445 model units (18.25cm) and rear-right-wing
+error0.008609 units (5.94cm). An anchor-aligned shadow retaining browser endpoint
+orientations changes pair10/14 guard fraction8.0794e-5 to4.8655e-4, still nearly
+blocked. These probes omit forces, world, damage and a complete tick; they verify
+prediction sensitivity, not a standalone lockup or FPS cure.
+
+The user authorizes reversible structural/guard changes with Git checkpoints
+and intermediate playtests. Native/gameplay expectations supersede mandatory
+bitwise preservation of browser-only guards or eight global correction rounds.
+PHY-13 owns the recovery/guard remedy; PERF-15 owns local retry orchestration.

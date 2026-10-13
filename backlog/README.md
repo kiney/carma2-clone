@@ -196,6 +196,38 @@ The actual rendered user-route stall and PHY-13 remain open. A keyboard target
 assumption found during QA is fixed as UI-04 / TASK-107 (`done`). Current board:
 115 tasks,65 `backlog`,1 `next`,2 `wip`,47 `done`; WIP remains below3.
 
+## Selected structural redesign queue
+
+On 2026-10-13 the user selected the fundamental findings for implementation,
+explicitly allowing substantial reversible physics/guard changes and playtests
+between ticket checkpoints. All six entries are P1/high in `next`, ordered by
+stored ordinal. PHY-13 is reused rather than duplicating the own-debris/guard fix.
+
+| Order | Issue   | Backlog ID  | Ordinal | Scope                                                             |
+| ----- | ------- | ----------- | ------- | ----------------------------------------------------------------- |
+| 1     | PERF-14 | TASK-100.9  | 1190    | Native hierarchy-aware joint candidate movement                   |
+| 2     | PHY-13  | TASK-106    | 1200    | Native old-overlap recovery and restrictive guard redesign        |
+| 3     | PERF-15 | TASK-100.10 | 1210    | Change-local collision response and retry orchestration           |
+| 4     | PERF-16 | TASK-100.11 | 1220    | Retained static ACTs, local physical admission and reclaim bridge |
+| 5     | PERF-17 | TASK-100.12 | 1230    | Generic car/part/jointed-prop hierarchy sleep and wake            |
+| 6     | PERF-18 | TASK-100.13 | 1240    | Dormant render-pose work and scenery batch locality               |
+
+Native/gameplay expectations govern redesign; preserving the old browser's
+monotone-depth guards or eight global rounds is not a completion requirement.
+Each ticket owns focused validation and a separate Git checkpoint for user
+playtesting. Original data remains read-only and measurements stay short/serial.
+Admission/reclaim initially uses already authoritative quiet states; PERF-17
+supplies the remaining hierarchy providers. Detached/split car pieces do not
+become reclaimable driver-4 scenery merely because they sleep.
+
+PERF-13 returns to `backlog` for residual rendered-route integration and profiling
+after these changes; its implemented optimizations and historical checks remain
+intact. PERF-01 remains `wip` for coordination. PERF-04 stays P2 in `next` after
+PERF-13 validation, with its original visibility scope and ordinal unchanged.
+The board contains 120 tasks:65 `backlog`,7 `next`,1 `wip`,47 `done`.
+No implementation ticket has been started or engine behavior changed by this
+queue update. The WIP limit remains3; the broader paused Goal is unchanged.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip

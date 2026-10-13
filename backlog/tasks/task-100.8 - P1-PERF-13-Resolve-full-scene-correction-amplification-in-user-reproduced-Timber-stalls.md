@@ -3,10 +3,10 @@ id: TASK-100.8
 title: >-
   [P1] PERF-13: Resolve full-scene correction amplification in user-reproduced
   Timber stalls
-status: wip
+status: backlog
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-13 09:19'
+updated_date: '2026-10-13 11:33'
 labels:
   - priority-1
   - PERF-13
@@ -14,6 +14,11 @@ labels:
   - physics
 dependencies:
   - TASK-106
+  - TASK-100.9
+  - TASK-100.10
+  - TASK-100.11
+  - TASK-100.12
+  - TASK-100.13
 references:
   - docs/live-timber-drop.md
   - src/physics/simulation.ts
@@ -32,28 +37,29 @@ ordinal: 1180
 <!-- SECTION:DESCRIPTION:BEGIN -->
 User-driven hardware Chromium capture after PERF-12 records physics updateFrame up to 263.1 ms with five ticks, versus typical render CPU of 4-9 ms. Most heavy ticks perform eight global correction rounds, 4,347 world-guard calls across 483 bodies, and nine pair collections. Nonempty cached/resting contacts retain solver and callback rounds; raw-contact caching alone does not remove this amplification.
 
-Resolve remaining repeated scene-wide work while retaining C2 motion, momentum, damage/crush/repair, callbacks, restart ordering and final guards. Lowering correction/angular/catch-up caps, skipping nonzero impulses or freezing moving parts is not an acceptable fix.
+Coordinate residual whole-route integration and validation while retaining C2 motion, momentum, damage/crush/repair and meaningful effects. New structural implementation is delegated to PERF-14, PHY-13, PERF-15, PERF-16, PERF-17 and PERF-18. The user explicitly authorizes replacing browser-only guard/recollection algorithms, sampling and iteration policies rather than preserving their current behavior bit-for-bit. Reducing simulated time, freezing moving parts or discarding meaningful response merely to report higher FPS remains outside the intended outcome.
 
 Implemented exact query-specific depth/fraction paths, allocation-free moving-edge roots/clipping, explicitly owned immutable car/part/NONCAR collision generations, certified constant-static geometry reuse and shared empty world-guard results. Mutable/custom geometry retains full fallback checks. Native steps and all correction/response rounds remain unchanged. See docs/guard-kernel-performance.md for differential tests, full distributions, adverse samples and exclusions.
 
-The reported 180-degree direction correlation remains unisolated. Software Chromium comparisons show lower costs in several heavy cases, with mixed tails/medians; the actual hardware route and useful per-pass dependency attribution still need validation. Earlier MCP startup and headless hardware EGL probes failed. MCP has since reconnected to actual AMD ANGLE Chromium, enabling bounded hardware-backed CPU comparisons with exact state/fraction hashes. Those recreated, drawing-suppressed fixtures still do not reproduce the actual rendered user route. The original user trace/body snapshot were saved before restarting the controlled browser. No system permissions or packages were changed. Keep this P1 task in wip; do not claim the 6 FPS stall fully resolved.
+The reported 180-degree direction correlation remains unisolated. Software Chromium comparisons show lower costs in several heavy cases, with mixed tails/medians; the actual hardware route and useful per-pass dependency attribution still need validation. Earlier MCP startup and headless hardware EGL probes failed. MCP has since reconnected to actual AMD ANGLE Chromium, enabling bounded hardware-backed CPU comparisons with exact state/fraction hashes. Those recreated, drawing-suppressed fixtures still do not reproduce the actual rendered user route. The original user trace/body snapshot were saved before restarting the controlled browser. No system permissions or packages were changed. The 6 FPS stall remains unresolved. With structural implementation now split into the selected next queue, this partially implemented integration/validation ticket returns to backlog until its own route validation is actively resumed.
+
+The 2026-10-13 structural brainstorming found native joint candidate anchor placement missing before collision collection, dormant ACTs admitted to the browser roster prematurely, incomplete hierarchy quiet providers, and unmeasured dormant render interpolation/restoration. Those implementation scopes belong to the selected successors; this ticket owns comparative actual-route integration and remaining direction/catch-up/GPU attribution. Completed exact optimizations and historical validation remain intact. Use independently derived native/gameplay expectations for changed orchestration rather than treating old exact browser guards as the specification.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 Identify persistent correction rows and exact motion/geometry/attachment changes per pass in the saved user scene; distinguish useful response from redundant scene-wide work.
-- [ ] #2 Reduce measured whole-tick and updateFrame CPU in bounded serial hardware captures without simply lowering native time or guard iteration limits; retain adverse samples and instrumentation overhead.
+- [ ] #2 After the selected structural checkpoints, demonstrate substantially lower whole-tick/updateFrame costs and usable rendered frame-time tails in short serial hardware routes; retain adverse samples and observer overhead. Browser guard/recollection algorithms may change; simply slowing simulation or freezing moving objects does not qualify.
 - [x] #3 Prove contact, momentum, damage/restart ordering, activation and final body/world safeguards remain valid across original Stock/Advanced multi-car debris/crush/repair scenarios.
 - [x] #4 Validate running Chromium frames and regressions with clean console/WebGL; distinguish exact directional attribution from hypotheses and keep original data unmodified/unbundled.
 <!-- AC:END -->
 
+
+
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Build a bounded, explicitly partial replay of the 145.68 s body-pair/joint snapshot; record per-pass rows, impulses, changes, cache misses and CPU. Snapshot lacks world/forces/damage state, so do not claim an exact whole tick.
-2. Implement safe roster reuse within pure synchronous collection, rebuilding after solves/callbacks and preserving preparation order. Evaluate larger reuse only with complete certificates and callback preservation.
-3. Trace PHY-13 native detachment/former-owner/exhausted-retry behavior and test a focused separating-motion remedy; do not simply discard velocity.
-4. Repeat short serial Chromium measurements, preserving adverse samples and backend metadata. Obtain hardware heading/whole-tick evidence when the controlled browser is available.
+Validate the structural queue checkpoints together on ordinary rendered Timber and Snow routes. Capture minimally instrumented frame/tick distributions, executed tick counts, populations, headings, GPU/backend/buffer and skipped time; investigate any remaining bottleneck. Reuse the retained original snapshots and partial replay with their limitations. Confirm original-car crash, deformation/detachment, repair, world activation and rendering regressions against the new native-informed behavior. Preserve completed optimization evidence and distinguish actual user-playtest observations from recreated CPU-only fixtures.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -74,4 +80,6 @@ Reviewed 2026-10-13 analysis (docs/perf13-root-cause-analysis.md): 474/512 ticks
 Reviewed follow-up implemented scalar SAT axes, one roster per pure correction collection phase, exact moving-path extraction with two-clone fixed paths, direct fixed-body guard sample entries and allocation-free exact pose comparison. Full tests2733 pass; production build passes;15 original-car crash reports byte-identical. Serial actual AMD ANGLE/MCP Stock Timber recreated-fixture ABBA retains exact initial/final/fraction hashes at2100x1466. Final tick p50 baseline33.1/41.3 ms vs optimized23.0/32.5 ms; adverse traced/cold/tail samples retained in docs/guard-kernel-performance.md; CPU-only drawing-suppressed fixture is not rendered user-route FPS. A bounded partial483-body replay confirms real contact/joint changes on Cerby cluster every round; no unsupported zero-impulse exit or sampling/damping change. Native retry exhaustion does not zero velocity; ordinary recovery pre-candidate motion is mathematically equivalent. Original lockup and full world/damage attribution remain open; AC1/AC2 not checked.
 
 Final production Chromium crash matrix passes Stock Eagle/Buggy/Bigdump, Advanced69mach1 and Porker2 split/repair, with no console errors/failed requests/WebGL faults. Screenshots inspected. MCP ordinary Timber head-on with driving input changes player health100→91, opponent100→44 and persistent player deformation revision0→1. A non-element keyboard event-target assumption discovered in the injected QA path was fixed as UI-04/TASK-107 (done); Window/document controls and editable exclusion pass with clean final console/requests/GL. Broader PERF-13 and PHY-13 remain open.
+
+2026-10-13: structural implementation split into five new P1/next children plus reused PHY-13/TASK106. This residual integration/route-validation task moves to backlog because partial implementation alone is not WIP. Latest user authorization supersedes immutable preservation of browser-only guard/correction policies; native timebase and meaningful response remain the target. Earlier checked AC3/AC4 describe validation of the existing checkpoint; all changed systems require fresh child-ticket validation and final route integration.
 <!-- SECTION:NOTES:END -->
