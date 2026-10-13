@@ -149,6 +149,37 @@ export class WorldCollision {
   private nativeActorsByMesh = new Map<THREE.Mesh, NativeOrderedActor[]>();
   private nativeMeshesByActor = new WeakMap<NativeOrderedActor, THREE.Mesh>();
   private cellSize = 4;
+  private staticGuardRevision: object = {};
+  private staticGuardFriction: number[] = [];
+  private staticGuardDefaultFriction = NaN;
+  private dynamicGuardOwners = new Set<RigidBody>();
+  /** Certificate only for the pure static trajectory guard. Native collection
+   * callbacks and moving-owner queries are deliberately not cached across passes.
+   * Surface snapshots follow the explicit invalidateActors/rebuild contract. */
+  getStaticGuardRevision(): object | undefined {
+    if (
+      this.dynamicGuardOwners.size ||
+      this.modifier !== WorldCollision.prototype.modifier ||
+      this.querySurfaces !== WorldCollision.prototype.querySurfaces ||
+      this.queryLocalSurfaces !== WorldCollision.prototype.queryLocalSurfaces
+    )
+      return undefined;
+    if (
+      this.staticGuardFriction.length !== this.modifiers.length ||
+      !Object.is(
+        DEFAULT_SURFACE.wallFriction,
+        this.staticGuardDefaultFriction,
+      ) ||
+      this.modifiers.some(
+        (m, i) => !Object.is(m.wallFriction, this.staticGuardFriction[i]),
+      )
+    ) {
+      this.staticGuardRevision = {};
+      this.staticGuardFriction = this.modifiers.map((m) => m.wallFriction);
+      this.staticGuardDefaultFriction = DEFAULT_SURFACE.wallFriction;
+    }
+    return this.staticGuardRevision;
+  }
   triangles = 0;
   private readonly sourceMeshes: readonly THREE.Mesh[] | undefined;
   private readonly sourceTriangles = new Map<
@@ -220,6 +251,7 @@ export class WorldCollision {
     this.rebuildStatic();
   }
   rebuildStatic() {
+    this.staticGuardRevision = {};
     if (this.syncDiagnostics)
       this.syncDiagnostics.staticRebuilds =
         (this.syncDiagnostics.staticRebuilds ?? 0) + 1;
@@ -302,6 +334,7 @@ export class WorldCollision {
    * MODEL resources and dynamic owners; native face-ring policy stays separate. */
   invalidateActors(actors: readonly THREE.Object3D[]): void {
     if (!actors.length) return;
+    this.staticGuardRevision = {};
     const affected = new Set<THREE.Mesh>();
     const dynamic = new Set<RigidBody>();
     let orderChanged = false;
@@ -562,9 +595,12 @@ export class WorldCollision {
     drivable = true,
     worldCollider = false,
   ) {
+    this.staticGuardRevision = {};
     const previous = this.dynamic.get(owner);
     if (previous) this.dynamicOwners.delete(previous.actor);
     this.dynamicOwners.set(actor, owner);
+    this.dynamicGuardOwners.delete(owner);
+    if (worldCollider) this.dynamicGuardOwners.add(owner);
     this.dynamic.set(owner, {
       actor,
       drivable,
@@ -579,9 +615,11 @@ export class WorldCollision {
     this.refreshDynamic(owner);
   }
   removeDynamic(owner: RigidBody) {
+    this.staticGuardRevision = {};
     const entry = this.dynamic.get(owner);
     if (entry) this.dynamicOwners.delete(entry.actor);
     this.dynamic.delete(owner);
+    this.dynamicGuardOwners.delete(owner);
   }
   invalidateDynamic(owner?: RigidBody) {
     for (const [body, entry] of this.dynamic)

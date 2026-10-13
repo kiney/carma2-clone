@@ -323,4 +323,8 @@ import "./world-invalidation.test.mjs";
 import "./world-local-faces.test.mjs";
 import "./world-face-envelope.test.mjs";
 import "./world-plane-cache.test.mjs";
+import "./correction-working-set.test.mjs";
+import "./stationary-bounds-cache.test.mjs";
+import "./correction-simulation.test.mjs";
+import "./correction-integration.test.mjs";
 import "./smash-invalidation.test.mjs";

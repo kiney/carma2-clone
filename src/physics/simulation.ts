@@ -3,6 +3,17 @@ import {
   type BodyBroadphaseDiagnostics,
 } from "./body-broadphase";
 import { worldFaceSweepEnvelope } from "./world-face-envelope";
+import {
+  CorrectionWorkingSet,
+  type CorrectionDiagnostics,
+  type CorrectionBoundsProvider,
+  type CorrectionBodySnapshot,
+  type CorrectionGeometry,
+} from "./correction-working-set";
+import {
+  StationaryBoundsCache,
+  type StationaryBoundsDiagnostics,
+} from "./stationary-bounds-cache";
 import { CameraContactFrame } from "../camera/contact-frame";
 import {
   activateNativePedBody,
@@ -554,6 +565,27 @@ function transformHulls(
     ),
   );
 }
+const correctionBounds: CorrectionBoundsProvider = (
+  body,
+  position,
+  orientation,
+  hulls,
+) =>
+  isNativeSphereBody(body)
+    ? nativeBodyWorldBounds(body, position, orientation).expandByScalar(0.005)
+    : hullsBounds(hulls);
+/** Providers receive fresh rows even when geometry is retained. */
+function copyContactRows(rows: readonly Contact[]): Contact[] {
+  return rows.map((row) => {
+    const point = row.point.clone();
+    return {
+      ...row,
+      point,
+      pointB: row.pointB === row.point ? point : row.pointB?.clone(),
+      normal: row.normal.clone(),
+    };
+  });
+}
 /** Fixed-tick orchestration. Low-level collision equations live in contact.ts;
  * authored mechanics, source tyre forces and permanent shape crush stay distinct.
  * Remaining special-volume and custom sphere/wire paths are
@@ -837,6 +869,29 @@ export class VehicleSimulation {
   private contactSurfaces = new Map<RigidBody, Surface[]>();
   private bodyBroadphase = new BodyBroadphase();
   private bodyTrajectoryGuard = new BodyTrajectoryGuard();
+  /** Diagnostic A/B switch; production defaults to validated reuse. */
+  correctionReuse = true;
+  correctionDiagnostics?: CorrectionDiagnostics &
+    StationaryBoundsDiagnostics & {
+      correctionPasses?: number;
+      contactCollections?: number;
+      worldCollections?: number;
+      worldHullTransforms?: number;
+    };
+  private correctionWorkingSet?: CorrectionWorkingSet;
+  private correctionGeometry = new CorrectionWorkingSet();
+  /** Only validated dormant geometry persists; contacts and paths never do. */
+  private dormantCorrectionGeometry = new CorrectionWorkingSet();
+  private stationaryCorrectionBounds = new StationaryBoundsCache();
+  private dormantCorrectionPoses = new WeakMap<
+    SimulationBody,
+    {
+      shape: object;
+      old: object;
+      next: object;
+      geometry: CorrectionGeometry;
+    }
+  >();
   /** Opt-in diagnostics; no counters or retained captures in normal gameplay. */
   bodyPairDiagnostics?: (
     phase: "contacts" | "commit" | "projection",
@@ -3063,7 +3118,42 @@ export class VehicleSimulation {
         body.kind === "noncar" &&
         body.mechanics.ignoreWorldCollisions)
     )
+      return this.computeAdvanceWorldContacts(body, refine);
+    const working = this.correctionWorkingSet;
+    const revision = this.movingWorld.length
+      ? undefined
+      : this.world.getStaticGuardRevision?.();
+    if (!working || revision === undefined)
+      return this.computeAdvanceWorldContacts(body, refine);
+    const result = working.world(
+      body,
+      working.capture(body),
+      revision,
+      refine,
+      () => this.computeAdvanceWorldContacts(body, refine),
+    );
+    (body.state.predictedPosition ??= new Vector3()).copy(result.position);
+    (body.state.predictedOrientation ??= new Quaternion()).copy(
+      result.orientation,
+    );
+    return {
+      ...result.value,
+      contacts: copyContactRows(result.value.contacts),
+    };
+  }
+  private computeAdvanceWorldContacts(body: SimulationBody, refine = false) {
+    if (
+      body.properties.immovable ||
+      ((isNativePedBody(body) || isNativePedBoneBody(body)) &&
+        body.suppressWorldFaces) ||
+      ("kind" in body &&
+        body.kind === "noncar" &&
+        body.mechanics.ignoreWorldCollisions)
+    )
       return { fraction: 1, contacts: [] as Contact[] };
+    if (this.correctionDiagnostics)
+      this.correctionDiagnostics.worldCollections =
+        (this.correctionDiagnostics.worldCollections ?? 0) + 1;
     const samples = Math.min(
       128,
       Math.max(
@@ -3120,6 +3210,10 @@ export class VehicleSimulation {
         basePosition,
         baseOrientation,
       );
+    if (this.correctionDiagnostics)
+      this.correctionDiagnostics.worldHullTransforms =
+        (this.correctionDiagnostics.worldHullTransforms ?? 0) +
+        body.hulls.length * (samples + 1);
     let old = body.hulls.map((hull) =>
       transformHull(hull, basePosition, baseOrientation),
     );
@@ -3642,16 +3736,79 @@ export class VehicleSimulation {
   }
   private collectBodyContacts(bodies: SimulationBody[]): Contact[] {
     const contacts: Contact[] = [];
-    const poses = new Map(
-      bodies.map((body) => {
+    if (this.correctionDiagnostics)
+      this.correctionDiagnostics.contactCollections =
+        (this.correctionDiagnostics.contactCollections ?? 0) + 1;
+    const working = this.correctionWorkingSet;
+    const snapshots = new Map<SimulationBody, CorrectionBodySnapshot>();
+    const poses = new Map<
+      SimulationBody,
+      {
+        old: CollisionHull[];
+        next: CollisionHull[];
+        bounds: Box3;
+        oldHullBounds?: Box3[];
+        nextHullBounds?: Box3[];
+      }
+    >();
+    const geometryFor = (
+      body: SimulationBody,
+    ): NonNullable<ReturnType<typeof poses.get>> => {
+      const available = poses.get(body);
+      if (available) return available;
+      const build = () => {
+        if (working) {
+          const snapshot = working.capture(body);
+          snapshots.set(body, snapshot);
+          if (
+            "kind" in body &&
+            body.kind === "noncar" &&
+            body.properties.immovable
+          ) {
+            let retained = this.dormantCorrectionPoses.get(body);
+            if (
+              retained?.shape !== snapshot.shapeToken ||
+              retained.old !== snapshot.oldPoseToken ||
+              retained.next !== snapshot.nextPoseToken
+            ) {
+              this.dormantCorrectionGeometry.diagnostics =
+                this.correctionDiagnostics;
+              retained = {
+                shape: snapshot.shapeToken,
+                old: snapshot.oldPoseToken,
+                next: snapshot.nextPoseToken,
+                geometry: this.dormantCorrectionGeometry.geometry(
+                  body,
+                  undefined,
+                  correctionBounds,
+                ),
+              };
+              this.dormantCorrectionPoses.set(body, retained);
+            } else if (this.correctionDiagnostics) {
+              this.correctionDiagnostics.geometryHits =
+                (this.correctionDiagnostics.geometryHits ?? 0) + 2;
+            }
+            return retained.geometry;
+          }
+          return working.geometry(body, snapshot, correctionBounds);
+        }
         if (
           "kind" in body &&
           body.kind === "noncar" &&
           body.properties.immovable
         ) {
           const cached = this.dormantPoses.get(body);
-          if (cached) return [body, cached] as const;
+          if (cached) {
+            if (this.correctionDiagnostics)
+              this.correctionDiagnostics.geometryHits =
+                (this.correctionDiagnostics.geometryHits ?? 0) + 2;
+            return cached;
+          }
         }
+        if (this.correctionDiagnostics)
+          this.correctionDiagnostics.geometryTransforms =
+            (this.correctionDiagnostics.geometryTransforms ?? 0) +
+            body.hulls.length * 2;
         const old = transformHulls(body, body.hulls),
           next = transformHulls(body, body.hulls, true);
         const bounds = isNativeSphereBody(body)
@@ -3676,17 +3833,29 @@ export class VehicleSimulation {
           body.properties.immovable
         )
           this.dormantPoses.set(body, result);
-        return [body, result] as const;
-      }),
+        return result;
+      };
+      const result = build();
+      poses.set(body, result);
+      return result;
+    };
+    // Dormant props need an exact swept box to discover newly entering pairs,
+    // but full face/edge certificates and transforms only after pair filtering.
+    // Source vertices remain checked each collection; no assumed immutability.
+    this.stationaryCorrectionBounds.diagnostics = this.correctionDiagnostics;
+    const bounds = bodies.map((body) =>
+      working &&
+      "kind" in body &&
+      body.kind === "noncar" &&
+      body.properties.immovable &&
+      !isNativeSphereBody(body)
+        ? this.stationaryCorrectionBounds.get(body)
+        : geometryFor(body).bounds,
     );
     const diagnostics = this.bodyPairDiagnostics
       ? ({} as BodyContactDiagnostics)
       : undefined;
-    const pairs = this.bodyBroadphase.pairs(
-      bodies,
-      bodies.map((body) => poses.get(body)!.bounds),
-      diagnostics,
-    );
+    const pairs = this.bodyBroadphase.pairs(bodies, bounds, diagnostics);
     if (diagnostics) {
       diagnostics.maskRejected =
         diagnostics.jointRejected =
@@ -3702,9 +3871,7 @@ export class VehicleSimulation {
         continue;
       }
       if (a.properties.immovable && b.properties.immovable) continue;
-      const pa = poses.get(a)!,
-        pb = poses.get(b)!;
-      if (!pa.bounds.intersectsBox(pb.bounds)) continue;
+      if (!bounds[i].intersectsBox(bounds[j])) continue;
       if (
         ("joint" in a && a.joint?.parent === b) ||
         ("joint" in b && b.joint?.parent === a)
@@ -3712,62 +3879,93 @@ export class VehicleSimulation {
         if (diagnostics) diagnostics.jointRejected++;
         continue;
       }
+      const pa = geometryFor(a),
+        pb = geometryFor(b);
       if (isNativeSphereBody(a) || isNativeSphereBody(b)) {
         if (diagnostics) diagnostics.spherePairs++;
-        contacts.push(...nativeSpherePairRows(a, b));
+        if (!working && this.correctionDiagnostics)
+          this.correctionDiagnostics.pairTests =
+            (this.correctionDiagnostics.pairTests ?? 0) + 1;
+        const result = working
+          ? working.pair(a, b, snapshots.get(a)!, snapshots.get(b)!, () => ({
+              contacts: nativeSpherePairRows(a, b),
+              overlap: false,
+            }))
+          : { contacts: nativeSpherePairRows(a, b), overlap: false };
+        contacts.push(
+          ...(working ? copyContactRows(result.contacts) : result.contacts),
+        );
         continue;
       }
       const oldA = pa.old,
         oldB = pb.old,
         nextA = pa.next,
         nextB = pb.next;
-      for (let ai = 0; ai < oldA.length; ai++)
-        for (let bi = 0; bi < oldB.length; bi++) {
-          if (
-            !hullBounds(oldA[ai])
-              .union(hullBounds(nextA[ai]))
-              .intersectsBox(hullBounds(oldB[bi]).union(hullBounds(nextB[bi])))
-          )
-            continue;
-          const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
-            ...(a.overlapRecovery || b.overlapRecovery
-              ? {
-                  recovery: {
-                    a,
-                    b,
-                    sameAttachmentGroup:
-                      attachmentRoot(a) === attachmentRoot(b),
-                    // HW0x427b56..427c67 transforms each LOCAL bounds
-                    // center. World AABB centers differ under rotation/crush.
-                    boundsCenterA: hullsBounds(a.hulls)
-                      .getCenter(new Vector3())
-                      .applyQuaternion(a.state.orientation)
-                      .add(a.state.position),
-                    boundsCenterB: hullsBounds(b.hulls)
-                      .getCenter(new Vector3())
-                      .applyQuaternion(b.state.orientation)
-                      .add(b.state.position),
-                  },
-                }
-              : {}),
-            onOverlap: () => {
-              a.overlapDetected = true;
-              b.overlapDetected = true;
-            },
-          });
-          if (hit)
-            hit.points.forEach((point, index) =>
-              contacts.push({
-                a,
-                b,
-                point,
-                pointB: hit.pointsB?.[index] ?? point,
-                normal: hit.pointNormals?.[index] ?? hit.normal,
-                sourceType: hit.contactTypes?.[index],
-                penetration: hit.penetration,
-              }),
-            );
-        }
+      const emit = () => {
+        const rows: Contact[] = [];
+        let overlap = false;
+        for (let ai = 0; ai < oldA.length; ai++)
+          for (let bi = 0; bi < oldB.length; bi++) {
+            if (
+              !(pa.oldHullBounds?.[ai]?.clone() ?? hullBounds(oldA[ai]))
+                .union(pa.nextHullBounds?.[ai] ?? hullBounds(nextA[ai]))
+                .intersectsBox(
+                  (
+                    pb.oldHullBounds?.[bi]?.clone() ?? hullBounds(oldB[bi])
+                  ).union(pb.nextHullBounds?.[bi] ?? hullBounds(nextB[bi])),
+                )
+            )
+              continue;
+            const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
+              ...(a.overlapRecovery || b.overlapRecovery
+                ? {
+                    recovery: {
+                      a,
+                      b,
+                      sameAttachmentGroup:
+                        attachmentRoot(a) === attachmentRoot(b),
+                      // HW0x427b56..427c67 transforms each LOCAL bounds
+                      // center. World AABB centers differ under rotation/crush.
+                      boundsCenterA: hullsBounds(a.hulls)
+                        .getCenter(new Vector3())
+                        .applyQuaternion(a.state.orientation)
+                        .add(a.state.position),
+                      boundsCenterB: hullsBounds(b.hulls)
+                        .getCenter(new Vector3())
+                        .applyQuaternion(b.state.orientation)
+                        .add(b.state.position),
+                    },
+                  }
+                : {}),
+              onOverlap: () => {
+                overlap = true;
+              },
+            });
+            if (hit)
+              hit.points.forEach((point, index) =>
+                rows.push({
+                  a,
+                  b,
+                  point,
+                  pointB: hit.pointsB?.[index] ?? point,
+                  normal: hit.pointNormals?.[index] ?? hit.normal,
+                  sourceType: hit.contactTypes?.[index],
+                  penetration: hit.penetration,
+                }),
+              );
+          }
+        return { contacts: rows, overlap };
+      };
+      if (!working && this.correctionDiagnostics)
+        this.correctionDiagnostics.pairTests =
+          (this.correctionDiagnostics.pairTests ?? 0) + 1;
+      const result = working
+        ? working.pair(a, b, snapshots.get(a)!, snapshots.get(b)!, emit)
+        : emit();
+      if (result.overlap) a.overlapDetected = b.overlapDetected = true;
+      contacts.push(
+        ...(working ? copyContactRows(result.contacts) : result.contacts),
+      );
     }
     if (diagnostics) {
       diagnostics.contactRows = contacts.length;
@@ -4467,6 +4665,10 @@ export class VehicleSimulation {
   step() {
     this.onBeforeStep?.();
     this.physicsQueryDepth++;
+    const previousWorkingSet = this.correctionWorkingSet;
+    this.correctionWorkingSet = this.correctionReuse
+      ? this.correctionGeometry.createTick(this.correctionDiagnostics)
+      : undefined;
     try {
       for (const car of this.cars)
         if (car.human && this.isCarPhysicsActive(car))
@@ -4737,6 +4939,9 @@ export class VehicleSimulation {
         ReturnType<VehicleSimulation["advanceWorldContacts"]>
       >();
       for (let pass = 0; pass < 8; pass++) {
+        if (this.correctionDiagnostics)
+          this.correctionDiagnostics.correctionPasses =
+            (this.correctionDiagnostics.correctionPasses ?? 0) + 1;
         // Every solve can redirect a pair trajectory, including props which
         // intentionally ignore world faces. Their predicted pose must not be
         // inherited from the pre-impulse solve or an early-returning world guard.
@@ -4787,6 +4992,9 @@ export class VehicleSimulation {
             .fraction,
         ]),
       );
+      // Final pair commitment and joint projection own fresh path/coupling
+      // certificates. No correction result survives into those phases.
+      this.correctionWorkingSet = undefined;
       const paths = new Map<HullBody, PosePath>(
         committing.map((body) => {
           const probe = {
@@ -5022,6 +5230,7 @@ export class VehicleSimulation {
       if (!this.collectingOrdinaryCrush)
         this.finishPedFrame(PHYSICS_STEP * 1000);
     } finally {
+      this.correctionWorkingSet = previousWorkingSet;
       this.physicsQueryDepth--;
     }
   }
@@ -5165,6 +5374,10 @@ export class VehicleSimulation {
   }
   dispose() {
     this.bodyBroadphase = new BodyBroadphase();
+    this.correctionGeometry = new CorrectionWorkingSet();
+    this.dormantCorrectionGeometry = new CorrectionWorkingSet();
+    this.stationaryCorrectionBounds = new StationaryBoundsCache();
+    this.dormantCorrectionPoses = new WeakMap();
     this.bodyTrajectoryGuard.clear();
     this.bodyPairDiagnostics = undefined;
     this.smashPowerupQueue.initialize();

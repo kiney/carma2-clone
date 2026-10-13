@@ -65,7 +65,8 @@ choices remain open. The user then separated upcoming work as follows:
 | TASK-103 | PERF-04 | 2 | `next` | Higher visual visibility, dependent on TASK-101 |
 | TASK-102 | PERF-03 | 4 | `backlog` | High-resolution rendering policy; deferred, measured gain was small |
 
-The board now has 111 tasks: 64 `backlog`, 8 `next`, 1 `wip` and 38 `done`.
+At the creation of this queue, the board had 111 tasks: 64 `backlog`, 8 `next`,
+1 `wip` and 38 `done`.
 Only the profiling investigation remains active; queued tickets do not consume
 WIP slots. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
 memory and FPS-diagnostic scopes and user-edited priorities.
@@ -82,8 +83,8 @@ implementation subtasks of TASK-100, selected by the user at priority 1 and plac
 in `next`. They precede P2 visibility work. Stored ordinals define the proposed
 implementation order; dependencies record technical prerequisites separately.
 Creating this queue does not start implementation or occupy additional WIP slots.
-PERF-06 through PERF-11 were completed on 2026-10-12; the following scopes remain in
-`next`.
+PERF-06 through PERF-11 were completed on 2026-10-12. PERF-12 was completed on
+2026-10-13; the table retains the implementation order.
 
 | Order | Backlog ID | Issue   | Priority / status | Scope                                                              |
 | ----- | ---------- | ------- | ----------------- | ------------------------------------------------------------------ |
@@ -93,19 +94,27 @@ PERF-06 through PERF-11 were completed on 2026-10-12; the following scopes remai
 | 4     | TASK-100.4 | PERF-09 | P1 / `done`       | Synchronization of changed world actors/geometry only              |
 | 5     | TASK-100.5 | PERF-10 | P1 / `done`       | Native smash restart versus actual owner-specific invalidation     |
 | 6     | TASK-100.6 | PERF-11 | P1 / `done`       | Conservative local world-face discovery for physics/camera queries |
-| 7     | TASK-100.7 | PERF-12 | P1 / `next`       | Reuse of unchanged collision work between correction passes        |
+| 7     | TASK-100.7 | PERF-12 | P1 / `done`       | Reuse of unchanged collision work between correction passes        |
 
 [World synchronization](../docs/world-sync-performance.md) now retains unchanged
 geometry and synchronizes query-selected native subtrees before callbacks.
-PERF-01 remains the active profiling/coordinating ticket; the later scopes are
-queued. [Smash invalidation](../docs/smash-invalidation-performance.md) separates
+PERF-01 remains the active profiling/coordinating ticket; visibility and resolution
+retain separate scopes. [Smash invalidation](../docs/smash-invalidation-performance.md) separates
 unchanged notifications from actual owner changes. Completing these scopes does
 not assert that all frame-time spikes are fixed.
 
 [World face locality](../docs/world-face-performance.md) now narrows static
 guard/camera candidates while preserving native wheel/capacity paths, moving
 owner snapshots and contact decisions. Cold index costs and adverse quarry
-timings remain recorded under PERF-01; PERF-12 is still queued.
+timings remain recorded under PERF-01.
+
+[Correction-pass reuse](../docs/correction-performance.md) checks exact body and
+world validity, reuses unsolved rows for unchanged pairs, and defers full dormant
+geometry until spatial admission. Stock/Advanced Timber retain eight correction
+passes, restart work and exact damage/guard outcomes. Work reductions are stable;
+elapsed frame results remain mixed and the exact reported route still needs
+profiling. After this completion the board has 112 tasks: 64 `backlog`, 1 `next`,
+1 `wip` and 46 `done`. PERF-01 alone remains active; P2 visibility remains next.
 
 Native MODEL bounds are separated from broader synchronization so their narrower
 cache validity can be reviewed independently. Correction-pass reuse follows the

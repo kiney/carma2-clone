@@ -54,6 +54,13 @@ and camera candidates with conservative feature bounds and stable source order.
 Native wheel/face-cache semantics and uncertain or moving-owner paths retain
 their existing selection; collision safeguards and simulation limits are unchanged.
 
+[Correction-pass reuse](docs/correction-performance.md) retains validated
+geometry, raw pair contacts and pure static trajectory results for unchanged
+bodies. Impulses, damage, splits and world changes invalidate affected work;
+native callbacks and final collision safeguards remain live. Heavy Timber tests
+show fewer transformations and repeated guard queries, with mixed frame-time
+results documented rather than a steady-FPS guarantee.
+
 ## Run it
 
 Use Node.js 20 or newer and a modern browser with WebGL support:

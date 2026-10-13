@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-12 21:38'
+updated_date: '2026-10-13 00:01'
 labels:
   - priority-1
   - PERF-01
@@ -64,4 +64,6 @@ PERF-08 completed: native MODEL bounds/radius retention and mutation ownership v
 2026-10-12 PERF-10 / TASK-100.5 completed: actual owner invalidation is separate from native notification/restart. Original Stock/Advanced TEZFEN reuse rebuilds zero triangles, and first preparation regenerates one155-triangle mesh/two native MODELs instead of full static/dynamic world. 2657 tests, build, identical15 original crash reports and serial Chromium smash/debris/crash/render checks pass. Short frozen CPU comparisons retain all samples and do not claim hardware FPS or repair the earlier zero-rebuild canyon capture. See docs/smash-invalidation-performance.md. PERF-11 and PERF-12 remain next; PERF-01 stays wip.
 
 PERF-11 / TASK-100.6 completed: ordered conservative static face locality and retained exact feature planes. Timber bridge candidate counts fall 203 to 4 and guard face work 272 to 16; quarry guard work falls 348 to 24. Stock/Advanced Timber and Snow comparisons preserve camera, normal and shallow flagged/unflagged/deep recovery results and native collector callbacks exactly. All 2,677 tests, build, 15 exact original crash reports and serial production/hardware MCP regressions pass. Cold BVH construction costs and unfavorable quarry guard samples (4.15/3.60 ms local versus 0.65/1.10 ms baseline) remain unresolved timing concerns; there is no universal FPS or exact canyon/tunnel route completion claim. See docs/world-face-performance.md. PERF-12 stays next; PERF-01 stays wip for attribution and profiling coordination.
+
+2026-10-13 PERF-12 / TASK-100.7 completed: exact cross-pass body/world certificates, raw contact reuse, independent retained geometry and lazy dormant narrow-phase preparation. Stock/Advanced reconstructed Timber heavy states preserve eight correction passes, restart work, ordered damage/impacts and guard fractions; body transformations 298->95 / 370->93 and actual static guard collections 135->78 / 171->82. All 2,698 tests, build, 15 original crash outputs, serial spawn/debris/camera/render Chromium regressions and clean AMD hardware production MCP driving/crush/repair validation pass. Short traced and minimally instrumented ABBA timings have lower heavy-tick/frame maxima but retain adverse medians/tails and do not prove steady FPS. Original canyon route is still not exactly reproduced; residual stalls/route attribution remain in PERF-01. Evidence: docs/correction-performance.md. PERF-01 remains the only WIP ticket; visibility keeps its existing P2 next priority.
 <!-- SECTION:NOTES:END -->
