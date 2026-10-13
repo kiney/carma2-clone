@@ -243,3 +243,20 @@ actual-simulation tests exercise depth .1/.8 and global gravity 0/.2/4 with
 a redistributable noncar fixture. Motor thrust remains independent.
 See [motion powerup notes](c2-motion-powerups-re.md) for the separate driver
 guard and settling calculation. Evidence: verified from installed binary.
+
+### PERF-13 query implementation and immutable collision generations
+
+The browser now distinguishes mutable DamageSystem shape vertices from published
+collision hull generations. Built-in cars/NONCARs opt into frozen source hulls;
+accepted crush/repair, split and detachment publish independently built snapshots.
+Motion, masks, attachments and custom mutable sources remain fully validated.
+Independent depth/fraction queries and scalar moving-edge/clipping arithmetic
+remove discarded manifold work and transient allocations, preserving the existing
+native-derived numerical outputs. These are implementation optimizations, not
+new physics formulas or permission to omit solver/damage callbacks.
+
+Installed HW `DoCollisions` at `0x4ba450` retains local retries through the
+`0x4bac60` response path and a conditional global traversal restart. rec2's
+incomplete reconstruction does not establish our eight global correction rounds
+as native C2 behavior. All existing steps/restarts/guards remain unchanged here.
+See [implementation, differential evidence and hardware limits](guard-kernel-performance.md).

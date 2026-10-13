@@ -1047,7 +1047,7 @@ async function loadRace() {
         const mechanics = noncarDefinitions.get(type);
         if (!mechanics) return [];
         try {
-          return [createNonCarBody(actor, mechanics)];
+          return [createNonCarBody(actor, mechanics, { immutableHulls: true })];
         } catch (error) {
           delete actor.userData.dynamicBody;
           assets.warnings.push(String(error));
@@ -1364,6 +1364,7 @@ async function loadRace() {
       start,
       ((track.heading ?? 0) * Math.PI) / 180,
       true,
+      { immutableHulls: true },
     );
     if (!placeCarAtStart(player, collision, noncarBodies).placed)
       throw new Error(
@@ -2325,6 +2326,7 @@ async function loadRivals(
       spawn,
       heading,
       false,
+      { immutableHulls: true },
     );
     const reservedStarts = [
       ...(simulation?.cars ?? []),

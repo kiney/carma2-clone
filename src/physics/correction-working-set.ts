@@ -7,6 +7,7 @@ import {
   type CollisionHull,
 } from "./geometry";
 import type { HullBody } from "./pair-guard";
+import { hasImmutableCollisionHulls } from "./immutable-hulls";
 
 /** Contact/world maps last one tick. Exact source/pose certificates and weakly
  * owned geometry may persist; each new tick explicitly admits its snapshots. */
@@ -152,7 +153,10 @@ function shapeValues(body: CollisionBody, visit: Visit) {
   visit(body);
   visit(body.hulls);
   visit(body.hulls.length);
-  for (const value of body.hulls) hull(value, visit);
+  // Only producer-owned, deeply frozen local geometry can use identity here.
+  // Mutable cars, crush/debris and custom hulls retain the complete value walk.
+  if (!hasImmutableCollisionHulls(body.hulls))
+    for (const value of body.hulls) hull(value, visit);
   const shape = body.shape;
   visit(shape);
   if (!shape) return;

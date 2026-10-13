@@ -173,11 +173,15 @@ visibility remains deferred. The new task makes 113 tasks: 65 `backlog`, 1 `next
 
 The subsequent real user-driven 6 FPS capture confirms dominant physics CPU
 and global correction/catch-up amplification. PERF-13 / TASK-100.8 is P1 in
-`next`, ordinal 1180, ahead of P2 visibility. Its implementation is open; do
-not simply lower iteration caps. [Live evidence](../docs/live-timber-drop.md)
-includes observer overhead and the unresolved 180-degree direction correlation.
-PERF-01 remains the only WIP ticket. The board now has 114 tasks: 65 `backlog`,
-2 `next`, 1 `wip`, 46 `done`; existing priorities are unchanged.
+`wip`, ordinal 1180, ahead of P2 visibility. Its authorized implementation removes
+repeated shape walks, discarded query work and transient collision allocations;
+see [implementation and remaining acceptance](../docs/guard-kernel-performance.md).
+Iteration/catch-up limits and solver callbacks are preserved. The actual
+hardware route and the 180-degree correlation remain unverified; software
+measurements retain adverse samples and do not close that acceptance.
+[Live evidence](../docs/live-timber-drop.md) includes observer overhead.
+PERF-01 and PERF-13 occupy two WIP slots. The board now has 114 tasks:
+65 `backlog`, 1 `next`, 2 `wip`, 46 `done`; existing priorities are unchanged.
 
 ```sh
 backlog task edit TASK-1 --status next

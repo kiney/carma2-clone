@@ -207,6 +207,10 @@ import {
   type HullBody,
   type PosePath,
 } from "./pair-guard";
+import {
+  hasImmutableCollisionHulls,
+  sealCollisionHulls,
+} from "./immutable-hulls";
 import { SafeCarHistory, allWheelsSuspended } from "./recovery";
 import { OilRuntime } from "./oil";
 import {
@@ -375,6 +379,12 @@ function nativePairAllowed(a: RigidBody, b: RigidBody): boolean {
   );
 }
 const Y = new Vector3(0, 1, 0);
+// Thousands of dormant no-op guards per tick must not allocate independent
+// objects/arrays. This private result is only read by collection/commitment.
+const EMPTY_WORLD_GUARD = Object.freeze({
+  fraction: 1,
+  contacts: Object.freeze([] as Contact[]),
+});
 export function boxVertices(bounds: Box3): Vector3[] {
   const result: Vector3[] = [];
   for (const x of [bounds.min.x, bounds.max.x])
@@ -420,6 +430,7 @@ export function createSimulatedCar(
   position: Vector3,
   heading: number,
   human: boolean,
+  options: { immutableHulls?: boolean } = {},
 ): SimulatedCar {
   const mechanics = parseCarMechanics(text);
   group.updateMatrixWorld(true);
@@ -483,6 +494,9 @@ export function createSimulatedCar(
   const vertices = hulls.map((hull) =>
     hull.vertices.map((point) => point.clone()),
   );
+  // Damage owns a separate mutable shape graph. Published collision shapes
+  // can be immutable snapshots, replaced atomically after accepted crush.
+  if (options.immutableHulls) sealCollisionHulls(hulls);
   const car: SimulatedCar = {
     smokeLastComponentLevels: new Uint8Array(12),
     state,
@@ -3150,7 +3164,7 @@ export class VehicleSimulation {
         body.kind === "noncar" &&
         body.mechanics.ignoreWorldCollisions)
     )
-      return { fraction: 1, contacts: [] as Contact[] };
+      return EMPTY_WORLD_GUARD;
     if (this.correctionDiagnostics)
       this.correctionDiagnostics.worldCollections =
         (this.correctionDiagnostics.worldCollections ?? 0) + 1;
@@ -3538,7 +3552,9 @@ export class VehicleSimulation {
           this.placementDirection(car, pending),
         ).accepted;
       if (accepted) {
-        car.hulls = pending;
+        car.hulls = hasImmutableCollisionHulls(car.hulls)
+          ? sealCollisionHulls(pending)
+          : pending;
         car.revision = car.damage.deformationRevision;
         car.damage.pendingShapeSwapFlags = 0;
       }
@@ -3605,6 +3621,7 @@ export class VehicleSimulation {
         objectFriction: 0.4,
       },
     };
+    if (hasImmutableCollisionHulls(body.hulls)) sealCollisionHulls(child.hulls);
     // Source42e230 assigns physics children by the original parent-local
     // joint anchor. Their world pose and joint geometry remain unchanged.
     for (const piece of this.debris)
@@ -5350,6 +5367,7 @@ export class VehicleSimulation {
         if (points.every((p): p is Vector3 => !!p))
           body.hulls = [buildHull(points)];
       }
+      if (hasImmutableCollisionHulls(car.hulls)) sealCollisionHulls(body.hulls);
       if (part.state.type !== 2 && !part.forcedFullDetach) {
         body.joint =
           part.part.type === "flap"

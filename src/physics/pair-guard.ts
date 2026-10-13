@@ -12,10 +12,12 @@ import {
 import {
   hullBounds,
   hullPenetration,
-  sweepHulls,
+  hullPenetrationExceeds,
+  sweepHullsFraction,
   transformHull,
   type CollisionHull,
 } from "./geometry";
+import { hasImmutableCollisionHulls } from "./immutable-hulls";
 
 export type HullBody = RigidBody & { hulls: CollisionHull[] };
 /** Pure filter: spatial discovery omits calls for non-contacting pairs. */
@@ -88,14 +90,46 @@ interface GeometrySnapshot {
   hulls: CollisionHull[];
   bounds: Box3[];
 }
-/** Geometry has phase lifetime, not body/hull identity lifetime. Never carry
- * samples through crush, solver correction, repair or joint projection. */
+interface ImmutableSnapshot {
+  source: CollisionHull[];
+  pose: number[];
+  geometry: GeometrySnapshot;
+}
+/** Only fixed producer-owned source shapes with exact constant poses survive
+ * phases. Mutable crash shapes and all moving trajectories stay phase-local. */
+class ImmutableGuardGeometry {
+  private entries = new WeakMap<HullBody, ImmutableSnapshot>();
+  get(body: HullBody, pose: GuardPose): GeometrySnapshot | undefined {
+    const entry = this.entries.get(body);
+    if (!entry || entry.source !== body.hulls) return;
+    const p = pose.position,
+      q = pose.orientation;
+    const values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w];
+    return values.every((v, i) => Object.is(v, entry.pose[i]))
+      ? entry.geometry
+      : undefined;
+  }
+  set(body: HullBody, pose: GuardPose, geometry: GeometrySnapshot) {
+    const p = pose.position,
+      q = pose.orientation;
+    this.entries.set(body, {
+      source: body.hulls,
+      pose: [p.x, p.y, p.z, q.x, q.y, q.z, q.w],
+      geometry,
+    });
+  }
+}
+/** Moving geometry has phase lifetime. Persistent static reuse additionally
+ * requires deep source immutability and an exact constant-pose certificate. */
 class GuardWorkingSet {
   private samples = new Map<
     HullBody,
     Map<PosePath, Map<number, GeometrySnapshot>>
   >();
-  constructor(private diagnostics?: BodyGuardDiagnostics) {}
+  constructor(
+    private diagnostics?: BodyGuardDiagnostics,
+    private immutable?: ImmutableGuardGeometry,
+  ) {}
   sample(body: HullBody, path: PosePath, fraction: number): GeometrySnapshot {
     const key = path.constantPose ? 0 : fraction;
     let paths = this.samples.get(body);
@@ -108,6 +142,16 @@ class GuardWorkingSet {
       return value;
     }
     const pose = path.constantPose ?? path(fraction);
+    const retain =
+      body.properties.immovable &&
+      path.constantPose &&
+      hasImmutableCollisionHulls(body.hulls);
+    if (retain) value = this.immutable?.get(body, pose);
+    if (value) {
+      if (this.diagnostics) this.diagnostics.snapshotHits++;
+      samples.set(key, value);
+      return value;
+    }
     value = {
       hulls: body.hulls.map((hull) =>
         transformHull(hull, pose.position, pose.orientation),
@@ -115,6 +159,7 @@ class GuardWorkingSet {
       bounds: [],
     };
     if (this.diagnostics) this.diagnostics.hullTransforms += body.hulls.length;
+    if (retain) this.immutable?.set(body, pose, value);
     samples.set(key, value);
     return value;
   }
@@ -217,13 +262,23 @@ export function guardPairTrajectory(
       Math.ceil((ta.angle + tb.angle) / 0.025),
     ),
   );
-  const exceeds = (t: number) => {
+  const exceeds = (t: number, retainDepth = false) => {
     const ha = getA(t),
       hb = getB(t);
     return ha.hulls.some((_, i) =>
-      hb.hulls.some(
-        (_, j) => depthAt(ha, hb, i, j) > allowed[i][j] + DEPTH_EPSILON,
-      ),
+      hb.hulls.some((_, j) => {
+        const limit = allowed[i][j] + DEPTH_EPSILON;
+        const known = ha.depths[i]?.[j];
+        if (known !== undefined) return known > limit;
+        // Positive old overlap needs an exact endpoint depth to lower its
+        // escape allowance. Otherwise only the strict SAT predicate matters.
+        if (retainDepth && allowed[i][j] > 0)
+          return depthAt(ha, hb, i, j) > limit;
+        return (
+          bounds(ha, i).intersectsBox(bounds(hb, j)) &&
+          hullPenetrationExceeds(ha.hulls[i], hb.hulls[j], limit)
+        );
+      }),
     );
   };
   let safe = 0;
@@ -233,7 +288,7 @@ export function guardPairTrajectory(
       nextSampleB = getB(end),
       nextA = nextSampleA.hulls,
       nextB = nextSampleB.hulls;
-    let blocked = exceeds(end) ? end : Infinity;
+    let blocked = exceeds(end, true) ? end : Infinity;
     const sweptA: Box3[] = [],
       sweptB: Box3[] = [];
     for (let i = 0; i < oldA.length; i++)
@@ -256,12 +311,17 @@ export function guardPairTrajectory(
           )
         )
           continue;
-        const hit = sweepHulls(oldA[i], nextA[i], oldB[j], nextB[j]);
-        if (!hit || hit.fraction! < 0 || hit.fraction! > 1) continue;
+        const fraction = sweepHullsFraction(
+          oldA[i],
+          nextA[i],
+          oldB[j],
+          nextB[j],
+        );
+        if (fraction === undefined || fraction < 0 || fraction > 1) continue;
         // Source emitters extend edges and accept resting/tolerance contacts.
         // Require real positive-depth evidence, never freeze a separating touch.
         for (const delta of [0.0001, 0.001, 0.01, 0.1, 0.5]) {
-          const t = safe + (end - safe) * Math.min(1, hit.fraction! + delta);
+          const t = safe + (end - safe) * Math.min(1, fraction + delta);
           if (exceeds(t)) {
             blocked = Math.min(blocked, t);
             break;
@@ -281,7 +341,10 @@ export function guardPairTrajectory(
     // Each local overlap must not deepen; after it clears, re-entry is new.
     allowed = nextA.map((_, i) =>
       nextB.map((_, j) =>
-        Math.min(allowed[i][j], depthAt(nextSampleA, nextSampleB, i, j)),
+        // Zero cannot decrease: a full SAT depth here would be discarded.
+        allowed[i][j] === 0
+          ? allowed[i][j]
+          : Math.min(allowed[i][j], depthAt(nextSampleA, nextSampleB, i, j)),
       ),
     );
     oldA = nextA;
@@ -372,11 +435,14 @@ function guardSpherePairTrajectory(
 /** Couple attachment and actual conflicting trajectories, not broadphase
  * proximity. Revalidate unequal prefixes: slowing one body can create a new
  * crossing. Full-path bounds enclose every tested prefix and rotation arc.
- * Only the broadphase index survives phases. Geometry is rebuilt per run. */
+ * Only certified immutable constant geometry and broadphase indexes survive
+ * phases; damage, motion, masks, coupling and fractions are recomputed. */
 export class BodyTrajectoryGuard {
   private broadphase = new BodyBroadphase();
+  private immutable = new ImmutableGuardGeometry();
   clear() {
     this.broadphase = new BodyBroadphase();
+    this.immutable = new ImmutableGuardGeometry();
   }
   run(
     bodies: readonly HullBody[],
@@ -396,7 +462,7 @@ export class BodyTrajectoryGuard {
         diagnostics.conservativeFallbacks =
           0;
     }
-    const workingSet = new GuardWorkingSet(diagnostics);
+    const workingSet = new GuardWorkingSet(diagnostics, this.immutable);
     const parents = bodies.map((_, i) => i);
     const roots = bodies.map(attachmentRoot);
     const find = (i: number): number =>

@@ -265,7 +265,9 @@ export class NativeNonCarDebrisRuntime {
         if (slot)
           body = this.host.pull
             ? this.host.pull(actor, template, slot)
-            : createNonCarBody(actor, template.mechanics);
+            : createNonCarBody(actor, template.mechanics, {
+                immutableHulls: true,
+              });
       } catch (error) {
         this.host.diagnose?.(`Noncar debris pull failed: ${String(error)}`);
       }

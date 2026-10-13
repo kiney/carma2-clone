@@ -189,3 +189,14 @@ player heading/position, camera pose, draws/triangles and moving-world count.
 The previous history was saved before recorder replacement. Targeted
 lifecycle/count tests pass; the user remains paused at the same time/pose.
 No physics behavior, iteration limit, activation or visibility change is made.
+
+## Subsequent implementation
+
+The authorized PERF-13 work removes repeated source-shape walks, discarded
+SAT/manifold work and high-volume temporary allocations; see
+[implementation and bounded validation](guard-kernel-performance.md).
+It retains solver/callback rounds and does not yet close the original hardware
+route acceptance. The old controlled Chromium was restarted while diagnosing
+its stalled protocol connection; the recorded trace and full user-state snapshot
+were saved before that restart. Earlier pause-preservation statements above
+describe the diagnostic captures, not the later browser restart.

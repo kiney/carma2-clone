@@ -510,17 +510,35 @@ export function sweepMovingEdges(
   newStart: Vector3,
   newEnd: Vector3,
 ): HullContact | null {
-  const edge = staticEnd.clone().sub(staticStart);
-  const original = oldEnd.clone().sub(oldStart);
-  const movement = newStart.clone().sub(oldStart);
-  const edgeChange = newEnd.clone().sub(newStart).sub(original);
-  const relative = oldStart.clone().sub(staticStart);
-  const normal0 = edge.clone().cross(original);
-  const normalDelta = edge.clone().cross(edgeChange);
-  const a = movement.dot(normalDelta);
-  const b = relative.dot(normalDelta) + movement.dot(normal0);
-  const c = relative.dot(normal0);
-  const roots: number[] = [];
+  // Scalar storage preserves Vector3's subtraction/cross/dot operation order
+  // while avoiding temporary vectors for every rejected authored edge pair.
+  const ex = staticEnd.x - staticStart.x,
+    ey = staticEnd.y - staticStart.y,
+    ez = staticEnd.z - staticStart.z;
+  const ox = oldEnd.x - oldStart.x,
+    oy = oldEnd.y - oldStart.y,
+    oz = oldEnd.z - oldStart.z;
+  const mx = newStart.x - oldStart.x,
+    my = newStart.y - oldStart.y,
+    mz = newStart.z - oldStart.z;
+  const dx = newEnd.x - newStart.x - ox,
+    dy = newEnd.y - newStart.y - oy,
+    dz = newEnd.z - newStart.z - oz;
+  const rx = oldStart.x - staticStart.x,
+    ry = oldStart.y - staticStart.y,
+    rz = oldStart.z - staticStart.z;
+  const n0x = ey * oz - ez * oy,
+    n0y = ez * ox - ex * oz,
+    n0z = ex * oy - ey * ox;
+  const ndx = ey * dz - ez * dy,
+    ndy = ez * dx - ex * dz,
+    ndz = ex * dy - ey * dx;
+  const a = mx * ndx + my * ndy + mz * ndz;
+  const b = rx * ndx + ry * ndy + rz * ndz + (mx * n0x + my * n0y + mz * n0z);
+  const c = rx * n0x + ry * n0y + rz * n0z;
+  let root0 = 0,
+    root1 = 0,
+    rootCount = 0;
   const coefficientScale = Math.max(
     Math.abs(a),
     Math.abs(b),
@@ -528,29 +546,57 @@ export function sweepMovingEdges(
     1e-30,
   );
   if (Math.abs(a) <= 1e-12 * coefficientScale) {
-    if (Math.abs(b) > 1e-12 * coefficientScale) roots.push(-c / b);
+    if (Math.abs(b) > 1e-12 * coefficientScale) {
+      root0 = -c / b;
+      rootCount = 1;
+    }
   } else {
     const discriminant = b * b - 4 * a * c;
     if (discriminant >= 0) {
       const root = Math.sqrt(discriminant);
       // Stable quadratic roots, with the zero-q double root handled separately.
       const q = -0.5 * (b + (b >= 0 ? root : -root));
-      if (q === 0) roots.push(-b / (2 * a));
-      else roots.push(q / a, c / q);
+      if (q === 0) {
+        root0 = -b / (2 * a);
+        rootCount = 1;
+      } else {
+        root0 = q / a;
+        root1 = c / q;
+        rootCount = 2;
+        // Stable two-element sort with the original subtraction comparator.
+        // Equal/signed-zero/NaN comparisons retain their authored root order.
+        if (root1 - root0 < 0) {
+          const first = root0;
+          root0 = root1;
+          root1 = first;
+        }
+      }
     }
   }
-  roots.sort((x, y) => x - y);
-  for (const fraction of roots) {
+  for (let rootIndex = 0; rootIndex < rootCount; rootIndex++) {
+    const fraction = rootIndex === 0 ? root0 : root1;
     if (fraction < 0 || fraction > 1) continue;
-    const currentEdge = original.clone().addScaledVector(edgeChange, fraction);
-    const normal = edge.clone().cross(currentEdge);
-    const normalSquared = normal.lengthSq();
+    const cx = ox + dx * fraction,
+      cy = oy + dy * fraction,
+      cz = oz + dz * fraction;
+    const nx = ey * cz - ez * cy,
+      ny = ez * cx - ex * cz,
+      nz = ex * cy - ey * cx;
+    const normalSquared = nx * nx + ny * ny + nz * nz;
     if (normalSquared < 1e-7) continue;
-    const offset = relative.clone().addScaledVector(movement, fraction);
+    const fx = rx + mx * fraction,
+      fy = ry + my * fraction,
+      fz = rz + mz * fraction;
     const staticParameter =
-      offset.clone().cross(currentEdge).dot(normal) / normalSquared;
+      ((fy * cz - fz * cy) * nx +
+        (fz * cx - fx * cz) * ny +
+        (fx * cy - fy * cx) * nz) /
+      normalSquared;
     const movingParameter =
-      offset.clone().cross(edge).dot(normal) / normalSquared;
+      ((fy * ez - fz * ey) * nx +
+        (fz * ex - fx * ez) * ny +
+        (fx * ey - fy * ex) * nz) /
+      normalSquared;
     if (
       staticParameter < 0 ||
       staticParameter > 1 ||
@@ -558,11 +604,24 @@ export function sweepMovingEdges(
       movingParameter > 1
     )
       continue;
+    const normal = new Vector3(nx, ny, nz);
     normal.normalize().multiplyScalar(c < 0 ? -1 : 1);
     return {
       normal,
-      points: [oldStart.clone().addScaledVector(original, movingParameter)],
-      pointsB: [staticStart.clone().addScaledVector(edge, staticParameter)],
+      points: [
+        new Vector3(
+          oldStart.x + ox * movingParameter,
+          oldStart.y + oy * movingParameter,
+          oldStart.z + oz * movingParameter,
+        ),
+      ],
+      pointsB: [
+        new Vector3(
+          staticStart.x + ex * staticParameter,
+          staticStart.y + ey * staticParameter,
+          staticStart.z + ez * staticParameter,
+        ),
+      ],
       contactTypes: [0],
       penetration: 0,
       fraction: Math.fround(fraction),
@@ -998,6 +1057,24 @@ function manifold(
     ).reduce((p, q) => (q.dot(normal) > p.dot(normal) ? q : p));
   return [project(av.clone().add(bv).multiplyScalar(0.5))];
 }
+const SAT_EDGE_COMPONENT_LIMIT = Math.sqrt(Math.sqrt(Number.MAX_VALUE)) / 4;
+function exactUniqueEdges(edges: Vector3[]): Vector3[] {
+  // This is an optional arithmetic shortcut, not a source feature limit. Avoid
+  // quadratic dedup work for unusually large/imbalanced external hulls.
+  if (edges.length > 64) return edges;
+  const result: Vector3[] = [];
+  for (const edge of edges)
+    if (
+      !result.some(
+        (old) =>
+          Object.is(old.x, edge.x) &&
+          Object.is(old.y, edge.y) &&
+          Object.is(old.z, edge.z),
+      )
+    )
+      result.push(edge);
+  return result;
+}
 /** Visit the original ordered/deduplicated SAT prefix. A separating axis avoids
  * constructing the remaining edge crosses; no axis or tolerance is omitted. */
 function visitAxes(
@@ -1023,8 +1100,24 @@ function visitAxes(
   const edgesB = b.edges.map(([i, j]) =>
     b.vertices[j].clone().sub(b.vertices[i]),
   );
-  for (const edgeA of edgesA)
-    for (const edgeB of edgesB)
+  // Repeated world-vector bits produce identical ordered cross/normalization
+  // results. Their first axis either remains in the append-only axis list or
+  // was already rejected by it. Retain signed zero and first authored order.
+  // This bound keeps cross lengthSq below 3*MAX/64; surviving axes normalize
+  // outside the zero/overflow regime, so self-dot is safely above 1-EPS.
+  // Exceptional geometry retains the complete original arithmetic/axes.
+  const safe = (edge: Vector3) =>
+    Number.isFinite(edge.x) &&
+    Number.isFinite(edge.y) &&
+    Number.isFinite(edge.z) &&
+    Math.abs(edge.x) <= SAT_EDGE_COMPONENT_LIMIT &&
+    Math.abs(edge.y) <= SAT_EDGE_COMPONENT_LIMIT &&
+    Math.abs(edge.z) <= SAT_EDGE_COMPONENT_LIMIT;
+  const deduplicate = edgesA.every(safe) && edgesB.every(safe),
+    directionsA = deduplicate ? exactUniqueEdges(edgesA) : edgesA,
+    directionsB = deduplicate ? exactUniqueEdges(edgesB) : edgesB;
+  for (const edgeA of directionsA)
+    for (const edgeB of directionsB)
       if (!add(edgeA.clone().cross(edgeB))) return false;
   return true;
 }
@@ -1041,6 +1134,29 @@ export function hullPenetration(a: CollisionHull, b: CollisionHull): number {
     return true;
   });
   return overlap && Number.isFinite(depth) ? depth : 0;
+}
+/** Exact depth predicate for the integration guard. For a nonnegative limit,
+ * one axis at/below that limit certifies rejection without constructing the
+ * remaining SAT axes. Keep the original ordered axes/projection arithmetic;
+ * this is an independent query optimization, not a native contact change. */
+export function hullPenetrationExceeds(
+  a: CollisionHull,
+  b: CollisionHull,
+  threshold: number,
+): boolean {
+  // Preserve the full depth API's zero fallback and ordinary JS comparison for
+  // negative/NaN thresholds, including wire and degenerate geometry.
+  if (!(threshold >= 0)) return hullPenetration(a, b) > threshold;
+  if (!a.faces.length || !b.faces.length) return false;
+  let depth = Infinity;
+  const overlap = visitAxes(a, b, (axis) => {
+    const [al, ah] = projection(a.vertices, axis, a.vertexOrder),
+      [bl, bh] = projection(b.vertices, axis, b.vertexOrder);
+    if (ah <= bl || bh <= al) return false;
+    depth = Math.min(depth, ah - bl, bh - al);
+    return depth > threshold;
+  });
+  return overlap && Number.isFinite(depth) && depth > threshold;
 }
 /** Full convex SAT, including edge-edge axes. Normal points from B into A. */
 export function collideHulls(
@@ -1079,7 +1195,19 @@ function clipPointHull(
   from: Vector3,
   to: Vector3,
   hull: CollisionHull,
-): PointHullEntry | null {
+): PointHullEntry | null;
+function clipPointHull(
+  from: Vector3,
+  to: Vector3,
+  hull: CollisionHull,
+  fractionOnly: true,
+): number | null;
+function clipPointHull(
+  from: Vector3,
+  to: Vector3,
+  hull: CollisionHull,
+  fractionOnly = false,
+): PointHullEntry | number | null {
   // Original pair vertex arrays, plane records and clipping fractions are
   // single-precision. Retain those storage boundaries: double-precision sinπ
   // residuals otherwise turn coplanar side vertices into outside segments.
@@ -1096,13 +1224,15 @@ function clipPointHull(
     parallelOutside = false;
   let plane: HullFace | undefined;
   for (const face of hull.faces) {
-    const normal = new Vector3(
-      Math.fround(face.normal.x),
-      Math.fround(face.normal.y),
-      Math.fround(face.normal.z),
+    const nx = Math.fround(face.normal.x),
+      ny = Math.fround(face.normal.y),
+      nz = Math.fround(face.normal.z);
+    // Vector3.dot's exact multiply/add order, with the same Float32 stores.
+    // Keeping three scalar coefficients avoids one vector per authored plane.
+    const distance = Math.fround(
+      Math.fround(face.constant) - (nx * from.x + ny * from.y + nz * from.z),
     );
-    const distance = Math.fround(Math.fround(face.constant) - normal.dot(from));
-    const movement = Math.fround(-normal.dot(delta));
+    const movement = Math.fround(-(nx * delta.x + ny * delta.y + nz * delta.z));
     if (distance < 0) inside = false;
     if (movement === 0) {
       if (distance < 0) parallelOutside = true;
@@ -1117,6 +1247,7 @@ function clipPointHull(
   }
   if (inside) return null;
   if (!parallelOutside && plane && enter >= 0 && enter <= 1 && enter <= exit) {
+    if (fractionOnly) return enter;
     return {
       point: from.clone().addScaledVector(delta, enter),
       normal: plane.normal.clone(),
@@ -1131,15 +1262,17 @@ function clipPointHull(
     if (distance < -1e-5) return null;
     if (distance < 0) normal.add(face.normal);
   }
-  return normal.lengthSq()
-    ? { point: to.clone(), normal: normal.normalize(), fraction: 1.05 }
-    : null;
+  if (!normal.lengthSq()) return null;
+  return fractionOnly
+    ? 1.05
+    : { point: to.clone(), normal: normal.normalize(), fraction: 1.05 };
 }
-function hullLocal(hull: CollisionHull, point: Vector3): Vector3 {
-  const result = point
-    .clone()
-    .sub(hull.position!)
-    .applyQuaternion(hull.orientation!.clone().conjugate());
+function hullLocal(
+  hull: CollisionHull,
+  point: Vector3,
+  inverse = hull.orientation!.clone().conjugate(),
+): Vector3 {
+  const result = point.clone().sub(hull.position!).applyQuaternion(inverse);
   return result.set(
     Math.fround(result.x),
     Math.fround(result.y),
@@ -1173,17 +1306,22 @@ function blendedPairNormal(
 }
 
 function localPointInside(hull: CollisionHull, point: Vector3): boolean {
-  return (
-    hull.faces.length > 0 &&
-    hull.faces.every((face) => {
-      const normal = new Vector3(
-        Math.fround(face.normal.x),
-        Math.fround(face.normal.y),
-        Math.fround(face.normal.z),
-      );
-      return Math.fround(Math.fround(face.constant) - normal.dot(point)) >= 0;
-    })
-  );
+  if (!hull.faces.length) return false;
+  for (const face of hull.faces) {
+    const nx = Math.fround(face.normal.x),
+      ny = Math.fround(face.normal.y),
+      nz = Math.fround(face.normal.z);
+    if (
+      !(
+        Math.fround(
+          Math.fround(face.constant) -
+            (nx * point.x + ny * point.y + nz * point.z),
+        ) >= 0
+      )
+    )
+      return false;
+  }
+  return true;
 }
 function pairPointVelocity(body: RigidBody, point: Vector3): Vector3 {
   const center = body.properties.centerOfMass
@@ -1239,7 +1377,10 @@ export function recoverHullOverlap(
     targetBody: RigidBody,
     swapped: boolean,
   ) => {
-    const points = moving.vertices.map((point) => hullLocal(target, point));
+    const inverse = target.orientation!.clone().conjugate();
+    const points = moving.vertices.map((point) =>
+      hullLocal(target, point, inverse),
+    );
     for (const [start, end] of moving.edges) {
       const startInside = localPointInside(target.localHull!, points[start]),
         endInside = localPointInside(target.localHull!, points[end]);
@@ -1295,6 +1436,39 @@ export function sweepHulls(
   predictedB: CollisionHull,
   options: PairSweepOptions = {},
 ): HullContact | null {
+  return sweepHullFeatures(
+    oldA,
+    predictedA,
+    oldB,
+    predictedB,
+    options,
+    false,
+  ) as HullContact | null;
+}
+
+/** Earliest native feature fraction for the integration guard, using the same
+ * Float32 roots/clipping, authored order and buried-edge exclusion as CCD.
+ * Solver normals, torque points and manifold reduction are unnecessary here.
+ * Recovery remains the responsibility of the original sweepHulls API. */
+export function sweepHullsFraction(
+  oldA: CollisionHull,
+  predictedA: CollisionHull,
+  oldB: CollisionHull,
+  predictedB: CollisionHull,
+): number | undefined {
+  return sweepHullFeatures(oldA, predictedA, oldB, predictedB, {}, true) as
+    | number
+    | undefined;
+}
+
+function sweepHullFeatures(
+  oldA: CollisionHull,
+  predictedA: CollisionHull,
+  oldB: CollisionHull,
+  predictedB: CollisionHull,
+  options: PairSweepOptions,
+  fractionOnly: boolean,
+): HullContact | null | number | undefined {
   for (const hull of [oldA, predictedA, oldB, predictedB]) {
     if (!hull.localHull || !hull.position || !hull.orientation)
       throw new Error("Object CCD requires transformed authored hulls");
@@ -1307,6 +1481,7 @@ export function sweepHulls(
     }
   }
   const candidates: HullContact[] = [];
+  let firstFraction: number | undefined;
   const vertices = (
     moving: CollisionHull,
     nextMoving: CollisionHull,
@@ -1314,19 +1489,40 @@ export function sweepHulls(
     nextTarget: CollisionHull,
     swapped: boolean,
   ) => {
+    const inverseOld = target.orientation!.clone().conjugate(),
+      inverseNew = nextTarget.orientation!.clone().conjugate();
     const relativeOld = moving.vertices.map((point) =>
-      hullLocal(target, point),
+      hullLocal(target, point, inverseOld),
     );
     const relativeNew = nextMoving.vertices.map((point) =>
-      hullLocal(nextTarget, point),
+      hullLocal(nextTarget, point, inverseNew),
     );
-    const inside = relativeOld.map((point) =>
-      localPointInside(target.localHull!, point),
-    );
+    // Only A's old-inside flags suppress relative moving-edge features. The
+    // fraction query has no overlap callback needing B's redundant flags.
+    const inside =
+      fractionOnly && swapped
+        ? []
+        : relativeOld.map((point) =>
+            localPointInside(target.localHull!, point),
+          );
     const featureOrder =
       moving.vertexOrder ?? moving.vertices.map((_, index) => index);
     if (featureOrder.some((index) => inside[index])) options.onOverlap?.();
     for (const i of featureOrder) {
+      if (fractionOnly) {
+        const fraction = clipPointHull(
+          relativeOld[i],
+          relativeNew[i],
+          target.localHull!,
+          true,
+        );
+        if (
+          fraction !== null &&
+          (firstFraction === undefined || fraction < firstFraction)
+        )
+          firstFraction = fraction;
+        continue;
+      }
       const entry = clipPointHull(
         relativeOld[i],
         relativeNew[i],
@@ -1371,6 +1567,19 @@ export function sweepHulls(
       );
       if (!hit) continue;
       const fraction = Math.fround(hit.fraction!);
+      if (fractionOnly) {
+        // Keep the source edge eligibility test before recording its root.
+        if (
+          oldB.localHull!.faces.length > 0 &&
+          oldB.localHull!.faces.every(
+            (face) => face.normal.dot(hit.points[0]) < face.constant - EPS,
+          )
+        )
+          continue;
+        if (firstFraction === undefined || fraction < firstFraction)
+          firstFraction = fraction;
+        continue;
+      }
       const oldEdge = relative.relativeOld[a1]
         .clone()
         .sub(relative.relativeOld[a0]);
@@ -1409,7 +1618,7 @@ export function sweepHulls(
       });
     }
   }
-  return reducePairContacts(candidates);
+  return fractionOnly ? firstFraction : reducePairContacts(candidates);
 }
 /** Original static world vertex versus authored moving hull-face path:
  * transform the point into the old/candidate body frames, then clip its local

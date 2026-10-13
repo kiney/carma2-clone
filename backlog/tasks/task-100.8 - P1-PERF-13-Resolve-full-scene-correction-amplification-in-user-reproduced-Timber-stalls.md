@@ -3,10 +3,10 @@ id: TASK-100.8
 title: >-
   [P1] PERF-13: Resolve full-scene correction amplification in user-reproduced
   Timber stalls
-status: next
+status: wip
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-13 01:25'
+updated_date: '2026-10-13 03:18'
 labels:
   - priority-1
   - PERF-13
@@ -16,6 +16,7 @@ dependencies: []
 references:
   - docs/live-timber-drop.md
   - src/physics/simulation.ts
+  - docs/guard-kernel-performance.md
 parent_task_id: TASK-100
 priority: high
 ordinal: 1180
@@ -24,17 +25,33 @@ ordinal: 1180
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-User-driven hardware Chromium capture after PERF-12 records physics updateFrame up to 263.1 ms with five ticks, versus typical render CPU of 4-9 ms. Most heavy ticks perform eight global correction rounds, 4,347 world-guard calls across 483 bodies, and nine pair collections. Nonempty cached/resting contacts retain global solver and callback rounds; raw-contact caching alone does not remove this amplification.
+User-driven hardware Chromium capture after PERF-12 records physics updateFrame up to 263.1 ms with five ticks, versus typical render CPU of 4-9 ms. Most heavy ticks perform eight global correction rounds, 4,347 world-guard calls across 483 bodies, and nine pair collections. Nonempty cached/resting contacts retain solver and callback rounds; raw-contact caching alone does not remove this amplification.
 
-Investigate and resolve the remaining repeated scene-wide work while retaining C2 motion, momentum, damage/crush/repair, callbacks, restart ordering and final guards. Implementation choices remain open. Lowering correction/angular/catch-up caps, skipping nonzero impulses or freezing parts is not an acceptable fix.
+Resolve remaining repeated scene-wide work while retaining C2 motion, momentum, damage/crush/repair, callbacks, restart ordering and final guards. Lowering correction/angular/catch-up caps, skipping nonzero impulses or freezing moving parts is not an acceptable fix.
 
-The reported 180-degree direction correlation remains unisolated. Preserve bounded hardware baselines and instrumentation-overhead limits. This is a new solver/correction-ownership scope beyond completed PERF-12 raw discovery reuse. No implementation has started.
+Implemented exact query-specific depth/fraction paths, allocation-free moving-edge roots/clipping, explicitly owned immutable car/part/NONCAR collision generations, certified constant-static geometry reuse and shared empty world-guard results. Mutable/custom geometry retains full fallback checks. Native steps and all correction/response rounds remain unchanged. See docs/guard-kernel-performance.md for differential tests, full distributions, adverse samples and exclusions.
+
+The reported 180-degree direction correlation remains unisolated. Software Chromium comparisons show lower costs in several heavy cases, with mixed tails/medians; the actual hardware route and useful per-pass dependency attribution still need validation. MCP target/page startup currently times out; headless hardware EGL also reports inaccessible renderD128 and no WebGL2 context. This is a tool/environment limitation, not an application error. The original user trace/body snapshot were saved before restarting the controlled browser. No system permissions or packages were changed. Keep this P1 task in wip; do not claim the 6 FPS stall fully resolved.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 Identify persistent correction rows and exact motion/geometry/attachment changes per pass in the saved user scene; distinguish useful response from redundant scene-wide work.
 - [ ] #2 Reduce measured whole-tick and updateFrame CPU in bounded serial hardware captures without simply lowering native time or guard iteration limits; retain adverse samples and instrumentation overhead.
-- [ ] #3 Prove contact, momentum, damage/restart ordering, activation and final body/world safeguards remain valid across original Stock/Advanced multi-car debris/crush/repair scenarios.
-- [ ] #4 Validate running Chromium frames and regressions with clean console/WebGL; distinguish exact directional attribution from hypotheses and keep original data unmodified/unbundled.
+- [x] #3 Prove contact, momentum, damage/restart ordering, activation and final body/world safeguards remain valid across original Stock/Advanced multi-car debris/crush/repair scenarios.
+- [x] #4 Validate running Chromium frames and regressions with clean console/WebGL; distinguish exact directional attribution from hypotheses and keep original data unmodified/unbundled.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation authorized by the user on 2026-10-13. Independent native/collision and ownership audits reviewed the exact query and source-generation boundaries. rec2 leaves DoCollisions incomplete; installed HW local retry/rest-response evidence means repeated rows cannot simply be skipped.
+
+Current implementation: geometry.ts exact SAT predicate/first-fraction query, bit-exact edge direction dedup with exceptional/large-list fallback, scalar edge equations and fixed roots, scalar clipping and shared inverse within a query; immutable-hulls.ts explicit owned source sealing; built-in car/NONCAR loaders, accepted crush/repair/split/detachment publish sealed collider snapshots separately from mutable DamageSystem vertices; cache identity never substitutes for mutable/default source checks. Static retained guard geometry requires immovable + certified source + explicit constant/stable path + exact pose. Empty world guards are private frozen read-only values.
+
+Validation: 2,723 full tests pass; production build passes; 15 original-car crash reports match baseline byte-for-byte. Production Chromium multi-car Stock/Advanced crash/split/repair and four original-track NONCAR joint/debris/repair suites pass with clean console/requests/WebGL; supported spawn/interlock regression passed before the final scalar/ownership extension. Final serial Stock/Advanced ABBA fixture initial state, ordered impulses/damage/hulls, kinematics, attachment state and traced world fractions are exact. Saved 483-body snapshot guard fractions are exact. Screenshots inspected. Backend for new measurements/regressions is SwiftShader; no hardware FPS claim. Final raw distributions, earlier adverse/cold samples, wrong-shared-anchor exclusions and one concurrently run exploratory-profile exclusion are recorded in docs/guard-kernel-performance.md.
+
+Acceptance remains open for per-pass attribution in the actual saved user scene and a bounded hardware route recapture. Eight scene-wide rounds and rotating-part sampled queries remain costly. PHY-13 own-debris lockup remains separate; PERF-04 visibility remains deferred. No broader/paused Goal is completed.
+
+Final-build follow-up: the supported spawn/grid and interlock release Chromium suite passes with no errors/failed requests/WebGL faults. Original motion-powerup browser regression also passes (Eagle/Buggy suspension, bounce, original-wall climbing, gravity/free-body and world/car pinball). Final full suite is 2,723 passed, no failures/skips; no source changes followed these checks. Remaining AC1/AC2 hardware/per-pass attribution stay open.
+<!-- SECTION:NOTES:END -->

@@ -4,6 +4,7 @@ import type { RigidBody } from "./contact";
 import { buildHull, hullsBounds, type CollisionHull } from "./geometry";
 import { buildBoxHull } from "./box-hull";
 import { buildWireHull } from "./wire-hull";
+import { sealCollisionHulls } from "./immutable-hulls";
 import { createBallJoint, type RigidJoint } from "./joint";
 import { createNonCarMotorState, type NonCarMotorState } from "./noncar-motion";
 import type { BodyVolumeState } from "./simulation";
@@ -33,6 +34,7 @@ export interface NonCarBody extends RigidBody {
 export function createNonCarBody(
   actor: Object3D,
   mechanics: NonCarMechanics,
+  options: { immutableHulls?: boolean } = {},
 ): NonCarBody {
   actor.userData.dynamicBody = true;
   actor.updateWorldMatrix(true, true);
@@ -76,6 +78,7 @@ export function createNonCarBody(
       shape.vertices.map((point) => new Vector3(...point).multiply(scale)),
     );
   });
+  if (options.immutableHulls) sealCollisionHulls(hulls);
   const attached = !!mechanics.worldJoint || mechanics.snapAngleDegrees !== 0;
   const mass =
     actor.name[3] !== "!" && mechanics.snapAngleDegrees !== 0

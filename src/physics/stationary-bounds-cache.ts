@@ -1,5 +1,6 @@
 import { Box3, Quaternion, Vector3 } from "three";
 import type { HullBody } from "./pair-guard";
+import { hasImmutableCollisionHulls } from "./immutable-hulls";
 
 export interface StationaryBoundsDiagnostics {
   boundsBuilds?: number;
@@ -9,6 +10,7 @@ export interface StationaryBoundsDiagnostics {
 interface BoundsEntry {
   values: number[];
   bounds: Box3;
+  immutableHulls?: HullBody["hulls"];
 }
 type Visit = (value: number) => void;
 function pose(position: Vector3, orientation: Quaternion, visit: Visit) {
@@ -22,10 +24,11 @@ function pose(position: Vector3, orientation: Quaternion, visit: Visit) {
 }
 /** Bounds ignore source planes/edges, but compact vertexOrder is authoritative:
  * unused authored vertices do not participate in hullsBounds(). */
-function values(body: HullBody, visit: Visit) {
+function values(body: HullBody, visit: Visit, includeLocalHull = true) {
   const state = body.state;
   pose(state.position, state.orientation, visit);
   pose(state.predictedPosition!, state.predictedOrientation!, visit);
+  if (!includeLocalHull) return;
   visit(body.hulls.length);
   for (const hull of body.hulls) {
     visit(hull.vertices.length);
@@ -64,8 +67,9 @@ function at(body: HullBody, position: Vector3, orientation: Quaternion): Box3 {
 
 /** Persistent aggregate broadphase bounds for caller-certified immovable
  * polygonal noncars. Never use for native spheres, whose bounds are analytic.
- * Exact OLD/NEXT pose and source vertex values are checked on every get; no
- * object/array identity or shape immutability assumption substitutes for them.
+ * Exact OLD/NEXT poses are checked on every get. Only a producer-owned deeply
+ * frozen source array can bypass vertex checks; mutable shapes retain the
+ * complete numeric value walk, without assumed immutability.
  * Faces/edges and other collision metadata remain the narrow phase's concern.
  * The returned Box3 is owned by this cache: consumers must treat it as immutable
  * and clone before expanding or unioning. Missing candidate poses are an error,
@@ -83,24 +87,36 @@ export class StationaryBoundsCache {
         "Stationary bounds require both candidate pose endpoints",
       );
     const old = this.entries.get(body);
+    const immutableHulls = hasImmutableCollisionHulls(body.hulls);
     let offset = 0,
-      same = !!old;
-    for (const hull of body.hulls)
-      this.count("boundsVertexTests", hull.vertices.length);
-    values(body, (value) => {
-      if (!old || !Object.is(old.values[offset], value)) same = false;
-      offset++;
-    });
+      same =
+        !!old &&
+        old.immutableHulls === (immutableHulls ? body.hulls : undefined);
+    if (!immutableHulls)
+      for (const hull of body.hulls)
+        this.count("boundsVertexTests", hull.vertices.length);
+    values(
+      body,
+      (value) => {
+        if (!old || !Object.is(old.values[offset], value)) same = false;
+        offset++;
+      },
+      !immutableHulls,
+    );
     if (same && offset === old!.values.length) {
       this.count("boundsHits");
       return old!.bounds;
     }
     const captured: number[] = [];
-    values(body, (value) => captured.push(value));
+    values(body, (value) => captured.push(value), !immutableHulls);
     const bounds = at(body, body.state.position, body.state.orientation).union(
       at(body, body.state.predictedPosition, body.state.predictedOrientation),
     );
-    this.entries.set(body, { values: captured, bounds });
+    this.entries.set(body, {
+      values: captured,
+      bounds,
+      ...(immutableHulls ? { immutableHulls: body.hulls } : {}),
+    });
     this.count("boundsBuilds");
     return bounds;
   }
