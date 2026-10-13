@@ -12,12 +12,12 @@ backlog task view TASK-1 --plain
 
 ## Board columns
 
-| Column | Meaning | Imported status |
-| --- | --- | --- |
+| Column    | Meaning                                                                                                            | Imported status                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
 | `backlog` | Open work awaiting selection, including inactive partially implemented work, unresolved data issues and validation | Missing, inactive Partial, Needs validation, Data issue |
-| `next` | Explicitly selected upcoming work | Initially empty |
-| `wip` | The most recently active workstreams, limited to 3 tickets | Selected Partial tasks with concrete recent activity |
-| `done` | The described scope was implemented and verified according to the existing record | Done |
+| `next`    | Explicitly selected upcoming work                                                                                  | Initially empty                                         |
+| `wip`     | The most recently active workstreams, limited to 3 tickets                                                         | Selected Partial tasks with concrete recent activity    |
+| `done`    | The described scope was implemented and verified according to the existing record                                  | Done                                                    |
 
 Migration preserved all 92 numbered issues plus three distinct completed checklist items (95 tasks total). Seven other completed checklist items are retained as evidence on existing tasks to avoid duplicates. The initial migration mapped all 35 Partial issues to `wip`; that mapping confused implementation completeness with active work. On 2026-10-11, 32 inactive partial issues were returned to `backlog`. After that cleanup, the board had 59 in `backlog`, 0 in `next`, 3 in `wip`, and 33 in `done`. The `legacy-partial` label and full implementation evidence remain unchanged, regardless of board status. Importing `done` preserves the previous verification record; it does not assert that the whole subsystem is complete or that migration reran engine tests. Original status labels such as `legacy-needs-validation` distinguish validation requests from reported defects. No new engine completion claims are introduced by the migration.
 
@@ -27,11 +27,11 @@ At most **three tickets** may occupy `wip`. Only genuinely active work belongs t
 
 The three retained tickets were originally selected from actual source/test changes and normalized issue-description changes in the last engine commit, `83d0ba3`, rather than migration timestamps:
 
-| Backlog ID | Original ID | Completed implementation |
-| --- | --- | --- |
-| TASK-19 | WLD-03 | Production prepared MODEL/ACT collection, live geometry ownership and separate drivable wheel phase |
-| TASK-35 | PED-03 | Real population/group/mission counting from the native once-only OneLessPed outlet |
-| TASK-67 | REN-02 | Native Gouraud/specular coefficients, material fog/sampling and shared race-resource lifetimes |
+| Backlog ID | Original ID | Completed implementation                                                                            |
+| ---------- | ----------- | --------------------------------------------------------------------------------------------------- |
+| TASK-19    | WLD-03      | Production prepared MODEL/ACT collection, live geometry ownership and separate drivable wheel phase |
+| TASK-35    | PED-03      | Real population/group/mission counting from the native once-only OneLessPed outlet                  |
+| TASK-67    | REN-02      | Native Gouraud/specular coefficients, material fog/sampling and shared race-resource lifetimes      |
 
 This selection records the latest work context; changing board status does not resume a paused Goal. Backlog.md 1.47.1 has no built-in configurable WIP cap. The limit is therefore enforced by the project workflow and agent policy; the CLI/browser does not automatically reject a fourth ticket.
 
@@ -41,12 +41,12 @@ PED-03 / TASK-35 now owns only the small remaining integration of native `OneLes
 
 Four larger priority-2 follow-ups are separately tracked in `backlog`:
 
-| Legacy ID | Backlog ID | Deferred scope |
-| --- | --- | --- |
-| PED-06 | TASK-96 | Normal population identities, native physical/resource admission and movement/spawn ownership |
-| PED-07 | TASK-97 | Native grounding, fall/get-up/recovery, selected volumes and process/face ownership |
-| PED-08 | TASK-98 | Visible severing, articulated body/part contacts and exceptional form continuations |
-| PED-09 | TASK-99 | Native physical cause/retained award inputs and contact/effect consumer adapters |
+| Legacy ID | Backlog ID | Deferred scope                                                                                |
+| --------- | ---------- | --------------------------------------------------------------------------------------------- |
+| PED-06    | TASK-96    | Normal population identities, native physical/resource admission and movement/spawn ownership |
+| PED-07    | TASK-97    | Native grounding, fall/get-up/recovery, selected volumes and process/face ownership           |
+| PED-08    | TASK-98    | Visible severing, articulated body/part contacts and exceptional form continuations           |
+| PED-09    | TASK-99    | Native physical cause/retained award inputs and contact/effect consumer adapters              |
 
 Existing PED-04, ANI-01, RAC-04, RAC-09 and PUP-11 retain asset, animation, reward-formula, replay and combat ownership; their descriptions clarify the extracted boundaries. Their existing priorities are unchanged. Follow-ups depend on the narrowed counting integration where appropriate; closing PED-03 does not require completing them and does not assert full native pedestrian parity. No paused Goal or broader acceptance gate is completed by changing task scope.
 
@@ -57,13 +57,13 @@ PERF-01 / TASK-100 was subsequently added at priority 1 and taken directly into
 [analysis](../docs/performance-investigation.md) is recorded; implementation
 choices remain open. The user then separated upcoming work as follows:
 
-| Backlog ID | Issue | Priority | Status | Scope / order |
-| --- | --- | --- | --- | --- |
-| TASK-100 | PERF-01 | 1 | `wip` | Cross-subsystem profiling, unresolved frame-time spikes and finding coordination |
-| TASK-101 | PERF-02 | 1 | `done` | Shared render preparation and dormant pedestrian subtree pruning, measured and validated |
-| TASK-104 | PERF-05 | 1 | `done` | Lazy SAT and per-invocation guard caches, numerical and Chromium validation |
-| TASK-103 | PERF-04 | 2 | `next` | Higher visual visibility, dependent on TASK-101 |
-| TASK-102 | PERF-03 | 4 | `backlog` | High-resolution rendering policy; deferred, measured gain was small |
+| Backlog ID | Issue   | Priority | Status    | Scope / order                                                                            |
+| ---------- | ------- | -------- | --------- | ---------------------------------------------------------------------------------------- |
+| TASK-100   | PERF-01 | 1        | `wip`     | Cross-subsystem profiling, unresolved frame-time spikes and finding coordination         |
+| TASK-101   | PERF-02 | 1        | `done`    | Shared render preparation and dormant pedestrian subtree pruning, measured and validated |
+| TASK-104   | PERF-05 | 1        | `done`    | Lazy SAT and per-invocation guard caches, numerical and Chromium validation              |
+| TASK-103   | PERF-04 | 2        | `next`    | Higher visual visibility, dependent on TASK-101                                          |
+| TASK-102   | PERF-03 | 4        | `backlog` | High-resolution rendering policy; deferred, measured gain was small                      |
 
 At the creation of this queue, the board had 111 tasks: 64 `backlog`, 8 `next`,
 1 `wip` and 38 `done`.
@@ -129,13 +129,13 @@ keep their user-assigned priorities.
 
 The original five numeric levels remain visible in each task title (`[P1] PHY-10: …`), label (`priority-1`) and description. Lower numbers mean higher importance. Backlog.md's native three-level priority is an additional coarse grouping:
 
-| Numeric priority | Meaning | Native priority |
-| --- | --- | --- |
-| 1 | High impact on driving, crashes and destruction | high |
-| 2 | Important gameplay mechanics or substantially simplified original behavior | high |
-| 3 | Further compatibility, content and major game systems | medium |
-| 4 | Quality assurance, robustness, maintainability and convenience | low |
-| 5 | Presentation and UI with less impact on gameplay feel | low |
+| Numeric priority | Meaning                                                                    | Native priority |
+| ---------------- | -------------------------------------------------------------------------- | --------------- |
+| 1                | High impact on driving, crashes and destruction                            | high            |
+| 2                | Important gameplay mechanics or substantially simplified original behavior | high            |
+| 3                | Further compatibility, content and major game systems                      | medium          |
+| 4                | Quality assurance, robustness, maintainability and convenience             | low             |
+| 5                | Presentation and UI with less impact on gameplay feel                      | low             |
 
 All columns use explicit ordinals to put numeric priority 1 first and priority 5 last, retaining original table order within each priority. Ordinals are initially `priority × 1000 + original row index`, leaving room for manual ordering. Native priority alone cannot distinguish 1 from 2 or 4 from 5; keep the numeric title, label and ordinal consistent when reprioritizing. A task's original issue ID (for example `PHY-09`) stays in its title, label and description; Backlog.md also assigns its own `TASK-…` ID for CLI operations. Existing issue references remain valid.
 
@@ -182,6 +182,12 @@ measurements retain adverse samples and do not close that acceptance.
 [Live evidence](../docs/live-timber-drop.md) includes observer overhead.
 PERF-01 and PERF-13 occupy two WIP slots. The board now has 114 tasks:
 65 `backlog`, 1 `next`, 2 `wip`, 46 `done`; existing priorities are unchanged.
+
+A subsequent [root-cause analysis](../docs/perf13-root-cause-analysis.md)
+identifies frame-window feedback and a plausible jammed opponent/own-debris
+contributor matching the PHY-13 mechanism; dominant attribution remains open. PERF-13 / TASK-100.8 now
+depends on PHY-13 / TASK-106, which gained an acceptance criterion for the
+captured opponent case. Statuses, priorities and ordinals are unchanged.
 
 ```sh
 backlog task edit TASK-1 --status next

@@ -200,3 +200,12 @@ route acceptance. The old controlled Chromium was restarted while diagnosing
 its stalled protocol connection; the recorded trace and full user-state snapshot
 were saved before that restart. Earlier pause-preservation statements above
 describe the diagnostic captures, not the later browser restart.
+
+## Root-cause follow-up
+
+An offline evaluation of these captures is recorded in
+[perf13-root-cause-analysis.md](perf13-root-cause-analysis.md). An approximate frame budget explains amplification when tick CPU approaches
+40 ms. Two snapshots about 32 s apart contain a similar Cerby cluster with
+~5 model units/s (×6.9 for m/s) and up to 19 rad/s. A separate full-40-ms
+guard probe returns fraction 8.1e-5 for that cluster; uninterrupted lockup,
+live commit fractions and dominant per-pass cost remain unverified.

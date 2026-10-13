@@ -27,18 +27,18 @@ can refresh derived geometry caches but do not invoke native face-ring gameplay
 callbacks. `worldContacts`, `facesNearBody`, wheel-force providers, repair and
 reset are not called on the live game.
 
-| Probe | Result |
-| --- | --- |
-| Actual player static-world guard, refined/unrefined | Fraction 1; no contacts |
-| World guard with spin removed, forward or reverse motion | Fraction 1; no contacts |
-| Whole-population body trajectory guard | Player fraction 0.000004149319832785087 |
-| Individual player / detached own wing | Same near-zero fraction |
-| Player / either nearby static prop | Fraction 1; no penetration |
-| Clone guard excluding only the nearby detached own wing | Player fraction 1 |
-| Fresh uncached native body contact collection | Zero rows; overlap still detected |
-| Pair guard with player spin removed | Fraction ≈0.000004157 |
-| Pair guard with player forward / reverse velocity | ≈0.000015503 / 0.000018046 |
-| Pair guard with both bodies prescribed outward motion | Fraction 1 |
+| Probe                                                    | Result                                  |
+| -------------------------------------------------------- | --------------------------------------- |
+| Actual player static-world guard, refined/unrefined      | Fraction 1; no contacts                 |
+| World guard with spin removed, forward or reverse motion | Fraction 1; no contacts                 |
+| Whole-population body trajectory guard                   | Player fraction 0.000004149319832785087 |
+| Individual player / detached own wing                    | Same near-zero fraction                 |
+| Player / either nearby static prop                       | Fraction 1; no penetration              |
+| Clone guard excluding only the nearby detached own wing  | Player fraction 1                       |
+| Fresh uncached native body contact collection            | Zero rows; overlap still detected       |
+| Pair guard with player spin removed                      | Fraction ≈0.000004157                   |
+| Pair guard with player forward / reverse velocity        | ≈0.000015503 / 0.000018046              |
+| Pair guard with both bodies prescribed outward motion    | Fraction 1                              |
 
 The whole-population guard has one actual guarded pair and zero attachment
 dependency merges, revalidations or conservative component fallbacks. This is
@@ -57,6 +57,21 @@ deep overlap or which native C2 rule should resolve it. Native detachment
 admission, former-owner collision eligibility and old-overlap recovery remain
 the required evidence for selecting a fix. Globally bypassing the guard or
 permanently ignoring own debris is not justified by this diagnosis.
+
+## Opponent instance and performance impact
+
+The later PERF-13 captures (113.56 s and 145.68 s, a separate Timber race) show
+the same mechanism on opponent Cerby. Its fully detached hood `cbhood01`
+(no joint) overlaps the car, and the ball-jointed bumper and wings are involved
+too. An isolated full-40-ms probe returns fraction 8.1e-5 for bodies 6, 10, 11,
+12 and 14; every other body receives 1. These are not recorded live commit
+fractions. Endpoint positions differ by about 0.5–0.7 m after converting
+model units ×6.9, despite significant velocities at both endpoints.
+Recurring type-6 rows and rotation are plausible cost contributors; only
+per-pass replay can establish whether this cluster keeps the loop active.
+Continuous lockup during all 32 s and dominant attribution remain unproven. See [root-cause analysis](perf13-root-cause-analysis.md). A fix must
+cover this opponent case and the case where recovery emits rows that never
+separate the hulls, besides the player case where it emits no rows.
 
 ## Performance and evidence ownership
 

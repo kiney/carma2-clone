@@ -6,17 +6,22 @@ title: >-
 status: wip
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-13 03:18'
+updated_date: '2026-10-13 08:12'
 labels:
   - priority-1
   - PERF-13
   - performance
   - physics
-dependencies: []
+dependencies:
+  - TASK-106
 references:
   - docs/live-timber-drop.md
   - src/physics/simulation.ts
   - docs/guard-kernel-performance.md
+  - docs/perf13-root-cause-analysis.md
+  - docs/own-debris-lockup.md
+  - src/physics/frame-window.ts
+  - src/physics/pair-guard.ts
 parent_task_id: TASK-100
 priority: high
 ordinal: 1180
@@ -42,6 +47,15 @@ The reported 180-degree direction correlation remains unisolated. Software Chrom
 - [x] #4 Validate running Chromium frames and regressions with clean console/WebGL; distinguish exact directional attribution from hypotheses and keep original data unmodified/unbundled.
 <!-- AC:END -->
 
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Build a bounded, explicitly partial replay of the 145.68 s body-pair/joint snapshot; record per-pass rows, impulses, changes, cache misses and CPU. Snapshot lacks world/forces/damage state, so do not claim an exact whole tick.
+2. Implement safe roster reuse within pure synchronous collection, rebuilding after solves/callbacks and preserving preparation order. Evaluate larger reuse only with complete certificates and callback preservation.
+3. Trace PHY-13 native detachment/former-owner/exhausted-retry behavior and test a focused separating-motion remedy; do not simply discard velocity.
+4. Repeat short serial Chromium measurements, preserving adverse samples and backend metadata. Obtain hardware heading/whole-tick evidence when the controlled browser is available.
+<!-- SECTION:PLAN:END -->
+
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
@@ -54,4 +68,6 @@ Validation: 2,723 full tests pass; production build passes; 15 original-car cras
 Acceptance remains open for per-pass attribution in the actual saved user scene and a bounded hardware route recapture. Eight scene-wide rounds and rotating-part sampled queries remain costly. PHY-13 own-debris lockup remains separate; PERF-04 visibility remains deferred. No broader/paused Goal is completed.
 
 Final-build follow-up: the supported spawn/grid and interlock release Chromium suite passes with no errors/failed requests/WebGL faults. Original motion-powerup browser regression also passes (Eagle/Buggy suspension, bounce, original-wall climbing, gravity/free-body and world/car pinball). Final full suite is 2,723 passed, no failures/skips; no source changes followed these checks. Remaining AC1/AC2 hardware/per-pass attribution stay open.
+
+Reviewed 2026-10-13 analysis (docs/perf13-root-cause-analysis.md): 474/512 ticks run eight correction rounds, but per-pass pair attribution remains open. Two Cerby-cluster endpoint snapshots and partial full-40-ms guard probes establish suspicious near-static poses with substantial velocity, not continuous lockup or live commit fractions. Metric units corrected. Existing caches mean call counts are not expensive sweep counts. Contact-only zero impulses do not certify no state changes: joints, quick-hinge projection, activation and callbacks remain observable. Dirty tracking must certify all collision inputs and discover new partners. Initial-energy rotation bound is rejected: the current integrator increases rotational energy in a focused probe. Preserve momentum bound, native steps/caps and callbacks. TASK-106 is an investigation dependency; resolving the cluster is not yet proven necessary or sufficient for the FPS target.
 <!-- SECTION:NOTES:END -->

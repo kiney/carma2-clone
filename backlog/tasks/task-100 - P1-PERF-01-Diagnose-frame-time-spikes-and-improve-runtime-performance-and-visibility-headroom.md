@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-13 03:09'
+updated_date: '2026-10-13 08:12'
 labels:
   - priority-1
   - PERF-01
@@ -17,6 +17,7 @@ references:
   - tools/profile-performance.mjs
   - tools/performance-probe.mjs
   - docs/live-timber-drop.md
+  - docs/perf13-root-cause-analysis.md
 priority: high
 ordinal: 1000
 ---
@@ -77,4 +78,6 @@ User-driven controlled Timber session did not reproduce the <=4FPS performance p
 Subsequent actual user 6 FPS / opposite-direction ~20 FPS capture succeeded at elapsed 145.68 s: 388 updates,387 frame intervals,last512ticks saved ignored. Physics update mean68.95 ms,p95178.9,max263.1 (five ticks/262.7ms tick CPU); render mean4.86,p959.1ms. Most heavy ticks perform4347world guards=483*(8+1),nine pair collections. Nonempty raw/rest contacts trigger all eight global correction rounds; caching does not terminate their solver/callback work. This directly confirms CPU physics/catch-up dominance in this capture, while exact direction causality and GPU contribution remain open. New P1/next PERF-13 / TASK-100.8 owns resolving global correction amplification beyond PERF-12 raw reuse; implementation remains open and no limits or physics changed. Saved full paused body graph as well as timing rings. Recorder-v2 observer overhead is explicitly retained (pure immovable4347-call microprobe cold21.2ms/warm2.5ms versus base0.9/0.4); v3 counts immovable calls without timing and retains heading/camera/draw/moving-world scalars. Old history saved before replacement; lifecycle/count tests pass, game unchanged and paused. See docs/live-timber-drop.md.
 
 2026-10-13 authorized PERF-13 implementation removes repeated collider value walks and discarded geometry/temporary allocations while retaining all native timing, correction/solver/callback limits. Exact differential and original-data regressions pass; see docs/guard-kernel-performance.md. New SwiftShader CPU comparisons retain full adverse distributions; the actual directional hardware route remains unverified because controlled Chromium target/page startup failed. PERF-13 stays P1 wip, PERF-01 remains active, and visibility stays deferred. Original user trace/full body state were saved before the controlled browser restart; no system GPU permissions or packages changed.
+
+2026-10-13 reviewed analysis (docs/perf13-root-cause-analysis.md): physics/catch-up dominates the captured CPU. Cerby and own parts are a plausible contributor matching PHY-13, not proven dominant or continuously jammed across the two snapshots. Guard fractions are from a partial offline probe; metric units corrected (model ×6.9). FPS budgeting is approximate, and heading causality stays open. PERF-13 investigation depends on TASK-106 evidence; no engine change.
 <!-- SECTION:NOTES:END -->

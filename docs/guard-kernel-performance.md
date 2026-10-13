@@ -148,7 +148,9 @@ catch-up feedback can amplify ticks near the 40 ms budget; a cheaper tick alone
 does not prove the complete stall has gone. Eight global correction rounds and
 high-angular-travel part guards remain expensive. Changing that behavior needs
 separate native/dependency evidence, not a lower cap or cached solved impulse.
-The own-debris road lockup remains the separate PHY-13 ticket.
+The [root-cause analysis](perf13-root-cause-analysis.md) identifies a plausible Cerby/own-hood cluster contributor to frame-window
+feedback. Its dominant cost and live commit fractions need per-pass replay.
+PERF-13 investigation now includes the PHY-13 evidence gap.
 
 Run comparisons serially:
 
