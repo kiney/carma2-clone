@@ -6,7 +6,7 @@ title: >-
 status: wip
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-13 08:12'
+updated_date: '2026-10-13 09:19'
 labels:
   - priority-1
   - PERF-13
@@ -36,7 +36,7 @@ Resolve remaining repeated scene-wide work while retaining C2 motion, momentum, 
 
 Implemented exact query-specific depth/fraction paths, allocation-free moving-edge roots/clipping, explicitly owned immutable car/part/NONCAR collision generations, certified constant-static geometry reuse and shared empty world-guard results. Mutable/custom geometry retains full fallback checks. Native steps and all correction/response rounds remain unchanged. See docs/guard-kernel-performance.md for differential tests, full distributions, adverse samples and exclusions.
 
-The reported 180-degree direction correlation remains unisolated. Software Chromium comparisons show lower costs in several heavy cases, with mixed tails/medians; the actual hardware route and useful per-pass dependency attribution still need validation. MCP target/page startup currently times out; headless hardware EGL also reports inaccessible renderD128 and no WebGL2 context. This is a tool/environment limitation, not an application error. The original user trace/body snapshot were saved before restarting the controlled browser. No system permissions or packages were changed. Keep this P1 task in wip; do not claim the 6 FPS stall fully resolved.
+The reported 180-degree direction correlation remains unisolated. Software Chromium comparisons show lower costs in several heavy cases, with mixed tails/medians; the actual hardware route and useful per-pass dependency attribution still need validation. Earlier MCP startup and headless hardware EGL probes failed. MCP has since reconnected to actual AMD ANGLE Chromium, enabling bounded hardware-backed CPU comparisons with exact state/fraction hashes. Those recreated, drawing-suppressed fixtures still do not reproduce the actual rendered user route. The original user trace/body snapshot were saved before restarting the controlled browser. No system permissions or packages were changed. Keep this P1 task in wip; do not claim the 6 FPS stall fully resolved.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -70,4 +70,8 @@ Acceptance remains open for per-pass attribution in the actual saved user scene 
 Final-build follow-up: the supported spawn/grid and interlock release Chromium suite passes with no errors/failed requests/WebGL faults. Original motion-powerup browser regression also passes (Eagle/Buggy suspension, bounce, original-wall climbing, gravity/free-body and world/car pinball). Final full suite is 2,723 passed, no failures/skips; no source changes followed these checks. Remaining AC1/AC2 hardware/per-pass attribution stay open.
 
 Reviewed 2026-10-13 analysis (docs/perf13-root-cause-analysis.md): 474/512 ticks run eight correction rounds, but per-pass pair attribution remains open. Two Cerby-cluster endpoint snapshots and partial full-40-ms guard probes establish suspicious near-static poses with substantial velocity, not continuous lockup or live commit fractions. Metric units corrected. Existing caches mean call counts are not expensive sweep counts. Contact-only zero impulses do not certify no state changes: joints, quick-hinge projection, activation and callbacks remain observable. Dirty tracking must certify all collision inputs and discover new partners. Initial-energy rotation bound is rejected: the current integrator increases rotational energy in a focused probe. Preserve momentum bound, native steps/caps and callbacks. TASK-106 is an investigation dependency; resolving the cluster is not yet proven necessary or sufficient for the FPS target.
+
+Reviewed follow-up implemented scalar SAT axes, one roster per pure correction collection phase, exact moving-path extraction with two-clone fixed paths, direct fixed-body guard sample entries and allocation-free exact pose comparison. Full tests2733 pass; production build passes;15 original-car crash reports byte-identical. Serial actual AMD ANGLE/MCP Stock Timber recreated-fixture ABBA retains exact initial/final/fraction hashes at2100x1466. Final tick p50 baseline33.1/41.3 ms vs optimized23.0/32.5 ms; adverse traced/cold/tail samples retained in docs/guard-kernel-performance.md; CPU-only drawing-suppressed fixture is not rendered user-route FPS. A bounded partial483-body replay confirms real contact/joint changes on Cerby cluster every round; no unsupported zero-impulse exit or sampling/damping change. Native retry exhaustion does not zero velocity; ordinary recovery pre-candidate motion is mathematically equivalent. Original lockup and full world/damage attribution remain open; AC1/AC2 not checked.
+
+Final production Chromium crash matrix passes Stock Eagle/Buggy/Bigdump, Advanced69mach1 and Porker2 split/repair, with no console errors/failed requests/WebGL faults. Screenshots inspected. MCP ordinary Timber head-on with driving input changes player health100→91, opponent100→44 and persistent player deformation revision0→1. A non-element keyboard event-target assumption discovered in the injected QA path was fixed as UI-04/TASK-107 (done); Window/document controls and editable exclusion pass with clean final console/requests/GL. Broader PERF-13 and PHY-13 remain open.
 <!-- SECTION:NOTES:END -->

@@ -64,7 +64,7 @@ test("exact duplicate edge vectors skip repeated crosses without changing SAT co
     crosses = 0;
     assert.ok(Object.is(hullPenetration(a, b), expected));
     assert.equal(baselineCrosses, 144);
-    assert.equal(crosses, 9);
+    assert.equal(crosses, 0, "scalar SAT constructs no cross Vector3 values");
   } finally {
     Vector3.prototype.cross = original;
   }
@@ -98,7 +98,7 @@ test("SAT edge dedup preserves signed zero and falls back for unsafe vectors", (
     );
     crosses = 0;
     hullPenetration(signed, one);
-    assert.equal(crosses, 2, "+0 and -0 edges remain separate raw vectors");
+    assert.equal(crosses, 0, "signed-zero edges use scalar arithmetic");
     for (const component of [limit * 2, Infinity, NaN]) {
       const unsafe = {
         ...a,
@@ -111,8 +111,8 @@ test("SAT edge dedup preserves signed zero and falls back for unsafe vectors", (
       assert.ok(Object.is(hullPenetration(unsafe, b), expected));
       assert.equal(
         crosses,
-        unsafe.edges.length * b.edges.length,
-        "either unsafe hull retains both complete authored edge lists",
+        0,
+        "exceptional edges also avoid cross Vector3 allocation",
       );
       compareDepth(unsafe, b);
       assert.deepEqual(collideHulls(unsafe, b), eagerContact(unsafe, b));

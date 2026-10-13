@@ -187,21 +187,21 @@ test("SAT shortcut retains every edge above 64 independently of the partner list
     b = buildBoxHull(v(-0.8, -0.8, -0.8), v(1.2, 1.2, 1.2));
   a.edges = Array.from({ length: 65 }, () => [...a.edges[0]]);
   const expected = eagerPenetration(a, b),
-    originalCross = Vector3.prototype.cross;
-  let crosses = 0;
-  Vector3.prototype.cross = function (...args) {
-    crosses++;
-    return originalCross.apply(this, args);
+    originalSqrt = Math.sqrt;
+  let normalizations = 0;
+  Math.sqrt = function (...args) {
+    normalizations++;
+    return originalSqrt.apply(this, args);
   };
   try {
     exact(hullPenetration(a, b), expected, "large-list depth");
     assert.equal(
-      crosses,
-      65 * 3,
-      "all 65 authored A edges survive; small B still deduplicates",
+      normalizations,
+      12 + 65 * 2,
+      "12 face normals and two nonzero crosses per authored A edge; small B deduplicates",
     );
   } finally {
-    Vector3.prototype.cross = originalCross;
+    Math.sqrt = originalSqrt;
   }
   exact(collideHulls(a, b), eagerContact(a, b));
   exact(hullPenetration(b, a), eagerPenetration(b, a));

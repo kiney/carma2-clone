@@ -1058,21 +1058,24 @@ function manifold(
   return [project(av.clone().add(bv).multiplyScalar(0.5))];
 }
 const SAT_EDGE_COMPONENT_LIMIT = Math.sqrt(Math.sqrt(Number.MAX_VALUE)) / 4;
-function exactUniqueEdges(edges: Vector3[]): Vector3[] {
+function exactUniqueEdges(edges: number[]): number[] {
   // This is an optional arithmetic shortcut, not a source feature limit. Avoid
   // quadratic dedup work for unusually large/imbalanced external hulls.
-  if (edges.length > 64) return edges;
-  const result: Vector3[] = [];
-  for (const edge of edges)
-    if (
-      !result.some(
-        (old) =>
-          Object.is(old.x, edge.x) &&
-          Object.is(old.y, edge.y) &&
-          Object.is(old.z, edge.z),
-      )
-    )
-      result.push(edge);
+  if (edges.length > 64 * 3) return edges;
+  const result: number[] = [];
+  for (let i = 0; i < edges.length; i += 3) {
+    let duplicate = false;
+    for (let j = 0; j < result.length; j += 3)
+      if (
+        Object.is(result[j], edges[i]) &&
+        Object.is(result[j + 1], edges[i + 1]) &&
+        Object.is(result[j + 2], edges[i + 2])
+      ) {
+        duplicate = true;
+        break;
+      }
+    if (!duplicate) result.push(edges[i], edges[i + 1], edges[i + 2]);
+  }
   return result;
 }
 /** Visit the original ordered/deduplicated SAT prefix. A separating axis avoids
@@ -1082,43 +1085,69 @@ function visitAxes(
   b: CollisionHull,
   visit: (axis: Vector3) => boolean,
 ): boolean {
-  const result: Vector3[] = [];
-  const add = (v: Vector3) => {
-    if (v.lengthSq() < 1e-12) return true;
-    v.normalize();
-    if (result.some((p) => Math.abs(p.dot(v)) > 1 - EPS)) return true;
-    result.push(v);
-    return visit(v);
+  const result: number[] = [];
+  const axis = new Vector3();
+  const add = (x: number, y: number, z: number) => {
+    const lengthSq = x * x + y * y + z * z;
+    if (lengthSq < 1e-12) return true;
+    // Vector3.normalize -> divideScalar(length() || 1) -> multiplyScalar.
+    // Keep reciprocal multiplication, operation order and NaN/Infinity/zero
+    // handling exactly; division of each component would change rounding.
+    const reciprocal = 1 / (Math.sqrt(lengthSq) || 1);
+    x *= reciprocal;
+    y *= reciprocal;
+    z *= reciprocal;
+    for (let i = 0; i < result.length; i += 3)
+      if (
+        Math.abs(result[i] * x + result[i + 1] * y + result[i + 2] * z) >
+        1 - EPS
+      )
+        return true;
+    result.push(x, y, z);
+    return visit(axis.set(x, y, z));
   };
-  for (const f of a.faces) if (!add(f.normal.clone())) return false;
-  for (const f of b.faces) if (!add(f.normal.clone())) return false;
+  for (const f of a.faces)
+    if (!add(f.normal.x, f.normal.y, f.normal.z)) return false;
+  for (const f of b.faces)
+    if (!add(f.normal.x, f.normal.y, f.normal.z)) return false;
   // Subtract the actual world vertices as before. Rotating local edge vectors
   // would change rounding, particularly for translated/deformed hulls.
-  const edgesA = a.edges.map(([i, j]) =>
-    a.vertices[j].clone().sub(a.vertices[i]),
-  );
-  const edgesB = b.edges.map(([i, j]) =>
-    b.vertices[j].clone().sub(b.vertices[i]),
-  );
+  const edgeDirections = (hull: CollisionHull): number[] => {
+    const edges: number[] = [];
+    for (const [i, j] of hull.edges) {
+      const start = hull.vertices[i],
+        end = hull.vertices[j];
+      edges.push(end.x - start.x, end.y - start.y, end.z - start.z);
+    }
+    return edges;
+  };
+  const edgesA = edgeDirections(a),
+    edgesB = edgeDirections(b);
   // Repeated world-vector bits produce identical ordered cross/normalization
   // results. Their first axis either remains in the append-only axis list or
   // was already rejected by it. Retain signed zero and first authored order.
   // This bound keeps cross lengthSq below 3*MAX/64; surviving axes normalize
   // outside the zero/overflow regime, so self-dot is safely above 1-EPS.
   // Exceptional geometry retains the complete original arithmetic/axes.
-  const safe = (edge: Vector3) =>
-    Number.isFinite(edge.x) &&
-    Number.isFinite(edge.y) &&
-    Number.isFinite(edge.z) &&
-    Math.abs(edge.x) <= SAT_EDGE_COMPONENT_LIMIT &&
-    Math.abs(edge.y) <= SAT_EDGE_COMPONENT_LIMIT &&
-    Math.abs(edge.z) <= SAT_EDGE_COMPONENT_LIMIT;
+  const safe = (component: number) =>
+    Number.isFinite(component) &&
+    Math.abs(component) <= SAT_EDGE_COMPONENT_LIMIT;
   const deduplicate = edgesA.every(safe) && edgesB.every(safe),
     directionsA = deduplicate ? exactUniqueEdges(edgesA) : edgesA,
     directionsB = deduplicate ? exactUniqueEdges(edgesB) : edgesB;
-  for (const edgeA of directionsA)
-    for (const edgeB of directionsB)
-      if (!add(edgeA.clone().cross(edgeB))) return false;
+  for (let i = 0; i < directionsA.length; i += 3) {
+    const ax = directionsA[i],
+      ay = directionsA[i + 1],
+      az = directionsA[i + 2];
+    for (let j = 0; j < directionsB.length; j += 3) {
+      const bx = directionsB[j],
+        by = directionsB[j + 1],
+        bz = directionsB[j + 2];
+      // Vector3.crossVectors uses these products/subtractions in this order.
+      if (!add(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx))
+        return false;
+    }
+  }
   return true;
 }
 /** Depth-only solid-hull SAT for placement/integration verification. Wire

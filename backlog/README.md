@@ -189,6 +189,13 @@ contributor matching the PHY-13 mechanism; dominant attribution remains open. PE
 depends on PHY-13 / TASK-106, which gained an acceptance criterion for the
 captured opponent case. Statuses, priorities and ordinals are unchanged.
 
+Reviewed follow-up implements further SAT/fixed-body allocation reductions and
+phase roster reuse. Hardware MCP reconnects; bounded recreated Timber CPU
+comparisons preserve exact numerical states/fractions with mixed timing samples.
+The actual rendered user-route stall and PHY-13 remain open. A keyboard target
+assumption found during QA is fixed as UI-04 / TASK-107 (`done`). Current board:
+115 tasks,65 `backlog`,1 `next`,2 `wip`,47 `done`; WIP remains below3.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip

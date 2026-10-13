@@ -200,6 +200,7 @@ import {
   type RigidJoint,
 } from "./joint";
 import { advanceRigidBody } from "./integrate";
+import { createRigidBodyPosePath } from "./rigid-path";
 import {
   attachmentRoot,
   BodyTrajectoryGuard,
@@ -4962,9 +4963,15 @@ export class VehicleSimulation {
         // Every solve can redirect a pair trajectory, including props which
         // intentionally ignore world faces. Their predicted pose must not be
         // inherited from the pre-impulse solve or an early-returning world guard.
-        for (const body of this.allBodies()) candidate(body, PHYSICS_STEP);
+        // Collection is synchronous: take one ordered roster for this phase.
+        // Rebuild it on the next pass, after contact preparation, damage and
+        // restart callbacks can activate/remove bodies or detach new parts.
+        // The diagnostic uncached path retains the original collection calls.
+        const passBodies = this.correctionReuse ? this.allBodies() : undefined;
+        for (const body of passBodies ?? this.allBodies())
+          candidate(body, PHYSICS_STEP);
         guardResults = new Map(
-          this.allBodies().map((body) => [
+          (passBodies ?? this.allBodies()).map((body) => [
             body,
             this.advanceWorldContacts(body),
           ]),
@@ -4974,9 +4981,11 @@ export class VehicleSimulation {
         );
         // Impulses may create a body-pair crossing which was absent from the
         // first trajectory. Recollect the same authored hulls, not only roads.
-        contacts.push(...this.collectBodyContacts(this.allBodies()));
+        contacts.push(
+          ...this.collectBodyContacts(passBodies ?? this.allBodies()),
+        );
         if (this.movingWorld.length)
-          for (const body of this.allBodies())
+          for (const body of passBodies ?? this.allBodies())
             contacts.push(
               ...this.worldContacts(body, body.hulls).filter(
                 (contact) =>
@@ -5013,56 +5022,14 @@ export class VehicleSimulation {
       // certificates. No correction result survives into those phases.
       this.correctionWorkingSet = undefined;
       const paths = new Map<HullBody, PosePath>(
-        committing.map((body) => {
-          const probe = {
-            ...body,
-            state: {
-              ...body.state,
-              position: body.state.position.clone(),
-              orientation: body.state.orientation.clone(),
-              velocity: body.state.velocity.clone(),
-              angularVelocity: body.state.angularVelocity.clone(),
-              predictedPosition: new Vector3(),
-              predictedOrientation: new Quaternion(),
-            },
-          };
-          const cache = new Map<
-            number,
-            { position: Vector3; orientation: Quaternion }
-          >();
-          const path: PosePath = (fraction) => {
-            let pose = cache.get(fraction);
-            if (!pose) {
-              candidate(
-                probe,
-                PHYSICS_STEP * worldFractions.get(body)! * fraction,
-              );
-              pose = {
-                position: probe.state.predictedPosition.clone(),
-                orientation: probe.state.predictedOrientation.clone(),
-              };
-              cache.set(fraction, pose);
-            }
-            return pose;
-          };
-          path.stable = true;
-          if (body.properties.immovable) path.constantPose = path(0);
-          // Momentum / smallest principal inertia bounds all midpoint angular
-          // rates, including full turns hidden by identical endpoint quaternions.
-          const inertia = body.properties.inertia;
-          path.angularTravel =
-            body.properties.immovable || body.properties.rotationLocked
-              ? 0
-              : (body.state.angularVelocity
-                  .clone()
-                  .applyQuaternion(body.state.orientation.clone().invert())
-                  .multiply(inertia)
-                  .length() /
-                  Math.min(inertia.x, inertia.y, inertia.z)) *
-                PHYSICS_STEP *
-                worldFractions.get(body)!;
-          return [body, path];
-        }),
+        committing.map((body) => [
+          body,
+          createRigidBodyPosePath(
+            body,
+            PHYSICS_STEP,
+            worldFractions.get(body)!,
+          ),
+        ]),
       );
       const pairDiagnostics = this.bodyPairDiagnostics
         ? ({} as BodyGuardDiagnostics)

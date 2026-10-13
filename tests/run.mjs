@@ -2,6 +2,8 @@ import "./assets.test.mjs";
 import "./live-performance-recorder.test.mjs";
 import "./render-matrices.test.mjs";
 import "./sat-optimization.test.mjs";
+import "./sat-scalar-kernel.test.mjs";
+import "./rigid-path.test.mjs";
 import "./guard-predicate.test.mjs";
 import "./moving-edge-kernel.test.mjs";
 import "./native-random.test.mjs";

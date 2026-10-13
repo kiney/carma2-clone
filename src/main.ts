@@ -2800,7 +2800,10 @@ addEventListener("keydown", (event) => {
     }
     return;
   }
-  if ((event.target as HTMLElement)?.closest("input, select, textarea, button"))
+  if (
+    event.target instanceof Element &&
+    event.target.closest("input, select, textarea, button")
+  )
     return;
   if (
     ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(

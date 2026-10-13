@@ -2,6 +2,7 @@
  * No game/simulation stepping. Requires node --import tsx. Not a FPS benchmark.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -31,9 +32,16 @@ if (!Array.isArray(snapshot.bodies) || snapshot.bodies.length > 8192)
 const baseline = await import(
   pathToFileURL(resolve(values.baseline, "src/physics/pair-guard.ts")).href
 );
+const baselineHullModule = resolve(
+  values.baseline,
+  "src/physics/immutable-hulls.ts",
+);
+const baselineSeal = existsSync(baselineHullModule)
+  ? (await import(pathToFileURL(baselineHullModule).href)).sealCollisionHulls
+  : undefined;
 const vector = (x) => new Vector3(...x),
   quaternion = (x) => new Quaternion(...x);
-function bodiesFromSnapshot(immutable = false) {
+function bodiesFromSnapshot(seal) {
   const bodies = snapshot.bodies.map((row) => ({
     ...row.flags,
     properties: {
@@ -58,8 +66,8 @@ function bodiesFromSnapshot(immutable = false) {
   }));
   for (let i = 0; i < bodies.length; i++) {
     const row = snapshot.bodies[i];
-    if (immutable && (row.type === "noncar" || row.kind === "noncar"))
-      sealCollisionHulls(bodies[i].hulls);
+    if (seal && (row.type === "noncar" || row.kind === "noncar"))
+      seal(bodies[i].hulls);
     if (row.owner >= 0) bodies[i].owner = bodies[row.owner];
     if (row.joint)
       bodies[i].joint = {
@@ -122,11 +130,11 @@ const allowed = (a, b) => {
 const samples = [];
 const modes = {
   baseline: {
-    bodies: bodiesFromSnapshot(),
+    bodies: bodiesFromSnapshot(baselineSeal),
     guard: new baseline.BodyTrajectoryGuard(),
   },
   optimized: {
-    bodies: bodiesFromSnapshot(true),
+    bodies: bodiesFromSnapshot(sealCollisionHulls),
     guard: new BodyTrajectoryGuard(),
   },
 };
@@ -151,8 +159,10 @@ for (const sample of samples)
     "Guard fractions changed",
   );
 const report = {
-  note: "Four short serial full-40ms next-trajectory guard calls; each mode retains its own body/guard identities, cold/JIT effects retained. External NONCAR anchors are synthesized separately per built-in constructor. Optimized NONCAR geometry is sealed as in the loader. No world-fraction clipping, forces, correction or frame/GPU workload. Not a full-tick replay or FPS benchmark.",
+  note: "Four short serial full-40ms next-trajectory guard calls; each mode retains its own body/guard identities, cold/JIT effects retained. External NONCAR anchors are synthesized separately per built-in constructor. NONCAR geometry uses each source checkout's own sealer when available, as in that loader; older baselines without ownership certification retain mutable geometry. No world-fraction clipping, forces, correction or frame/GPU workload. Not a full-tick replay or FPS benchmark.",
   snapshot: values.snapshot,
+  baselineSource: resolve(values.baseline),
+  baselineOwnedHulls: !!baselineSeal,
   elapsed: snapshot.elapsed,
   bodies: snapshot.bodies.length,
   samples,

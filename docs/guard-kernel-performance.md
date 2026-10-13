@@ -164,3 +164,102 @@ node --import tsx tools/frozen-guard-report.mjs \
 
 Tools are not imported by production. Original data and asset-derived snapshots,
 reports and screenshots stay ignored and unmodified.
+
+## Reviewed follow-up: correction attribution and allocation work
+
+The reviewed analysis is committed separately as `b6b2a47`. Its bounded partial
+body-pair/joint replay confirms real impulses in every round, concentrated on
+the Cerby/hood/wing/bumper cluster. It does not restore the world, forces or
+damage state; see `perf13-root-cause-analysis.md` for results and native retry
+findings. No empty-impulse exit, joint-group skipping, velocity reset or tighter
+angular sample grid is implemented.
+
+Further exact reductions:
+
+- Scalar SAT axis normalization, dot/cross products and world-edge differences
+  preserve original operation order, authored order, signed zeros, exceptional
+  arithmetic and the64-edge dedup fallback. Each query uses one scratch axis
+  rather than cloned face/edge/cross vectors; selected contact normals still
+  receive independent clones.
+- One ordered body roster is reused within each synchronous correction
+  collection phase. The next pass and final commitment rebuild it after
+  preparation, damage, activation and restart callbacks. Uncached diagnostics
+  retain the original calls and ordered decisions.
+- `createRigidBodyPosePath` captures an immovable body with two pose clones,
+  instead of cloning motion plus spreading the entire body/state and creating
+  a per-body time map. Moving paths retain literal `step * worldFraction * t`
+  and `momentumBound * step * worldFraction` grouping and original shared
+  property semantics. Four fewer clones and two fewer newly constructed pose
+  objects per fixed body mean2796 fewer Vector3/Quaternion objects for466
+  dormant props during each commitment, plus466 fewer per-body time maps.
+- A guard phase stores fixed constant-path samples in a direct body/path entry
+  instead of two nested maps per fixed body. Seven exact pose comparisons avoid
+  another temporary scalar array. Shape/pose/immutability certificates,
+  wake-up, custom moving-path fallback and per-pair escape allowances remain.
+
+These reductions apply to the pure synchronous guard/collection phase and plain
+native state fields; side-effectful custom getters or providers mutating bodies
+within a promised pure phase are outside that certificate.
+
+The frozen-guard tool now uses each baseline checkout's own optional hull sealer.
+This matters when comparing two revisions that both certify source ownership:
+using the optimized module's sealer on baseline objects would leave the baseline
+uncertified. Old references without that module retain their original mutable
+path. New reports record baseline source and ownership availability.
+
+Hardware MCP reconnected during this follow-up. Stage1 (SAT/roster only) ran
+serially in actual AMD ANGLE/radeonsi Chromium, drawing buffer2100×1466. Original
+Stock Timber recreated crash fixture: two manual ticks and250ms CPU-only frame
+sampling with drawing suppressed. All initial-state, ordered final-state and
+world-fraction SHA-256 values match across ABBA; GL error0.
+
+| Stage1          | Manual traced/minimal tick (ms) | Frame tick p50/p95 (ms) |
+| --------------- | ------------------------------- | ----------------------- |
+| Baseline3b15b44 | 175.3 /71.7                     | 30.6 /57.7              |
+| SAT/roster      | 134.3 /66.4                     | 27.0 /55.4              |
+| SAT/roster      | 144.2 /84.5                     | 40.1 /49.4              |
+| Baseline3b15b44 | 94.9 /43.8                      | 25.8 /50.0              |
+
+The adverse optimized sample and faster final baseline are retained. This
+establishes numerical preservation and removes known allocations; it does not
+establish a uniform speedup or solve the user route's6FPS drop. The hardware
+fixture is not the saved Cerby scene or an end-to-end rendered FPS benchmark.
+Ignored report: `artifacts/perf13-reviewed-hardware-abba.json`. Frozen probes
+made while a browser capture could overlap are excluded from timing claims.
+
+Final follow-up ABBA includes fixed-body path/cache reductions, with the same
+hardware/context/buffer and bounded recreated Stock fixture. All three state/
+fraction hashes remain identical; GL error0.
+
+| Final           | Manual traced/minimal tick (ms) | Frame tick p50/p95 (ms) |
+| --------------- | ------------------------------- | ----------------------- |
+| Baseline3b15b44 | 95.7 /65.9                      | 33.1 /44.5              |
+| Final optimized | 117.5 /53.2                     | 23.0 /44.8              |
+| Final optimized | 135.6 /54.8                     | 32.5 /40.4              |
+| Baseline3b15b44 | 126.6 /53.3                     | 41.3 /59.4              |
+
+Typical tick costs are lower in these final short samples; traced/cold times
+and one tail remain adverse, and the last baseline minimal tick matches the
+optimized ones. No universal percentage or60FPS claim follows. Final report:
+`artifacts/perf13-reviewed-hardware-final.json`. Source remains at40ms/max5 ticks,
+eight correction rounds,30 local restarts and unchanged angular/bisection caps.
+
+Final full suite:2733 passed, zero failures/skips. Production build passes.
+The15-scenario original-car crash report matches the existing baseline byte for
+byte. Independent review confirms the arithmetic, pose alias/ownership,
+phase-scoped roster and custom-path fallback boundaries. Production Chromium crash/repair validation passes: original Stock Eagle,
+Buggy and Bigdump, Advanced69mach1, and the existing Porker2 split/repair
+checks. Console errors and failed requests are empty; WebGL error0. Screenshots
+are saved by the harness under ignored artifacts/. PERF-13 remains WIP: the original
+Cerby lockup, full world/damage replay and actual rendered user-route drop are
+not declared fixed by these allocations or recreated fixture measurements.
+
+MCP also loaded ordinary Timber and ran a controlled head-on collision during
+normal frame updates/driving input: player health100→91, opponent100→44,
+player deformation revision0→1, actual position movement and GL error0.
+An injected Window keyboard event exposed an unrelated event-target assumption
+in `main.ts`; UI-04/TASK-107 adds an Element check before `closest()`. After a
+fresh document load, Window/document KeyW events both reach throttle1, while
+input/select/button/textarea targets remain excluded (throttle0). The production
+build passes after this UI guard; final controlled console and failed resource
+lists are empty, WebGL error0. This minor validation fix changes no physics.

@@ -39,12 +39,15 @@ can skip simulation time. Derive that rate from actual tick counts.
 
 | Window (s) | Measured FPS | CPU/tick (ms) | Ticks/update | Render CPU (ms) | Predicted (1000−25c)/o |
 | ---------- | -----------: | ------------: | -----------: | --------------: | ---------------------: |
-| 118–120    |         22.5 |          28.2 |         1.09 |             4.6 |                    ~25 |
-| 130–132    |         23.0 |          29.4 |         1.09 |             4.9 |                    ~20 |
-| 122–124    |          5.0 |          36.2 |   5.00 (cap) |             3.9 |                     ~7 |
-| 144–146    |          5.0 |          34.6 |         4.40 |             9.3 |                   ~5.6 |
+| 118–120    |         23.3 |          28.2 |         1.09 |             4.6 |                    ~24 |
+| 130–132    |         21.9 |          29.4 |         1.09 |             4.9 |                    ~20 |
+| 122–124    |          5.1 |          36.2 |   5.00 (cap) |             3.9 |                     ~7 |
+| 144–146    |          5.7 |          34.6 |         4.40 |             9.3 |                   ~5.6 |
 
-`o` is the frame interval minus updateFrame CPU (typically 12–15 ms, including
+Windows select rows by recorded elapsed time. FPS is 1000 divided by mean
+RAF interval; tick CPU uses update tick CPU divided by executed ticks.
+`o` is the frame interval minus updateFrame CPU (about 12–14 ms in the first
+three windows, about 24 ms in the last, including
 render, AI, matrices and RAF/vsync wait). Game time tracks wall time in every
 window (ratio 0.95–1.04). Render CPU stays at 4–9 ms while FPS swings between 5
 and 23. All 512 ticks have 7 active cars and 10 debris bodies, so opponent
@@ -164,3 +167,46 @@ runs, not the user scene, and cannot attribute it.
 - Next measurement: replay the 145.68 s snapshot headlessly with per-pass
   counters (contact rows per pair, impulses, changed bodies) to confirm the
   attribution, then repeat a short serial hardware capture after the fix.
+
+## 4. Bounded captured-body replay and implementation follow-up
+
+`node --import tsx tools/replay-captured-corrections.mjs` hydrates fresh cloned
+bodies and runs the actual body-pair collector, raw-result cache and joint/contact
+solver, for at most eight rounds. Output stays ignored in
+`artifacts/perf13-captured-corrections.json`. It does not execute `step()` or
+recover missing world, tyre-force, damage, activation and preceding solver state.
+It observes callbacks and accepts impulses; original gameplay callbacks are not
+replayed. This is partial attribution, not a restored full game tick.
+
+For the captured 483-body state, contact counts by round are
+`[3,2,3,2,3,2,3,1]`, all type6 on car/hood (6/14) or wing/hood (11/14).
+Positive contact impulses are `[2,1,2,1,2,1,2,1]`; nine joint rows participate
+in every round. Exactly bodies6/10/11/12/14 change kinematics each round.
+Round8 still changes speed by up to .01102 model units/s and angular velocity
+by .48012 rad/s. These are useful physical changes, not no-op rounds.
+Removing only those five bodies on clones retains 478 bodies (including other
+Cerby debris), leaves the first pair collection empty, and removes pair-guard
+clipping. That strengthens cluster attribution in this partial scenario; it
+is not permission to remove those bodies in the game.
+
+Warm-cache counters from round2 onward still show five changed certificates,
+five geometry transforms, 33 geometry hits and466 stationary-bounds hits per
+round. Nine pair tests include two raw-result hits. Final partial-solve guard
+uses43 actual pair checks/2408 hull transforms versus5/782 in the counterfactual.
+First cold serial timings (98.75/20.28 ms correction,79.66/7.71 ms guard) include
+hydration/source warming/order effects; no warmed A/B or hardware FPS claim.
+
+Implemented follow-up: scalar SAT axes/world-edge differences eliminate cloned
+face/edge/cross vectors while retaining exact operation order, normalization,
+exceptional-value fallbacks and contact order. One ordered body roster is reused
+only during each synchronous correction collection phase, then rebuilt after
+solves/preparation/restarts. The uncached diagnostic path retains the original
+collection calls. No rounds, impulses, callbacks, angular samples or guard
+fractions are deliberately omitted. Numerical and browser results follow in
+`guard-kernel-performance.md`.
+
+Native retry and former-owner evidence is recorded in `c2-physics-re.md`.
+Exhausting retries does not zero velocity; full detachment clears parent links
+but does not require zero SAT penetration. A remedy must therefore address
+interaction of recovery with the browser's conservative commitment guard,
+without inventing native damping or permanently excluding former-owner contacts.

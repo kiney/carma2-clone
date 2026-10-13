@@ -104,8 +104,13 @@ class ImmutableGuardGeometry {
     if (!entry || entry.source !== body.hulls) return;
     const p = pose.position,
       q = pose.orientation;
-    const values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w];
-    return values.every((v, i) => Object.is(v, entry.pose[i]))
+    return Object.is(p.x, entry.pose[0]) &&
+      Object.is(p.y, entry.pose[1]) &&
+      Object.is(p.z, entry.pose[2]) &&
+      Object.is(q.x, entry.pose[3]) &&
+      Object.is(q.y, entry.pose[4]) &&
+      Object.is(q.z, entry.pose[5]) &&
+      Object.is(q.w, entry.pose[6])
       ? entry.geometry
       : undefined;
   }
@@ -122,6 +127,12 @@ class ImmutableGuardGeometry {
 /** Moving geometry has phase lifetime. Persistent static reuse additionally
  * requires deep source immutability and an exact constant-pose certificate. */
 class GuardWorkingSet {
+  // Native fixed props have one explicit constant path for this phase. They
+  // need one entry, not two nested maps and a time-sample map per prop.
+  private constants = new Map<
+    HullBody,
+    { path: PosePath; geometry: GeometrySnapshot }
+  >();
   private samples = new Map<
     HullBody,
     Map<PosePath, Map<number, GeometrySnapshot>>
@@ -131,6 +142,31 @@ class GuardWorkingSet {
     private immutable?: ImmutableGuardGeometry,
   ) {}
   sample(body: HullBody, path: PosePath, fraction: number): GeometrySnapshot {
+    if (body.properties.immovable && path.constantPose) {
+      const old = this.constants.get(body);
+      if (old?.path === path) {
+        if (this.diagnostics) this.diagnostics.snapshotHits++;
+        return old.geometry;
+      }
+      const pose = path.constantPose;
+      const retain = hasImmutableCollisionHulls(body.hulls);
+      let geometry = retain ? this.immutable?.get(body, pose) : undefined;
+      if (geometry) {
+        if (this.diagnostics) this.diagnostics.snapshotHits++;
+      } else {
+        geometry = {
+          hulls: body.hulls.map((hull) =>
+            transformHull(hull, pose.position, pose.orientation),
+          ),
+          bounds: [],
+        };
+        if (this.diagnostics)
+          this.diagnostics.hullTransforms += body.hulls.length;
+        if (retain) this.immutable?.set(body, pose, geometry);
+      }
+      this.constants.set(body, { path, geometry });
+      return geometry;
+    }
     const key = path.constantPose ? 0 : fraction;
     let paths = this.samples.get(body);
     if (!paths) this.samples.set(body, (paths = new Map()));

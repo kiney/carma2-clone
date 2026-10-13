@@ -260,3 +260,46 @@ Installed HW `DoCollisions` at `0x4ba450` retains local retries through the
 incomplete reconstruction does not establish our eight global correction rounds
 as native C2 behavior. All existing steps/restarts/guards remain unchanged here.
 See [implementation, differential evidence and hardware limits](guard-kernel-performance.md).
+
+## Captured own-debris correction and native retry outcome
+
+Verified from the installed HW executable (hash/PE metadata above); rec2
+provides symbol guidance for a different address revision. Static disassembly
+stays outside Git. No source code or proprietary instruction dump is copied.
+
+| Installed HW address               | Behavior                                                                                                                                               | Confidence / implementation consequence                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `0x4ba62e`, `0x4ba658`, `0x4ba662` | DoCollisions local retries stop at30; call `0x4c5f90`, a return-only function, then visit the next object. No exhaustion-specific pose/velocity write. | Verified instructions; do not justify damping fast trapped bodies from this limit.                                 |
+| `0x4ba637`, `0x4bb869`             | A separate global counter at `0x692734` limits retries at3; increment follows nonzero normal-solver result from `0x4c3900`.                            | Verified control flow; semantic name remains uncertain. This is not returned status3.                              |
+| `0x4ba670`, `0x4b951e`             | Global traversal restarts only on list-position update flag `0x69145c`.                                                                                | Verified; our eight nonempty global rounds are not proven original orchestration.                                  |
+| `0x4bbe7a`–`0x4bbf13`, `0x4baba2`  | Awake response ring members restore saved transform, integrate literal .04 s, rebuild bounds/callback, then commit actor matrix into body state.       | Verified inspected path; no fractional commitment guard found here, not a statement about all uninspected callees. |
+| `0x4bab5c`–`0x4bab83`              | Ordinary quiet gates zero velocity/omega, including speed²<.001 and angular-energy<.00009.                                                             | Verified; independent of retry exhaustion, unsuitable for a fast trapped cluster.                                  |
+| `0x42f430`, `0x4c61c0`, `0x4bd900` | Full detachment unlinks parent/sibling and clears joint; collector excludes direct parent pairs but no saved-owner exclusion before pair emitter.      | Verified; released own debris remains eligible for ordinary collision.                                             |
+| `0x434860`, `0x4348d5`, `0x4388dd` | Full-release admission uses an authored angular cone dot product >Float32(.707107), followed by elapsed-percentage gate.                               | Verified; admission does not certify hull clearance.                                                               |
+
+The bounded partial captured-body replay now confirms real type6 contact and
+joint impulses across eight rounds on only the five-body Cerby cluster. Missing
+world/forces/damage state prevents claiming a complete native/browser tick replay.
+See `perf13-root-cause-analysis.md` and `tools/replay-captured-corrections.mjs`.
+No retry limit, damping, former-owner mask or sampling rule changes are made.
+
+Recovery velocity follow-up: installed `0x4b97dc`–`0x4b981e` transforms world
+velocity into solver-local `+0x1a8`; `0x4c19d1`–`0x4c19ee` snapshots local
+omega into `+0x1c0` before candidate rotation. Recovery `0x4280d5`–`0x428353`
+uses these pre-candidate quantities; normal application restores auxiliary
+omega at `0x4bb27a`–`0x4bb292` and updates local/world velocity consistently.
+Mathematically `R_old*(V_local + omega_local × (p_local-COM_local))` equals the
+browser's `V_world + Omega_world × (p_world-COM_world_old)`.
+`advanceRigidBody(..., true)` leaves committed motion untouched, so the ordinary
+car/free/ball-jointed Cerby path does not exhibit a demonstrated pre-/post-rotation
+velocity mismatch. Native Float32/x87 versus browser double/quaternion rounding
+is not claimed bit-identical. Do not substitute predicted/end omega as a cure.
+
+Native detected recovery overlap (`0x427d9c`–`0x427df0`) sets next-tick flag0x200
+and replaces ordinary CCD even when no rows emit. Center-facing/closing gates
+select contacts, not safe displacement directions. A native-admitted initial
+hull-overlap escape policy could therefore address the browser-only monotone
+SAT commitment gate, but permitting penetration to increase would change its
+safety behavior. Third-body/new-hull crossings, clearance/re-entry and projection
+must remain protected; no such exemption is implemented by this performance
+follow-up. This remains PHY-13 evidence and validation work.

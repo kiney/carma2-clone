@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-13 08:12'
+updated_date: '2026-10-13 09:04'
 labels:
   - priority-1
   - PERF-01
@@ -80,4 +80,6 @@ Subsequent actual user 6 FPS / opposite-direction ~20 FPS capture succeeded at e
 2026-10-13 authorized PERF-13 implementation removes repeated collider value walks and discarded geometry/temporary allocations while retaining all native timing, correction/solver/callback limits. Exact differential and original-data regressions pass; see docs/guard-kernel-performance.md. New SwiftShader CPU comparisons retain full adverse distributions; the actual directional hardware route remains unverified because controlled Chromium target/page startup failed. PERF-13 stays P1 wip, PERF-01 remains active, and visibility stays deferred. Original user trace/full body state were saved before the controlled browser restart; no system GPU permissions or packages changed.
 
 2026-10-13 reviewed analysis (docs/perf13-root-cause-analysis.md): physics/catch-up dominates the captured CPU. Cerby and own parts are a plausible contributor matching PHY-13, not proven dominant or continuously jammed across the two snapshots. Guard fractions are from a partial offline probe; metric units corrected (model ×6.9). FPS budgeting is approximate, and heading causality stays open. PERF-13 investigation depends on TASK-106 evidence; no engine change.
+
+2026-10-13 reviewed follow-up: source-only analysis checkpoint b6b2a47 and further exact allocation/roster reductions implemented under PERF-13. Actual hardware MCP now reconnects; bounded recreated Stock fixture has exact numerical state/fractions and lower typical tick costs with mixed/adverse samples retained.2733 tests and production build pass;15 original-car crash reports unchanged. Actual rendered user-route6FPS issue remains unverified/unresolved; visibility work stays deferred. See docs/guard-kernel-performance.md.
 <!-- SECTION:NOTES:END -->

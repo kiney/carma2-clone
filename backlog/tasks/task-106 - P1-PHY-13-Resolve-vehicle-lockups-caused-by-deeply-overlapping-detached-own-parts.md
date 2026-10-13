@@ -6,7 +6,7 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-13 00:37'
-updated_date: '2026-10-13 08:12'
+updated_date: '2026-10-13 09:04'
 labels:
   - priority-1
   - PHY-13
@@ -48,4 +48,6 @@ Confirmed clone probes: player worldFraction=1 with actual motion, spin removed 
 Exact hardware capture metadata: drawing buffer2098x1466, DPR1.484375, ANGLE AMD Radeon Graphics/radeonsi gfx1150. Earlier approximate buffer wording is superseded. All diagnostic integration and collision checks operate on cloned kinematics and fresh guard/broadphase contexts. The original live game remains paused at149.44s with identical player position and no repair/reset/advancement.
 
 Reviewed cross-link 2026-10-13: the Cerby/own-hood/three-jointed-parts cluster has similar endpoint positions at 113.56 and 145.68 s with substantial retained velocity. Positions/velocities are model units (×6.9 metric). A partial full-40-ms guard probe returns ~8.1e-5 for bodies6/10/11/12/14, not recorded live commit fractions. Accumulated type-6 rows suggest the same overlap mechanism but cannot attribute each correction pass or prove uninterrupted lockup. Include this opponent case and compare its cost, but do not claim it is proven the dominant FPS cause. Exhausted native retry and detachment eligibility still need evidence; zeroing retained velocity is not a verified remedy.
+
+Bounded partial captured-body replay tools/replay-captured-corrections.mjs confirms type6 rows for pairs6/14 and11/14, nine joint rows each round, and real kinematic changes on bodies6/10/11/12/14 through round8. Removing only those bodies on clones empties pair collection. Missing world/forces/damage prevents declaring complete attribution or a production fix. Installed native exhaustion has no velocity reset; full detach uses angular admission rather than hull clearance and released own debris remains eligible. Ordinary recovery auxiliary-omega/local-velocity trace is mathematically equivalent to existing browser pre-candidate point velocity. The conservative monotone SAT commitment extension remains the likely incompatibility to investigate, with explicit third-body/re-entry/projection tests before relaxing it. No PHY-13 production behavior change.
 <!-- SECTION:NOTES:END -->
