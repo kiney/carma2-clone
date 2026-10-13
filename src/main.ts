@@ -122,6 +122,7 @@ import {
 } from "./noncar-debris-assets";
 import {
   NativeNonCarDebrisRuntime,
+  initializeNativeNonCarDebrisBody,
   type NativeNonCarBodySlot,
 } from "./noncar-debris";
 import type { NonCarBody } from "./physics/noncar-body";
@@ -1614,43 +1615,10 @@ async function loadRace() {
     scene.add(debrisActorGroup);
     noncarDebrisActors = debrisActorGroup;
     let noncarActorCount = originalNonCarActorCount;
-    const bodySlots = new Map<string, NonCarBody>();
-    const assignedBodies = new Set<NonCarBody>();
     const slotKey = (slot: NativeNonCarBodySlot) =>
       slot.kind === "dedicated"
         ? `dedicated:${slot.mechanicsIndex}`
         : `extra:${slot.index}`;
-    // Existing props still have private browser bodies. First observation in
-    // registration order is a provisional bridge, not original PHIL allocation
-    // order. Native driver/ec admission and reclaim remain lifecycle gaps.
-    const retainPulledWorldBodies = () => {
-      for (const body of debrisSimulation.noncars) {
-        if (assignedBodies.has(body) || !body.actor.userData.noncarPulled)
-          continue;
-        let slot: NativeNonCarBodySlot | undefined = {
-          kind: "dedicated",
-          mechanicsIndex: body.mechanics.index,
-        };
-        if (bodySlots.has(slotKey(slot))) {
-          slot = undefined;
-          for (let index = 0; index < 40; index++) {
-            const candidate: NativeNonCarBodySlot = { kind: "extra", index };
-            if (!bodySlots.has(slotKey(candidate))) {
-              slot = candidate;
-              break;
-            }
-          }
-        }
-        if (!slot) {
-          assets.warnings.push(
-            "Native noncar physical slots exhausted by world props",
-          );
-          continue;
-        }
-        bodySlots.set(slotKey(slot), body);
-        assignedBodies.add(body);
-      }
-    };
     loadedDebrisRuntime = new NativeNonCarDebrisRuntime({
       originalActorCount: originalNonCarActorCount,
       readActorCount: () => noncarActorCount,
@@ -1659,17 +1627,27 @@ async function loadRace() {
         noncarActorCount++;
       },
       removeActor: (actor) => {
+        debrisSimulation.world.discardNonCarClone(actor);
         actor.removeFromParent();
         noncarActorCount--;
       },
-      isBodySlotOccupied: (slot) => {
-        retainPulledWorldBodies();
-        return bodySlots.has(slotKey(slot));
+      isBodySlotOccupied: (slot) =>
+        debrisSimulation.nonCarSlots.isOccupied(slot),
+      pull: (actor, template, slot) => {
+        const body = createNonCarBody(actor, template.mechanics, {
+          immutableHulls: true,
+        });
+        initializeNativeNonCarDebrisBody(body);
+        if (!debrisSimulation.world.retainNonCarClone(actor, template.actor))
+          assets.warnings.push(
+            `Native retained-ACT providers unavailable for noncar debris: ${actor.name}`,
+          );
+        // The pool/header decision precedes launch/RNG/smoke publication.
+        if (!debrisSimulation.admitNonCar(body, { slot, wake: true }))
+          return null;
+        return body;
       },
       registerBody: (body, slot) => {
-        bodySlots.set(slotKey(slot), body);
-        assignedBodies.add(body);
-        body.actor.userData.noncarPulled = true;
         body.actor.userData.nativeDebrisSlot = slotKey(slot);
         registerShrapnelMaterials(
           body.actor,
@@ -2082,8 +2060,7 @@ function dispatchFollowupSmash(
   if (context.route === "numbered") {
     const body = activeSimulation.noncars.find((body) => body.actor === actor);
     if (body) {
-      body.actor.userData.noncarPulled = true;
-      body.properties.immovable = false;
+      if (!activeSimulation.admitNonCar(body, { wake: true })) return;
       body.motor.sleeping = false;
     }
     actor.name = actor.name.slice(0, 3) + "!" + actor.name.slice(4);
@@ -3437,7 +3414,8 @@ function animate(now: number) {
         cameraNeedsReset = false;
         camera.near = nativeCameraSettings.hitherGeneral;
         const queries = cameraWorldQueries(collision, () =>
-          simulation!.noncars
+          simulation!
+            .activeNonCars()
             .filter(
               (body) => (body.motor.flags & NONCAR_FLAGS.blockCamera) !== 0,
             )

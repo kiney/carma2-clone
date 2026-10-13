@@ -424,7 +424,8 @@ try {
       assert.ok(result.reverse.distance > 0.5, JSON.stringify(result.reverse));
 
       // Accumulate further contacts through the normal fixed-step contact and
-      // applyImpactDamage pipeline while the car remains beside its obstacle.
+      // applyImpactDamage pipeline. The synthetic45-unit/s crash can separate
+      // the cars; record proximity at contact, not a post-crash tether.
       result.severeChain = await page.evaluate(() => {
         const c = window.carma;
         const { player, rival } = window.__crashMatrix;
@@ -445,7 +446,25 @@ try {
         player.state.angularVelocity.set(0, 0, 0);
         player.state.predictedPosition = undefined;
         player.state.predictedOrientation = undefined;
-        for (let i = 0; i < 24 && !rival.knackered; i++) c.simulation.step();
+        const pairContacts = [];
+        for (let i = 0; i < 24 && !rival.knackered; i++) {
+          c.simulation.step();
+          for (const impact of c.simulation.lastImpacts)
+            if (
+              impact.solverAccepted &&
+              impact.normalImpulse > 0 &&
+              ((impact.a === player && impact.b === rival) ||
+                (impact.a === rival && impact.b === player))
+            )
+              pairContacts.push({
+                tick: i,
+                impulse: impact.normalImpulse,
+                point: impact.point.toArray(),
+                distance: player.state.position.distanceTo(
+                  rival.state.position,
+                ),
+              });
+        }
         // This fixture advances the production fixed-step simulation while
         // paused, so frame-driven chase-camera history is intentionally stale.
         // Reframe the actual world camera around the damaged rival for capture.
@@ -469,6 +488,12 @@ try {
           ).length,
           wasted: rival.knackered || rival.damage.wasted,
           nearby: player.state.position.distanceTo(rival.state.position),
+          pairContacts,
+          finalPositions: [
+            player.state.position.toArray(),
+            rival.state.position.toArray(),
+          ],
+          minimumWorldY: c.collision.minimumWorldY,
           geometry: rival.shapeVertices
             .flat()
             .some((point) => point.length() > 0),
@@ -485,7 +510,16 @@ try {
         JSON.stringify(result.severeChain),
       );
       assert.ok(
-        result.severeChain.nearby < 10,
+        result.severeChain.pairContacts.length > 0 &&
+          result.severeChain.pairContacts.some(
+            (contact) => contact.distance < 10,
+          ) &&
+          result.severeChain.finalPositions.every(
+            (position) =>
+              position.every(Number.isFinite) &&
+              (result.severeChain.minimumWorldY === null ||
+                position[1] > result.severeChain.minimumWorldY - 10),
+          ),
         JSON.stringify(result.severeChain),
       );
       if (result.severeChain.wasted) {

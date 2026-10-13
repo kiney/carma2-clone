@@ -11,6 +11,7 @@ import {
   knownNativeActorValue as known,
   nativeSingleActorColumn,
   type NativeOrderedActor,
+  type NativeActorBounds,
 } from "./native-actor-order";
 import {
   compactNativeTrackNonCars,
@@ -29,7 +30,10 @@ import {
   type NativeTrackModelResource,
 } from "./native-track-resources";
 import type { NativeResourceArena } from "./native-resource-arena";
-import type { NativeFindFacesLayout } from "./native-find-faces";
+import {
+  nativeFindFacesColumnXZ,
+  type NativeFindFacesLayout,
+} from "./native-find-faces";
 import type { NativeTrackLayoutResult } from "./native-track-layout";
 import {
   nativeTrackTextureReserve,
@@ -39,16 +43,23 @@ import {
 
 export interface NativeWorldScene {
   layout: NativeFindFacesLayout;
+  /** Load-time gTrack_actor bounds, before MODEL/ACT migration or batching. */
+  initialBounds?: NativeActorBounds;
   columns: readonly (readonly (NativeOrderedActor | null)[])[];
   additionalActors: NativeOrderedActor | null;
   /** DoPullActorFromWorld moves ACTs here, outside FindFacesInBox roots. */
   nonTrackActors: NativeOrderedActor;
+  /** Authoritative gTrack_actor for reclaim's NULL-column fallback. Older
+   * isolated collector fixtures need not supply it unless returning an ACT. */
+  trackRoot?: NativeOrderedActor;
   blackMaterial: MatMaterial;
   resources: Map<object, NativeTrackModelResource>;
   arena: NativeResourceArena;
   findModelResource?: (
     identifier: string,
   ) => NativeTrackModelResource | undefined;
+  /** Actual registry lookup for external ACT templates' authored local MAT. */
+  findMaterialSource?: (identifier: string) => MatMaterial | undefined;
   meshes: ReadonlyMap<NativeOrderedActor, THREE.Mesh>;
   initialPoses?: ReadonlyMap<
     NativeOrderedActor,
@@ -472,16 +483,19 @@ export function prepareNativeWorldScene(
   });
   return {
     nonTrackActors,
+    trackRoot: state.roots[0],
     arena: source.materialArena,
     findModelResource: (identifier) => {
       const identity = source.findSourceModel(identifier);
-      return identity ? resources.get(identity) : undefined;
+      return identity ? admitModel(identity) : undefined;
     },
+    findMaterialSource: (identifier) => source.findSourceMaterial(identifier),
     meshes,
     initialPoses,
     initialGeometries,
     resolveRenderedMaterial: options.resolveRenderedMaterial,
     layout: options.initialLayout.layout,
+    initialBounds: options.initialLayout.initialBounds,
     columns: columns.columns.map((row) => row.map((c) => c?.wrapper ?? null)),
     additionalActors: null,
     blackMaterial: options.blackMaterial,
@@ -502,4 +516,106 @@ export function pullNativeWorldActor(
 ): void {
   removeNativeActor(actor);
   prependNativeActor(scene.nonTrackActors, actor);
+}
+
+export interface NativeWorldActorReturn {
+  destination: "column" | "track-root" | "additional" | "unparented";
+  parent: NativeOrderedActor | null;
+  column?: readonly [number, number];
+}
+
+/** Compose BRender row-vector storage through the actual native ACT links.
+ * Three uses column vectors, so the corresponding parent precedes its child. */
+function actorWorldMatrix(actor: NativeOrderedActor): THREE.Matrix4 {
+  const ancestors: NativeOrderedActor[] = [];
+  const seen = new Set<NativeOrderedActor>();
+  for (let current: NativeOrderedActor | null = actor; current; ) {
+    if (seen.has(current)) throw new Error("Cycle in native ACT parent links");
+    seen.add(current);
+    ancestors.push(current);
+    current = current.parent;
+  }
+  const world = new THREE.Matrix4();
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const m = ancestors[i].matrix;
+    if (m.length !== 12 || !m.every(Number.isFinite))
+      throw new Error(
+        "Native ACT return requires twelve finite matrix scalars",
+      );
+    world.multiply(
+      new THREE.Matrix4().set(
+        m[0],
+        m[3],
+        m[6],
+        m[9],
+        m[1],
+        m[4],
+        m[7],
+        m[10],
+        m[2],
+        m[5],
+        m[8],
+        m[11],
+        0,
+        0,
+        0,
+        1,
+      ),
+    );
+  }
+  return world;
+}
+
+/** Installed4206d4..42076e retains the ACT and prepends it to the actual
+ * XZ column (40cb90), NULL-column track root, or optional additional group.
+ * No actor allocation/free or retained-count change occurs here. Native
+ * remove/add leaves its local matrix untouched; the browser bridge explicitly
+ * rebases the saved world pose for potentially transformed host parents. Full
+ * affine inversion is required here because host parents can include scale. */
+export function returnNativeWorldActor(
+  scene: NativeWorldScene,
+  actor: NativeOrderedActor,
+  position: THREE.Vector3 | readonly [number, number, number],
+  additional = false,
+): NativeWorldActorReturn {
+  const xyz = "x" in position ? [position.x, position.y, position.z] : position;
+  if (xyz.length !== 3 || !xyz.every(Number.isFinite))
+    throw new Error("Native ACT return requires a finite world position");
+  let parent: NativeOrderedActor | null;
+  let destination: NativeWorldActorReturn["destination"];
+  let column: readonly [number, number] | undefined;
+  if (additional) {
+    parent = scene.additionalActors;
+    destination = parent ? "additional" : "unparented";
+  } else {
+    column = nativeFindFacesColumnXZ(xyz[0], xyz[2], scene.layout);
+    parent = scene.columns[column[1]]?.[column[0]] ?? null;
+    destination = parent ? "column" : "track-root";
+    if (!parent) {
+      if (!scene.trackRoot)
+        throw new Error("Native ACT return requires authoritative track root");
+      parent = scene.trackRoot;
+    }
+  }
+  const seen = new Set<NativeOrderedActor>();
+  for (let current = parent; current; current = current.parent) {
+    if (current === actor || seen.has(current))
+      throw new Error("Native ACT return would create a parent cycle");
+    seen.add(current);
+  }
+  const world = actorWorldMatrix(actor);
+  const parentWorld = parent ? actorWorldMatrix(parent) : new THREE.Matrix4();
+  const determinant = parentWorld.determinant();
+  if (!Number.isFinite(determinant) || determinant === 0)
+    throw new Error(
+      "Native ACT return requires an invertible parent transform",
+    );
+  const local = nativeWorldMatrix(parentWorld.invert().multiply(world));
+  if (!local.every(Number.isFinite))
+    throw new Error("Native ACT return pose exceeds finite Float32 storage");
+  // Prepare all fallible destination/pose work before changing linked ownership.
+  removeNativeActor(actor);
+  actor.matrix = local;
+  if (parent) prependNativeActor(parent, actor);
+  return { destination, parent, ...(column ? { column } : {}) };
 }

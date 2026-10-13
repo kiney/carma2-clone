@@ -175,6 +175,7 @@ test("custom noncar gravity reads raw volume independently of depth and global p
         scene,
       );
       simulation.addNonCar(body);
+      assert.ok(simulation.admitNonCar(body, { wake: true }));
       body.motor.sleeping = false;
       body.properties.immovable = false;
       simulation.gravityMultiplier = factor;

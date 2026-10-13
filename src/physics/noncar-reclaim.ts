@@ -28,6 +28,10 @@ export interface NativeNonCarReclaimObject<Owner> {
 
 export interface NativeNonCarReclaimFrame<Owner> {
   activeNonCars: readonly NativeNonCarReclaimObject<Owner>[];
+  /** Partial-provider host: clock still advances for unsupported active owners. */
+  activeNonCarCount?: number;
+  /** Unknown awake cache providers retain all owners without freezing cadence. */
+  allowRemoval?: boolean;
   /** Original combined list, retained through this increasing pass. */
   activeObjects: readonly NativeNonCarReclaimCollider<Owner>[];
   minimumWorldY: number;
@@ -190,8 +194,11 @@ export class NativeNonCarReclaimRuntime<Owner> {
 
   advanceFrame(
     framePeriodMs: number,
-    frame: NativeNonCarReclaimFrame<Owner>,
+    input:
+      | NativeNonCarReclaimFrame<Owner>
+      | (() => NativeNonCarReclaimFrame<Owner>),
     emitEffect: (effect: NativeNonCarReclaimEffect<Owner>) => void = () => {},
+    activeCountHint?: number,
   ): NativeNonCarReclaimResult<Owner> {
     const period = uint(framePeriodMs, 0xffffffff, "frame period"),
       survivors: NativeNonCarReclaimObject<Owner>[] = [],
@@ -204,13 +211,29 @@ export class NativeNonCarReclaimRuntime<Owner> {
       reclaimed,
       effects,
     });
-    if (!frame.activeNonCars.length) return result(false);
+    // Production obtains MODEL/cache providers only on the source's once-per-
+    // second pass, rather than scanning original vertices every render frame.
+    let frame = typeof input === "function" ? undefined : input;
+    const activeCount = frame
+      ? (frame.activeNonCarCount ?? frame.activeNonCars.length)
+      : (activeCountHint ?? NaN);
+    uint(activeCount, 0x7fffffff, "active count");
+    if (frame && activeCount < frame.activeNonCars.length)
+      throw new Error("Invalid native noncar active count");
+    if (!activeCount) return result(false);
     this.accumulatorMs = (this.accumulatorMs + period) >>> 0;
     if (this.accumulatorMs < 1000) {
-      survivors.push(...frame.activeNonCars);
+      if (frame) survivors.push(...frame.activeNonCars);
       return result(false);
     }
     this.accumulatorMs = 0;
+    frame ??= (input as () => NativeNonCarReclaimFrame<Owner>)();
+    if (activeCount < frame.activeNonCars.length)
+      throw new Error("Invalid native noncar active count");
+    if (frame.allowRemoval === false) {
+      survivors.push(...frame.activeNonCars);
+      return result(true);
+    }
     const minY = finite(frame.minimumWorldY, "minimum world Y"),
       doNothing = new Map<Owner, boolean>();
     for (const collider of frame.activeObjects) {

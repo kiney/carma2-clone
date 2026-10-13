@@ -26,6 +26,8 @@ export interface WorldActivationOptions {
     | undefined;
   /** Native actor.type_data != NULL: already pulled into active physics. */
   isPulled?: (body: NonCarBody) => boolean;
+  /** Host reserves physical ownership before applying initial movement. */
+  admit?: (body: NonCarBody) => boolean;
   onActivate?: (body: NonCarBody) => void;
 }
 export interface NonCarInitialMovement {
@@ -301,6 +303,7 @@ export class WorldActivationRuntime {
         this.options.isPulled?.(body) ??
         (!!body.actor.userData.noncarPulled || !body.properties.immovable);
       if (pulled) continue;
+      if (this.options.admit && !this.options.admit(body)) continue;
       if (body.mechanics.worldJoint?.kind === "translation")
         activateNonCarMotor(body.motor);
       else {

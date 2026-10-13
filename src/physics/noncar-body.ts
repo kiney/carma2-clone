@@ -36,7 +36,8 @@ export function createNonCarBody(
   mechanics: NonCarMechanics,
   options: { immutableHulls?: boolean } = {},
 ): NonCarBody {
-  actor.userData.dynamicBody = true;
+  // Retained ACTs are static geometry until successful PHIL/slot admission.
+  actor.userData.dynamicBody = !!actor.userData.noncarPulled;
   actor.updateWorldMatrix(true, true);
   const position = new Vector3(),
     orientation = new Quaternion(),

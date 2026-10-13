@@ -13,8 +13,9 @@ as `0x4203c0`; the installed function starts at **`0x4203e0`**.
 fifteen numerical/original-model tests. Its host must supply authoritative ec,
 driver, model bounds and retained query caches, and apply ordered ownership
 changes. Free unjointed props now have a native quiet provider in the real
-simulation; jointed/car/part hierarchies and collection-time static repull still
-block full production reclaim integration. See [wake and repull](c2-noncar-wake-pull-re.md).
+simulation. PERF-16 integrates retained-ACT return and collection-time static
+repull for supported free leaves, including connotation clones. Jointed/car/part
+quiet hierarchies remain PERF-17 providers. See [wake and repull](c2-noncar-wake-pull-re.md).
 
 This pass releases physical participation while retaining the ACT. It has no
 random draw, fragment lifetime, visual expiry or distance-from-camera gate.
@@ -176,5 +177,9 @@ other-object cache state. Browser `NonCarMotorState.sleeping` is not a
 complete generic PHIL `ec` provider: `evaluateNativeQuietLeaf` has source
 equations, but generic noncar quiet hierarchy/contact-ring ownership remains
 explicitly incomplete. Do not substitute a TTL or arbitrary velocity cutoff.
-Packed track-column order and exact native physics-resource aliasing remain
-host-adapter gaps. This research made no runtime edits or production build.
+PERF-16 now connects supported quiet owners, native column/root return,
+collection-time repull, shared global slots and connotation-clone retention.
+Model/cache providers are collected only on the due one-second pass; its BSS
+clock survives race disposal. Unsupported hierarchies and exact native
+physics-resource memory aliasing remain explicit host gaps. See
+[production evidence](noncar-participation-performance.md).

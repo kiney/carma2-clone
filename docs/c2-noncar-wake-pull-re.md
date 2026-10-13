@@ -207,7 +207,10 @@ A complete retained-ACT adapter needs:
   pre-contact-V providers for cascading wake; no motor/TTL substitutes.
 - Sticky failure-marker handling and distinct PHIL-table diagnostics.
 
-Existing private browser prop bodies, full collection-time pull ownership,
-native packed column/ACT traversal and global physical resource aliasing
-remain integration gaps. This audit changed only this new evidence note;
-no runtime source or production build was modified.
+PERF-16 now implements retained static ACT ownership, shared physical occupancy,
+immediate supported-leaf preparation/collection-time candidate discovery,
+distinct capacity failure paths and static reclaim/repull. Native packed
+column/ACT traversal is retained. Quiet hierarchy/cascade propagation and exact
+native physical-resource memory aliasing remain gaps. Browser coordinate rebasing
+and conservative borrowed-face invalidation are explicit host adaptations. See
+[production evidence](noncar-participation-performance.md).

@@ -17,6 +17,7 @@ const { values } = parseArgs({
     root: { type: "string" },
     "cpu-profile": { type: "boolean", default: false },
     "allow-motion-changes": { type: "boolean", default: false },
+    "allow-participation-changes": { type: "boolean", default: false },
   },
 });
 for (const input of [values.url, values.baseline]) {
@@ -32,9 +33,11 @@ if (!["2", "4"].includes(values.samples))
 if (values.root && !["data", "adv_data"].includes(values.root))
   throw new Error("Use the data or adv_data catalog root");
 const report = {
-  outcomePolicy: values["allow-motion-changes"]
-    ? "Equal initial fixture required; intentional native movement differences are reported, not rejected. This is timing evidence, not native conformance."
-    : "Exact old/new initial state, outcomes and guard fractions required.",
+  outcomePolicy: values["allow-participation-changes"]
+    ? "Equal initial cars/parts and retained noncar counts required; changing active NONCAR participation is intentional. Full-roster and resulting-state equality are reported, not required; not native conformance."
+    : values["allow-motion-changes"]
+      ? "Equal initial fixture required; intentional native movement differences are reported, not rejected. This is timing evidence, not native conformance."
+      : "Exact old/new initial state, outcomes and guard fractions required.",
   note: "Two exact manual physics ticks plus one whole40ms updateFrame per prepared case and a separate bounded250ms CPU-only frame sample; this recreated fixture is not the exact preceding user frame. No long-running simulation. Traced first-tick time includes attribution overhead; second tick disables counters/guard tracing. Hardware/software backend is recorded, never inferred from launch flags.",
   cases: [],
   errors: [],
@@ -177,13 +180,27 @@ try {
         }),
       );
     }
-    const initial = JSON.stringify(samples[0].result.initialState),
+    const comparableInitial = (result) =>
+      values["allow-participation-changes"]
+        ? {
+            bodies: result.initialState.bodies.filter(
+              (body) => !body.key.startsWith("actor:"),
+            ),
+            retainedNonCars: result.population.noncars,
+          }
+        : result.initialState;
+    const initial = JSON.stringify(comparableInitial(samples[0].result)),
       state = JSON.stringify(samples[0].result.deterministicState),
       fractions = JSON.stringify(samples[0].result.tracedFractions);
     const comparison = {
       dataRoot,
       exactInitial: samples.every(
-        (s) => JSON.stringify(s.result.initialState) === initial,
+        (s) => JSON.stringify(comparableInitial(s.result)) === initial,
+      ),
+      exactInitialFullRoster: samples.every(
+        (s) =>
+          JSON.stringify(s.result.initialState) ===
+          JSON.stringify(samples[0].result.initialState),
       ),
       exactState: samples.every(
         (s) => JSON.stringify(s.result.deterministicState) === state,
@@ -207,6 +224,8 @@ try {
         frameStepMs: distribution(r.frameStepSamples),
         diagnostics: r.tracedDiagnostics,
         collectionWork: r.tracedCollectionWork,
+        initialBodyCount: r.initialState.bodies.length,
+        retainedNonCars: r.population.noncars,
         bodyCount: r.deterministicState.bodies.length,
         impactCount: r.deterministicState.impacts.length,
         cpuProfile: r.cpuProfile,
@@ -222,6 +241,7 @@ try {
     assert(
       comparison.exactInitial &&
         (values["allow-motion-changes"] ||
+          values["allow-participation-changes"] ||
           (comparison.exactState && comparison.exactFractions)),
       "Numerical fixture changed",
     );

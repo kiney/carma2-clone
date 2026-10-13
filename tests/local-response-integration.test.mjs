@@ -179,7 +179,7 @@ const momentumX = (bodies) =>
     0,
   );
 
-test("a callback replacement of a dormant third hull is discovered by local response before commitment", () => {
+test("a callback replacement of a registered sleeping third hull is discovered by local response before commitment", () => {
   const scene = new Group();
   const a = prop(-0.25, true, 4),
     b = prop(0, true),
@@ -189,6 +189,12 @@ test("a callback replacement of a dormant third hull is discovered by local resp
   for (const body of bodies) {
     scene.add(body.actor);
     sim.addNonCar(body);
+    assert.ok(
+      sim.admitNonCar(body, {
+        wake: !body.motor.sleeping,
+        resetVelocity: false,
+      }),
+    );
   }
   sim.correctionDiagnostics = {};
   const initialMomentum = momentumX(bodies);

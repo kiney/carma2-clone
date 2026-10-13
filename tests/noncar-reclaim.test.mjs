@@ -41,6 +41,57 @@ const frame = (activeNonCars, activeObjects = [], extra = {}) => ({
 });
 const kinds = (result) => result.effects.map((effect) => effect.kind);
 
+test("lazy reclaim providers are read only on due active passes and excess time is discarded", () => {
+  const runtime = new NativeNonCarReclaimRuntime();
+  let reads = 0;
+  const provider = () => {
+    reads++;
+    return frame([object("awake", { doNothing: false })]);
+  };
+  assert.equal(runtime.advanceFrame(5000, provider, undefined, 0).ran, false);
+  assert.equal(runtime.accumulatorMs, 0);
+  assert.equal(runtime.advanceFrame(999, provider, undefined, 1).ran, false);
+  assert.equal(reads, 0);
+  assert.equal(runtime.advanceFrame(1, provider, undefined, 1).ran, true);
+  assert.equal(reads, 1);
+  assert.equal(runtime.accumulatorMs, 0);
+  assert.equal(runtime.advanceFrame(2500, provider, undefined, 1).ran, true);
+  assert.equal(reads, 2, "a long frame invokes one pass");
+  assert.equal(runtime.accumulatorMs, 0);
+  assert.equal(runtime.advanceFrame(999, provider, undefined, 1).ran, false);
+  assert.equal(reads, 2);
+  assert.equal(runtime.advanceFrame(1, provider, undefined, 1).ran, true);
+  assert.equal(reads, 3);
+  assert.throws(() => runtime.advanceFrame(0, provider), /active count/);
+  assert.equal(reads, 3, "missing count must not eagerly invoke the provider");
+});
+
+test("lazy blocked-removal passes consume the clock despite missing providers", () => {
+  const runtime = new NativeNonCarReclaimRuntime();
+  let reads = 0,
+    allowRemoval = false;
+  const provider = () => {
+    reads++;
+    return frame([object("quiet")], [], { activeNonCarCount: 2, allowRemoval });
+  };
+  runtime.advanceFrame(600, provider, undefined, 2);
+  assert.equal(reads, 0);
+  const blocked = runtime.advanceFrame(400, provider, undefined, 2);
+  assert.equal(blocked.ran, true);
+  assert.equal(blocked.accumulatorMs, 0);
+  assert.equal(blocked.reclaimed.length, 0);
+  assert.equal(reads, 1);
+  assert.equal(runtime.advanceFrame(999, provider, undefined, 2).ran, false);
+  assert.equal(reads, 1);
+  allowRemoval = true;
+  const accepted = runtime.advanceFrame(1, provider, undefined, 2);
+  assert.equal(reads, 2);
+  assert.deepEqual(
+    accepted.reclaimed.map((item) => item.owner),
+    ["quiet"],
+  );
+});
+
 test("outer-frame accumulator pauses without active noncars, runs once and discards excess", () => {
   const runtime = new NativeNonCarReclaimRuntime(700),
     awake = object("awake", { doNothing: false });

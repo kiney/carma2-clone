@@ -3,9 +3,10 @@ id: TASK-100.11
 title: >-
   [P1] PERF-16: Separate static world ACTs from locally admitted physical
   objects
-status: next
+status: done
 assignee: []
 created_date: '2026-10-13 11:29'
+updated_date: '2026-10-13 19:51'
 labels:
   - priority-1
   - PERF-16
@@ -40,10 +41,16 @@ The user explicitly authorizes substantial, reversible physics and rendering red
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Record a body/PHIL/pulled/static-owner census before and after; inactive loaded ACTs no longer participate as ordinary active integration/response bodies merely because they were loaded.
-- [ ] #2 Validate static collision coverage, local oriented pull eligibility, immediate same-collection candidate preparation and successful activation without one-frame collision gaps.
-- [ ] #3 Handle admission/resource capacity failures and native fallback/sticky-failure semantics where verified; preserve ordinary world faces, drivable geometry, camera queries, smash and moving scenery.
-- [ ] #4 Integrate retained-ACT return/reclaim using already authoritative eligibility, cached MODEL/query bounds and source driver/ownership rules; unsupported hierarchy quiet states remain explicit until PERF-17.
-- [ ] #5 Check original Stock/Advanced approaches to dormant props, impulse-redirected impacts, activation, settling and repull; preserve original assets, visible scenery and source-supported gameplay effects.
-- [ ] #6 Report per-tick roster, bounds/guard/world work and short Chromium CPU evidence, with a separate checkpoint and user-playtest focus for scenery collisions and repeated prop activation.
+- [x] #1 Record a body/PHIL/pulled/static-owner census before and after; inactive loaded ACTs no longer participate as ordinary active integration/response bodies merely because they were loaded.
+- [x] #2 Validate static collision coverage, local oriented pull eligibility, immediate same-collection candidate preparation and successful activation without one-frame collision gaps.
+- [x] #3 Handle admission/resource capacity failures and native fallback/sticky-failure semantics where verified; preserve ordinary world faces, drivable geometry, camera queries, smash and moving scenery.
+- [x] #4 Integrate retained-ACT return/reclaim using already authoritative eligibility, cached MODEL/query bounds and source driver/ownership rules; unsupported hierarchy quiet states remain explicit until PERF-17.
+- [x] #5 Check original Stock/Advanced approaches to dormant props, impulse-redirected impacts, activation, settling and repull; preserve original assets, visible scenery and source-supported gameplay effects.
+- [x] #6 Report per-tick roster, bounds/guard/world work and short Chromium CPU evidence, with a separate checkpoint and user-playtest focus for scenery collisions and repeated prop activation.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented retained static ACT versus active PHIL ownership, oriented local admission and same-collection preparation, shared type-dedicated/forty-global-extra slots, distinct sticky physical versus retryable PHIL failure, supported quiet reclaim/native return/repull and connotation-clone resource/index retention. Original ACT capacity/resources remain retained; unknown hierarchy quiet stays PERF-17. Source BSS clock survives race disposal, with MODEL/cache providers read only at the due outer-frame pass. Hardware Stock/Advanced Timber initial car/part state matches; retained props stay466 while fixture active bodies fall480/484 to16/21. Whole40ms update CPU83.5->21.1ms Stock and34.3->27.9ms Advanced; adverse cold115.6ms Advanced first tick retained. See docs/noncar-participation-performance.md for limits, source addresses and ignored evidence. Build and2869 full tests pass; final focused admission/quiet checks pass. Four Stock/Advanced static approach/repull, authored debris and controlled original-road quiet/wake checks pass, with no fatal console/request/WebGL errors. Crash/repair/split/joint matrix and smash/powerup/Carrier completion pass. Quiet harness observes pre-reclaim state and distinguishes forced recovery; a labelled controlled drop avoids the original station ledge rather than altering mechanics. Severe crash checks verify actual accepted contact and finite in-world results instead of an arbitrary post-crash tether. DevTools AMD keyboard drive and original Timber tree collision verified. PERF-01 stays open; checkpoint then user scenery/debris playtest before PERF-17.
+<!-- SECTION:NOTES:END -->

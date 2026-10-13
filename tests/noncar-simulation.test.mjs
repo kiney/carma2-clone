@@ -48,6 +48,7 @@ test("smashed jointed scenery leaves the candidate hierarchy until re-enabled", 
   scene.add(body.actor);
   const sim = new VehicleSimulation(new WorldCollision(scene), scene);
   sim.addNonCar(body);
+  assert.ok(sim.admitNonCar(body, { wake: true }));
   body.motor.sleeping = false;
   body.properties.immovable = false;
   assert.ok(body.joint);
@@ -62,7 +63,7 @@ test("smashed jointed scenery leaves the candidate hierarchy until re-enabled", 
   sim.dispose();
 });
 
-test("sleeping original props remain separate from static geometry and refresh finite drivable faces", () => {
+test("admitted sleeping props keep source geometry and refresh finite drivable faces", () => {
   const source = new Group(),
     body = prop({ keywords: "DRIVABLE_ON" });
   source.position.set(5, 0, 0);
@@ -77,8 +78,26 @@ test("sleeping original props remain separate from static geometry and refresh f
   near(body.actor.position.x, 5);
   assert.equal(disposed, 0);
   const world = new WorldCollision(result);
-  assert.equal(world.triangles, 0);
-  world.addDynamic(body, body.actor, true);
+  assert.equal(
+    world.triangles,
+    12,
+    "unpulled cube retains its twelve static faces",
+  );
+  const staticHit = world.raycast(
+    new Vector3(5, 1, 0),
+    new Vector3(0, -1, 0),
+    2,
+  );
+  near(staticHit.point.y, 0.1, 1e-6);
+  assert.equal(
+    staticHit.body,
+    undefined,
+    "unpulled static geometry has no dynamic owner",
+  );
+  // This isolated world fixture models an already admitted drivable owner;
+  // unpulled ACT coverage and collection-time admission have separate tests.
+  world.setNonCarParticipation(body, body.actor, true, true);
+  assert.equal(world.triangles, 0, "admission removes stale static copies");
   const hit = world.raycast(new Vector3(5, 1, 0), new Vector3(0, -1, 0), 2);
   assert.equal(hit.body, body);
   near(hit.point.y, 0.1, 1e-6);
@@ -101,7 +120,7 @@ test("sleeping original props remain separate from static geometry and refresh f
   );
 });
 
-test("body contact wakes a dormant prop and conserves authored two-body horizontal momentum", () => {
+test("body contact wakes a registered sleeping prop and conserves authored two-body horizontal momentum", () => {
   const scene = new Group(),
     a = prop({ mass: 0.1, name: "&07c0001.ACT" }),
     b = prop({ mass: 0.3, name: "&07c0002.ACT" });
@@ -115,6 +134,8 @@ test("body contact wakes a dormant prop and conserves authored two-body horizont
     simulation = new VehicleSimulation(world, scene);
   simulation.addNonCar(a);
   simulation.addNonCar(b);
+  assert.ok(simulation.admitNonCar(a, { wake: true }));
+  assert.ok(simulation.admitNonCar(b, { wake: false }));
   a.motor.sleeping = false;
   a.properties.immovable = false;
   a.state.velocity.x = 3;
@@ -158,6 +179,7 @@ test("activated source translation motor has finite travel and preserves its aut
   scene.add(body.actor);
   const simulation = new VehicleSimulation(new WorldCollision(scene), scene);
   simulation.addNonCar(body);
+  assert.ok(simulation.admitNonCar(body, { wake: true }));
   body.motor.flags |= 1;
   body.motor.sleeping = false;
   body.properties.immovable = false;

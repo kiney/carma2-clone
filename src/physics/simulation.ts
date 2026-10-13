@@ -18,6 +18,12 @@ import {
   StationaryBoundsCache,
   type StationaryBoundsDiagnostics,
 } from "./stationary-bounds-cache";
+import { NativeNonCarSlots, type NativeNonCarBodySlot } from "./noncar-slots";
+import {
+  NativeNonCarReclaimRuntime,
+  nativeNonCarId,
+  type NativeNonCarReclaimEffect,
+} from "./noncar-reclaim";
 import { CameraContactFrame } from "../camera/contact-frame";
 import {
   activateNativePedBody,
@@ -282,6 +288,9 @@ import {
 } from "./attachment";
 
 export const PHYSICS_STEP = 0.04;
+// Installed677cb8 has no race-load reset. The kernel retains only this clock,
+// never body/ACT references, so race disposal can preserve its BSS lifetime.
+const sharedNoncarReclaim = new NativeNonCarReclaimRuntime<RigidBody>();
 export type SimulatedVehicleState = VehicleState & MotionState;
 export interface BodyVolumeState {
   volume: SpecialVolume | null;
@@ -604,7 +613,24 @@ function copyContactRows(rows: readonly Contact[]): Contact[] {
 export class VehicleSimulation {
   cars: SimulatedCar[] = [];
   debris: DetachedBody[] = [];
+  /** Retained ACT catalog, deliberately larger than the active PHIL roster. */
   noncars: NonCarBody[] = [];
+  readonly nonCarSlots = new NativeNonCarSlots<NonCarBody>();
+  private readonly noncarReclaim = sharedNoncarReclaim;
+  private readonly noncarsByActor = new Map<Object3D, NonCarBody>();
+  private readonly admittedNoncars = new Set<NonCarBody>();
+  private readonly noncarReturnIds = new WeakMap<NonCarBody, number>();
+  private readonly initialNoncarSleep = new Set<NonCarBody>();
+  private pullWakeSourceVelocity?: Vector3;
+  isNonCarPhysicsActive(body: NonCarBody): boolean {
+    return this.phil.getHeader(body) !== null;
+  }
+  activeNonCars(): NonCarBody[] {
+    return [...this.admittedNoncars].filter(
+      (body) =>
+        this.isNonCarPhysicsActive(body) && !this.disabledWorldActor(body),
+    );
+  }
   pedBodies: NativePedBody[] = [];
   /** Stable FORM-owned detached objects. Sleeping does not release the owner. */
   pedBoneBodies: NativePedBoneBody[] = [];
@@ -869,6 +895,8 @@ export class VehicleSimulation {
     readTimeMs: () => this.smashClock(),
     readPhysics: (contact) => this.liveSmashPhysics(contact.bodyActor),
     random: sharedNativeRandom.random,
+    isPulled: (body) => this.isNonCarPhysicsActive(body),
+    admit: (body) => this.admitNonCar(body, { wake: true }),
     onActivate: (body) => this.dormantPoses.delete(body),
   });
   private oilWheelPrevious = new WeakMap<SimulatedCar, Array<Vector3 | null>>();
@@ -1164,8 +1192,9 @@ export class VehicleSimulation {
   addNonCar(body: NonCarBody) {
     // Authored debris is already pulled at this outlet. Ordinary level ACTs
     // stay outside PHIL until their actual wheel/contact promotion.
-    if (body.actor.userData.noncarPulled && !this.admitPulledNonCar(body))
-      throw new Error("No native PHIL header available for pulled noncar");
+    const alreadyPulled = !!body.actor.userData.noncarPulled;
+    if (!this.isNonCarPhysicsActive(body))
+      body.actor.userData.noncarPulled = false;
     const definition = body.mechanics.worldJoint;
     if (definition?.kind === "translation") {
       const local = new Vector3(...definition.position);
@@ -1198,12 +1227,278 @@ export class VehicleSimulation {
         definition.travel,
       );
     }
-    this.noncars.push(body);
-    this.world.addDynamic(body, body.actor, body.mechanics.drivableOn);
+    if (!this.noncars.includes(body)) this.noncars.push(body);
+    this.noncarsByActor.set(body.actor, body);
+    if (
+      alreadyPulled &&
+      !this.admitNonCar(body, { wake: true, resetVelocity: false })
+    )
+      throw new Error(
+        "No native physical slot/PHIL header available for pulled noncar",
+      );
   }
-  private admitPulledNonCar(body: NonCarBody): boolean {
-    if (this.phil.getHeader(body)) return true;
-    return this.phil.addActiveImmediate(body) === 0;
+  /** Installed41ff40 reserves a type slot then a global extra before PHIL.
+   * A header failure rolls back to static coverage: deliberate browser safety
+   * adaptation of the original unchecked PHIL return, not native sticky-x. */
+  admitNonCar(
+    body: NonCarBody,
+    options: {
+      wake?: boolean;
+      resetVelocity?: boolean;
+      slot?: NativeNonCarBodySlot;
+    } = {},
+  ): boolean {
+    if (this.isNonCarPhysicsActive(body)) {
+      if (
+        options.slot &&
+        !this.nonCarSlots.claim(body, body.mechanics.index, options.slot)
+      )
+        return false;
+      if (options.wake) this.wakeNonCarPhysics(body);
+      return true;
+    }
+    if (body.actor.name[1] === "x" || this.disabledWorldActor(body))
+      return false;
+    const slot = this.nonCarSlots.claim(
+      body,
+      body.mechanics.index,
+      options.slot,
+    );
+    if (!slot) {
+      // Native physical capacity failure permanently disables numeric pulls;
+      // the original MODEL continues emitting ordinary static faces.
+      body.actor.name =
+        body.actor.name.slice(0, 1) + "x" + body.actor.name.slice(2);
+      const native = this.world.getNonCarNativeActor?.(body.actor);
+      if (native) native.name = body.actor.name;
+      return false;
+    }
+    const velocity = body.state.velocity.clone(),
+      omega = body.state.angularVelocity.clone();
+    const wasImmovable = body.properties.immovable,
+      wasMotorSleeping = body.motor.sleeping;
+    if (options.resetVelocity !== false) {
+      body.state.velocity.set(0, 0, 0);
+      body.state.angularVelocity.set(0, 0, 0);
+    }
+    body.previousVelocity.copy(body.state.velocity);
+    let quiet: NativeNonCarQuietState | undefined;
+    if (supportsNativeNonCarQuiet(body).supported) {
+      quiet = createNativeNonCarQuiet(body);
+      // DoPull initializes ec=1 before PHIL preparation; a subsequent wake
+      // is a separate source event, including immediately enabled cascades.
+      quiet.doNothing = true;
+      this.noncarQuiet.set(body, quiet);
+      // Immediate InternalPrepareObject snapshot, WITHOUT another force pass.
+      prepareNativeNonCarQuiet(body, quiet, new Vector3());
+    }
+    body.properties.immovable = true;
+    this.initialNoncarSleep.add(body);
+    if (this.phil.addActiveImmediate(body) !== 0) {
+      this.nonCarSlots.release(body);
+      this.noncarQuiet.delete(body);
+      this.initialNoncarSleep.delete(body);
+      body.state.velocity.copy(velocity);
+      body.state.angularVelocity.copy(omega);
+      body.properties.immovable = wasImmovable;
+      body.motor.sleeping = wasMotorSleeping;
+      return false;
+    }
+    const nativeActor = this.world.getNonCarNativeActor?.(body.actor);
+    try {
+      this.noncarReturnIds.set(
+        body,
+        nativeNonCarId(
+          body.actor.name,
+          !!nativeActor &&
+            nativeActor.parent === this.world.nativeScene?.additionalActors,
+        ),
+      );
+    } catch {
+      /* Synthetic actors without a native ID cannot use source reclaim. */
+    }
+    this.admittedNoncars.add(body);
+    body.actor.userData.noncarPulled = true;
+    body.actor.userData.c2ActorTypeData = body;
+    body.actor.userData.nativeNoncarDriver = 4;
+    this.world.setNonCarParticipation(
+      body,
+      body.actor,
+      true,
+      body.mechanics.drivableOn,
+    );
+    this.pedContactRings.set(body, new Set([body]));
+    this.dormantPoses.delete(body);
+    this.invalidateWorldFaceCache();
+    // New owners receive their candidate immediately at the local roster
+    // refresh barrier, even when sleeping or their eventual lambda is zero.
+    if (options.wake) this.wakeNonCarPhysics(body);
+    return true;
+  }
+  private wakeNonCarPhysics(body: NonCarBody): void {
+    const quiet = this.noncarQuiet.get(body);
+    if (quiet) wakeNativeNonCarQuiet(body, quiet);
+    this.initialNoncarSleep.delete(body);
+    body.properties.immovable = false;
+    // ec wake is distinct from RISE_WHEN_HIT/DRIVEN_ON motor activation.
+    if (body.mechanics.worldJoint?.kind !== "translation")
+      body.motor.sleeping = false;
+    this.dormantPoses.delete(body);
+    this.invalidateWorldFaceCache(body);
+  }
+  nonCarCensus() {
+    const active = this.activeNonCars();
+    return {
+      retained: this.noncars.length,
+      active: active.length,
+      pulled: this.noncars.filter((b) => !!b.actor.userData.noncarPulled)
+        .length,
+      static: this.noncars.length - active.length,
+      physicalSlots: this.nonCarSlots.count,
+      dedicatedSlots: this.nonCarSlots.dedicatedCount,
+      extraSlots: this.nonCarSlots.extraCount,
+      phil: this.phil.registeredBodies.length,
+      supportedQuiet: active.filter((b) => this.noncarQuiet.has(b)).length,
+      sleeping: active.filter((b) => this.noncarQuiet.get(b)?.doNothing).length,
+    };
+  }
+  /** Installed4203e0, once after FinishCars, never a TTL/speed-based eviction.
+   * Unsupported hierarchy ec remains active until PERF-17 supplies its owner. */
+  finishNonCarReclaim(framePeriodMs: number): void {
+    const active = this.activeNonCars(),
+      minimumWorldY = this.world.minimumWorldY;
+    if (minimumWorldY == null) return;
+    this.noncarReclaim.advanceFrame(
+      Math.round(framePeriodMs) >>> 0,
+      () => this.nonCarReclaimFrame(active, minimumWorldY),
+      (effect) => this.applyNonCarReclaimEffect(effect),
+      active.length,
+    );
+  }
+  private nonCarReclaimFrame(active: NonCarBody[], minimumWorldY: number) {
+    const combined: RigidBody[] = [
+      ...this.cars.filter((c) => this.isCarPhysicsActive(c)),
+      ...this.debris.filter((b) => this.phil.getHeader(b)),
+      ...active,
+    ];
+    const isQuiet = (body: RigidBody) =>
+      "kind" in body && body.kind === "noncar"
+        ? this.noncarQuiet.get(body as NonCarBody)?.doNothing === true
+        : false;
+    // A missing provider must retain owners, not fabricate current AABBs in
+    // place of the source's retained +124/+144 GetFacesNearObject cache.
+    const missingCache = combined.some(
+      (b) =>
+        !isQuiet(b) &&
+        (!this.worldFaceStates.get(b) ||
+          this.worldFaceStates.get(b)!.bounds.isEmpty()),
+    );
+    const objects = combined.flatMap((owner) => {
+      const cached = this.worldFaceStates.get(owner);
+      return cached && !cached.bounds.isEmpty()
+        ? [
+            {
+              owner,
+              doNothing: isQuiet(owner),
+              cachedBounds: cached.bounds,
+              cachedInverse: cached.inverse,
+            },
+          ]
+        : [];
+    });
+    const candidates = active.flatMap((owner) => {
+      const quiet = this.noncarQuiet.get(owner);
+      const authoredModelBounds = this.world.getNonCarModelBounds(owner.actor);
+      if (!quiet || !authoredModelBounds) return [];
+      const carId = this.noncarReturnIds.get(owner);
+      if (carId === undefined) return [];
+      owner.actor.updateWorldMatrix(true, false);
+      return [
+        {
+          owner,
+          driver: Number(owner.actor.userData.nativeNoncarDriver ?? 4),
+          doNothing: quiet.doNothing,
+          actorMatrix: owner.actor.matrixWorld.clone(),
+          authoredModelBounds,
+          committedMatrix: new Matrix4().compose(
+            owner.state.position,
+            owner.state.orientation,
+            new Vector3(1, 1, 1),
+          ),
+          flags: owner.motor.flags,
+          jointReference: owner.originalPosition,
+          carId,
+        },
+      ];
+    });
+    return {
+      activeNonCars: candidates,
+      activeNonCarCount: active.length,
+      allowRemoval: !missingCache,
+      activeObjects: objects,
+      minimumWorldY,
+      viewedOwner: null,
+    };
+  }
+  private applyNonCarReclaimEffect(
+    effect: NativeNonCarReclaimEffect<RigidBody>,
+  ): void {
+    const body = effect.owner as NonCarBody;
+    switch (effect.kind) {
+      case "set-do-nothing": {
+        const quiet = this.noncarQuiet.get(body);
+        if (quiet) quiet.doNothing = true;
+        body.properties.immovable = true;
+        break;
+      }
+      case "zero-body-omega":
+        body.state.angularVelocity.set(0, 0, 0);
+        break;
+      case "set-actor-matrix":
+        effect.matrix.decompose(
+          body.state.position,
+          body.state.orientation,
+          new Vector3(),
+        );
+        this.syncActor(body);
+        break;
+      case "set-committed-translation":
+        body.state.position.copy(effect.position);
+        break;
+      // The browser actor is retained by rendering; native reparenting happens
+      // at return-actor. Neither this nor clear-splashes disposes ACT resources.
+      case "remove-actor":
+      case "clear-splashes":
+        break;
+      case "set-driver":
+        body.actor.userData.nativeNoncarDriver = 0;
+        this.nonCarSlots.release(body);
+        break;
+      case "return-actor":
+        this.world.setNonCarParticipation(
+          body,
+          body.actor,
+          false,
+          body.mechanics.drivableOn,
+          effect.destination === "additional-actors",
+        );
+        break;
+      case "clear-actor-binding":
+        body.actor.userData.noncarPulled = false;
+        delete body.actor.userData.c2ActorTypeData;
+        break;
+      case "remove-physics":
+        this.phil.remove(body);
+        this.admittedNoncars.delete(body);
+        this.noncarQuiet.delete(body);
+        this.initialNoncarSleep.delete(body);
+        this.dormantPoses.delete(body);
+        this.pedContactRings.delete(body);
+        this.contactSurfaces.delete(body);
+        this.worldFaceStates.delete(body);
+        this.invalidateWorldFaceCache();
+        break;
+    }
   }
   addMovingWorld(body: MovingWorldBody) {
     this.movingWorld.push(body);
@@ -1368,15 +1663,18 @@ export class VehicleSimulation {
   }
   private pullWorldActor(actor: Object3D): object | null {
     if (!this.physicsQueryDepth) return null;
-    const body = this.noncars.find((body) => body.actor === actor);
-    if (!body || actor.userData.noncarPulled) return null;
-    if (!this.admitPulledNonCar(body)) return null;
-    this.collisionTraversalRevision++;
-    actor.userData.noncarPulled = true;
-    actor.userData.c2ActorTypeData = body;
-    body.state.velocity.set(0, 0, 0);
-    body.state.angularVelocity.set(0, 0, 0);
-    this.dormantPoses.delete(body);
+    const body = this.noncarsByActor.get(actor);
+    if (!body) {
+      // Installed420007: missing mechanics has the same sticky numeric-pull
+      // failure as exhausted physical slots. Its MODEL remains static.
+      actor.name = actor.name.slice(0, 1) + "x" + actor.name.slice(2);
+      const native = this.world.getNonCarNativeActor?.(actor);
+      if (native) native.name = actor.name;
+      return null;
+    }
+    if (this.isNonCarPhysicsActive(body)) return null;
+    const wake = (this.pullWakeSourceVelocity?.lengthSq() ?? 0) !== 0;
+    if (!this.admitNonCar(body, { wake })) return null;
     return body;
   }
   private physicsQueryDepth = 0;
@@ -1438,9 +1736,8 @@ export class VehicleSimulation {
     return [
       ...this.cars.filter((car) => this.isCarPhysicsActive(car)),
       ...this.debris.filter((body) => !this.attachedToInactiveCar(body)),
-      ...this.noncars.filter(
-        (body) =>
-          !this.disabledWorldActor(body) && !this.attachedToInactiveCar(body),
+      ...this.activeNonCars().filter(
+        (body) => !this.attachedToInactiveCar(body),
       ),
       ...this.mineBodies.filter(
         (body) => !(body.mine.flags & MINE_FLAGS.exploded),
@@ -1680,11 +1977,15 @@ export class VehicleSimulation {
     }
   }
   private allJoints(): RigidJoint[] {
-    return [...this.debris, ...this.noncars].flatMap((b) =>
+    return [...this.debris, ...this.activeNonCars()].flatMap((b) =>
       b.joint &&
       !b.properties.immovable &&
       !this.attachedToInactiveCar(b) &&
-      !("kind" in b && b.kind === "noncar" && this.disabledWorldActor(b))
+      !(
+        "kind" in b &&
+        b.kind === "noncar" &&
+        (!this.isNonCarPhysicsActive(b) || this.disabledWorldActor(b))
+      )
         ? [b.joint]
         : [],
     );
@@ -2025,7 +2326,8 @@ export class VehicleSimulation {
         )
           return;
         if (noncar) {
-          if (!this.admitPulledNonCar(noncar)) return;
+          if (!this.admitNonCar(noncar, { wake: true, resetVelocity: false }))
+            return;
           noncar.motor.sleeping = false;
           noncar.properties.immovable = false;
           noncar.actor.userData.noncarPulled = true;
@@ -2039,7 +2341,7 @@ export class VehicleSimulation {
             noncar &&
             notifyNonCarDrivenOn(noncar.mechanics, noncar.motor, owners, noncar)
           )
-            noncar.properties.immovable = false;
+            this.admitNonCar(noncar, { wake: true, resetVelocity: false });
         }
       },
       sampleOil: (
@@ -2431,10 +2733,13 @@ export class VehicleSimulation {
           if (
             quietState?.doNothing &&
             (!other.properties.immovable || passiveOther)
-          ) {
-            wakeNativeNonCarQuiet(noncar, quietState);
-            this.invalidateWorldFaceCache(noncar);
-          }
+          )
+            this.wakeNonCarPhysics(noncar);
+          else if (
+            this.initialNoncarSleep.has(noncar) &&
+            !other.properties.immovable
+          )
+            this.wakeNonCarPhysics(noncar);
         }
         if (!body || !isNativePedBody(body)) continue;
         if (body.headerState === 1) {
@@ -2798,6 +3103,7 @@ export class VehicleSimulation {
     }
     this.finishPedFrame(Math.round(Math.max(0, dt) * 1000) >>> 0);
     this.onFinishCars?.(Math.round(Math.max(0, dt) * 1000) >>> 0);
+    this.finishNonCarReclaim(Math.round(Math.max(0, dt) * 1000) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
     if (!this.deferFinalSmashFlush) this.processOilFrame();
@@ -2835,6 +3141,7 @@ export class VehicleSimulation {
     this.accumulator = window.interpolationAlpha * PHYSICS_STEP;
     this.finishPedFrame(Math.round(framePeriodMs) >>> 0);
     this.onFinishCars?.(Math.round(framePeriodMs) >>> 0);
+    this.finishNonCarReclaim(Math.round(framePeriodMs) >>> 0);
     this.flushOrdinaryCrush();
     this.finishCrashFrame();
     for (const car of this.cars) {
@@ -4679,7 +4986,8 @@ export class VehicleSimulation {
         if (other) {
           notifyNonCarBodyContact(noncar.mechanics, noncar.motor);
           if (noncar.properties.immovable) {
-            if (!this.admitPulledNonCar(noncar)) continue;
+            if (!this.admitNonCar(noncar, { wake: true, resetVelocity: false }))
+              continue;
             this.dormantPoses.delete(noncar);
             noncar.properties.immovable = false;
             changed = true;
@@ -4885,7 +5193,7 @@ export class VehicleSimulation {
         this.applyFreeBodyForces(body);
         return true;
       });
-      for (const body of this.noncars) {
+      for (const body of this.activeNonCars()) {
         if (this.disabledWorldActor(body) || this.attachedToInactiveCar(body)) {
           this.noncarQuiet.delete(body);
           continue;
@@ -4908,6 +5216,8 @@ export class VehicleSimulation {
           body.collisionFlags = 0;
           continue;
         }
+        if (this.initialNoncarSleep.has(body)) continue;
+        if (quietState) body.motor.sleeping = false;
         if (body.motor.sleeping && body.motor.pauseUntilMs === 0) continue;
         const environment = this.updateSpecialVolume(body);
         const beforeForces = body.state.velocity.clone();
@@ -4935,7 +5245,7 @@ export class VehicleSimulation {
       this.preparePedBonePhysics();
       const bodies = this.allBodies();
       prepareJointVelocities(this.allJoints());
-      for (const body of this.noncars)
+      for (const body of this.activeNonCars())
         body.previousVelocity.copy(body.state.velocity);
       for (const body of bodies) {
         body.overlapDetected = false;
@@ -4955,6 +5265,9 @@ export class VehicleSimulation {
         (typeof provider === "function" &&
           (provider as { correctionObserverSource?: unknown })
             .correctionObserverSource === native);
+      const sourceVelocities = new Map(
+        this.allBodies().map((body) => [body, body.state.velocity.clone()]),
+      );
       this.lastImpacts = runLocalResponses<SimulationBody>({
         roster: () => this.allBodies(),
         joints: () => this.allJoints(),
@@ -5002,27 +5315,32 @@ export class VehicleSimulation {
           else this.hierarchyMotion.writeCandidates(roster);
         },
         worldRows: (body) => {
-          // Native finite surface collection remains live. Angular CCD adds
-          // missing directions, including a wall while the floor supports the
-          // body. Its safe-prefix writes are not a normal-response candidate:
-          // every pair must see the same OLD-reintegrated endpoints this phase.
-          const native = this.worldContacts(body, body.hulls);
-          const position = body.state.predictedPosition!.clone();
-          const orientation = body.state.predictedOrientation!.clone();
-          const angular = this.advanceWorldContacts(body).contacts;
-          body.state.predictedPosition!.copy(position);
-          body.state.predictedOrientation!.copy(orientation);
-          return [
-            ...native,
-            ...angular.filter(
-              (row) =>
-                !native.some(
-                  (other) =>
-                    other.b === row.b &&
-                    other.normal.dot(row.normal) > 1 - 1e-8,
-                ),
-            ),
-          ];
+          this.pullWakeSourceVelocity = sourceVelocities.get(body);
+          try {
+            // Native finite surface collection remains live. Angular CCD adds
+            // missing directions, including a wall while the floor supports the
+            // body. Its safe-prefix writes are not a normal-response candidate:
+            // every pair must see the same OLD-reintegrated endpoints this phase.
+            const native = this.worldContacts(body, body.hulls);
+            const position = body.state.predictedPosition!.clone();
+            const orientation = body.state.predictedOrientation!.clone();
+            const angular = this.advanceWorldContacts(body).contacts;
+            body.state.predictedPosition!.copy(position);
+            body.state.predictedOrientation!.copy(orientation);
+            return [
+              ...native,
+              ...angular.filter(
+                (row) =>
+                  !native.some(
+                    (other) =>
+                      other.b === row.b &&
+                      other.normal.dot(row.normal) > 1 - 1e-8,
+                  ),
+              ),
+            ];
+          } finally {
+            this.pullWakeSourceVelocity = undefined;
+          }
         },
         pairRows: (roster, incident) =>
           this.collectBodyContacts(roster, incident),
@@ -5164,7 +5482,7 @@ export class VehicleSimulation {
       for (const body of this.mineBodies)
         if (!(body.mine.flags & MINE_FLAGS.exploded)) this.syncActor(body);
       for (const body of this.pedBoneBodies) this.syncActor(body);
-      for (const body of this.noncars) {
+      for (const body of this.activeNonCars()) {
         if (
           body.attached &&
           body.mechanics.worldJoint?.kind !== "translation" &&
@@ -5382,6 +5700,10 @@ export class VehicleSimulation {
     this.debris = [];
     for (const body of this.noncars) this.world.removeDynamic(body);
     this.noncars = [];
+    this.noncarsByActor.clear();
+    this.nonCarSlots.clear();
+    this.admittedNoncars.clear();
+    this.initialNoncarSleep.clear();
     this.noncarQuiet.clear();
     for (const body of this.movingWorld) this.world.removeDynamic(body);
     this.movingWorld = [];

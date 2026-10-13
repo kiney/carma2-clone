@@ -46,7 +46,8 @@
     "test:ped-assets": "node tests/native-ped-personality-audit.mjs",
     "test:ped-bones": "npm run build && node tests/browser-ped-bone-runtime.mjs",
     "test:ped-gameplay": "npm run build && node tests/browser-ped-native-gameplay.mjs",
-    "test:render-matrices": "npm run build && node tests/browser-render-matrices.mjs"
+    "test:render-matrices": "npm run build && node tests/browser-render-matrices.mjs",
+    "test:noncar-participation": "npm run build && node tests/browser-noncar-participation.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

@@ -399,3 +399,19 @@ saved-next ring traversal, native active-set failure reporting and exceptional
 joint/PHIL metadata are not claimed exact. Collection-time activation and
 geometry changes discard stale rows and rediscover against the full roster.
 See [PERF-15 evidence](local-response-performance.md) for validation and costs.
+
+## Local NONCAR physical participation (PERF-16)
+
+Retained scenery now stays in static MODEL/triangle queries until successful
+physical-slot and PHIL admission; local response discovers/prepares the new
+candidate in the same collection. Original type-dedicated/forty-global-extra
+occupancy is shared with connotation debris. Supported source-quiet leaves
+return to static native columns/root/additional while retaining ACT resources,
+then can be pulled again. Reclaim uses authored OWN MODEL and retained face-query
+cache bounds at the original outer-frame cadence, with a process-lifetime clock.
+Unknown hierarchy quiet state is retained for PERF-17. Native header-failure
+rollback, Three/native matrix rebasing and broad face-cache invalidation are
+explicit browser adaptations, not verified original unchecked-failure behavior.
+See [runtime and numerical evidence](noncar-participation-performance.md),
+[wake/pull addresses](c2-noncar-wake-pull-re.md) and
+[reclaim formulas](c2-noncar-slot-reclaim-re.md).

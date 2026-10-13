@@ -68,6 +68,7 @@ test("fixed-step moving world supplies owner velocity and finite platform faces"
   const world = new WorldCollision(scene),
     sim = new VehicleSimulation(world, scene);
   sim.addNonCar(body);
+  assert.ok(sim.admitNonCar(body, { wake: true, resetVelocity: false }));
   const moving = createMovingWorldBody(actor);
   sim.addMovingWorld(moving);
   sim.grooves = {
@@ -112,6 +113,7 @@ test("world model removal caps stale contact rows and recollects without invisib
   const world = new WorldCollision(scene),
     sim = new VehicleSimulation(world, scene);
   sim.addNonCar(body);
+  assert.ok(sim.admitNonCar(body, { wake: true, resetVelocity: false }));
   sim.destruction = new WorldDestruction(scene, [
     {
       flags: 0,
@@ -154,6 +156,7 @@ test("smash thresholds use individual rows before the native cap summation", () 
   const world = new WorldCollision(scene),
     sim = new VehicleSimulation(world, scene);
   sim.addNonCar(body);
+  assert.ok(sim.admitNonCar(body, { wake: true, resetVelocity: false }));
   sim.destruction = new WorldDestruction(scene, [
     {
       flags: 0,

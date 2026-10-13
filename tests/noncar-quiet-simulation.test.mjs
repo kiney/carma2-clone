@@ -60,6 +60,8 @@ function simulation(surfaces = [floor]) {
       querySurfaces() {
         return surfaces;
       },
+      // Pure force/quiet fixture has no renderer/native ACT ownership.
+      setNonCarParticipation() {},
       addDynamic() {},
       removeDynamic() {},
     },

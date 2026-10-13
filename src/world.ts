@@ -25,14 +25,19 @@ import {
   findNativeFacesInBox,
 } from "./native-find-faces";
 import {
+  allocateNativeOrderedActor,
   enumerateNativeActorChildren,
+  prependNativeActor,
+  removeNativeActor,
   knownNativeActorValue as known,
 } from "./native-actor-order";
 import type { NativeOrderedActor } from "./native-actor-order";
+import type { NativeActorDescriptor } from "./native-actor-order";
 import type { NativeModelPickFace } from "./native-model-pick";
 import {
   nativeWorldMatrix,
   pullNativeWorldActor,
+  returnNativeWorldActor,
   type NativeWorldScene,
 } from "./native-world-scene";
 import {
@@ -47,6 +52,7 @@ import type { NativeWorldFaceQuery } from "./physics/world-face-cache";
 import { cameraTriangleInBox } from "./camera/triangle-box";
 import { cameraShapeRay } from "./camera/own-shape";
 import type { CollisionHull } from "./physics/geometry";
+import { nativeNonCarModelBounds } from "./physics/noncar-reclaim";
 
 export interface WorldFaceCollectorCallbacks {
   /** Runs on the emitted immutable row before its MODEL stop notification. */
@@ -148,6 +154,30 @@ export class WorldCollision {
   private staticChildren = new Map<THREE.Object3D, readonly THREE.Object3D[]>();
   private nativeActorsByMesh = new Map<THREE.Mesh, NativeOrderedActor[]>();
   private nativeMeshesByActor = new WeakMap<NativeOrderedActor, THREE.Mesh>();
+  private nativeActorsByObject = new WeakMap<
+    THREE.Object3D,
+    NativeOrderedActor
+  >();
+  private retainedCloneMeshes = new Set<THREE.Mesh>();
+  private retainedCloneRecords = new WeakMap<
+    THREE.Object3D,
+    {
+      actors: NativeOrderedActor[];
+      objects: THREE.Object3D[];
+      meshes: THREE.Mesh[];
+    }
+  >();
+  private retainedCloneActorSerial = 0;
+  private retainedCloneStaticOrder = 0;
+  private nativeCloneFaceIndices = new WeakMap<
+    NativeOrderedActor,
+    Map<number, number>
+  >();
+  private initialMinimumWorldY: number | null = null;
+  /** Retained load-time bounds are independent of admitted or smashed geometry. */
+  get minimumWorldY(): number | null {
+    return this.initialMinimumWorldY;
+  }
   private cellSize = 4;
   private staticGuardRevision: object = {};
   private staticGuardFriction: number[] = [];
@@ -231,6 +261,7 @@ export class WorldCollision {
     this.transforms.beginPhase();
     if (nativeScene)
       for (const [actor, object] of nativeScene.actorObjects) {
+        this.nativeActorsByObject.set(object, actor);
         const old = this.nativePoses.get(actor),
           p = object.position,
           q = object.quaternion,
@@ -249,6 +280,18 @@ export class WorldCollision {
         });
       }
     this.rebuildStatic();
+    const nativeMinimum = nativeScene?.initialBounds?.min[1];
+    if (nativeMinimum !== undefined && Number.isFinite(nativeMinimum))
+      this.initialMinimumWorldY = nativeMinimum;
+    else {
+      // Legacy worlds have no native load provider. Capture their actual initial
+      // triangles once; production uses the original initial ACT bounds above.
+      let minimum = Infinity;
+      for (const entry of this.staticOwners.values())
+        for (const surface of entry.surfaces)
+          minimum = Math.min(minimum, surface.minY);
+      if (Number.isFinite(minimum)) this.initialMinimumWorldY = minimum;
+    }
   }
   rebuildStatic() {
     this.staticGuardRevision = {};
@@ -273,17 +316,28 @@ export class WorldCollision {
         )
           additional.push(object);
       });
+    const retainedOutside = [...this.retainedCloneMeshes].filter((mesh) => {
+      for (let node: THREE.Object3D | null = mesh; node; node = node.parent)
+        if (node === this.sourceRoot) return false;
+      return !this.sourceTriangles.has(mesh);
+    });
     const surfaces = this.sourceMeshes
-      ? [...this.sourceMeshes, ...additional].flatMap((mesh) =>
-          this.makeSurfaces(mesh, undefined, true),
+      ? [...this.sourceMeshes, ...additional, ...retainedOutside].flatMap(
+          (mesh) => this.makeSurfaces(mesh, undefined, true),
         )
-      : this.makeSurfaces(this.sourceRoot);
+      : [
+          ...this.makeSurfaces(this.sourceRoot),
+          ...retainedOutside.flatMap((mesh) =>
+            this.makeSurfaces(mesh, undefined, true),
+          ),
+        ];
     const meshes: THREE.Mesh[] = [];
     if (this.sourceMeshes) meshes.push(...this.sourceMeshes, ...additional);
     else
       this.sourceRoot.traverse((object) => {
         if (object instanceof THREE.Mesh) meshes.push(object);
       });
+    meshes.push(...retainedOutside);
     for (const [order, mesh] of meshes.entries())
       this.staticOwners.set(mesh, {
         order,
@@ -416,7 +470,8 @@ export class WorldCollision {
       this.triangles -= entry.indexed;
       entry.cells.clear();
       entry.indexed = 0;
-      let retained = this.sourceTriangles.has(mesh);
+      let retained =
+        this.sourceTriangles.has(mesh) || this.retainedCloneMeshes.has(mesh);
       for (let node: THREE.Object3D | null = mesh; node; node = node.parent)
         if (node === this.sourceRoot) retained = true;
       entry.surfaces = retained
@@ -589,6 +644,377 @@ export class WorldCollision {
     return surfaces;
   }
   private dynamicOwners = new Map<THREE.Object3D, RigidBody>();
+  getNonCarNativeActor(actor: THREE.Object3D): NativeOrderedActor | null {
+    return this.nativeActorsByObject.get(actor) ?? null;
+  }
+  /** Borrow existing native bindings or resolve authored ACT local names through
+   * the real DAT/MAT registry. Render names/material group order supply no
+   * substitute resource identity. Unsupported providers publish no ACTs. */
+  retainNonCarClone(
+    actor: THREE.Object3D,
+    templateActor: THREE.Object3D,
+  ): boolean {
+    if (this.getNonCarNativeActor(actor)) return true;
+    const scene = this.nativeScene;
+    if (
+      !scene ||
+      !Array.isArray(scene.actors) ||
+      Object.isFrozen(scene.actors) ||
+      !(scene.actorObjects instanceof Map) ||
+      !(scene.faceActors instanceof Map) ||
+      !(scene.meshes instanceof Map) ||
+      !(scene.initialGeometries instanceof Map)
+    )
+      return false;
+    const pairs: {
+      object: THREE.Object3D;
+      template: THREE.Object3D;
+      source: NativeOrderedActor | null;
+      descriptor: NativeActorDescriptor;
+    }[] = [];
+    const objects = new Map<THREE.Object3D, THREE.Object3D>();
+    const descriptor = (
+      object: THREE.Object3D,
+    ): NativeActorDescriptor | null => {
+      const source = this.getNonCarNativeActor(object),
+        data = object.userData;
+      let type: number, style: number, model, material, bounds;
+      if (source) {
+        type = source.type;
+        style = source.renderStyle;
+        model = source.localModel;
+        material = source.localMaterial;
+        bounds = source.bounds;
+      } else {
+        if (
+          !Number.isInteger(data.c2ActorType) ||
+          !Number.isInteger(data.c2ActorRenderStyle) ||
+          !(
+            data.c2ActorLocalModelName === null ||
+            typeof data.c2ActorLocalModelName === "string"
+          ) ||
+          !(
+            data.c2ActorLocalMaterialName === null ||
+            typeof data.c2ActorLocalMaterialName === "string"
+          )
+        )
+          return null;
+        type = data.c2ActorType;
+        style = data.c2ActorRenderStyle;
+        const localModel = data.c2ActorLocalModelName;
+        let resource: NativeTrackModelResource | null | undefined;
+        try {
+          resource =
+            localModel === null ? null : scene.findModelResource?.(localModel);
+        } catch {
+          // Missing native preparation/MAT providers must not block the clone's
+          // existing dynamic physics path or publish a fabricated static ACT.
+          return null;
+        }
+        if (resource === undefined) return null;
+        model = known(resource);
+        const localMaterial = data.c2ActorLocalMaterialName;
+        if (localMaterial !== null && !scene.findMaterialSource) return null;
+        try {
+          material = known(
+            localMaterial === null
+              ? null
+              : (scene.findMaterialSource!(localMaterial) ?? null),
+          );
+        } catch {
+          return null;
+        }
+        if ((type === 5 || type === 6) && !data.c2ActorBounds) return null;
+        bounds = known(data.c2ActorBounds ?? null);
+      }
+      if (
+        !model.resolved ||
+        !material.resolved ||
+        !bounds.resolved ||
+        (model.value && !scene.resources.has(model.value))
+      )
+        return null;
+      return {
+        type,
+        renderStyle: style,
+        matrix: [],
+        localModel: model,
+        localMaterial: material,
+        bounds,
+        provenance: source
+          ? `Retained noncar clone of ${source.id}`
+          : "Retained clone with registry-resolved authored ACT metadata",
+      };
+    };
+    const match = (clone: THREE.Object3D, source: THREE.Object3D): boolean => {
+      if (clone.children.length !== source.children.length) return false;
+      objects.set(source, clone);
+      if (
+        !(source instanceof THREE.Mesh) ||
+        this.getNonCarNativeActor(source)
+      ) {
+        const fields = descriptor(source);
+        if (!fields) return false;
+        pairs.push({
+          object: clone,
+          template: source,
+          source: this.getNonCarNativeActor(source),
+          descriptor: fields,
+        });
+      }
+      return source.children.every((child, i) =>
+        match(clone.children[i], child),
+      );
+    };
+    if (
+      !match(actor, templateActor) ||
+      !pairs.some((pair) => pair.object === actor)
+    )
+      return false;
+    const participating = new Set(
+      pairs.map((pair) => pair.source).filter((source) => source !== null),
+    );
+    for (const { source } of pairs)
+      if (source)
+        for (let child = source.firstChild; child; child = child.next)
+          if (!participating.has(child)) return false;
+    const state = { roots: [], actors: [...scene.actors] };
+    const copies = new Map<THREE.Object3D, NativeOrderedActor>();
+    const nativeCopies = new Map<NativeOrderedActor, NativeOrderedActor>();
+    for (const pair of pairs) {
+      const object = pair.object;
+      const local = object.matrixAutoUpdate
+        ? new THREE.Matrix4().compose(
+            object.position,
+            object.quaternion,
+            object.scale,
+          )
+        : object.matrix;
+      const copy = allocateNativeOrderedActor(state, {
+        ...pair.descriptor,
+        name: object.name,
+        matrix: nativeWorldMatrix(local),
+      });
+      Object.defineProperty(copy, "id", {
+        value: `retained-clone:${this.retainedCloneActorSerial++}`,
+      });
+      copies.set(pair.template, copy);
+      if (pair.source) nativeCopies.set(pair.source, copy);
+    }
+    for (const pair of pairs) {
+      const children: NativeOrderedActor[] = [];
+      if (pair.source) {
+        for (let child = pair.source.firstChild; child; child = child.next)
+          children.push(nativeCopies.get(child)!);
+        children.reverse(); // Preserve the already linked native order.
+      } else {
+        for (const child of pair.template.children)
+          if (copies.has(child)) children.push(copies.get(child)!);
+        // File-order child additions prepend, just like BrActorAllocate loading.
+      }
+      for (const child of children)
+        prependNativeActor(copies.get(pair.template)!, child);
+    }
+    this.transforms.invalidatePhase();
+    const root = copies.get(templateActor)!;
+    const parentWorld = this.nativeParentWorldMatrix(scene.nonTrackActors);
+    if (!parentWorld.determinant())
+      throw new Error(
+        "Native clone retention requires an invertible non-track parent",
+      );
+    root.matrix = nativeWorldMatrix(
+      parentWorld.invert().multiply(this.transforms.resolve(actor).matrix),
+    );
+    for (const pair of pairs) {
+      const copy = copies.get(pair.template)!;
+      (scene.actors as NativeOrderedActor[]).push(copy);
+      scene.actorObjects.set(copy, pair.object);
+      scene.faceActors.set(copy, pair.object);
+      this.nativeActorsByObject.set(pair.object, copy);
+      const sourceMesh = pair.source && scene.meshes.get(pair.source);
+      const mesh = sourceMesh
+        ? objects.get(sourceMesh)
+        : pair.object.children.find((node) => node instanceof THREE.Mesh);
+      if (mesh instanceof THREE.Mesh) {
+        scene.meshes.set(copy, mesh);
+        scene.initialGeometries.set(copy, mesh.geometry);
+        this.retainedCloneMeshes.add(mesh);
+        this.rememberNativeMesh(copy, mesh);
+        this.nativeGeometryRevisions.set(copy, captureColliderMesh(mesh));
+        const entry: StaticColliderState = {
+          order: Math.max(
+            this.retainedCloneStaticOrder,
+            this.staticOwners.size,
+          ),
+          surfaces: [],
+          cells: new Set(),
+          indexed: 0,
+          parents: [],
+        };
+        this.retainedCloneStaticOrder = entry.order + 1;
+        this.staticOwners.set(mesh, entry);
+        this.rememberStaticOwner(mesh, entry);
+        const faces = mesh.geometry.userData.sourceFaces;
+        const count = mesh.geometry.getAttribute("position")?.count ?? 0;
+        if (Array.isArray(faces) && count === faces.length * 3) {
+          const indices = new Map<number, number>();
+          for (let i = 0; i < (mesh.geometry.index?.count ?? count) / 3; i++)
+            indices.set(
+              Math.floor((mesh.geometry.index?.getX(i * 3) ?? i * 3) / 3),
+              i,
+            );
+          this.nativeCloneFaceIndices.set(copy, indices);
+        }
+      }
+    }
+    prependNativeActor(scene.nonTrackActors, root);
+    actor.traverse((object) =>
+      this.staticChildren.set(object, [...object.children]),
+    );
+    this.retainedCloneRecords.set(actor, {
+      actors: pairs.map((pair) => copies.get(pair.template)!),
+      objects: pairs.map((pair) => pair.object),
+      meshes: pairs.flatMap((pair) => {
+        const mesh = scene.meshes.get(copies.get(pair.template)!);
+        return mesh ? [mesh] : [];
+      }),
+    });
+    this.staticGuardRevision = {};
+    this.transforms.invalidatePhase();
+    return true;
+  }
+  /** Failed clone pull/PHIL admission frees only this copied ACT registration.
+   * Reclaim must use participation return instead. Borrowed MODEL/MAT/geometry
+   * remain live, and original track ACTs cannot enter this cleanup path. */
+  discardNonCarClone(actor: THREE.Object3D): boolean {
+    const retained = this.retainedCloneRecords.get(actor),
+      scene = this.nativeScene;
+    if (!retained || !scene) return false;
+    const owner = this.dynamicOwners.get(actor);
+    if (owner) this.removeDynamic(owner);
+    removeNativeActor(retained.actors[0]);
+    const removed = new Set(retained.actors);
+    const actors = scene.actors as NativeOrderedActor[];
+    for (let i = actors.length - 1; i >= 0; i--)
+      if (removed.has(actors[i])) actors.splice(i, 1);
+    for (const native of retained.actors) {
+      (scene.actorObjects as Map<NativeOrderedActor, THREE.Object3D>).delete(
+        native,
+      );
+      (scene.faceActors as Map<NativeOrderedActor, THREE.Object3D>).delete(
+        native,
+      );
+      (scene.meshes as Map<NativeOrderedActor, THREE.Mesh>).delete(native);
+      (
+        scene.initialGeometries as Map<NativeOrderedActor, THREE.BufferGeometry>
+      ).delete(native);
+      this.nativeSync.delete(native);
+      this.nativeLocalWritten.delete(native);
+      this.nativeGeometryRevisions.delete(native);
+      this.nativeGeometryOwners.delete(native);
+      this.nativeReplacementSourceFaces.delete(native);
+      this.nativeCloneFaceIndices.delete(native);
+      this.nativeMeshesByActor.delete(native);
+    }
+    for (const object of retained.objects) {
+      this.nativeActorsByObject.delete(object);
+      this.staticChildren.delete(object);
+    }
+    for (const mesh of retained.meshes) {
+      this.retainedCloneMeshes.delete(mesh);
+      this.nativeActorsByMesh.delete(mesh);
+      this.staticChildren.delete(mesh);
+      const entry = this.staticOwners.get(mesh);
+      if (entry) {
+        for (const key of entry.cells) {
+          const remaining =
+            this.cells.get(key)?.filter((surface) => surface.actor !== mesh) ??
+            [];
+          if (remaining.length) this.cells.set(key, remaining);
+          else this.cells.delete(key);
+        }
+        this.triangles -= entry.indexed;
+        for (const parent of entry.parents) {
+          const members = this.staticMembership.get(parent);
+          members?.delete(mesh);
+          if (!members?.size) this.staticMembership.delete(parent);
+        }
+        this.staticOwners.delete(mesh);
+      }
+    }
+    this.retainedCloneRecords.delete(actor);
+    this.staticGuardRevision = {};
+    this.transforms.invalidatePhase();
+    return true;
+  }
+  /** Reclaim reads the ACT's OWN authored MODEL, including unused DAT vertices.
+   * No inherited model, collision hull, render mesh or world AABB substitute.
+   * Missing/custom MODEL providers deliberately block source reclaim. */
+  getNonCarModelBounds(actor: THREE.Object3D): THREE.Box3 | null {
+    const native = this.getNonCarNativeActor(actor);
+    if (!native || !this.nativeScene) return null;
+    this.syncNativeGeometry(native);
+    if (!native.localModel.resolved || !native.localModel.value) return null;
+    const source = this.nativeScene.resources.get(
+      native.localModel.value,
+    )?.source;
+    if (!source || source.flags & 0x400) return null;
+    return nativeNonCarModelBounds(source);
+  }
+  /** Caller has already obtained physical-slot and PHIL ownership. Dormant ACTs
+   * retain static faces, active noncars replace them with body geometry, and
+   * moving-world collider ownership continues through addDynamic separately.
+   * The simulation also invalidates retained native face-cache references. */
+  setNonCarParticipation(
+    owner: object,
+    actor: THREE.Object3D,
+    active: boolean,
+    drivable = true,
+    additional = false,
+  ): void {
+    const body = owner as RigidBody;
+    const scene = this.nativeScene;
+    const native = this.getNonCarNativeActor(actor);
+    const wasActive = this.dynamicOwners.get(actor) === body;
+    if (
+      active &&
+      wasActive &&
+      actor.userData.dynamicBody === true &&
+      (!native || native.parent === scene?.nonTrackActors)
+    )
+      return;
+    if (
+      !active &&
+      !wasActive &&
+      actor.userData.dynamicBody === false &&
+      (!native || native.parent !== scene?.nonTrackActors)
+    )
+      return;
+    this.transforms.invalidatePhase();
+    if (native && scene) {
+      // The host's actual world pose must precede the native parent transition.
+      // Three/render retention can keep a different parent than native ACTs.
+      this.syncNativeActor(native);
+      if (active) {
+        if (native.parent !== scene.nonTrackActors)
+          pullNativeWorldActor(scene, native);
+      } else if (wasActive || native.parent === scene.nonTrackActors) {
+        const position = new THREE.Vector3().setFromMatrixPosition(
+          this.transforms.resolve(actor).matrix,
+        );
+        returnNativeWorldActor(scene, native, position, additional);
+      }
+      this.nativeSync.delete(native);
+      this.nativeLocalWritten.delete(native);
+      this.transforms.invalidatePhase();
+    }
+    actor.userData.dynamicBody = active;
+    if (active) this.addDynamic(body, actor, drivable, false);
+    else this.removeDynamic(body);
+    // Borrowed source mesh identities persist even when native parent links
+    // change without matching Three reparenting; rebuild only this ACT's owners.
+    this.invalidateActors([actor]);
+  }
   addDynamic(
     owner: RigidBody,
     actor: THREE.Object3D,
@@ -832,7 +1258,8 @@ export class WorldCollision {
           const pulled = object
             ? (callbacks.pullActorFromWorld?.(object) ?? null)
             : null;
-          if (pulled !== null) pullNativeWorldActor(scene, actor);
+          if (pulled !== null && actor.parent !== scene.nonTrackActors)
+            pullNativeWorldActor(scene, actor);
           this.transforms.invalidatePhase();
           return known(pulled);
         },
@@ -1272,9 +1699,9 @@ export class WorldCollision {
       if (candidate.name === sourceModel?.name) fallback = candidate;
     }
     mesh ??= fallback;
-    const currentFace = this.nativeRuntimeFaceIndices
-      .get(row.model)
-      ?.get(row.nativeFaceIndex);
+    const currentFace =
+      this.nativeRuntimeFaceIndices.get(row.model)?.get(row.nativeFaceIndex) ??
+      this.nativeCloneFaceIndices.get(row.actor)?.get(row.sourceFaceIndex);
     if (currentFace !== undefined) faceIndex = currentFace;
     if (!mesh) mesh = scene.meshes?.get(row.actor);
     let owner: RigidBody | undefined;

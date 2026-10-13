@@ -265,6 +265,7 @@ async function scenario(reuse, t, randomState, stopTimer, mode) {
     for (const body of props) {
       scene.add(body.actor);
       sim.addNonCar(body);
+      assert.ok(sim.admitNonCar(body, { wake: true, resetVelocity: false }));
     }
   }
   for (const car of cars) {

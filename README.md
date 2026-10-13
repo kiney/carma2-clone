@@ -65,7 +65,11 @@ results documented rather than a steady-FPS guarantee.
 those eight global rounds with C2-informed collision rings and deferred friction.
 Saved Cerby work is localized while preserving movement, joints and repair.
 Whole-tick timings are mixed, including an Advanced regression; PERF-01 remains
-open and PERF-16 next addresses the still-loaded inactive physics roster.
+open. [Local NONCAR participation](docs/noncar-participation-performance.md)
+now keeps loaded scenery static until actual admission, rather than walking all
+466 Timber props as physics bodies. Shared physical slots, retained static return
+and repull preserve scenery collisions; unsupported hierarchy sleep remains
+PERF-17. Short whole-update timings improve, with cold-frame limits documented.
 
 ## Run it
 
@@ -189,11 +193,14 @@ group expiry and material replacement. These ghost contacts are controlled
 fixtures, separately labelled from driven crashes. `npm run test:noncar-debris`
 checks authored Stock/Advanced city pump and Carrier gun debris: original
 mechanics, collision hulls, physical motion, fire columns and race cleanup.
-`npm run test:noncar-quiet` additionally checks original free props reaching
-source contact-ring sleep and waking through physical car contacts; its report
-retains incomplete city velocity-exchange coverage. Slot admission/reclaim,
-jointed hierarchy quiet state and positive-material preparation order still
-have documented integration gaps. See [wake and repull evidence](docs/c2-noncar-wake-pull-re.md).
+`npm run test:noncar-quiet` additionally checks controlled original free-body drops reaching
+source contact-ring sleep and registered wake/static repull with real car-body
+impulses. Authored launch snapshots remain separate; the previous city station
+ledge fixture is not proof of unobstructed velocity exchange. `npm run test:noncar-participation` checks original Stock/Advanced
+static approaches and retained-ACT reclaim/repull. Local slot admission and
+free-prop reclaim are integrated; jointed hierarchy quiet state, native physical
+memory aliasing and positive-material preparation order still have documented
+gaps. See [wake and repull evidence](docs/c2-noncar-wake-pull-re.md).
 
 ## Asset and license notes
 

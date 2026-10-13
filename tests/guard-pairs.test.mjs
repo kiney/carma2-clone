@@ -10,12 +10,16 @@ import { WorldCollision } from "../src/world.ts";
 // Independent source-shaped NONCARS fixture. Rotation locking isolates normal
 // momentum; zero authored OBJECT_FRICTION disables tangent impulses. The world
 // skip exercises the early-return path which previously left stale candidates.
-function prop(x, z = 0, { awake = false, vx = 0, ignoreWorld = true } = {}) {
+function prop(
+  x,
+  z = 0,
+  { awake = false, vx = 0, ignoreWorld = true, mechanicsIndex = 7 } = {},
+) {
   const actor = new Group();
-  actor.name = "&07c0001.ACT";
+  actor.name = `&${String(mechanicsIndex).padStart(2, "0")}c0001.ACT`;
   actor.position.set(x, 1, z);
   const mechanics = parseNonCarMechanics(
-    `101\n7\n0,0,0\n0,-.1,0\n1\nbox\n-.1,-.1,-.1\n.1,.1,.1\n.1,2\n.2,.2,.2\n0\n0\n0\nINFINITE_I\nOBJECT_FRICTION\n0\n${ignoreWorld ? "IGNORE_WORLD_COLLISIONS\n" : ""}END`,
+    `101\n${mechanicsIndex}\n0,0,0\n0,-.1,0\n1\nbox\n-.1,-.1,-.1\n.1,.1,.1\n.1,2\n.2,.2,.2\n0\n0\n0\nINFINITE_I\nOBJECT_FRICTION\n0\n${ignoreWorld ? "IGNORE_WORLD_COLLISIONS\n" : ""}END`,
   );
   const body = createNonCarBody(actor, mechanics);
   body.motor.sleeping = !awake;
@@ -27,7 +31,17 @@ function simulation(bodies) {
   const scene = new Group();
   for (const body of bodies) scene.add(body.actor);
   const sim = new VehicleSimulation(new WorldCollision(scene), scene);
-  for (const body of bodies) sim.addNonCar(body);
+  for (const body of bodies) {
+    sim.addNonCar(body);
+    // These pair-response fixtures use registered movers/sleeping neighbors,
+    // not unpulled scenery without MODEL/native collection metadata.
+    assert.ok(
+      sim.admitNonCar(body, {
+        wake: !body.motor.sleeping,
+        resetVelocity: false,
+      }),
+    );
+  }
   return sim;
 }
 const close = (actual, expected, tolerance = 1e-8) =>
@@ -131,22 +145,45 @@ test("forty disconnected loose-prop wakes each rebuild their own collision group
     pairs = [],
     bodies = [];
   for (let index = 0; index < count; index++) {
-    const a = prop(-0.25, index * 2, { awake: true, vx: 4 }),
-      b = prop(0, index * 2);
+    // Forty mechanics types each own one dedicated slot and share forty
+    // extras. All eighty bodies fit the actual NONCAR and PHIL capacities.
+    const a = prop(-0.25, index * 2, {
+        awake: true,
+        vx: 4,
+        mechanicsIndex: index,
+      }),
+      b = prop(0, index * 2, { mechanicsIndex: index });
     pairs.push([a, b]);
     bodies.push(a, b);
   }
   const sim = simulation(bodies);
+  const originalPrepare = sim.preparePedContacts;
+  const wokeBeforeSolve = new Set();
+  sim.preparePedContacts = function (contacts) {
+    const sleeping = new Set(
+      contacts.flatMap((contact) =>
+        pairs.flatMap(([, b]) =>
+          b.motor.sleeping && (contact.a === b || contact.b === b) ? [b] : [],
+        ),
+      ),
+    );
+    const prepared = originalPrepare.call(this, contacts);
+    // Native geometry wake precedes lambda construction. Each sleeping owner
+    // must be movable before these rows can enter the response matrix.
+    for (const b of sleeping) {
+      assert.equal(b.motor.sleeping, false);
+      assert.equal(b.properties.immovable, false);
+      wokeBeforeSolve.add(b);
+    }
+    return prepared;
+  };
   try {
     sim.step();
+    assert.equal(wokeBeforeSolve.size, count);
     for (const [index, [a, b]] of pairs.entries()) {
       assert.equal(b.motor.sleeping, false, `group${index} must wake`);
       assert.equal(b.properties.immovable, false);
       const impacts = sim.lastImpacts.filter((impact) => pair(impact, a, b));
-      assert.ok(
-        impacts.some((impact) => impact.sourceType === 9),
-        "dormant-mass solve is cancelled before its impulses apply",
-      );
       assert.ok(
         impacts.some(
           (impact) => impact.sourceType !== 9 && impact.normalImpulse > 0.001,
@@ -162,6 +199,7 @@ test("forty disconnected loose-prop wakes each rebuild their own collision group
     // so unrelated groups after the30th must still exchange their momentum.
     assert.ok(pairs.at(-1)[1].state.velocity.x > 1);
   } finally {
+    sim.preparePedContacts = originalPrepare;
     sim.dispose();
   }
 });
