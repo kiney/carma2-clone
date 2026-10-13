@@ -1,7 +1,9 @@
 # Captured own-debris lockup (PHY-13)
 
 User-driven hardware Chromium capture, 2026-10-13, source `3135cf6`.
-Tracked as **PHY-13 / TASK-106**, priority 1, backlog. No engine fix is implemented.
+Tracked as **PHY-13 / TASK-106**, priority 1. This document records the pre-fix
+diagnosis; the implemented recovery admission and its validation are documented
+in [old-overlap recovery](old-overlap-recovery.md).
 
 ## Verified live state
 

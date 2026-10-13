@@ -239,6 +239,20 @@ the next P1 ticket for a separate checkpoint after user playtesting. Current
 board: 120 tasks, 65 `backlog`, 6 `next`, 1 `wip`, 48 `done`. PERF-01 alone
 remains active; the broader paused Goal is unchanged.
 
+PHY-13 / TASK-106 is now `done`: native-qualified old hull-pair recovery admits
+solver-selected phase movement instead of forcing monotonically decreasing
+penetration. Fresh clear phases rearm collision checks; independent other hulls,
+third bodies, finite world contacts and physical joint-tree timing remain guarded.
+[Recovery evidence](../docs/old-overlap-recovery.md) records the captured player/
+Cerby release, preserved impulses, numerical regressions and production/MCP
+driving, new own-piece contact and repair validation. This does not close the
+whole rendered Timber performance investigation. PERF-15 is the next P1
+checkpoint after user playtesting. The separately discovered nested-parent
+eligibility discrepancy is PHY-14 / TASK-108, P2 in `backlog`, without an engine
+change in that scope. Current board: 121 tasks, 66 `backlog`, 5 `next`, 1 `wip`,
+49 `done`. PERF-01 alone remains active; WIP limit3 and the broader paused Goal
+are unchanged.
+
 ```sh
 backlog task edit TASK-1 --status next
 backlog task edit TASK-1 --status wip

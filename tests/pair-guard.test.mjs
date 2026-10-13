@@ -80,7 +80,7 @@ test("touching cars can separate or slide without being frozen by source toleran
   );
 });
 
-test("initial overlap may escape, but cannot deepen or clear and re-enter", () => {
+test("overlap without native recovery eligibility retains the conservative guard", () => {
   const a = box(-0.1),
     b = box(0.1),
     still = path(b);

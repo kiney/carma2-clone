@@ -149,6 +149,12 @@ Debug mode is off on page load and stays selected across race changes within tha
 
 ## Tests
 
+`npm run test:overlap` checks original Eagle3/Cerby driving out of embedded
+released bodywork, renewed physical own-part collisions, full repair and finite
+road support in the production Chromium build. See [old-overlap recovery](docs/old-overlap-recovery.md)
+for native evidence, captured regressions and the deliberate guard-policy change.
+Optional ignored-capture tests skip when their local snapshots are absent.
+
 `npm run test:render-matrices` builds and checks real Stock/Advanced pedestrian
 reactivation, matrix parity, render-pass flags and population cleanup in Chromium.
 

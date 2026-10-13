@@ -13,13 +13,18 @@ import {
   hullBounds,
   hullPenetration,
   hullPenetrationExceeds,
+  nativeHullRecoveryOverlap,
   sweepHullsFraction,
   transformHull,
   type CollisionHull,
 } from "./geometry";
 import { hasImmutableCollisionHulls } from "./immutable-hulls";
 
-export type HullBody = RigidBody & { hulls: CollisionHull[] };
+export type HullBody = RigidBody & {
+  hulls: CollisionHull[];
+  /** Native prior-overlap flag0x100, rebuilt from detection each tick. */
+  overlapRecovery?: boolean;
+};
 /** Pure filter: spatial discovery omits calls for non-contacting pairs. */
 export type BodyPairPredicate = (a: HullBody, b: HullBody) => boolean;
 export interface GuardPose {
@@ -92,6 +97,7 @@ export interface BodyGuardDiagnostics extends BodyBroadphaseDiagnostics {
   dependencyMerges: number;
   revalidationCalls: number;
   conservativeFallbacks: number;
+  recoveryHullAdmissions: number;
 }
 interface GeometrySnapshot {
   hulls: CollisionHull[];
@@ -148,6 +154,9 @@ class GuardWorkingSet {
     private diagnostics?: BodyGuardDiagnostics,
     private immutable?: ImmutableGuardGeometry,
   ) {}
+  admitRecoveryHull() {
+    if (this.diagnostics) this.diagnostics.recoveryHullAdmissions++;
+  }
   sample(body: HullBody, path: PosePath, fraction: number): GeometrySnapshot {
     if (body.properties.immovable && path.constantPose) {
       const old = this.constants.get(body);
@@ -211,7 +220,8 @@ class GuardWorkingSet {
 /** Independent commit safety guard, NOT an alternative impulse/damage solver.
  * The original feature emitter/normal equations remain authoritative. Verify
  * the actual post-solver integration path so exhausting recollection passes
- * cannot commit interlocking convex shapes. Existing overlap may escape.
+ * cannot introduce unchecked new interlocks. Native-qualified OLD overlap
+ * follows recovery/solver motion for this phase, without a monotone-depth veto.
  * CCD between short angular samples also catches a crossing with clear ends. */
 export function guardPairTrajectory(
   a: HullBody,
@@ -269,6 +279,24 @@ export function guardPairTrajectory(
   let allowed = oldA.map((_, i) =>
     oldB.map((_, j) => depthAt(oldSampleA, oldSampleB, i, j)),
   );
+  // Native427d9c..427df0 returns recovery rows (including zero) instead of
+  // feature CCD for the full candidate step. It imposes no SAT-depth decrease.
+  // Admission belongs to this actual OLD hull pair, not its owner/body/tree.
+  // Rebuild next phase: once old geometry is clear, re-entry is checked again.
+  const admitted = oldA.map((hullA, i) =>
+    oldB.map((hullB, j) => {
+      const result =
+        !!(a.overlapRecovery || b.overlapRecovery) &&
+        allowed[i][j] > DEPTH_EPSILON &&
+        nativeHullRecoveryOverlap(hullA, hullB);
+      if (result) workingSet?.admitRecoveryHull();
+      return result;
+    }),
+  );
+  // Do not spend an angular sample walk proving a browser-only invariant on
+  // pairs already admitted by native recovery. Other hull/body/world pairs
+  // retain their independent guards and ordinary source impulses/damage.
+  if (admitted.every((row) => row.every(Boolean))) return 1;
   const travel = (path: PosePath) => {
     const poses = [0, 0.25, 0.5, 0.75, 1].map(path);
     return {
@@ -310,6 +338,7 @@ export function guardPairTrajectory(
       hb = getB(t);
     return ha.hulls.some((_, i) =>
       hb.hulls.some((_, j) => {
+        if (admitted[i][j]) return false;
         const limit = allowed[i][j] + DEPTH_EPSILON;
         const known = ha.depths[i]?.[j];
         if (known !== undefined) return known > limit;
@@ -337,6 +366,7 @@ export function guardPairTrajectory(
     for (let i = 0; i < oldA.length; i++)
       for (let j = 0; j < oldB.length; j++) {
         if (
+          admitted[i][j] ||
           allowed[i][j] > DEPTH_EPSILON ||
           !oldA[i].faces.length ||
           !oldB[j].faces.length
@@ -381,11 +411,12 @@ export function guardPairTrajectory(
       }
       return lo;
     }
-    // Each local overlap must not deepen; after it clears, re-entry is new.
+    // Non-admitted overlap retains the historical guard. Native admissions
+    // last this phase, independently of within-phase SAT depth fluctuations.
     allowed = nextA.map((_, i) =>
       nextB.map((_, j) =>
         // Zero cannot decrease: a full SAT depth here would be discarded.
-        allowed[i][j] === 0
+        admitted[i][j] || allowed[i][j] === 0
           ? allowed[i][j]
           : Math.min(allowed[i][j], depthAt(nextSampleA, nextSampleB, i, j)),
       ),
@@ -503,6 +534,7 @@ export class BodyTrajectoryGuard {
         diagnostics.dependencyMerges =
         diagnostics.revalidationCalls =
         diagnostics.conservativeFallbacks =
+        diagnostics.recoveryHullAdmissions =
           0;
     }
     const workingSet = new GuardWorkingSet(diagnostics, this.immutable);

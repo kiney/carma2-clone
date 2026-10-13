@@ -3,10 +3,10 @@ id: TASK-106
 title: >-
   [P1] PHY-13: Resolve vehicle lockups caused by deeply overlapping detached own
   parts
-status: next
+status: done
 assignee: []
 created_date: '2026-10-13 00:37'
-updated_date: '2026-10-13 11:32'
+updated_date: '2026-10-13 13:23'
 labels:
   - priority-1
   - PHY-13
@@ -16,12 +16,8 @@ labels:
 dependencies:
   - TASK-100.9
 references:
-  - docs/own-debris-lockup.md
-  - docs/guard-coupling-fix.md
-  - src/physics/simulation.ts
-  - src/physics/pair-guard.ts
-  - src/physics/geometry.ts
-  - docs/perf13-root-cause-analysis.md
+  - docs/old-overlap-recovery.md
+  - tools/replay-old-overlap.mjs
 priority: high
 ordinal: 1200
 ---
@@ -38,11 +34,11 @@ Use separate reversible Git checkpoints and provide a concise user-playtest focu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Replay the captured original-car and detached-part kinematics/hulls as a deterministic headless fixture and reproduce absent recovery rows plus near-zero accepted movement before the fix; proprietary fixtures stay ignored or load locally.
-- [ ] #2 Trace C2 detached-part admission, former-owner collision rules and old-overlap recovery; distinguish native behavior from browser-specific guard restrictions, including corrected joint candidate paths from PERF-14.
-- [ ] #3 Restore physical release/contact response in the player/wing and comparable damaged/detached cases. Allow native-supported temporary old penetration where justified, while checking new third-body impacts, separation/re-entry, fast world/car collisions and sustained interlocks. Document intentional guard-policy changes instead of requiring unchanged monotone-depth decisions.
-- [ ] #4 Validate head-on/oblique/repeated impacts, physical debris, attachment transitions, repair/reset and multiple original cars in Chromium with clean console/WebGL. Add meaningful numerical/gameplay regressions for the changed behavior and provide a reviewed checkpoint plus a focused user playtest.
-- [ ] #5 Investigate the Cerby opponent/hood/three-ball-joint cluster using bounded per-pass diagnostics; demonstrate release or source-eligible settling without deleting meaningful response, and report tick/guard-cost changes. Distinguish partial replay from actual world/forces/damage behavior and do not promise this alone cures all PERF-13 stalls.
+- [x] #1 Replay the captured original-car and detached-part kinematics/hulls as a deterministic headless fixture and reproduce absent recovery rows plus near-zero accepted movement before the fix; proprietary fixtures stay ignored or load locally.
+- [x] #2 Trace C2 detached-part admission, former-owner collision rules and old-overlap recovery; distinguish native behavior from browser-specific guard restrictions, including corrected joint candidate paths from PERF-14.
+- [x] #3 Restore physical release/contact response in the player/wing and comparable damaged/detached cases. Allow native-supported temporary old penetration where justified, while checking new third-body impacts, separation/re-entry, fast world/car collisions and sustained interlocks. Document intentional guard-policy changes instead of requiring unchanged monotone-depth decisions.
+- [x] #4 Validate head-on/oblique/repeated impacts, physical debris, attachment transitions, repair/reset and multiple original cars in Chromium with clean console/WebGL. Add meaningful numerical/gameplay regressions for the changed behavior and provide a reviewed checkpoint plus a focused user playtest.
+- [x] #5 Investigate the Cerby opponent/hood/three-ball-joint cluster using bounded per-pass diagnostics; demonstrate release or source-eligible settling without deleting meaningful response, and report tick/guard-cost changes. Distinguish partial replay from actual world/forces/damage behavior and do not promise this alone cures all PERF-13 stalls.
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -57,4 +53,14 @@ Reviewed cross-link 2026-10-13: the Cerby/own-hood/three-jointed-parts cluster h
 Bounded partial captured-body replay tools/replay-captured-corrections.mjs confirms type6 rows for pairs6/14 and11/14, nine joint rows each round, and real kinematic changes on bodies6/10/11/12/14 through round8. Removing only those bodies on clones empties pair collection. Missing world/forces/damage prevents declaring complete attribution or a production fix. Installed native exhaustion has no velocity reset; full detach uses angular admission rather than hull clearance and released own debris remains eligible. Ordinary recovery auxiliary-omega/local-velocity trace is mathematically equivalent to existing browser pre-candidate point velocity. The conservative monotone SAT commitment extension remains the likely incompatibility to investigate, with explicit third-body/re-entry/projection tests before relaxing it. No PHY-13 production behavior change.
 
 2026-10-13 structural queue: reused as entry2 to avoid duplicate guard ownership. Latest user direction explicitly permits substantial reversible physics/guard redesign and intermediate playtests. Previous absolute prohibition on deeper existing overlap is superseded by native-informed recovery and practical third-body/re-entry/tunneling/interlock regression acceptance. Historical captures and no-fix conclusions remain evidence.
+
+Implemented native-qualified per-hull OLD-overlap admission for the captured commitment phase. Eligibility requires prior recovery flag, positive actual OLD SAT depth and the same native edge-inside/finite-clip overlap detector used by recovery. Qualified cells follow source solver-selected motion without a monotone-depth veto; admitted-only pairs avoid redundant angular sampling/bisection. No owner immunity, artificial force/damage/damping, retry/timestep change or world/sphere-guard change. Fresh clear phases restore new-entry checks; independent other hulls, third bodies/world and physical hierarchy caps stay guarded. Temporary deepening/pass-through/exit-reentry within an admitted phase is the deliberate native-informed policy, not an exhaustive continuous safety promise.
+
+Evidence: installed recovery 0x427d9c–0x427df0 returns overlap row count including zero before full candidate CCD; zero aggregate response 0x4bafb8 returns without a separating fallback; contact solves reintegrate .04 s and exhaustion does not zero velocity. Native released former-owner debris remains eligible. A separate immediate-parent versus recursive-root suppression discrepancy is tracked as PHY-14 / TASK-108 (P2 backlog), outside this guard checkpoint.
+
+Deterministic ignored-snapshot hydration/replay reproduces the old player/wing cap 4.14932e-6 and Cerby cap .000486732 using current PERF-14 hierarchy; both become 1. Eight bounded partial pair/joint windows progress and clear at least one original overlap while preserving useful type-6/joint impulses and coincident anchors. First-window transformed hulls reduce 40→2 and 206→99. No world/forces/damage/full preceding-tick reconstruction claim. After release, legitimate work/timing can rise; adverse partial samples remain documented.
+
+Validation: full npm test passed 2,764 tests; subsequently registered capture/hydration suite passed 17 separately (13 pass/4 clean skips without optional captures). Production build, formatting and existing fast/oblique/full-turn/interlock/finite-ground/split/repair regressions pass. Final production Chromium crash matrix passes Stock/Advanced impacts, Porker2 split/joints and Eagle queued parts/repair. New twelve-tick Eagle3/Cerby production old-overlap harness passes drive-out, renewed accepted physical own-piece type-5 contact, repair and four-wheel regrounding, with no console/failed-request/WebGL errors; functional harness uses SwiftShader, not hardware FPS evidence. Chrome DevTools MCP independently runs the original Eagle fixture and a normal-frame W-driven Jetcar crash on AMD hardware; geometry/component damage, retained ground support, physical debris response and repair verified, screenshots inspected, clean console/GL.
+
+User's paused post-PERF-14 snapshot preserved before HMR in ignored artifacts/phy13-current-user-snapshot.json. Its player/neighbour clone guard is full motion under both policies and does not reproduce the lockup. Bounded serial hardware guard comparison is recorded in docs/old-overlap-recovery.md; not a cure claim for all Timber FPS stalls. Reviewed Git checkpoint and user playtest focus: damaged-car/loose-bodywork pileups, driving away without repair, rollovers near props, separation/re-entry and repeated repair. Next structural ticket remains PERF-15; broad paused Goal unchanged.
 <!-- SECTION:NOTES:END -->

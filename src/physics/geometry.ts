@@ -1382,6 +1382,36 @@ function reducePairContacts(candidates: HullContact[]): HullContact | null {
     penetration: 0,
   };
 }
+/** Boolean part of HW0x427f20 recovery admission. Normal/closing-speed gates
+ * select rows, not overlap: containment may admit recovery with zero rows.
+ * Only transformed authored hulls are accepted, as in recoverHullOverlap. */
+export function nativeHullRecoveryOverlap(
+  a: CollisionHull,
+  b: CollisionHull,
+): boolean {
+  for (const hull of [a, b])
+    if (!hull.localHull || !hull.position || !hull.orientation)
+      throw new Error("Recovery admission requires transformed authored hulls");
+  const intersects = (moving: CollisionHull, target: CollisionHull) => {
+    const inverse = target.orientation!.clone().conjugate();
+    const points = moving.vertices.map((point) =>
+      hullLocal(target, point, inverse),
+    );
+    for (const [start, end] of moving.edges) {
+      const startInside = localPointInside(target.localHull!, points[start]);
+      const endInside = localPointInside(target.localHull!, points[end]);
+      if (
+        startInside ||
+        endInside ||
+        clipPointHull(points[start], points[end], target.localHull!)
+      )
+        return true;
+    }
+    return false;
+  };
+  return intersects(a, b) || intersects(b, a);
+}
+
 /** Original0x427f20 recovery uses old edge/hull intersections, center-facing
  * outward normals and positive closing speed. It supplies no arbitrary MTV. */
 export function recoverHullOverlap(
