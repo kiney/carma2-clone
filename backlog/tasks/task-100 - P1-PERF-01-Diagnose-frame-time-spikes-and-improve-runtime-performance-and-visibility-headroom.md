@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-13 13:23'
+updated_date: '2026-10-15 18:19'
 labels:
   - priority-1
   - PERF-01
@@ -89,3 +89,17 @@ PERF-14 completed: hierarchy-aware native-informed candidate/probe/commit moveme
 
 PHY-13 completed with native-qualified per-hull OLD-overlap admission, retained source response and fresh-phase re-entry checks. Old player/Cerby captures release; first-window guard hull transforms40→2/206→99. Full tests/build, Stock/Advanced crash matrix and original Eagle/Cerby production drive-out/new-contact/repair/reground checks pass; actual AMD MCP driving/crash validation is clean. Short partial replay retains adverse timings after release; actual rendered Timber stall and global retry work remain open. See docs/old-overlap-recovery.md. Next is PERF-15 after user playtesting; PHY-14/TASK-108 records separate nested immediate-parent eligibility gap in P2 backlog.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-15 18:13
+---
+Post-PHY-16 live recording (2026-10-15, HEAD 5fcbec0): original data/RACES/desert2/desert2.txt, Eagle3, AMD/radeonsi through ANGLE, drawing buffer 2612 x 1805. Ignored raw capture: artifacts/phy16-live-recording.json; active-window analysis: artifacts/phy16-live-recording-active-analysis.json. Last common active window is about 11.23 seconds / 399 frame rows: frame median 16.7 ms, p95 66.6 ms, p99 150.1 ms, maximum 450 ms; 31 intervals over 50 ms and 8 over 100 ms. Exclude 113 terminal frames with frozen simulation time from active-play averages. Independent fixed 512-row rings have different time windows. Worst tick at simulation time 81.28 s takes 420 ms, including 292 ms across 108 worldContacts calls, 51.2 ms world guard, 24.6 ms commit guard and 16.6 ms pair collection (inclusive wall timings, not exclusive CPU samples). Parent update has only ONE tick: peak is not initially caused by catch-up. The 450 ms RAF interval spans that tick; render CPU in that bucket is only 3.2 ms. Later updates with 4-5 ticks take 104-169 ms and amplify delays. Active-window average render CPU about 3.0 ms, matrices 0.87 ms, opponents 0.64 ms, pedestrians 0.33 ms; physics updates account for about 61.5% of window wall time. Primary measured peak is world-contact processing, not the old pair-guard bottleneck. No per-call CPU stack/GC/GPU timing exists: do not infer specific body, contact algorithm, allocation issue or preceding 9-FPS episode from this capture. Next diagnostic: short serial CPU profile plus bounded body/face-count/contact-call outlier tags around worldContacts and world guard, preserving static-query certification. Existing live recorder stays installed; paused game was not advanced, repaired or reloaded. No engine changes.
+---
+
+created: 2026-10-15 18:19
+---
+Follow-up implementation work is now TASK-100.14 / PERF-19 (P1, next, ordinal1260 before visual visibility). Scope: attribute and eliminate the newly recorded ordinary world-contact latency spikes. Structural audit and conditional solution sequence are in docs/world-contact-spikes.md; no engine changes in this analysis.
+---
+<!-- COMMENTS:END -->
