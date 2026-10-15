@@ -49,13 +49,25 @@ export function installPerformanceProbe() {
         }
       }
     }
+    // Preserve the existing observer contract for pure response collectors.
+    // Otherwise timing wrappers disable native response-preparation reuse.
+    if (
+      ["worldContacts", "advanceWorldContacts", "collectBodyContacts"].includes(
+        name,
+      )
+    )
+      Object.defineProperty(measured, "correctionObserverSource", {
+        value: original.correctionObserverSource ?? original,
+      });
     owner[name] = measured;
     restores.push(() => {
       if (owner[name] === measured) owner[name] = original;
     });
   }
   wrap(renderer, "render", "renderer.render");
-  wrap(c.scene, "updateMatrixWorld", "scene.updateMatrixWorld");
+  // Transform/provider identities certify the production fast paths. Wrapping
+  // them makes profiling itself select the expensive custom-provider fallback.
+  // prepareRenderMatrices below measures the renderer-owned preparation phase.
   wrap(c, "prepareRenderMatrices", "scene.prepareRenderMatrices");
   for (const name of [
     "updateFrame",
@@ -70,10 +82,8 @@ export function installPerformanceProbe() {
   ])
     wrap(c.simulation, name, `simulation.${name}`);
   for (const name of [
-    "collectFaces",
     "syncNativeGeometry",
     "refreshDynamic",
-    "querySurfaces",
     "raycast",
     "drivableWheelRaycast",
     "rebuildStatic",

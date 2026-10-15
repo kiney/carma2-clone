@@ -925,6 +925,8 @@ const runCases = async () => {
       source.damage.damageContext.random = sourceRandom;
     }
   });
+  // Preserve the adverse result even when a split assertion fails.
+  report.splitCase = splitCase;
   assert.ok(splitCase.snappability > 0, JSON.stringify(splitCase));
   assert.ok(
     splitCase.spamRays > 0 && splitCase.spamSplitRequest,
@@ -935,7 +937,10 @@ const runCases = async () => {
     JSON.stringify(splitCase),
   );
   assert.ok(splitCase.massConserved, JSON.stringify(splitCase));
-  assert.ok(splitCase.secondaryMoved && splitCase.secondaryFinite);
+  assert.ok(
+    splitCase.secondaryMoved && splitCase.secondaryFinite,
+    JSON.stringify(splitCase),
+  );
   assert.equal(
     splitCase.repair.wastedAfter,
     splitCase.repair.before.wasted,

@@ -64,14 +64,30 @@ export interface NativeActorPickResult<Row> {
 }
 const f = Math.fround;
 function scalar(value: number): number {
-  if (!Number.isFinite(value) || !Number.isFinite(f(value)))
+  if (!Number.isFinite(value))
     throw new Error("native actor pick requires finite Float32 scalars");
-  return f(value);
+  const stored = f(value);
+  if (!Number.isFinite(stored))
+    throw new Error("native actor pick requires finite Float32 scalars");
+  return stored;
 }
 function mat(value: NativeActorMatrix): number[] {
   if (value.length !== 12)
     throw new Error("native actor pick requires twelve matrix scalars");
-  return Array.from(value, scalar);
+  return [
+    scalar(value[0]),
+    scalar(value[1]),
+    scalar(value[2]),
+    scalar(value[3]),
+    scalar(value[4]),
+    scalar(value[5]),
+    scalar(value[6]),
+    scalar(value[7]),
+    scalar(value[8]),
+    scalar(value[9]),
+    scalar(value[10]),
+    scalar(value[11]),
+  ];
 }
 function vec(value: NativeActorPickVector): [number, number, number] {
   if (value.length !== 3)
@@ -81,7 +97,7 @@ function vec(value: NativeActorPickVector): [number, number, number] {
 function bounds(value: NativeActorBounds): NativeActorBounds {
   const min = vec(value.min),
     max = vec(value.max);
-  if (min.some((v, i) => v > max[i]))
+  if (min[0] > max[0] || min[1] > max[1] || min[2] > max[2])
     throw new Error("native actor pick bounds are reversed");
   return { min, max };
 }
@@ -112,51 +128,40 @@ export function nativeActorPickMultiply(
   b: NativeActorMatrix,
 ): number[] {
   const A = mat(a),
-    B = mat(b),
-    orders = [
-      [2, 1, 0],
-      [0, 1, 2],
-      [0, 1, 2],
-      [0, 1, 2],
-      [0, 2, 1],
-      [0, 1, 2],
-      [0, 2, 1],
-      [1, 0, 2],
-      [1, 0, 2],
-      [0, 1, 2],
-      [1, 0, 2],
-      [0, 1, 2],
-    ],
-    out = [];
-  for (let row = 0; row < 4; row++)
-    for (let column = 0; column < 3; column++) {
-      const terms = [0, 1, 2].map((k) => A[row * 3 + k] * B[k * 3 + column]),
-        order = orders[row * 3 + column];
-      const value = terms[order[0]] + terms[order[1]] + terms[order[2]];
-      out.push(scalar(row === 3 ? value + B[9 + column] : value));
-    }
-  return out;
+    B = mat(b);
+  // Keep each installed sum association, including the translation added last.
+  return [
+    scalar(A[2] * B[6] + A[1] * B[3] + A[0] * B[0]),
+    scalar(A[0] * B[1] + A[1] * B[4] + A[2] * B[7]),
+    scalar(A[0] * B[2] + A[1] * B[5] + A[2] * B[8]),
+    scalar(A[3] * B[0] + A[4] * B[3] + A[5] * B[6]),
+    scalar(A[3] * B[1] + A[5] * B[7] + A[4] * B[4]),
+    scalar(A[3] * B[2] + A[4] * B[5] + A[5] * B[8]),
+    scalar(A[6] * B[0] + A[8] * B[6] + A[7] * B[3]),
+    scalar(A[7] * B[4] + A[6] * B[1] + A[8] * B[7]),
+    scalar(A[7] * B[5] + A[6] * B[2] + A[8] * B[8]),
+    scalar(A[9] * B[0] + A[10] * B[3] + A[11] * B[6] + B[9]),
+    scalar(A[10] * B[4] + A[9] * B[1] + A[11] * B[7] + B[10]),
+    scalar(A[9] * B[2] + A[10] * B[5] + A[11] * B[8] + B[11]),
+  ];
 }
 /** Installed5324f0 transposes even a scaled/sheared basis. It is not a general inverse. */
 export function nativeActorPickLPInverse(value: NativeActorMatrix): number[] {
-  const M = mat(value),
-    out = Array<number>(12);
-  for (let row = 0; row < 3; row++)
-    for (let column = 0; column < 3; column++)
-      out[row * 3 + column] = M[column * 3 + row];
-  const orders = [
-    [0, 2, 1],
-    [2, 0, 1],
-    [2, 0, 1],
+  const M = mat(value);
+  return [
+    M[0],
+    M[3],
+    M[6],
+    M[1],
+    M[4],
+    M[7],
+    M[2],
+    M[5],
+    M[8],
+    scalar(-(M[9] * M[0] + M[11] * M[2] + M[10] * M[1])),
+    scalar(-(M[11] * M[5] + M[9] * M[3] + M[10] * M[4])),
+    scalar(-(M[11] * M[8] + M[9] * M[6] + M[10] * M[7])),
   ];
-  for (let column = 0; column < 3; column++) {
-    const terms = [0, 1, 2].map((k) => M[9 + k] * out[k * 3 + column]),
-      order = orders[column];
-    out[9 + column] = scalar(
-      -(terms[order[0]] + terms[order[1]] + terms[order[2]]),
-    );
-  }
-  return out;
 }
 /** Installed532ae0: live Y+Z+X for X (commutative first pair), Z+Y+X for Y/Z. */
 export function nativeActorPickApplyPoint(
@@ -165,14 +170,18 @@ export function nativeActorPickApplyPoint(
 ): [number, number, number] {
   const V = vec(value),
     M = mat(transform);
-  return [0, 1, 2].map((column) =>
-    scalar(
-      V[2] * M[6 + column] +
-        V[1] * M[3 + column] +
-        V[0] * M[column] +
-        M[9 + column],
-    ),
-  ) as [number, number, number];
+  return storedPoint(V, M);
+}
+/** Inputs have just been validated and stored by the public entry point. */
+function storedPoint(
+  V: NativeActorPickVector,
+  M: NativeActorMatrix,
+): [number, number, number] {
+  return [
+    scalar(V[2] * M[6] + V[1] * M[3] + V[0] * M[0] + M[9]),
+    scalar(V[2] * M[7] + V[1] * M[4] + V[0] * M[1] + M[10]),
+    scalar(V[2] * M[8] + V[1] * M[5] + V[0] * M[2] + M[11]),
+  ];
 }
 /** Installed45fab0: stored min point, stored extents/products, sequential row additions. */
 export function nativeActorPickTransformBounds(
@@ -181,10 +190,13 @@ export function nativeActorPickTransformBounds(
 ): NativeActorBounds {
   const box = bounds(value),
     M = mat(transform),
-    first = nativeActorPickApplyPoint(box.min, M),
-    min = [...first],
-    max = [...first];
-  const extent = box.min.map((v, i) => scalar(box.max[i] - v));
+    min = storedPoint(box.min, M),
+    max = [...min];
+  const extent = [
+    scalar(box.max[0] - box.min[0]),
+    scalar(box.max[1] - box.min[1]),
+    scalar(box.max[2] - box.min[2]),
+  ];
   for (let column = 0; column < 3; column++)
     for (let row = 0; row < 3; row++) {
       const contribution = scalar(extent[row] * M[row * 3 + column]);
@@ -203,7 +215,17 @@ export function nativeActorPickBoundsOverlap(
 ): boolean {
   for (let axis = 0; axis < 3; axis++)
     if (a.min[axis] > b.max[axis] || a.max[axis] < b.min[axis]) return false;
-  return [...a.min, ...a.max, ...b.min, ...b.max].every(Number.isFinite);
+  return (
+    finiteVector(a.min) &&
+    finiteVector(a.max) &&
+    finiteVector(b.min) &&
+    finiteVector(b.max)
+  );
+}
+function finiteVector(values: readonly number[]): boolean {
+  for (let i = 0; i < values.length; i++)
+    if (!Number.isFinite(values[i])) return false;
+  return true;
 }
 /** ActorBoxPick's inlined leaf BoundsTransformTest retains a live base sum,
  * unlike the repeatedly stored GetNewBoundingBox output. Tests X, then Z, then Y. */
@@ -215,21 +237,26 @@ export function nativeActorPickLeafBoundsTest(
   const box = bounds(value),
     other = bounds(target),
     M = mat(transform),
-    extent = box.min.map((v, i) => scalar(box.max[i] - v));
-  for (const column of [0, 2, 1]) {
-    const terms = [0, 1, 2].map((row) => M[row * 3 + column] * box.min[row]);
-    const base =
-      (column === 0
-        ? terms[0] + terms[1] + terms[2]
-        : terms[0] + terms[2] + terms[1]) + M[9 + column];
-    const high = [0, 1, 2].map((row) =>
-      M[row * 3 + column] > 0 ? M[row * 3 + column] * extent[row] : 0,
-    );
-    if (base + high[2] + high[1] + high[0] < other.min[column]) return false;
-    const low = [0, 1, 2].map((row) =>
-      M[row * 3 + column] < 0 ? M[row * 3 + column] * extent[row] : 0,
-    );
-    if (base + low[2] + low[1] + low[0] > other.max[column]) return false;
+    ex = scalar(box.max[0] - box.min[0]),
+    ey = scalar(box.max[1] - box.min[1]),
+    ez = scalar(box.max[2] - box.min[2]);
+  for (let pass = 0; pass < 3; pass++) {
+    const column = pass === 1 ? 2 : pass === 2 ? 1 : 0,
+      mx = M[column],
+      my = M[3 + column],
+      mz = M[6 + column],
+      tx = mx * box.min[0],
+      ty = my * box.min[1],
+      tz = mz * box.min[2];
+    const base = (column === 0 ? tx + ty + tz : tx + tz + ty) + M[9 + column];
+    const hx = mx > 0 ? mx * ex : 0,
+      hy = my > 0 ? my * ey : 0,
+      hz = mz > 0 ? mz * ez : 0;
+    if (base + hz + hy + hx < other.min[column]) return false;
+    const lx = mx < 0 ? mx * ex : 0,
+      ly = my < 0 ? my * ey : 0,
+      lz = mz < 0 ? mz * ez : 0;
+    if (base + lz + ly + lx > other.max[column]) return false;
   }
   return true;
 }

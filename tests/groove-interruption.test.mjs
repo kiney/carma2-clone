@@ -206,6 +206,105 @@ test("spin rolls back and skips the frame without acquiring a permanent interrup
   close(actor.quaternion.z, 0);
 });
 
+test("pose revision keeps culled stop callbacks native and publishes the later visible rollback", () => {
+  const { actor, runtime, state } = fixture();
+  frame(runtime, 250);
+  frame(runtime, 375);
+  const before = runtime.poseRevision;
+  runtime.beginFrame();
+  assert.equal(runtime.stopActor(actor, { isVisible: () => false }), true);
+  assert.equal(runtime.stopActor(actor, { isVisible: () => false }), true);
+  assert.equal(state.doneThisFrame, true);
+  assert.equal(state.pathInterrupt, 0);
+  assert.equal(runtime.poseRevision, before);
+  assert.equal(runtime.stopActor(actor, { isVisible: () => true }), true);
+  assert.equal(runtime.poseRevision, before + 1);
+  close(actor.position.x, 0);
+});
+
+test("pose revision suppresses repeated same-clock spin publications without suppressing evaluation", () => {
+  const { root, actor } = fixture();
+  const runtime = new WorldGrooveRuntime(
+    root,
+    `START OF GROOVE\n${block({ path: false, object: true }).replace("rock\nlinear", "spin\ncontinuous")}\nEND OF GROOVE`,
+  );
+  frame(runtime, 250);
+  frame(runtime, 500);
+  const before = runtime.poseRevision;
+  runtime.beginFrame();
+  assert.equal(runtime.stopActor(actor), true);
+  const rollback = runtime.poseRevision;
+  assert.equal(rollback, before + 1);
+  runtime.grooves[0].doneThisFrame = false;
+  assert.equal(runtime.stopActor(actor), true);
+  assert.equal(runtime.grooves[0].doneThisFrame, true);
+  assert.equal(runtime.grooves[0].objectInterrupt, 0);
+  assert.equal(runtime.poseRevision, rollback);
+  runtime.finishFrame(750);
+  assert.equal(runtime.poseRevision, rollback);
+  frame(runtime, 1000);
+  assert.equal(runtime.poseRevision, rollback + 1);
+});
+
+test("pose revision detects changed world pose from the source parent at the same clock", () => {
+  const { root, actor, runtime } = fixture({ path: false });
+  runtime.update(250);
+  const before = runtime.poseRevision;
+  root.position.set(10, 2, -3);
+  runtime.update(250);
+  assert.equal(runtime.poseRevision, before + 1);
+  assert.deepEqual(
+    actor.getWorldPosition(new THREE.Vector3()).toArray(),
+    [10, 2, -3],
+  );
+  runtime.update(250);
+  assert.equal(runtime.poseRevision, before + 1);
+});
+
+test("pose revision publishes an external actor move rolled back to the last GROOVE pose", () => {
+  const { root, actor } = fixture();
+  const runtime = new WorldGrooveRuntime(
+    root,
+    `START OF GROOVE\n${block({ path: false, object: true }).replace("rock\nlinear", "spin\ncontinuous")}\nEND OF GROOVE`,
+  );
+  frame(runtime, 250);
+  frame(runtime, 500);
+  runtime.beginFrame();
+  assert.equal(runtime.stopActor(actor), true);
+  actor.updateWorldMatrix(true, false);
+  const groovePose = actor.matrixWorld.clone();
+  const before = runtime.poseRevision;
+  // A tracked external writer and collector may publish a different pose
+  // between stops. Returning to the historical GROOVE pose still changes the
+  // matrix observed by that immediately preceding collection.
+  actor.position.set(7, 2, -3);
+  actor.updateWorldMatrix(true, false);
+  assert.notDeepEqual(actor.matrixWorld.elements, groovePose.elements);
+  assert.equal(runtime.stopActor(actor), true);
+  actor.updateWorldMatrix(true, false);
+  assert.deepEqual(actor.matrixWorld.elements, groovePose.elements);
+  assert.equal(runtime.poseRevision, before + 1);
+  assert.equal(runtime.stopActor(actor), true);
+  assert.equal(runtime.poseRevision, before + 1);
+});
+
+test("pose revision retains paused replay no-ops and conservatively publishes custom update outlets", () => {
+  const { actor, runtime } = fixture();
+  runtime.update(375);
+  const before = runtime.poseRevision;
+  runtime.update(500, { actionReplay: true, replayPaused: true });
+  assert.equal(runtime.poseRevision, before);
+  const updateMatrix = actor.updateMatrix;
+  let updates = 0;
+  actor.updateMatrix = function () {
+    updates++;
+    return updateMatrix.call(this);
+  };
+  runtime.update(500, { actionReplay: true, replayPaused: true });
+  assert.ok(updates > 0);
+  assert.equal(runtime.poseRevision, before + 1);
+});
+
 test("rollback retains source-parent scale and transforms after batching reparent", () => {
   const source = new THREE.Group(),
     parent = new THREE.Group(),

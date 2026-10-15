@@ -14,6 +14,7 @@ const { values } = parseArgs({
     ratio: { type: "string" },
     drive: { type: "boolean", default: false },
     "no-render": { type: "boolean", default: false },
+    "eager-native-preparation": { type: "boolean", default: false },
     software: { type: "boolean", default: false },
     headful: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
@@ -31,6 +32,7 @@ Usage: node tools/profile-performance.mjs [options]
   --height N         CSS viewport height (default 800, max 2160)
   --ratio N          Temporary pixel ratio (default engine policy, max 1.7)
   --drive            Unpause and hold W during the capture; otherwise paused
+  --eager-native-preparation  Diagnostic baseline: disable tick-scoped ACT preparation
   --no-render        Diagnostic only: omit GPU rendering during the capture
   --cpu-profile      Also save a CDP CPU profile beside the JSON report
   --software         Explicitly use SwiftShader (not a hardware FPS benchmark)
@@ -118,6 +120,11 @@ try {
     null,
     { timeout: 90000 },
   );
+  if (values["eager-native-preparation"])
+    await page.evaluate(() => {
+      const world = window.carma.simulation.world;
+      world.beginNativePreparation = world.endNativePreparation = () => {};
+    });
   await page.evaluate(installPerformanceProbe);
   await page.evaluate(() => window.__c2Perf.idle());
   const session = await page.context().newCDPSession(page);
@@ -155,6 +162,9 @@ try {
     JSON.stringify(
       {
         ...report,
+        nativePreparation: values["eager-native-preparation"]
+          ? "eager"
+          : "scoped",
         errors,
         failedRequests,
         softwareRequested: values.software,

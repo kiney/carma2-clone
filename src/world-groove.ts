@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { ordinaryTransformMethods } from "./world-transform-state";
 
 export type WorldGrooveMode = "continuous" | "linear" | "harmonic";
 export interface WorldGroove {
@@ -216,6 +217,14 @@ export class WorldGrooveRuntime {
   readonly diagnostics: WorldGrooveDiagnostic[];
   readonly grooves: WorldGrooveBinding[] = [];
   private grooveTimes: [number, number] = [0, 0];
+  private publishedPoses = new WeakMap<THREE.Object3D, THREE.Matrix4>();
+  private posePublicationRevision = 0;
+  /** Ordinary evaluation advances this only for a changed world pose; custom
+   * update methods retain conservative publication. Native callback execution
+   * and interruption status remain independently observable. */
+  get poseRevision(): number {
+    return this.posePublicationRevision;
+  }
   constructor(root: THREE.Object3D, text: string) {
     const parsed = parseWorldGrooves(text);
     this.diagnostics = parsed.diagnostics;
@@ -240,6 +249,7 @@ export class WorldGrooveRuntime {
       }
       this.actors.add(actor);
       actor.updateWorldMatrix(true, false);
+      this.publishedPoses.set(actor, actor.matrixWorld.clone());
       const sourceParent = actor.parent;
       this.grooves.push({
         definition,
@@ -323,6 +333,7 @@ export class WorldGrooveRuntime {
     entry.doneThisFrame = true;
     if (options.isVisible && !options.isVisible(actor, g)) return;
     actor.updateWorldMatrix(true, false);
+    const entryWorldPose = actor.matrixWorld.clone();
     const sourceWorld = this.sourceWorld(entry);
     const sourcePose = sourceWorld.clone().invert().multiply(actor.matrixWorld);
     const position = new THREE.Vector3(),
@@ -410,5 +421,29 @@ export class WorldGrooveRuntime {
     }
     worldPose.decompose(actor.position, actor.quaternion, actor.scale);
     actor.updateMatrix();
+    // Parent matrices were refreshed above. Derive the exact matrix the normal
+    // world updater will publish without adding another custom update callback.
+    let ordinary = true;
+    for (let node: THREE.Object3D | null = actor; node; node = node.parent)
+      ordinary &&= ordinaryTransformMethods(node);
+    const published = actor.matrixWorldAutoUpdate
+      ? actor.parent
+        ? worldPose.multiplyMatrices(actor.parent.matrixWorld, actor.matrix)
+        : worldPose.copy(actor.matrix)
+      : actor.matrixWorld;
+    const previous = this.publishedPoses.get(actor);
+    if (
+      !ordinary ||
+      !previous ||
+      published.elements.some(
+        (value, index) =>
+          !Object.is(value, entryWorldPose.elements[index]) ||
+          !Object.is(value, previous.elements[index]),
+      )
+    ) {
+      this.posePublicationRevision++;
+      if (previous) previous.copy(published);
+      else this.publishedPoses.set(actor, published.clone());
+    }
   }
 }

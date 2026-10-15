@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-15 18:19'
+updated_date: '2026-10-15 19:02'
 labels:
   - priority-1
   - PERF-01
@@ -88,6 +88,8 @@ Subsequent actual user 6 FPS / opposite-direction ~20 FPS capture succeeded at e
 PERF-14 completed: hierarchy-aware native-informed candidate/probe/commit movement, stock original WAM joint tests and final production/MCP crash/repair validation. Bounded AMD hardware CPU medians improve but adverse 123.2 ms tick remains; do not declare the rendered Timber stall fixed. See docs/hierarchy-motion-performance.md. PHY-13 then PERF-15 retain old-overlap guard and global retry redesign. Separate Git checkpoint for damaged-part playtesting; PERF-01 remains wip.
 
 PHY-13 completed with native-qualified per-hull OLD-overlap admission, retained source response and fresh-phase re-entry checks. Old player/Cerby captures release; first-window guard hull transforms40→2/206→99. Full tests/build, Stock/Advanced crash matrix and original Eagle/Cerby production drive-out/new-contact/repair/reground checks pass; actual AMD MCP driving/crash validation is clean. Short partial replay retains adverse timings after release; actual rendered Timber stall and global retry work remain open. See docs/old-overlap-recovery.md. Next is PERF-15 after user playtesting; PHY-14/TASK-108 records separate nested immediate-parent eligibility gap in P2 backlog.
+
+PERF-19 implementation checkpoint: scoped native preparation, scalar collector kernels and no-op GROOVE publication suppression are implemented; profiler wrappers were corrected after discovering they disabled existing reuse. Controlled contact work improves with identical results, but hardware startup tails are mixed and historical v3 live recording is not unbiased. PERF-19 remains wip for clean outlier acceptance; defer visibility expansion. Extended grounded Porker split-secondary stall reproduces on baseline1f33742 and is tracked separately as PHY-17/TASK-111 P1next.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

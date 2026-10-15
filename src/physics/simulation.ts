@@ -1,4 +1,5 @@
 import { NativeHierarchyQuiet } from "./hierarchy-quiet";
+import type { WorldContactProfile } from "./world-contact-profile";
 import {
   runLocalResponses,
   type LocalResponseDiagnostics,
@@ -1120,6 +1121,8 @@ export class VehicleSimulation {
   private collisionTraversalRevision = 0;
   /** Diagnostic A/B switch; production defaults to validated reuse. */
   correctionReuse = true;
+  /** Opt-in diagnostic; absent during normal play. */
+  worldContactDiagnostics?: (row: WorldContactProfile) => void;
   correctionDiagnostics?: CorrectionDiagnostics &
     StationaryBoundsDiagnostics &
     LocalResponseDiagnostics & {
@@ -1756,6 +1759,7 @@ export class VehicleSimulation {
     this.prepareMovingWorldPoses();
   }
   private prepareMovingWorldPoses() {
+    this.world.invalidateNativePreparation?.("pose");
     for (const body of this.movingWorld) {
       body.actor.updateWorldMatrix(true, true);
       const position = new Vector3(),
@@ -1858,6 +1862,9 @@ export class VehicleSimulation {
     const collect =
       this.world.collectFaces ?? WorldCollision.prototype.collectFaces;
     const collected = collect.call(this.world, query, maximum, gatherModels, {
+      // These callbacks publish scene mutations through WorldCollision outlets.
+      mutationsTracked: true,
+      onFaceReadOnly: true,
       pullActorFromWorld: (actor) => this.pullWorldActor(actor),
       stopGroovidelic: (actor) => this.stopCollectedWorldActor(actor),
       onFace: (surface) => {
@@ -1877,7 +1884,12 @@ export class VehicleSimulation {
   }
   private stopCollectedWorldActor(actor: Object3D): void {
     if (!this.worldGrooveFrameActive || !this.grooves) return;
-    if (this.grooves.stopActor(actor, this.worldGrooveOptions)) {
+    const poseRevision = this.grooves.poseRevision;
+    const evaluated = this.grooves.stopActor(actor, this.worldGrooveOptions);
+    if (
+      evaluated &&
+      (poseRevision === undefined || this.grooves.poseRevision !== poseRevision)
+    ) {
       this.prepareMovingWorldPoses();
       this.world.refreshDynamic?.();
       this.collisionTraversalRevision++;
@@ -1889,6 +1901,7 @@ export class VehicleSimulation {
     if (!body) {
       // Installed420007: missing mechanics has the same sticky numeric-pull
       // failure as exhausted physical slots. Its MODEL remains static.
+      this.world.invalidateNativePreparation?.("pose");
       actor.name = actor.name.slice(0, 1) + "x" + actor.name.slice(2);
       const native = this.world.getNonCarNativeActor?.(actor);
       if (native) native.name = actor.name;
@@ -1904,6 +1917,7 @@ export class VehicleSimulation {
   private stopGroovesForCollectedFaces(surfaces: readonly Surface[]): void {
     if (!this.worldGrooveFrameActive || !this.grooves) return;
     const models = new Set<Object3D>();
+    const poseRevision = this.grooves.poseRevision;
     let evaluated = false;
     for (const surface of surfaces) {
       if (!surface.actor || models.has(surface.actor)) continue;
@@ -1920,7 +1934,10 @@ export class VehicleSimulation {
         }
       }
     }
-    if (evaluated) {
+    if (
+      evaluated &&
+      (poseRevision === undefined || this.grooves.poseRevision !== poseRevision)
+    ) {
       // WorldCollision replaces its dynamic arrays. Surfaces already returned
       // above retain their vertices and captured CCD pose for this query.
       this.prepareMovingWorldPoses();
@@ -2164,6 +2181,7 @@ export class VehicleSimulation {
     state: RigidBody["state"];
     kind?: string;
   }) {
+    this.world.invalidateNativePreparation?.("pose");
     body.actor.position.copy(body.state.position);
     body.actor.quaternion.copy(body.state.orientation);
     if (body.actor.parent) {
@@ -2238,6 +2256,7 @@ export class VehicleSimulation {
     return false;
   }
   sync(car: SimulatedCar) {
+    this.world.invalidateNativePreparation?.("pose");
     car.group.position.copy(car.state.position);
     car.group.quaternion.copy(car.state.orientation);
     car.group.updateMatrixWorld(true);
@@ -3511,6 +3530,38 @@ export class VehicleSimulation {
     }));
   }
   private worldContacts(body: RigidBody, hulls: CollisionHull[]): Contact[] {
+    const diagnostic = this.worldContactDiagnostics;
+    if (!diagnostic) return this.computeWorldContacts(body, hulls);
+    const row: WorldContactProfile = {
+      body,
+      cpuMs: 0,
+      transformsMs: 0,
+      collectMs: 0,
+      recoveryMs: 0,
+      sweepMs: 0,
+      reduceMs: 0,
+      rawFaces: 0,
+      eligibleFaces: 0,
+      hulls: hulls.length,
+      sweepTests: 0,
+      rejectedFaces: 0,
+      contacts: 0,
+    };
+    const start = performance.now();
+    try {
+      const contacts = this.computeWorldContacts(body, hulls, row);
+      row.contacts = contacts.length;
+      return contacts;
+    } finally {
+      row.cpuMs = performance.now() - start;
+      diagnostic(row);
+    }
+  }
+  private computeWorldContacts(
+    body: RigidBody,
+    hulls: CollisionHull[],
+    profile?: WorldContactProfile,
+  ): Contact[] {
     if (
       body.properties.immovable ||
       ((isNativePedBody(body) || isNativePedBoneBody(body)) &&
@@ -3520,6 +3571,7 @@ export class VehicleSimulation {
         (body as NonCarBody).mechanics.ignoreWorldCollisions)
     )
       return [];
+    let clock = profile ? performance.now() : 0;
     const carBody = body as SimulationBody;
     const old = transformHulls(body, hulls),
       next = transformHulls(body, hulls, true);
@@ -3530,13 +3582,23 @@ export class VehicleSimulation {
       .clone()
       .applyQuaternion(body.state.orientation)
       .add(body.state.position);
-    const nearby = this.facesNearBody(body, hulls, true).filter(
+    if (profile) {
+      profile.transformsMs += performance.now() - clock;
+      clock = performance.now();
+    }
+    const collected = this.facesNearBody(body, hulls, true);
+    const nearby = collected.filter(
       (surface) =>
         surface.enabled !== false &&
         (!surface.owner || nativePairAllowed(body, surface.owner)) &&
         !/^[!>]/.test(surface.material) &&
         surface.collisionMode !== "passthrough",
     );
+    if (profile) {
+      profile.collectMs += performance.now() - clock;
+      profile.rawFaces = collected.length;
+      profile.eligibleFaces = nearby.length;
+    }
     surfaces.push(...nearby);
     if (isNativePedBody(body)) {
       body.worldFaceNormals = nearby.map((surface) => surface.normal.clone());
@@ -3577,6 +3639,7 @@ export class VehicleSimulation {
       }));
     }
     for (let i = 0; i < old.length; i++) {
+      if (profile) clock = performance.now();
       const staticNearby = nearby.filter((surface) => !surface.owner);
       const recovery = carBody.worldRecovery
         ? recoverWorldContacts(
@@ -3588,7 +3651,12 @@ export class VehicleSimulation {
         : undefined;
       carBody.worldOverlapDetected ||= !!recovery?.overlapDetected;
       const candidates: HullContact[] = [...(recovery?.contacts ?? [])];
+      if (profile) {
+        profile.recoveryMs += performance.now() - clock;
+        clock = performance.now();
+      }
       for (const surface of nearby) {
+        if (profile) profile.sweepTests++;
         if (surface.owner) {
           const hit = this.movingSurfaceContact(body, hulls[i], surface);
           if (hit)
@@ -3622,7 +3690,12 @@ export class VehicleSimulation {
             Object.assign(hit, { faceFriction: surface.modifier.wallFriction }),
           );
       }
+      if (profile) {
+        profile.sweepMs += performance.now() - clock;
+        clock = performance.now();
+      }
       allHits.push(...reduceWorldContacts(candidates));
+      if (profile) profile.reduceMs += performance.now() - clock;
     }
     return finalizeWorldContacts(allHits).map((hit) => ({
       a: body,
@@ -5226,6 +5299,7 @@ export class VehicleSimulation {
     this.correctionWorkingSet = this.correctionReuse
       ? this.correctionGeometry.createTick(this.correctionDiagnostics)
       : undefined;
+    this.world.beginNativePreparation?.();
     try {
       for (const car of this.cars)
         if (car.human && this.isCarPhysicsActive(car))
@@ -5762,6 +5836,7 @@ export class VehicleSimulation {
       if (!this.collectingOrdinaryCrush)
         this.finishPedFrame(PHYSICS_STEP * 1000);
     } finally {
+      this.world.endNativePreparation?.();
       this.correctionWorkingSet = previousWorkingSet;
       this.hierarchyMotion = previousHierarchyMotion;
       this.quietCollisionFlags = previousQuietFlags;

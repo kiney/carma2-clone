@@ -57,6 +57,11 @@ import { nativeNonCarModelBounds } from "./physics/noncar-reclaim";
 export interface WorldFaceCollectorCallbacks {
   /** Runs on the emitted immutable row before its MODEL stop notification. */
   onFace?: (surface: Surface) => void;
+  /** The observer only captures emitted rows; it does not mutate world inputs. */
+  onFaceReadOnly?: boolean;
+  /** Scoped simulation callbacks publish mutations through WorldCollision's
+   * invalidation outlets. Uncertified callbacks retain eager synchronization. */
+  mutationsTracked?: boolean;
   pullActorFromWorld?: (actor: THREE.Object3D) => object | null;
   stopGroovidelic?: (actor: THREE.Object3D) => void;
 }
@@ -85,6 +90,8 @@ export interface Surface {
   constant?: number;
 }
 export interface WorldSyncDiagnostics {
+  nativePreparedActorHits?: number;
+  nativePreparedGeometryHits?: number;
   staticRebuilds?: number;
   staticOwnerRebuilds?: number;
   staticTriangleBuilds?: number;
@@ -143,6 +150,23 @@ export class WorldCollision {
   faceDiagnostics?: WorldFaceDiagnostics;
   private faceIndex = new OrderedWorldFaceIndex();
   private transforms = new WorldTransformState();
+  private nativePreparationDepth = 0;
+  private nativePreparedActors = new WeakSet<NativeOrderedActor>();
+  private nativePreparedGeometry = new WeakSet<NativeOrderedActor>();
+  /** Own one synchronous physics preparation window. Pose/topology/geometry
+   * writers must invalidate their publication before the next collection. */
+  beginNativePreparation(): void {
+    if (this.nativePreparationDepth++ === 0) this.invalidateNativePreparation();
+  }
+  endNativePreparation(): void {
+    if (this.nativePreparationDepth === 0) return;
+    if (--this.nativePreparationDepth === 0) this.invalidateNativePreparation();
+  }
+  invalidateNativePreparation(kind: "pose" | "geometry" = "geometry"): void {
+    this.nativePreparedActors = new WeakSet();
+    if (kind === "geometry") this.nativePreparedGeometry = new WeakSet();
+    this.transforms.invalidatePhase();
+  }
   private nativeSync = new WeakMap<NativeOrderedActor, NativeSyncState>();
   private nativeLocalWritten = new WeakMap<
     NativeOrderedActor,
@@ -294,6 +318,7 @@ export class WorldCollision {
     }
   }
   rebuildStatic() {
+    this.invalidateNativePreparation();
     this.staticGuardRevision = {};
     if (this.syncDiagnostics)
       this.syncDiagnostics.staticRebuilds =
@@ -388,6 +413,7 @@ export class WorldCollision {
    * MODEL resources and dynamic owners; native face-ring policy stays separate. */
   invalidateActors(actors: readonly THREE.Object3D[]): void {
     if (!actors.length) return;
+    this.invalidateNativePreparation();
     this.staticGuardRevision = {};
     const affected = new Set<THREE.Mesh>();
     const dynamic = new Set<RigidBody>();
@@ -880,7 +906,7 @@ export class WorldCollision {
       }),
     });
     this.staticGuardRevision = {};
-    this.transforms.invalidatePhase();
+    this.invalidateNativePreparation();
     return true;
   }
   /** Failed clone pull/PHIL admission frees only this copied ACT registration.
@@ -944,7 +970,7 @@ export class WorldCollision {
     }
     this.retainedCloneRecords.delete(actor);
     this.staticGuardRevision = {};
-    this.transforms.invalidatePhase();
+    this.invalidateNativePreparation();
     return true;
   }
   /** Reclaim reads the ACT's OWN authored MODEL, including unused DAT vertices.
@@ -990,7 +1016,7 @@ export class WorldCollision {
       (!native || native.parent !== scene?.nonTrackActors)
     )
       return;
-    this.transforms.invalidatePhase();
+    this.invalidateNativePreparation();
     if (native && scene) {
       // The host's actual world pose must precede the native parent transition.
       // Three/render retention can keep a different parent than native ACTs.
@@ -1021,6 +1047,7 @@ export class WorldCollision {
     drivable = true,
     worldCollider = false,
   ) {
+    this.invalidateNativePreparation();
     this.staticGuardRevision = {};
     const previous = this.dynamic.get(owner);
     if (previous) this.dynamicOwners.delete(previous.actor);
@@ -1041,6 +1068,7 @@ export class WorldCollision {
     this.refreshDynamic(owner);
   }
   removeDynamic(owner: RigidBody) {
+    this.invalidateNativePreparation();
     this.staticGuardRevision = {};
     const entry = this.dynamic.get(owner);
     if (entry) this.dynamicOwners.delete(entry.actor);
@@ -1048,12 +1076,13 @@ export class WorldCollision {
     this.dynamicGuardOwners.delete(owner);
   }
   invalidateDynamic(owner?: RigidBody) {
+    this.invalidateNativePreparation();
     for (const [body, entry] of this.dynamic)
       if (!owner || body === owner) entry.force = true;
     this.refreshDynamic(owner);
   }
   refreshDynamic(owner?: RigidBody) {
-    this.transforms.beginPhase();
+    this.invalidateNativePreparation("pose");
     for (const [body, entry] of this.dynamic) {
       if (owner && body !== owner) continue;
       const diagnostics = this.syncDiagnostics;
@@ -1080,6 +1109,10 @@ export class WorldCollision {
       for (const old of entry.nodes) {
         if (diagnostics) diagnostics.hierarchyChecks++;
         const object = old.object;
+        const geometryChanged =
+          object instanceof THREE.Mesh &&
+          (!old.mesh || !sameColliderMesh(object, old.mesh));
+        if (geometryChanged) this.nativePreparedGeometry = new WeakSet();
         if (!ordinaryTransformMethods(object)) opaque = changed = true;
         if (
           opaque ||
@@ -1094,8 +1127,7 @@ export class WorldCollision {
           object.children.some((child, i) => child !== old.children[i]) ||
           object.userData.worldSmashDisabled !== old.disabled ||
           object.userData.skipWorldCollision !== old.skip ||
-          (object instanceof THREE.Mesh &&
-            (!old.mesh || !sameColliderMesh(object, old.mesh)))
+          geometryChanged
         )
           changed = true;
       }
@@ -1110,6 +1142,7 @@ export class WorldCollision {
       entry.actor.traverse((object) => nodes.push(object));
       opaque ||= nodes.some((object) => !this.transforms.isOrdinary(object));
       if (opaque) {
+        this.invalidateNativePreparation();
         // Stateful custom update methods must run once, before generation, never
         // again while capturing cache metadata. They remain uncached next phase.
         if (diagnostics) diagnostics.transform.nativeUpdates++;
@@ -1255,20 +1288,29 @@ export class WorldCollision {
       worldCallbacks: known({
         pullActorFromWorld: (actor: NativeOrderedActor) => {
           const object = scene.actorObjects.get(actor);
-          const pulled = object
-            ? (callbacks.pullActorFromWorld?.(object) ?? null)
-            : null;
-          if (pulled !== null && actor.parent !== scene.nonTrackActors)
+          let pulled: object | null = null;
+          try {
+            if (object) pulled = callbacks.pullActorFromWorld?.(object) ?? null;
+          } finally {
+            if (callbacks.pullActorFromWorld && !callbacks.mutationsTracked)
+              this.invalidateNativePreparation();
+          }
+          if (pulled !== null && actor.parent !== scene.nonTrackActors) {
             pullNativeWorldActor(scene, actor);
-          this.transforms.invalidatePhase();
+            this.invalidateNativePreparation();
+          }
           return known(pulled);
         },
         stopGroovidelic: (actor: NativeOrderedActor) => {
           const object = scene.actorObjects.get(actor);
           if (object) {
             if (callbacks.stopGroovidelic) {
-              callbacks.stopGroovidelic(object);
-              this.transforms.invalidatePhase();
+              try {
+                callbacks.stopGroovidelic(object);
+              } finally {
+                if (!callbacks.mutationsTracked)
+                  this.invalidateNativePreparation();
+              }
             }
             this.updateNativeActorMatrix(actor);
           }
@@ -1278,17 +1320,41 @@ export class WorldCollision {
         // All selected locals precede callbacks. Lazy rebasing during emission
         // would erase borrowed parent motion after StopGroovidelic, particularly
         // when the renderer retained a child under a different Three parent.
-        const visited = new Set<NativeOrderedActor>();
-        const prepare = (actor: NativeOrderedActor) => {
-          if (visited.has(actor)) return;
-          visited.add(actor);
+        const visited = new Map<NativeOrderedActor, boolean>();
+        const scoped = this.nativePreparationDepth > 0;
+        const prepare = (actor: NativeOrderedActor): boolean => {
+          if (scoped && this.nativePreparedActors.has(actor)) {
+            if (this.syncDiagnostics)
+              this.syncDiagnostics.nativePreparedActorHits =
+                (this.syncDiagnostics.nativePreparedActorHits ?? 0) + 1;
+            return true;
+          }
+          if (visited.has(actor)) return visited.get(actor)!;
+          visited.set(actor, false);
+          const object = scene.actorObjects.get(actor);
+          let reusable = !object || this.transforms.isOrdinary(object);
+          if (!reusable) this.invalidateNativePreparation();
           this.syncNativeActor(actor);
-          if (actor.renderStyle === 1) return;
-          this.syncNativeGeometry(actor);
-          enumerateNativeActorChildren(actor, (child) => {
-            prepare(child);
-            return 0;
-          });
+          if (actor.renderStyle !== 1) {
+            if (
+              !scoped ||
+              !reusable ||
+              !this.nativePreparedGeometry.has(actor)
+            ) {
+              this.syncNativeGeometry(actor);
+              if (scoped && reusable) this.nativePreparedGeometry.add(actor);
+            } else if (this.syncDiagnostics) {
+              this.syncDiagnostics.nativePreparedGeometryHits =
+                (this.syncDiagnostics.nativePreparedGeometryHits ?? 0) + 1;
+            }
+            enumerateNativeActorChildren(actor, (child) => {
+              reusable = prepare(child) && reusable;
+              return 0;
+            });
+          }
+          visited.set(actor, reusable);
+          if (scoped && reusable) this.nativePreparedActors.add(actor);
+          return reusable;
         };
         for (const root of roots) prepare(root);
       },
@@ -1300,8 +1366,12 @@ export class WorldCollision {
           for (const row of emitted.rows) {
             const surface = this.nativeSurface(row);
             surfaces.push(surface);
-            callbacks.onFace?.(surface);
-            if (callbacks.onFace) this.transforms.invalidatePhase();
+            try {
+              callbacks.onFace?.(surface);
+            } finally {
+              if (callbacks.onFace && !callbacks.onFaceReadOnly)
+                this.invalidateNativePreparation();
+            }
           }
           return emitted;
         },

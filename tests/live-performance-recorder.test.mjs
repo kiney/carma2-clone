@@ -25,6 +25,13 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
         return value;
       },
     };
+    diagnosticCalls = 0;
+    worldContactDiagnostics = () => {
+      this.diagnosticCalls++;
+    };
+    worldContacts() {}
+    advanceWorldContacts() {}
+    collectBodyContacts() {}
     advanceWorldContacts() {
       return "world";
     }
@@ -46,6 +53,23 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
       assert.equal(this.step("tick"), "tick");
       return { skippedMs: period, start };
     }
+    emitWorldProfile(body, cpuMs = 2) {
+      this.worldContactDiagnostics({
+        body,
+        cpuMs,
+        transformsMs: 0.1,
+        collectMs: 0.2,
+        recoveryMs: 0.3,
+        sweepMs: 0.4,
+        reduceMs: 0.5,
+        hulls: 2,
+        rawFaces: 8,
+        eligibleFaces: 6,
+        sweepTests: 7,
+        rejectedFaces: 1,
+        contacts: 3,
+      });
+    }
   }
   const makeGame = () => ({
     paused: true,
@@ -64,16 +88,37 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
   };
   globalThis.cancelAnimationFrame = (key) => callbacks.delete(key);
   try {
+    const oldDiagnostic = window.carma.simulation.worldContactDiagnostics;
+    const sim = window.carma.simulation;
+    const originalCollectors = [
+      sim.worldContacts,
+      sim.advanceWorldContacts,
+      sim.collectBodyContacts,
+    ];
+    const customProvider = () => {};
+    Object.defineProperty(sim.worldContacts, "correctionObserverSource", {
+      value: customProvider,
+    });
     installLivePerformanceRecorder(16);
     const recorder = window.__perf01LiveRecorder,
       oldSim = window.carma.simulation;
     const wrapped = oldSim.step;
+    assert.equal(oldSim.worldContacts.correctionObserverSource, customProvider);
+    assert.equal(
+      oldSim.advanceWorldContacts.correctionObserverSource,
+      originalCollectors[1],
+    );
+    assert.equal(
+      oldSim.collectBodyContacts.correctionObserverSource,
+      originalCollectors[2],
+    );
     frame(10);
     frame(20);
     assert.deepEqual(recorder.snapshot().rows, {
       ticks: [],
       updates: [],
       frames: [],
+      worldContacts: [],
     });
     assert.equal(window.carma.renderer.render(), 7);
     window.carma.paused = false;
@@ -97,10 +142,36 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
     assert.equal(snapshot.rows.ticks[0][7], 1);
     assert.equal(snapshot.rows.ticks[0][6], 0);
     assert.equal(snapshot.rows.ticks[0][9], 1);
+    const indexedBody = oldSim.cars[0];
+    oldSim.emitWorldProfile(indexedBody, 1.99);
+    oldSim.emitWorldProfile(indexedBody, 2.5);
+    assert.equal(oldSim.diagnosticCalls, 2);
+    for (let i = 0; i < 18; i++) {
+      const body = { kind: "debris", name: `part-${i}` };
+      oldSim.debris = [body];
+      oldSim.emitWorldProfile(body, 2 + i);
+    }
+    const contacts = recorder.snapshot();
+    assert.equal(contacts.rows.worldContacts.length, 16);
+    assert.equal(contacts.worldContactLabels.length, 16);
+    assert.equal(contacts.rows.worldContacts[0][3], 1);
+    assert.equal(contacts.rows.worldContacts.at(-1)[3], 1);
+    assert.equal(contacts.rows.worldContacts.at(-1)[4], 19);
+    assert.equal(contacts.rows.worldContacts.at(-1)[2], oldSim.elapsed);
+    assert.equal(contacts.worldContactLabels.at(-1), "debris:part-17");
+    assert.equal(contacts.rows.worldContacts.at(-1)[5], 0.1);
+    oldSim.emitWorldProfile({ kind: "moving-world", actor: { name: "actor-fallback" } });
+    oldSim.emitWorldProfile({ kind: "moving-world", group: { name: "group-fallback" } });
+    assert.deepEqual(recorder.snapshot().worldContactLabels.slice(-2), [
+      "moving-world:actor-fallback",
+      "moving-world:group-fallback",
+    ]);
     window.carma.paused = true;
     frame(1000);
     frame(2000);
-    assert.deepEqual(recorder.snapshot().rows, snapshot.rows);
+    assert.deepEqual(recorder.snapshot().rows.ticks, snapshot.rows.ticks);
+    assert.deepEqual(recorder.snapshot().rows.updates, snapshot.rows.updates);
+    assert.deepEqual(recorder.snapshot().rows.frames, snapshot.rows.frames);
     window.carma.paused = false;
     frame(4000);
     frame(4016);
@@ -111,6 +182,8 @@ test("live recorder preserves calls, pauses, race replacement and bounded histor
     assert.equal(recorder.generation, 2);
     assert.equal(oldSim.step, Simulation.prototype.step);
     assert.equal(Object.hasOwn(oldSim, "step"), false);
+    assert.equal(oldSim.worldContactDiagnostics, oldDiagnostic);
+    assert.equal(oldSim.worldContacts, originalCollectors[0]);
     assert.notEqual(oldSim.step, wrapped);
     window.carma.paused = false;
     window.carma.simulation.step("replacement");

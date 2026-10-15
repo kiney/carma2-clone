@@ -431,6 +431,246 @@ test("installed live leaf boundary rejects where rounded transformed AABB would 
   }
 });
 
+// Retain the pre-optimization generic arithmetic as an independent differential
+// oracle. Installed captures above remain the authority for operation ordering.
+const storedScalar = (value) => {
+  if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)))
+    throw new Error("native actor pick requires finite Float32 scalars");
+  return Math.fround(value);
+};
+const storedMatrix = (value) => {
+  if (value.length !== 12)
+    throw new Error("native actor pick requires twelve matrix scalars");
+  return Array.from(value, storedScalar);
+};
+const storedVector = (value) => {
+  if (value.length !== 3)
+    throw new Error("native actor pick requires three vector scalars");
+  return value.map(storedScalar);
+};
+const storedBounds = (value) => {
+  const min = storedVector(value.min),
+    max = storedVector(value.max);
+  if (min.some((v, i) => v > max[i]))
+    throw new Error("native actor pick bounds are reversed");
+  return { min, max };
+};
+function referenceMultiply(a, b) {
+  const A = storedMatrix(a),
+    B = storedMatrix(b),
+    out = [];
+  const orders = [
+    [2, 1, 0],
+    [0, 1, 2],
+    [0, 1, 2],
+    [0, 1, 2],
+    [0, 2, 1],
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 0, 2],
+    [0, 1, 2],
+    [1, 0, 2],
+    [0, 1, 2],
+  ];
+  for (let row = 0; row < 4; row++)
+    for (let column = 0; column < 3; column++) {
+      const terms = [0, 1, 2].map((k) => A[3 * row + k] * B[3 * k + column]);
+      const order = orders[3 * row + column];
+      const sum = terms[order[0]] + terms[order[1]] + terms[order[2]];
+      out.push(storedScalar(row === 3 ? sum + B[9 + column] : sum));
+    }
+  return out;
+}
+function referenceInverse(value) {
+  const M = storedMatrix(value),
+    out = Array(12);
+  for (let row = 0; row < 3; row++)
+    for (let column = 0; column < 3; column++)
+      out[3 * row + column] = M[3 * column + row];
+  const orders = [
+    [0, 2, 1],
+    [2, 0, 1],
+    [2, 0, 1],
+  ];
+  for (let column = 0; column < 3; column++) {
+    const terms = [0, 1, 2].map((k) => M[9 + k] * out[3 * k + column]);
+    const order = orders[column];
+    out[9 + column] = storedScalar(
+      -(terms[order[0]] + terms[order[1]] + terms[order[2]]),
+    );
+  }
+  return out;
+}
+function referencePoint(value, matrix) {
+  const V = storedVector(value),
+    M = storedMatrix(matrix);
+  return [0, 1, 2].map((column) =>
+    storedScalar(
+      V[2] * M[6 + column] +
+        V[1] * M[3 + column] +
+        V[0] * M[column] +
+        M[9 + column],
+    ),
+  );
+}
+function referenceTransformed(value, matrix) {
+  const b = storedBounds(value),
+    M = storedMatrix(matrix);
+  const first = referencePoint(b.min, M),
+    min = [...first],
+    max = [...first];
+  const extent = b.min.map((v, i) => storedScalar(b.max[i] - v));
+  for (let column = 0; column < 3; column++)
+    for (let row = 0; row < 3; row++) {
+      const contribution = storedScalar(extent[row] * M[3 * row + column]);
+      const output = contribution < 0 ? min : max;
+      output[column] = storedScalar(output[column] + contribution);
+    }
+  return { min, max };
+}
+function referenceLeaf(value, target, matrix) {
+  const b = storedBounds(value),
+    other = storedBounds(target),
+    M = storedMatrix(matrix);
+  const extent = b.min.map((v, i) => storedScalar(b.max[i] - v));
+  for (const column of [0, 2, 1]) {
+    const terms = [0, 1, 2].map((row) => M[3 * row + column] * b.min[row]);
+    const base =
+      (column === 0
+        ? terms[0] + terms[1] + terms[2]
+        : terms[0] + terms[2] + terms[1]) + M[9 + column];
+    const high = [0, 1, 2].map((row) =>
+      M[3 * row + column] > 0 ? M[3 * row + column] * extent[row] : 0,
+    );
+    if (base + high[2] + high[1] + high[0] < other.min[column]) return false;
+    const low = [0, 1, 2].map((row) =>
+      M[3 * row + column] < 0 ? M[3 * row + column] * extent[row] : 0,
+    );
+    if (base + low[2] + low[1] + low[0] > other.max[column]) return false;
+  }
+  return true;
+}
+const outcome = (fn, args) => {
+  try {
+    return { value: fn(...args) };
+  } catch (error) {
+    return { error: error.constructor.name, message: error.message };
+  }
+};
+const matchesReference = (fn, reference, args, label) =>
+  assert.deepEqual(outcome(fn, args), outcome(reference, args), label);
+
+test("scalar native kernels preserve pre-optimization Float32 arithmetic across adversarial inputs", () => {
+  let seed = 0x19c2f32;
+  const random = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) / 2 ** 32;
+  };
+  const sample = () => (random() - 0.5) * 2 ** Math.floor(random() * 60 - 30);
+  for (let trial = 0; trial < 512; trial++) {
+    const a = Array.from({ length: 12 }, sample),
+      b = Array.from({ length: 12 }, sample);
+    const min = Array.from({ length: 3 }, sample);
+    const bounds = { min, max: min.map((v) => v + Math.abs(sample())) };
+    const target = referenceTransformed(bounds, a);
+    matchesReference(mul, referenceMultiply, [a, b], `multiply ${trial}`);
+    matchesReference(inverse, referenceInverse, [a], `inverse ${trial}`);
+    matchesReference(point, referencePoint, [min, a], `point ${trial}`);
+    matchesReference(
+      transformed,
+      referenceTransformed,
+      [bounds, a],
+      `bounds ${trial}`,
+    );
+    for (let axis = 0; axis < 3; axis++) {
+      const boundary = { min: [...target.min], max: [...target.max] };
+      boundary.max[axis] = boundary.min[axis];
+      matchesReference(
+        leaf,
+        referenceLeaf,
+        [bounds, boundary, a],
+        `leaf low ${trial}/${axis}`,
+      );
+      boundary.min[axis] = boundary.max[axis] = target.max[axis];
+      matchesReference(
+        leaf,
+        referenceLeaf,
+        [bounds, boundary, a],
+        `leaf high ${trial}/${axis}`,
+      );
+    }
+  }
+  const extremes = [
+    0,
+    -0,
+    Number.MIN_VALUE,
+    -(2 ** -149),
+    2 ** -126,
+    1 + 2 ** -24,
+    2 ** 24 + 1,
+    -(2 ** 24 + 1),
+    3.4028234663852886e38,
+  ];
+  for (const value of extremes) {
+    const matrix = Array(12).fill(value),
+      bounds = box(-Math.abs(value), Math.abs(value));
+    matchesReference(
+      mul,
+      referenceMultiply,
+      [matrix, matrix],
+      `extreme multiply ${value}`,
+    );
+    matchesReference(
+      inverse,
+      referenceInverse,
+      [matrix],
+      `extreme inverse ${value}`,
+    );
+    matchesReference(
+      point,
+      referencePoint,
+      [[value, value, value], matrix],
+      `extreme point ${value}`,
+    );
+    matchesReference(
+      transformed,
+      referenceTransformed,
+      [bounds, matrix],
+      `extreme bounds ${value}`,
+    );
+    matchesReference(
+      leaf,
+      referenceLeaf,
+      [bounds, bounds, matrix],
+      `extreme leaf ${value}`,
+    );
+  }
+});
+
+test("scalar native kernels retain public validation before rejection and arithmetic", () => {
+  for (const invalid of [NaN, Infinity, -Infinity, 1e50])
+    for (let component = 0; component < 12; component++) {
+      const matrix = [...I];
+      matrix[component] = invalid;
+      matchesReference(mul, referenceMultiply, [matrix, I]);
+      matchesReference(inverse, referenceInverse, [matrix]);
+      matchesReference(point, referencePoint, [[0, 0, 0], matrix]);
+      matchesReference(transformed, referenceTransformed, [box(), matrix]);
+      matchesReference(leaf, referenceLeaf, [box(), box(100, 101), matrix]);
+    }
+  for (const matrix of [I.slice(0, 11), [...I, 0]])
+    matchesReference(mul, referenceMultiply, [matrix, I]);
+  matchesReference(transformed, referenceTransformed, [box(2, -2), I]);
+  matchesReference(leaf, referenceLeaf, [box(-3e38, 3e38), box(), I]);
+  matchesReference(mul, referenceMultiply, [
+    new Float32Array(I),
+    new Float64Array(I),
+  ]);
+});
+
 for (const root of ["data", "adv_data"])
   test(`original ${root} ACT admission topology with MOCK finite model bounds, no migration claim`, async (t) => {
     const installation =

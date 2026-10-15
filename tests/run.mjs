@@ -6,6 +6,7 @@ import "./native-noncar-return.test.mjs";
 import "./noncar-participation.test.mjs";
 import "./assets.test.mjs";
 import "./live-performance-recorder.test.mjs";
+import "./performance-probe.test.mjs";
 import "./render-matrices.test.mjs";
 import "./noncar-render-ownership.test.mjs";
 import "./scenery-submission.test.mjs";

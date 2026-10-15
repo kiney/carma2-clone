@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { WorldCollision } from "../src/world.ts";
 import {
   createNativeTrackModelResource,
+  nativeTrackMaterialOrder,
   prepareNativeTrackResource,
 } from "../src/native-track-resources.ts";
 import {
@@ -374,6 +375,10 @@ function nativeFixture({ columns = 1 } = {}) {
     ]).roots[0],
     blackMaterial: nativeMaterial,
     resources: new Map([[resource, resource]]),
+    arena: {
+      materialOrder: (faces) =>
+        nativeTrackMaterialOrder({ current: { faces } }),
+    },
     meshes,
     initialPoses: new Map(),
     initialGeometries: new Map(
@@ -737,4 +742,119 @@ test("native sync checks only selected columns and capacity zero still runs nati
     objects.get(state.actors[5]),
     objects.get(state.actors[7]),
   ]);
+});
+
+const preparationQuery = () => ({
+  bounds: new THREE.Box3(
+    new THREE.Vector3(-10, -10, -10),
+    new THREE.Vector3(10, 10, 10),
+  ),
+  matrix: new THREE.Matrix4(),
+});
+
+test("physics preparation reuses ordinary ACT subtrees while repeating native callbacks", () => {
+  const { world, state, objects } = nativeFixture();
+  world.syncDiagnostics = diagnostics();
+  const events = [];
+  const callbacks = {
+    mutationsTracked: true,
+    onFaceReadOnly: true,
+    onFace: (surface) => events.push(["face", surface.native.actor]),
+    stopGroovidelic: (actor) => events.push(["stop", actor]),
+    pullActorFromWorld: (actor) => {
+      events.push(["pull", actor]);
+      return null;
+    },
+  };
+  world.beginNativePreparation();
+  try {
+    const first = world.collectFaces(preparationQuery(), 8, true, callbacks);
+    const firstEvents = [...events];
+    const actorChecks = world.syncDiagnostics.nativeActorChecks;
+    const geometryChecks = world.syncDiagnostics.nativeGeometryChecks;
+    events.length = 0;
+    const second = world.collectFaces(preparationQuery(), 8, true, callbacks);
+    assert.deepEqual(second.map(points), first.map(points));
+    assert.deepEqual(events, firstEvents, "callbacks retain their exact order");
+    assert.equal(world.syncDiagnostics.nativeActorChecks, actorChecks);
+    assert.equal(world.syncDiagnostics.nativeGeometryChecks, geometryChecks);
+    assert.ok(world.syncDiagnostics.nativePreparedActorHits > 0);
+
+    objects.get(state.actors[1]).position.x = 3;
+    world.invalidateNativePreparation("pose");
+    const moved = world.collectFaces(preparationQuery(), 8, true, callbacks);
+    assert.equal(moved[1].a.x, first[1].a.x + 3);
+    assert.equal(world.syncDiagnostics.nativeActorChecks, actorChecks * 2);
+    assert.equal(world.syncDiagnostics.nativeGeometryChecks, geometryChecks);
+    assert.ok(world.syncDiagnostics.nativePreparedGeometryHits > 0);
+  } finally {
+    world.endNativePreparation();
+  }
+  const geometryChecks = world.syncDiagnostics.nativeGeometryChecks;
+  world.collectFaces(preparationQuery(), 8);
+  assert.ok(world.syncDiagnostics.nativeGeometryChecks > geometryChecks);
+});
+
+test("uncertified observers keep query-start snapshots and invalidate scoped preparation", () => {
+  const { world, state, objects } = nativeFixture();
+  const child = objects.get(state.actors[1]);
+  world.beginNativePreparation();
+  try {
+    const baseline = world.collectFaces(preparationQuery(), 8);
+    const changed = world.collectFaces(preparationQuery(), 8, true, {
+      onFace: (surface) => {
+        if (surface.native.actor === state.roots[0]) child.position.x = 7;
+      },
+    });
+    assert.deepEqual(changed.map(points), baseline.map(points));
+    const next = world.collectFaces(preparationQuery(), 8);
+    assert.equal(next[1].a.x, baseline[1].a.x + 7);
+  } finally {
+    world.endNativePreparation();
+  }
+});
+
+test("geometry publication invalidates prepared MODEL tables within a physics scope", () => {
+  const { world, state, native } = nativeFixture();
+  const actor = state.roots[0];
+  const mesh = native.meshes.get(actor);
+  world.syncDiagnostics = diagnostics();
+  world.beginNativePreparation();
+  try {
+    world.collectFaces(preparationQuery(), 8);
+    const position = mesh.geometry.getAttribute("position");
+    position.setX(0, -4);
+    position.needsUpdate = true;
+    world.invalidateActors([mesh]);
+    const next = world.collectFaces(preparationQuery(), 8);
+    assert.equal(next[0].a.x, -4);
+    assert.ok(world.syncDiagnostics.nativeGeometryWrites > 0);
+    const checks = world.syncDiagnostics.nativeGeometryChecks;
+    world.collectFaces(preparationQuery(), 8);
+    assert.equal(world.syncDiagnostics.nativeGeometryChecks, checks);
+  } finally {
+    world.endNativePreparation();
+  }
+});
+
+test("opaque ACT update methods stay eager within a physics preparation scope", () => {
+  const { world, state, objects } = nativeFixture();
+  const object = objects.get(state.roots[0]);
+  let updates = 0;
+  object.updateWorldMatrix = function (...args) {
+    updates++;
+    return THREE.Object3D.prototype.updateWorldMatrix.apply(this, args);
+  };
+  world.syncDiagnostics = diagnostics();
+  world.beginNativePreparation();
+  try {
+    world.collectFaces(preparationQuery(), 8);
+    const firstUpdates = updates;
+    const firstChecks = world.syncDiagnostics.nativeActorChecks;
+    world.collectFaces(preparationQuery(), 8);
+    assert.ok(updates > firstUpdates);
+    assert.ok(world.syncDiagnostics.nativeActorChecks > firstChecks);
+  } finally {
+    world.endNativePreparation();
+  }
 });

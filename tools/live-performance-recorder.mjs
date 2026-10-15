@@ -62,6 +62,24 @@ export function installLivePerformanceRecorder(capacity = 512) {
       "triangles",
       "movingWorldBodies",
     ],
+    worldContacts: [
+      "generation",
+      "timeMs",
+      "elapsedSeconds",
+      "bodyIndex",
+      "cpuMs",
+      "transformsMs",
+      "collectMs",
+      "recoveryMs",
+      "sweepMs",
+      "reduceMs",
+      "hulls",
+      "rawFaces",
+      "eligibleFaces",
+      "sweepTests",
+      "rejectedFaces",
+      "contacts",
+    ],
   };
   const rings = Object.fromEntries(
     Object.entries(columns).map(([key, names]) => [
@@ -69,6 +87,8 @@ export function installLivePerformanceRecorder(capacity = 512) {
       { data: new Float64Array(capacity * names.length), count: 0 },
     ]),
   );
+  // Labels share the same bounded slots as scalar rows; no body is retained.
+  const worldContactLabels = new Array(capacity).fill("");
   const record = (key, values) => {
     const ring = rings[key],
       width = columns[key].length;
@@ -86,6 +106,84 @@ export function installLivePerformanceRecorder(capacity = 512) {
     for (const fn of restores.reverse()) fn();
     restores = [];
   }
+  function installWorldContactDiagnostics(sim) {
+    const hadOwn = Object.prototype.hasOwnProperty.call(
+      sim,
+      "worldContactDiagnostics",
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(
+      sim,
+      "worldContactDiagnostics",
+    );
+    const previous =
+      typeof sim.worldContactDiagnostics === "function"
+        ? sim.worldContactDiagnostics
+        : undefined;
+    function measured(profile) {
+      try {
+        return previous?.call(this, profile);
+      } finally {
+        const elapsed = Number(profile?.cpuMs);
+        if (!stopped && Number.isFinite(elapsed) && elapsed >= 2) {
+          const candidateName =
+            profile.body?.name ??
+            profile.body?.actor?.name ??
+            profile.body?.group?.name;
+          const name = typeof candidateName === "string" ? candidateName : "";
+          const kind =
+            typeof profile.body?.kind === "string" ? profile.body.kind : "body";
+          const label = `${kind}:${name}`.slice(0, 64);
+          const index = rings.worldContacts.count % capacity;
+          record("worldContacts", [
+            generation,
+            performance.now(),
+            sim.elapsed ?? NaN,
+            identifyBody(sim, profile.body),
+            elapsed,
+            profile.transformsMs,
+            profile.collectMs,
+            profile.recoveryMs,
+            profile.sweepMs,
+            profile.reduceMs,
+            profile.hulls,
+            profile.rawFaces,
+            profile.eligibleFaces,
+            profile.sweepTests,
+            profile.rejectedFaces,
+            profile.contacts,
+          ]);
+          worldContactLabels[index] = label;
+        }
+      }
+    }
+    sim.worldContactDiagnostics = measured;
+    restores.push(() => {
+      if (sim.worldContactDiagnostics !== measured) return;
+      if (hadOwn)
+        Object.defineProperty(sim, "worldContactDiagnostics", descriptor);
+      else delete sim.worldContactDiagnostics;
+    });
+  }
+  function identifyBody(sim, body) {
+    // Use current simulation rosters for a numeric identity without retaining bodies.
+    let offset = 0;
+    for (const key of [
+      "cars",
+      "debris",
+      "movingWorld",
+      "mineBodies",
+      "pedBodies",
+      "pedBoneBodies",
+      "noncars",
+    ]) {
+      const roster = sim[key];
+      if (!Array.isArray(roster)) continue;
+      const index = roster.indexOf(body);
+      if (index >= 0) return offset + index;
+      offset += roster.length;
+    }
+    return -1;
+  }
   function wrap(owner, name, measure) {
     if (typeof owner?.[name] !== "function") return;
     const hadOwn = Object.prototype.hasOwnProperty.call(owner, name);
@@ -95,6 +193,16 @@ export function installLivePerformanceRecorder(capacity = 512) {
       if (stopped || window.carma?.paused) return original.apply(this, args);
       return measure.call(this, original, args);
     }
+    // Preserve the existing observer contract for pure response collectors.
+    // Otherwise timing wrappers disable native response-preparation reuse.
+    if (
+      ["worldContacts", "advanceWorldContacts", "collectBodyContacts"].includes(
+        name,
+      )
+    )
+      Object.defineProperty(measured, "correctionObserverSource", {
+        value: original.correctionObserverSource ?? original,
+      });
     owner[name] = measured;
     restores.push(() => {
       if (owner[name] !== measured) return;
@@ -118,6 +226,7 @@ export function installLivePerformanceRecorder(capacity = 512) {
     generation++;
     frame.fill(0);
     lastFrame = undefined;
+    installWorldContactDiagnostics(sim);
     wrap(sim, "step", function (original, args) {
       const previous = tick;
       const current = new Float64Array(10);
@@ -260,7 +369,7 @@ export function installLivePerformanceRecorder(capacity = 512) {
     raf = requestAnimationFrame(onFrame);
   }
   const recorder = {
-    version: 3,
+    version: 4,
     capacity,
     columns,
     rings,
@@ -272,7 +381,7 @@ export function installLivePerformanceRecorder(capacity = 512) {
     },
     snapshot() {
       return {
-        version: 3,
+        version: 4,
         generation,
         stopped,
         paused: window.carma?.paused,
@@ -290,6 +399,14 @@ export function installLivePerformanceRecorder(capacity = 512) {
             return [key, rows];
           }),
         ),
+        worldContactLabels: (() => {
+          const ring = rings.worldContacts;
+          const count = Math.min(capacity, ring.count);
+          const labels = [];
+          for (let i = ring.count - count; i < ring.count; i++)
+            labels.push(worldContactLabels[i % capacity]);
+          return labels;
+        })(),
       };
     },
     stop() {
