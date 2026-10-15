@@ -1285,3 +1285,16 @@ test("local Eagle3 and rival archive WAMs parse, and original Eagle meshes visib
       repairedPositions(system, object, original),
     );
 });
+
+test("native WAM softness commands accept spaced and underscored names", () => {
+  for (const [name, expected] of [
+    ["very soft", 4],
+    ["very hard", 0.25],
+    ["very_soft", 4],
+    ["very_hard", 0.25],
+  ]) {
+    const text = wam().replace("\nnormal\n", `\n${name}\n`);
+    const parsed = parseWam(text);
+    assert.equal(parsed.parts[0].softnessFactor, expected);
+  }
+});

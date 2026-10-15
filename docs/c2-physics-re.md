@@ -422,3 +422,48 @@ explicit browser adaptations, not verified original unchecked-failure behavior.
 See [runtime and numerical evidence](noncar-participation-performance.md),
 [wake/pull addresses](c2-noncar-wake-pull-re.md) and
 [reclaim formulas](c2-noncar-slot-reclaim-re.md).
+
+## DMG-06: selected-car WAM scope (2026-10-15)
+
+Evidence: **reconstructed by rec2**, not newly verified against the installed
+binary. `LoadCar` (`0x488f70`) opens the authored WAM token under the selected
+car directory; if missing, it retries the selected TXT basename with `.WAM` in
+that same directory. `LoadCarCrush` (`0x42a280`) reports a missing file, whereas
+invalid contents do not select another car's data. See
+[loading.c](https://github.com/madebr/rec2/blob/master/src/carma2/common/loading.c#L3907)
+and [crush.c](https://github.com/madebr/rec2/blob/master/src/carma2/common/crush.c#L646).
+The browser previously searched global basenames and preferred Stock paths even
+for Advanced selections. Player and opponent loading now pass their selected
+configuration path to DamageSystem. Only local authored/fallback candidates are
+used; parse errors and unmatched WAM actors produce diagnostics. Exact actor
+matching is retained. Unlike native fatal errors, the browser keeps its existing
+warning/geometry-only behavior for invalid optional damage data.
+
+`gSoftness_names` (`0x58f808`) also contains spaced `very soft` / `very hard`;
+`LoadCarCrushDataEntry` (`0x42a550`) maps these to 4/0.25. The parser now accepts
+these native names as well as the existing underscore spelling. Advanced OK
+exposed this independent WAM parsing error.
+
+Run `node --import tsx tools/audit-car-wam.mjs` for a read-only complete census;
+the asset-derived report and hashes stay in ignored `artifacts/car-wam-audit.json`.
+All 122 catalog cars were inspected (52 Stock, 70 Advanced). Previously each scope
+had 14 zero-binding and 2 missing-WAM cars. All 11 Eagle recolors now match 18/18
+parts, including their principal body; Green/Purple/White previously matched
+only 4/2/1. Corrected selection yields no missing WAM or zero bindings. Advanced
+DIGGA still needs an audit-only ACT trailing-newline trim and is **not** claimed
+production-loadable by this result (DAT-01).
+
+Partial authored actor coverage remains for Stock Cerby, Cobra, Dondump, Junker1,
+Razorback2, Screw28, Semi2 and Wideboy; Advanced additionally 69mach1, DIGGA, OK,
+Ped-o-matic2000 and Semi1. Some absent entries are explicitly uncrushable;
+OK's FIREWALL actor has no local model. Bugtoo5's main rendered actor and Advanced
+Ped-o-matic's base actor lack matching WAM entries even under the correct file.
+These are retained data/interpretation gaps, not grounds for fuzzy name matching
+or whole-car squash. Full WAM binding alone does not certify every mesh crushes.
+
+Regression coverage checks both resource scopes, authored-token precedence,
+selected-filename fallback despite stale TXT names, missing/invalid data and
+binding diagnostics. Original Gold/Green/Blue/Mustang tests check actual
+principal-body vertices, cumulative local dents, collision-hull deformation,
+detachment requests and repair. The separate Chromium regression exercises
+loaded scene geometry and the runtime detachment/repair path.

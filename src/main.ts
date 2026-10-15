@@ -1031,7 +1031,12 @@ async function loadRace() {
       0.18,
       cameraBounds.getCenter(new THREE.Vector3()).y,
     );
-    const loadedDamage = new DamageSystem(assets, loadedCar.group, carText);
+    const loadedDamage = new DamageSystem(
+      assets,
+      loadedCar.group,
+      carText,
+      currentCar,
+    );
     await loadedDamage.init();
     loadedDamage.structuralSettings = parseStructuralSettings(generalText);
     status("Building collision geometry…");
@@ -2288,7 +2293,7 @@ async function loadRivals(
       shading: 2,
       storage: "opponents",
     });
-    const rivalDamage = new DamageSystem(assets, model.group, text);
+    const rivalDamage = new DamageSystem(assets, model.group, text, configPath);
     rivalDamage.structuralSettings = parseStructuralSettings(generalText);
     await rivalDamage.init();
     if (activeTrack !== currentTrack || loadGeneration !== generation) {

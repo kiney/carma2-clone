@@ -50,7 +50,8 @@
     "test:render-matrices": "npm run build && node tests/browser-render-matrices.mjs",
     "test:render-presentation": "npm run build && node tests/browser-render-presentation.mjs",
     "test:noncar-participation": "npm run build && node tests/browser-noncar-participation.mjs",
-    "test:hierarchy-quiet": "npm run build && node tests/browser-hierarchy-quiet.mjs"
+    "test:hierarchy-quiet": "npm run build && node tests/browser-hierarchy-quiet.mjs",
+    "test:wam-binding": "npm run build && node tests/browser-wam-binding.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

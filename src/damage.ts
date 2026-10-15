@@ -251,7 +251,7 @@ export function parseWam(text: string): WamData {
   };
   for (let i = 0; i < count; i++) {
     const actor = r.read(),
-      soft = r.read().toLowerCase(),
+      soft = r.read().toLowerCase().replace(/\s+/g, "_"),
       type = r.read().toLowerCase();
     if (!(soft in softness) || !["boring", "flap", "detach"].includes(type))
       throw new Error(`Invalid WAM part ${actor}`);
@@ -496,6 +496,7 @@ export class DamageSystem {
     private assets: DamageAssets,
     private group: Group,
     private configText: string,
+    private configPath?: string,
   ) {}
 
   get carSoftness(): number {
@@ -830,16 +831,23 @@ export class DamageSystem {
       .map((line) => line.split("//")[0])
       .join("\n");
     const wamName = /([^\s,]+\.wam)\b/i.exec(config)?.[1];
+    // rec2 LoadCar (0x488f70): authored token in the selected car directory,
+    // then selected TXT basename.WAM if absent. Never borrow another car's
+    // identically named WAM, or cross Stock/Advanced resource scopes.
     const stem = /([^\s,]+)\.txt\b/i.exec(config)?.[1] ?? this.group.name;
+    const configPath = this.configPath ?? `data/CARS/${stem}/${stem}.TXT`;
+    const directory = configPath.slice(0, configPath.lastIndexOf("/") + 1);
+    const fallbackName = configPath
+      .slice(configPath.lastIndexOf("/") + 1)
+      .replace(/\.txt$/i, ".WAM");
     if (wamName) {
       const path =
-        this.assets.resolve(`data/CARS/${stem}/${wamName}`) ??
-        this.assets.resolve(`adv_data/CARS/${stem}/${wamName}`) ??
-        this.assets.manifest?.find(
-          (entry) =>
-            entry.path.split("/").pop()?.toLowerCase() ===
-            wamName.toLowerCase(),
-        )?.path;
+        this.assets.resolve(`${directory}${wamName}`) ??
+        this.assets.resolve(`${directory}${fallbackName}`);
+      if (!path)
+        this.assets.warnings?.push(
+          `Damage data missing for ${configPath}: ${wamName} / ${fallbackName}`,
+        );
       if (path) {
         try {
           this.wam = parseWam(await this.assets.text(path));
@@ -973,6 +981,18 @@ export class DamageSystem {
       for (const model of models) model.runtime = runtime;
       this.updatePartBounds(runtime);
     });
+    if (this.wam) {
+      const unmatched = this.wam.parts.filter(
+        (part) => !this.runtimeParts.some((runtime) => runtime.part === part),
+      );
+      if (unmatched.length || this.runtimeParts.length === 0)
+        this.assets.warnings?.push(
+          `Damage binding ${configPath}: ${this.runtimeParts.length}/${this.wam.parts.length} WAM actors bound` +
+            (unmatched.length
+              ? `; unmatched: ${unmatched.map((part) => part.actor).join(", ")}`
+              : ""),
+        );
+    }
     this.ready = true;
     this.setupRegions();
   }

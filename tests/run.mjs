@@ -356,3 +356,5 @@ import "./probe-window.test.mjs";
 import "./local-response.test.mjs";
 import "./local-response-integration.test.mjs";
 import "./response-input.test.mjs";
+
+import "./wam-resource-resolution.test.mjs";

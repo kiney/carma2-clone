@@ -27,3 +27,16 @@ The Advanced installation also contains malformed MAT and UI PIX files. Some Adv
 ## Tests
 
 `npm test` runs unit and fixture tests; tests requiring the original installation skip when it is absent. Coverage includes native wheel-ray tolerances, Eagle/Monster contour transitions and source recovery history, three full pedestrian populations, threat/avoidance updates, blood effects and original WASTED fonts/queues. All 212 valid stock noncar definitions construct complete bodies, including five repaired monorail instances and two authored wire forms; three oversized OILDRUM definitions remain intentional parse failures. `npm run test:browser` builds the app and launches installed Chromium through Playwright Core. Checks cover stock/Advanced driving/races, mine contact damage/deformation/detachment/repair, oil, finite water, Carrier lift, Airport localized door destruction, real-key Snow Way Out recovery, rival-triggered pedestrian panic, blood and WASTED feedback. Chrome DevTools MCP separately verifies actual world-prop collisions, lift travel/end stop, rotating GROOVEs, original WASTED glyphs/WAV decoding, blood rendering and console state. Screenshots are stored in ignored test artifacts. These checks use software WebGL and do not establish hardware-GPU performance or full-game parity.
+
+## Car damage resource audit
+
+DMG-06 corrects WAM selection for player and opponent cars, including all eleven
+Eagle recolors: the selected car directory owns both the authored token and its
+TXT-basename fallback. Stock and Advanced resources no longer cross-load.
+Run `node --import tsx tools/audit-car-wam.mjs` for the full local car census and
+`npm run test:wam-binding` for the focused Chromium deformation/repair regression.
+The installed 122-car census has no remaining missing or zero-binding WAM
+selection, but some authored actor references remain unmatched (DMG-01).
+Advanced DIGGA still fails production ACT parsing because of a trailing newline
+after END (DAT-01); its static audit uses an explicitly reported in-memory trim.
+These findings do not assert complete damage coverage for every model.
