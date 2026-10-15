@@ -4,7 +4,7 @@ title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: wip
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-15 19:02'
+updated_date: '2026-10-15 21:46'
 labels:
   - priority-1
   - PERF-01
@@ -90,6 +90,8 @@ PERF-14 completed: hierarchy-aware native-informed candidate/probe/commit moveme
 PHY-13 completed with native-qualified per-hull OLD-overlap admission, retained source response and fresh-phase re-entry checks. Old player/Cerby captures release; first-window guard hull transforms40→2/206→99. Full tests/build, Stock/Advanced crash matrix and original Eagle/Cerby production drive-out/new-contact/repair/reground checks pass; actual AMD MCP driving/crash validation is clean. Short partial replay retains adverse timings after release; actual rendered Timber stall and global retry work remain open. See docs/old-overlap-recovery.md. Next is PERF-15 after user playtesting; PHY-14/TASK-108 records separate nested immediate-parent eligibility gap in P2 backlog.
 
 PERF-19 implementation checkpoint: scoped native preparation, scalar collector kernels and no-op GROOVE publication suppression are implemented; profiler wrappers were corrected after discovering they disabled existing reuse. Controlled contact work improves with identical results, but hardware startup tails are mixed and historical v3 live recording is not unbiased. PERF-19 remains wip for clean outlier acceptance; defer visibility expansion. Extended grounded Porker split-secondary stall reproduces on baseline1f33742 and is tracked separately as PHY-17/TASK-111 P1next.
+
+2026-10-15 current board/evidence reconciliation: PERF-19 was closed with user playtest acceptance; DMG-06 then fixed scoped WAM binding across cars. Current rendered hardware integration under PERF-13 found a remaining damaged-scene slowdown:15.6 FPS instrumented /18.8 FPS bare RAF-only, normal25Hz simulation with zero skipped time in instrumented windows. PERF-13 stays open, P1 next, and now owns attribution/optimization of residual local collision processing and final pair guarding. Ordinary Timber/node192 starts48-53 FPS, Snow startup28 FPS at2100x1466 AMD ANGLE. These short captures do not reproduce the historical exact route or isolate rare frame/directional spikes. See docs/perf13-integration-check.md. PERF-04 remains deferred; no duplicate implementation ticket added.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

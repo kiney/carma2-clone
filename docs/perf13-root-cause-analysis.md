@@ -1,5 +1,9 @@
 # PERF-13 root-cause analysis: frame feedback and jammed own-debris cluster
 
+Current follow-up: [post-queue hardware integration check](perf13-integration-check.md).
+The historical global-round implementation below has been replaced; remaining
+damaged-scene physics latency keeps PERF-13 open.
+
 Analysis of 2026-10-13, source/code review plus offline evaluation of the
 saved user captures. No engine change. Inputs (ignored, never commit):
 `artifacts/perf01-directional-live-capture.json` (recorder v2, last 512 ticks),

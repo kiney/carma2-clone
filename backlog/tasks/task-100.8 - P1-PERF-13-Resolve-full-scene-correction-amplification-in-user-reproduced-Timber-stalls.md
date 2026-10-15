@@ -1,12 +1,12 @@
 ---
 id: TASK-100.8
 title: >-
-  [P1] PERF-13: Resolve full-scene correction amplification in user-reproduced
-  Timber stalls
-status: backlog
+  [P1] PERF-13: Resolve remaining damaged-scene physics stalls after structural
+  integration
+status: next
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-13 11:33'
+updated_date: '2026-10-15 21:46'
 labels:
   - priority-1
   - PERF-13
@@ -35,6 +35,12 @@ ordinal: 1180
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
+Current integration check (2026-10-15, engine checkpoint dbc7a0d): keep open. The old eight-global-round implementation has been replaced by the completed structural queue, but a short rendered hardware damaged-grid case still gives 15.6 FPS and 29.8 ms mean tick CPU. A CPU-profiled repeat gives 15.3 FPS; a separate bare RAF-only run without timing wrappers gives 18.8 FPS. Actual simulation runs about 25 ticks/s with zero skipped time in the instrumented captures. This is a concrete remaining collision/physics workload, not only historical validation debt.
+
+Next implementation focus: attribute and reduce damaged-scene local collision processing and final pair trajectory guarding. Preserve a seeded fixture and distinguish useful response from redundant discovery, invalidation, sampling and geometry work before selecting an algorithm. Do not preselect a new cap or weaker safeguard. Ordinary Timber/node192 views are roughly 48-53 FPS; Snow startup is 28 FPS. Actual AMD ANGLE hardware, 2100 x 1466, short serial windows. Detailed measurements, limits and reproduction: docs/perf13-integration-check.md. Visibility PERF-04 remains dependent. No new PERF-20 is created because it would duplicate this scope.
+
+Historical investigation and scope before the completed structural queue:
+
 User-driven hardware Chromium capture after PERF-12 records physics updateFrame up to 263.1 ms with five ticks, versus typical render CPU of 4-9 ms. Most heavy ticks perform eight global correction rounds, 4,347 world-guard calls across 483 bodies, and nine pair collections. Nonempty cached/resting contacts retain solver and callback rounds; raw-contact caching alone does not remove this amplification.
 
 Coordinate residual whole-route integration and validation while retaining C2 motion, momentum, damage/crush/repair and meaningful effects. New structural implementation is delegated to PERF-14, PHY-13, PERF-15, PERF-16, PERF-17 and PERF-18. The user explicitly authorizes replacing browser-only guard/recollection algorithms, sampling and iteration policies rather than preserving their current behavior bit-for-bit. Reducing simulated time, freezing moving parts or discarding meaningful response merely to report higher FPS remains outside the intended outcome.
@@ -53,8 +59,6 @@ The 2026-10-13 structural brainstorming found native joint candidate anchor plac
 - [x] #3 Prove contact, momentum, damage/restart ordering, activation and final body/world safeguards remain valid across original Stock/Advanced multi-car debris/crush/repair scenarios.
 - [x] #4 Validate running Chromium frames and regressions with clean console/WebGL; distinguish exact directional attribution from hypotheses and keep original data unmodified/unbundled.
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
@@ -82,4 +86,6 @@ Reviewed follow-up implemented scalar SAT axes, one roster per pure correction c
 Final production Chromium crash matrix passes Stock Eagle/Buggy/Bigdump, Advanced69mach1 and Porker2 split/repair, with no console errors/failed requests/WebGL faults. Screenshots inspected. MCP ordinary Timber head-on with driving input changes player health100→91, opponent100→44 and persistent player deformation revision0→1. A non-element keyboard event-target assumption discovered in the injected QA path was fixed as UI-04/TASK-107 (done); Window/document controls and editable exclusion pass with clean final console/requests/GL. Broader PERF-13 and PHY-13 remain open.
 
 2026-10-13: structural implementation split into five new P1/next children plus reused PHY-13/TASK106. This residual integration/route-validation task moves to backlog because partial implementation alone is not WIP. Latest user authorization supersedes immutable preservation of browser-only guard/correction policies; native timebase and meaningful response remain the target. Earlier checked AC3/AC4 describe validation of the existing checkpoint; all changed systems require fresh child-ticket validation and final route integration.
+
+2026-10-15 integration audit: rendered Timber damaged grid remains slow (15.6 FPS, tick mean29.8/p95 50.8ms, 12 debris, 24.67 ticks/s, zero skipped). Profiled repeat15.3 FPS, tick mean31.0ms; bare RAF-only confirmation18.8 FPS with no engine measurement wrappers. Different random opponents/detachment states prevent A/B overhead estimates. CPU sampling attributes38.60% inclusive to local responses and14.39% to sibling final pair guards; local-response exclusive self only0.69%, so no single control-flow bottleneck is proven. GPU elapsed mean0.86ms in the first damaged case. Ordinary starts/directions and adverse cold tails retained. Existing AC1/AC2 remain open; literal full replay of historical user tick is not claimed. No production behavior changed; ticket returns to next as the concrete P1 implementation owner after this bounded diagnosis. See docs/perf13-integration-check.md and tools/validate-performance-routes.mjs.
 <!-- SECTION:NOTES:END -->
