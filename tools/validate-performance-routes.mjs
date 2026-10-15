@@ -27,6 +27,9 @@ assert.ok(
   "PERF_ROUTE_SEED must be an unsigned 32-bit integer",
 );
 const pairDiagnostics = process.env.PERF_ROUTE_PAIR_DIAGNOSTICS === "1";
+// Benchmark-only selection input, independent of asynchronous asset RNG draws.
+// Restore normal seeded randomness after load; fingerprints still verify state.
+const fixedLoadRandom = process.env.PERF_ROUTE_FIXED_LOAD_RANDOM === "1";
 const fingerprint = async () => {
   const state = await page.evaluate(() => {
     const c = window.carma,
@@ -138,6 +141,7 @@ const report = {
   fixture: {
     seed: fixtureSeed,
     pairDiagnostics,
+    fixedLoadRandom,
     note: "Opt-in benchmark seeding only. Compare initial bodiesSha256 before claiming the same fixture; wall-clock warmup and capture remain nondeterministic.",
   },
   cases: [],
@@ -179,7 +183,7 @@ try {
     )
       continue;
     await page.evaluate(
-      async ({ scenario, seed }) => {
+      async ({ scenario, seed, fixedLoadRandom }) => {
         const c = window.carma;
         c.paused = true;
         if (seed !== null) {
@@ -195,11 +199,17 @@ try {
         document.querySelector("#car-select").value = c.assets.resolve(
           "data/CARS/eagle3/eagle3.txt",
         );
-        await c.loadRace();
+        const originalRandom = Math.random;
+        if (fixedLoadRandom) Math.random = () => 0.5;
+        try {
+          await c.loadRace();
+        } finally {
+          Math.random = originalRandom;
+        }
         c.paused = true;
         document.querySelector("#panel").hidden = true;
       },
-      { scenario, seed: fixtureSeed },
+      { scenario, seed: fixtureSeed, fixedLoadRandom },
     );
     await page.waitForFunction(() => window.carma.opponentsReady, null, {
       timeout: 90000,

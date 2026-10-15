@@ -482,3 +482,16 @@ OLD-overlap admissions, normal/friction response, damage and world contacts
 remain their existing paths. See [implementation and retained adverse
 measurements](perf20-adaptive-movement-guard.md). PERF-13 remains open; persistent
 data and rediscovery are PERF-21/PERF-22.
+
+## PERF-21: collision-data lifetime (2026-10-16)
+
+Evidence: independent browser-engine infrastructure, not a recovered native
+physics formula. Moving/fixed BVH topology now persists with exact leaf validation,
+refits and quality-triggered rebuilding. One weak endpoint geometry owner supplies
+bounds and lazily completed hull planes without duplicate vertex transforms;
+response-input certificates persist without retaining solved contacts/impulses.
+Crush/repair/split replacements, mutable sources, wake and roster edits invalidate
+through their actual shape/pose/classification inputs. Normal/friction equations,
+source ordering, damage and timestep remain unchanged. See
+[implementation and measurements](perf21-persistent-collision-data.md).
+PERF-22 retains redundant rediscovery; PERF-13 retains scene-level performance.

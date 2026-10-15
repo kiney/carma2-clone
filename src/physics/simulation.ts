@@ -14,12 +14,8 @@ import {
   type CorrectionDiagnostics,
   type CorrectionBoundsProvider,
   type CorrectionBodySnapshot,
-  type CorrectionGeometry,
+  type CorrectionGeometrySnapshot,
 } from "./correction-working-set";
-import {
-  StationaryBoundsCache,
-  type StationaryBoundsDiagnostics,
-} from "./stationary-bounds-cache";
 import { NativeNonCarSlots, type NativeNonCarBodySlot } from "./noncar-slots";
 import {
   NativeNonCarReclaimRuntime,
@@ -1124,7 +1120,6 @@ export class VehicleSimulation {
   /** Opt-in diagnostic; absent during normal play. */
   worldContactDiagnostics?: (row: WorldContactProfile) => void;
   correctionDiagnostics?: CorrectionDiagnostics &
-    StationaryBoundsDiagnostics &
     LocalResponseDiagnostics & {
       correctionPasses?: number;
       contactCollections?: number;
@@ -1136,18 +1131,8 @@ export class VehicleSimulation {
     };
   private correctionWorkingSet?: CorrectionWorkingSet;
   private correctionGeometry = new CorrectionWorkingSet();
-  /** Only validated dormant geometry persists; contacts and paths never do. */
-  private dormantCorrectionGeometry = new CorrectionWorkingSet();
-  private stationaryCorrectionBounds = new StationaryBoundsCache();
-  private dormantCorrectionPoses = new WeakMap<
-    SimulationBody,
-    {
-      shape: object;
-      old: object;
-      next: object;
-      geometry: CorrectionGeometry;
-    }
-  >();
+  /** Weak exact input certificates survive ticks; solved contacts never do. */
+  private responseInputs = new CorrectionWorkingSet();
   /** Opt-in diagnostics; no counters or retained captures in normal gameplay. */
   bodyPairDiagnostics?: (
     phase: "contacts" | "commit" | "projection",
@@ -4387,6 +4372,10 @@ export class VehicleSimulation {
         (this.correctionDiagnostics.contactCollections ?? 0) + 1;
     const working = this.correctionWorkingSet;
     const snapshots = new Map<SimulationBody, CorrectionBodySnapshot>();
+    const geometrySnapshots = new Map<
+      SimulationBody,
+      CorrectionGeometrySnapshot
+    >();
     const poses = new Map<
       SimulationBody,
       {
@@ -4404,35 +4393,17 @@ export class VehicleSimulation {
       if (available) return available;
       const build = () => {
         if (working) {
-          const snapshot = working.capture(body);
+          const snapshot = working.capture(
+            body,
+            true,
+            geometrySnapshots.get(body),
+          );
           snapshots.set(body, snapshot);
-          if (body.properties.immovable) {
-            let retained = this.dormantCorrectionPoses.get(body);
-            if (
-              retained?.shape !== snapshot.shapeToken ||
-              retained.old !== snapshot.oldPoseToken ||
-              retained.next !== snapshot.nextPoseToken
-            ) {
-              this.dormantCorrectionGeometry.diagnostics =
-                this.correctionDiagnostics;
-              retained = {
-                shape: snapshot.shapeToken,
-                old: snapshot.oldPoseToken,
-                next: snapshot.nextPoseToken,
-                geometry: this.dormantCorrectionGeometry.geometry(
-                  body,
-                  undefined,
-                  correctionBounds,
-                ),
-              };
-              this.dormantCorrectionPoses.set(body, retained);
-            } else if (this.correctionDiagnostics) {
-              this.correctionDiagnostics.geometryHits =
-                (this.correctionDiagnostics.geometryHits ?? 0) + 2;
-            }
-            return retained.geometry;
-          }
-          return working.geometry(body, snapshot, correctionBounds);
+          return working.geometry(
+            body,
+            snapshot,
+            isNativeSphereBody(body) ? correctionBounds : undefined,
+          );
         }
         if (this.correctionDiagnostics)
           this.correctionDiagnostics.geometryTransforms =
@@ -4463,15 +4434,33 @@ export class VehicleSimulation {
       poses.set(body, result);
       return result;
     };
-    // Dormant props need an exact swept box to discover newly entering pairs,
-    // but full face/edge certificates and transforms only after pair filtering.
-    // Source vertices remain checked each collection; no assumed immutability.
-    this.stationaryCorrectionBounds.diagnostics = this.correctionDiagnostics;
-    const bounds = bodies.map((body) =>
-      working && body.properties.immovable && !isNativeSphereBody(body)
-        ? this.stationaryCorrectionBounds.get(body)
-        : geometryFor(body).bounds,
-    );
+    // Every leaf needs a current OLD/NEXT box, including nonincident neighbors
+    // moved by a previous response. Full face/edge transforms and motion/joint
+    // certificates belong only to pairs that survive broadphase filtering.
+    // Sealed source identity or complete mutable vertex/order checks certify
+    // these boxes; changing velocity alone does not invalidate pose geometry.
+    const bounds = bodies.map((body) => {
+      if (!working) return geometryFor(body).bounds;
+      if (!isNativeSphereBody(body)) {
+        const snapshot = working.captureGeometry(body);
+        geometrySnapshots.set(body, snapshot);
+        return working.bounds(body, snapshot);
+      }
+      // Analytic spheres must retain their true radius, not proxy mesh bounds.
+      return nativeBodyWorldBounds(
+        body,
+        body.state.position,
+        body.state.orientation,
+      )
+        .union(
+          nativeBodyWorldBounds(
+            body,
+            body.state.predictedPosition ?? body.state.position,
+            body.state.predictedOrientation ?? body.state.orientation,
+          ),
+        )
+        .expandByScalar(0.005);
+    });
     const diagnostics = this.bodyPairDiagnostics
       ? ({} as BodyContactDiagnostics)
       : undefined;
@@ -5561,7 +5550,7 @@ export class VehicleSimulation {
       // rings; it does not recollect every scene object eight times. Friction
       // records survive retries and are applied after normal pose commitment.
       const friction = new DeferredContactFriction();
-      const responseInputs = new CorrectionWorkingSet();
+      const responseInputs = this.responseInputs;
       const restartGroups: Set<SimulationBody>[] = [];
       let revision = this.world.getStaticGuardRevision?.();
       let traversalRevision = this.collisionTraversalRevision;
@@ -5988,9 +5977,7 @@ export class VehicleSimulation {
     this.quietGravity.clear();
     this.bodyBroadphase = new BodyBroadphase();
     this.correctionGeometry = new CorrectionWorkingSet();
-    this.dormantCorrectionGeometry = new CorrectionWorkingSet();
-    this.stationaryCorrectionBounds = new StationaryBoundsCache();
-    this.dormantCorrectionPoses = new WeakMap();
+    this.responseInputs = new CorrectionWorkingSet();
     this.bodyTrajectoryGuard.clear();
     this.bodyPairDiagnostics = undefined;
     this.smashPowerupQueue.initialize();

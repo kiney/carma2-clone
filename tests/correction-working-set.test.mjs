@@ -251,3 +251,119 @@ test("fresh ticks reuse validated geometry but always recollect contacts and wor
     "persistent geometry still detects an unversioned crush between ticks",
   );
 });
+
+test("broadphase bounds and later contact geometry share endpoint vertex transforms", () => {
+  const diagnostics = {},
+    set = new CorrectionWorkingSet(diagnostics),
+    a = body();
+  const bounds = set.bounds(a);
+  assert.equal(diagnostics.boundsVertexTransforms, 16);
+  assert.equal(diagnostics.geometryTransforms ?? 0, 0);
+  const full = set.geometry(a);
+  assert.equal(
+    diagnostics.boundsVertexTransforms,
+    16,
+    "no second endpoint vertex transformation",
+  );
+  assert.equal(diagnostics.geometryTransforms, 2);
+  assert.equal(full.bounds, bounds);
+  assert.ok(full.old[0].faces.length > 0);
+  assert.ok(full.next[0].faces.length > 0);
+  const boundsAfter = set.bounds(a);
+  assert.equal(boundsAfter, bounds);
+  a.state.velocity.x = 17;
+  a.state.angularVelocity.z = 2;
+  assert.equal(
+    set.bounds(a),
+    bounds,
+    "written poses, not velocity, own geometry validity",
+  );
+  assert.equal(diagnostics.boundsVertexTransforms, 16);
+  a.state.predictedPosition.z += 0.5;
+  set.bounds(a);
+  assert.equal(
+    diagnostics.boundsVertexTransforms,
+    24,
+    "only changed NEXT endpoint transforms",
+  );
+  set.geometry(a);
+  assert.equal(diagnostics.boundsVertexTransforms, 24);
+});
+
+test("bounds admission cannot consume a later full shape or pose invalidation", () => {
+  const set = new CorrectionWorkingSet(),
+    a = body(),
+    b = body(1);
+  let emits = 0;
+  const emit = () => ({ contacts: [], overlap: !!++emits });
+  const original = set.capture(a);
+  collectPair(set, a, b, emit);
+  a.hulls[0].faces[0].normal.x += 0.25;
+  set.bounds(a);
+  const changed = set.capture(a);
+  assert.notEqual(changed.token, original.token);
+  collectPair(set, a, b, emit);
+  assert.equal(
+    emits,
+    2,
+    "face changes invalidate pair evidence after bounds capture",
+  );
+  const geometry = set.geometry(a);
+  assert.equal(geometry.old[0].faces[0].normal.x, a.hulls[0].faces[0].normal.x);
+  a.state.position.y += 1;
+  set.bounds(a);
+  const moved = set.capture(a);
+  assert.notEqual(moved.token, changed.token);
+  collectPair(set, a, b, emit);
+  assert.equal(emits, 3);
+});
+
+test("geometry-only snapshots stay tick-local while exact endpoint storage persists weakly", () => {
+  const diagnostics = {},
+    owner = new CorrectionWorkingSet(),
+    a = body();
+  const first = owner.createTick(diagnostics);
+  const snapshot = first.captureGeometry(a),
+    bounds = first.bounds(a);
+  const second = owner.createTick(diagnostics);
+  assert.throws(() => second.geometry(a, snapshot), /different body\/set/);
+  assert.throws(() => second.bounds(a, snapshot), /different body\/set/);
+  assert.equal(second.bounds(a), bounds);
+  assert.equal(diagnostics.boundsVertexTransforms, 16);
+  const full = second.geometry(a);
+  assert.equal(full.bounds, bounds);
+  assert.equal(diagnostics.boundsVertexTransforms, 16);
+});
+
+test("polygon bounds and full provider bounds never contaminate each other", () => {
+  const set = new CorrectionWorkingSet(),
+    a = body();
+  // Use an ordinary Box3 result without depending on implementation slots.
+  const polygon = set.bounds(a);
+  const custom = (_body, position, _orientation, hulls) => {
+    assert.ok(hulls[0].faces.length);
+    return polygon.clone().translate(position).expandByScalar(5);
+  };
+  const full = set.geometry(a, set.capture(a), custom);
+  assert.notDeepEqual(full.bounds, polygon);
+  assert.equal(set.bounds(a).equals(polygon), true);
+  assert.equal(set.geometry(a).bounds.equals(polygon), true);
+});
+
+test("borrowed geometry inputs retain fresh motion validity and reject foreign owners", () => {
+  const set = new CorrectionWorkingSet(),
+    a = body(),
+    other = body(2);
+  const geometry = set.captureGeometry(a);
+  set.bounds(a, geometry);
+  const first = set.capture(a, true, geometry);
+  a.state.velocity.x += 0.5;
+  a.overlapDetected = true;
+  const changed = set.capture(a, true, geometry);
+  assert.notEqual(changed.token, first.token);
+  assert.equal(changed.oldPoseToken, first.oldPoseToken);
+  assert.throws(
+    () => set.capture(other, true, geometry),
+    /different body\/set/,
+  );
+});

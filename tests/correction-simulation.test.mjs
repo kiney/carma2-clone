@@ -353,7 +353,9 @@ async function compareModes(t, mode) {
     "ordered comparison includes safe world fractions and candidate endpoints",
   );
   assert.ok(
-    (cachedDiagnostics.geometryHits ?? 0) + (cachedDiagnostics.pairHits ?? 0) >
+    (cachedDiagnostics.geometryHits ?? 0) +
+      (cachedDiagnostics.pairHits ?? 0) +
+      (cachedDiagnostics.boundsHits ?? 0) >
       0,
     `expected unchanged work reuse: ${JSON.stringify(cachedDiagnostics)}`,
   );

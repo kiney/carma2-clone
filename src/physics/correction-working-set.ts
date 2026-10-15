@@ -5,12 +5,7 @@ import type {
   RigidProperties,
   RigidState,
 } from "./contact";
-import {
-  hullBounds,
-  hullsBounds,
-  transformHull,
-  type CollisionHull,
-} from "./geometry";
+import { hullBounds, hullsBounds, type CollisionHull } from "./geometry";
 import type { HullBody } from "./pair-guard";
 import type { RigidJoint } from "./joint";
 import { hasImmutableCollisionHulls } from "./immutable-hulls";
@@ -18,19 +13,25 @@ import { hasImmutableCollisionHulls } from "./immutable-hulls";
 /** Contact/world maps last one tick. Exact source/pose certificates and weakly
  * owned geometry may persist; each new tick explicitly admits its snapshots. */
 export type CorrectionToken = object;
-export interface CorrectionBodySnapshot {
+export interface CorrectionGeometrySnapshot {
   readonly body: HullBody;
-  readonly token: CorrectionToken;
   readonly shapeToken: CorrectionToken;
   readonly oldPoseToken: CorrectionToken;
   readonly nextPoseToken: CorrectionToken;
   readonly cacheable: boolean;
 }
+export interface CorrectionBodySnapshot extends CorrectionGeometrySnapshot {
+  readonly token: CorrectionToken;
+}
 export interface CorrectionDiagnostics {
   validityChecks?: number;
+  geometryValidityChecks?: number;
   validityChanges?: number;
   geometryTransforms?: number;
   geometryHits?: number;
+  boundsBuilds?: number;
+  boundsHits?: number;
+  boundsVertexTransforms?: number;
   pairTests?: number;
   pairHits?: number;
   worldTests?: number;
@@ -392,7 +393,9 @@ interface PoseGeometry {
   hulls: CollisionHull[];
   hullBounds: Box3[];
   bounds: Box3;
+  complete: boolean;
   provider?: CorrectionBoundsProvider;
+  providerBounds?: Box3;
 }
 interface BodyEntry {
   shape: ExactValues;
@@ -402,6 +405,7 @@ interface BodyEntry {
   ancestry: RigidBody[];
   response: ExactValues;
   snapshot?: CorrectionBodySnapshot;
+  geometrySnapshot?: CorrectionGeometrySnapshot;
   old?: PoseGeometry;
   next?: PoseGeometry;
   geometry?: CorrectionGeometry;
@@ -420,8 +424,8 @@ interface WorldEntry {
 
 /** Contact/world use: create inside step(), discard before final commitment.
  * createTick() shares only weak body certificates/geometry across ticks;
- * per-tick pairs/world results remain independent. A separate weak geometry-only
- * set preserves dormant snapshots; never use its pair/world methods.
+ * per-tick pairs/world results remain independent. The same weak endpoint owner
+ * supplies broadphase bounds, dormant geometry and completed contact hulls.
  * capture() checks unversioned geometry contents as well as identities. Reuse
  * snapshots only during synchronous pure collection; recapture after callbacks,
  * solves, activation, crush, split, attachment changes or external mutations.
@@ -430,7 +434,7 @@ interface WorldEntry {
  * This helper never skips masks, native callbacks, contact preparation, solving,
  * damage, recovery flag replay, or final conservative guard decisions. */
 export class CorrectionWorkingSet {
-  private certificates = new WeakSet<CorrectionBodySnapshot>();
+  private certificates = new WeakSet<CorrectionGeometrySnapshot>();
   private pairs = new Map<HullBody, Map<HullBody, PairEntry>>();
   private worlds = new Map<HullBody, Map<boolean, WorldEntry>>();
   constructor(
@@ -489,28 +493,29 @@ export class CorrectionWorkingSet {
     entry.fixedResponse = fixed ? fixedResponseInput(shaped) : undefined;
     return entry.response.token;
   }
-  capture(body: HullBody, cacheable = true): CorrectionBodySnapshot {
-    this.count("validityChecks");
-    const entry = this.entry(body);
-    const shaped = body as CollisionBody;
-    // Unknown analytic shape providers need an explicit uncached fallback.
+  /** Geometry validity excludes velocities, friction and joint ancestry. They
+   * affect response/candidate production, not these already-written poses. */
+  captureGeometry(
+    body: HullBody,
+    cacheable = true,
+  ): CorrectionGeometrySnapshot {
+    this.count("geometryValidityChecks");
+    const entry = this.entry(body),
+      shaped = body as CollisionBody;
     cacheable &&=
       !shaped.shape ||
       shaped.shape.type === "BOX" ||
       shaped.shape.type === "LINE" ||
       shaped.shape.type === "SPHERE";
-    const shapeChanged = entry.shape.update(
-      (visit) => shapeValues(shaped, visit),
-      !cacheable,
-    );
-    const oldChanged = entry.oldPose.update((visit) => {
-      visit(entry!.shape.token);
+    entry.shape.update((visit) => shapeValues(shaped, visit), !cacheable);
+    entry.oldPose.update((visit) => {
+      visit(entry.shape.token);
       visit(body.state);
       poseNumbers(body.state.position, visit);
       poseNumbers(body.state.orientation, visit);
     });
-    const nextChanged = entry.nextPose.update((visit) => {
-      visit(entry!.shape.token);
+    entry.nextPose.update((visit) => {
+      visit(entry.shape.token);
       visit(body.state);
       visit(body.state.predictedPosition !== undefined);
       visit(body.state.predictedOrientation !== undefined);
@@ -520,77 +525,125 @@ export class CorrectionWorkingSet {
         visit,
       );
     });
-    const motionChanged = entry.motion.update(
-      (visit) => motionValues(shaped, visit, entry!.ancestry),
-      !cacheable,
-    );
+    const old = entry.geometrySnapshot;
     if (
-      !entry.snapshot ||
-      shapeChanged ||
-      oldChanged ||
-      nextChanged ||
-      motionChanged ||
-      entry.snapshot.cacheable !== cacheable
-    ) {
-      this.count("validityChanges");
-      entry.snapshot = {
+      !old ||
+      old.shapeToken !== entry.shape.token ||
+      old.oldPoseToken !== entry.oldPose.token ||
+      old.nextPoseToken !== entry.nextPose.token ||
+      old.cacheable !== cacheable
+    )
+      entry.geometrySnapshot = {
         body,
-        token: {},
         shapeToken: entry.shape.token,
         oldPoseToken: entry.oldPose.token,
         nextPoseToken: entry.nextPose.token,
         cacheable,
       };
-    }
-    this.certificates.add(entry.snapshot);
-    return entry.snapshot;
+    this.certificates.add(entry.geometrySnapshot!);
+    return entry.geometrySnapshot!;
   }
-  geometry(
+  /** A geometry snapshot may be borrowed within one synchronous pure collection.
+   * Recapture it after any pose/shape/provider callback mutation. Motion and
+   * detection flags are always inspected freshly for pair-result validity. */
+  capture(
     body: HullBody,
-    snapshot = this.capture(body),
-    boundsForPose?: CorrectionBoundsProvider,
-  ): CorrectionGeometry {
-    this.checkBody(body, snapshot);
-    const entry = this.bodies.get(body)!;
-    const sample = (predicted: boolean): PoseGeometry => {
-      const token = predicted ? snapshot.nextPoseToken : snapshot.oldPoseToken,
-        old = predicted ? entry.next : entry.old;
-      if (
-        snapshot.cacheable &&
-        old?.token === token &&
-        old.provider === boundsForPose
-      ) {
-        this.count("geometryHits");
-        return old;
-      }
-      const position = predicted
-          ? (body.state.predictedPosition ?? body.state.position)
-          : body.state.position,
-        orientation = predicted
-          ? (body.state.predictedOrientation ?? body.state.orientation)
-          : body.state.orientation,
-        hulls = body.hulls.map((value) =>
-          transformHull(value, position, orientation),
-        );
-      this.count("geometryTransforms", hulls.length);
-      const result = {
-        token,
-        hulls,
-        hullBounds: hulls.map(hullBounds),
-        bounds: boundsForPose
-          ? boundsForPose(body, position, orientation, hulls)
-          : hullsBounds(hulls),
-        provider: boundsForPose,
-      };
-      if (predicted) entry.next = result;
-      else entry.old = result;
-      return result;
+    cacheable = true,
+    geometrySnapshot?: CorrectionGeometrySnapshot,
+  ): CorrectionBodySnapshot {
+    this.count("validityChecks");
+    const geometry =
+        geometrySnapshot && cacheable
+          ? geometrySnapshot
+          : this.captureGeometry(body, cacheable),
+      entry = this.entry(body);
+    this.checkBody(body, geometry);
+    const motionChanged = entry.motion.update(
+      (visit) => motionValues(body as CollisionBody, visit, entry.ancestry),
+      !geometry.cacheable,
+    );
+    const old = entry.snapshot;
+    if (
+      !old ||
+      old.shapeToken !== geometry.shapeToken ||
+      old.oldPoseToken !== geometry.oldPoseToken ||
+      old.nextPoseToken !== geometry.nextPoseToken ||
+      motionChanged ||
+      old.cacheable !== geometry.cacheable
+    ) {
+      this.count("validityChanges");
+      entry.snapshot = { ...geometry, token: {} };
+    }
+    this.certificates.add(entry.snapshot!);
+    return entry.snapshot!;
+  }
+  /** Transform source vertices once per endpoint. Broadphase and narrowphase
+   * share this storage; full planes are materialized only on geometry(). */
+  private poseGeometry(
+    body: HullBody,
+    snapshot: CorrectionGeometrySnapshot,
+    predicted: boolean,
+  ): PoseGeometry {
+    const entry = this.entry(body),
+      token = predicted ? snapshot.nextPoseToken : snapshot.oldPoseToken,
+      old = predicted ? entry.next : entry.old;
+    if (snapshot.cacheable && old?.token === token) return old;
+    const position = predicted
+        ? (body.state.predictedPosition ?? body.state.position)
+        : body.state.position,
+      orientation = predicted
+        ? (body.state.predictedOrientation ?? body.state.orientation)
+        : body.state.orientation;
+    const hulls = body.hulls.map(
+      (source) =>
+        ({
+          vertices: source.vertices.map((point) =>
+            point.clone().applyQuaternion(orientation).add(position),
+          ),
+          vertexOrder: source.vertexOrder,
+          edges: source.edges,
+          faces: [],
+          localHull: source,
+          position: position.clone(),
+          orientation: orientation.clone(),
+        }) as CollisionHull,
+    );
+    this.count(
+      "boundsVertexTransforms",
+      body.hulls.reduce((n, h) => n + h.vertices.length, 0),
+    );
+    const value: PoseGeometry = {
+      token,
+      hulls,
+      hullBounds: hulls.map(hullBounds),
+      bounds: hullsBounds(hulls),
+      complete: false,
     };
-    const old = sample(false),
-      next = sample(true);
-    if (entry.geometry?.old === old.hulls && entry.geometry.next === next.hulls)
-      return entry.geometry;
-    return (entry.geometry = {
+    if (predicted) entry.next = value;
+    else entry.old = value;
+    return value;
+  }
+  /** Polygonal broadphase bounds only. Analytic/custom providers must keep
+   * using geometry(..., provider); their bounds need not follow hull vertices. */
+  bounds(body: HullBody, snapshot = this.captureGeometry(body)): Box3 {
+    this.checkBody(body, snapshot);
+    const entry = this.entry(body);
+    const old = this.poseGeometry(body, snapshot, false),
+      next = this.poseGeometry(body, snapshot, true);
+    const cached = entry.geometry;
+    if (
+      cached?.old === old.hulls &&
+      cached.next === next.hulls &&
+      cached.oldBounds === old.bounds &&
+      cached.nextBounds === next.bounds
+    ) {
+      this.count("boundsHits");
+      return cached.bounds;
+    }
+    // Keep the same aggregate record used by geometry(). No second bounds
+    // cache, transformed vertices or shape owner competes with this snapshot.
+    this.count("boundsBuilds");
+    entry.geometry = {
       old: old.hulls,
       next: next.hulls,
       oldHullBounds: old.hullBounds,
@@ -598,6 +651,72 @@ export class CorrectionWorkingSet {
       oldBounds: old.bounds,
       nextBounds: next.bounds,
       bounds: old.bounds.clone().union(next.bounds),
+    };
+    return entry.geometry.bounds;
+  }
+  geometry(
+    body: HullBody,
+    snapshot: CorrectionGeometrySnapshot = this.capture(body),
+    boundsForPose?: CorrectionBoundsProvider,
+  ): CorrectionGeometry {
+    this.checkBody(body, snapshot);
+    const entry = this.entry(body);
+    const sample = (predicted: boolean): PoseGeometry => {
+      const value = this.poseGeometry(body, snapshot, predicted);
+      if (value.complete) this.count("geometryHits");
+      else {
+        for (const hull of value.hulls) {
+          const position = hull.position!,
+            orientation = hull.orientation!;
+          hull.faces = hull.localHull!.faces.map((face) => {
+            const normal = face.normal.clone().applyQuaternion(orientation);
+            return {
+              normal,
+              constant: face.constant + normal.dot(position),
+              indices: face.indices,
+            };
+          });
+        }
+        value.complete = true;
+        this.count("geometryTransforms", value.hulls.length);
+      }
+      if (
+        boundsForPose &&
+        (value.provider !== boundsForPose || !value.providerBounds)
+      ) {
+        value.provider = boundsForPose;
+        value.providerBounds = boundsForPose(
+          body,
+          predicted
+            ? (body.state.predictedPosition ?? body.state.position)
+            : body.state.position,
+          predicted
+            ? (body.state.predictedOrientation ?? body.state.orientation)
+            : body.state.orientation,
+          value.hulls,
+        );
+      }
+      return value;
+    };
+    const old = sample(false),
+      next = sample(true),
+      oldBounds = boundsForPose ? old.providerBounds! : old.bounds,
+      nextBounds = boundsForPose ? next.providerBounds! : next.bounds;
+    if (
+      entry.geometry?.old === old.hulls &&
+      entry.geometry.next === next.hulls &&
+      entry.geometry.oldBounds === oldBounds &&
+      entry.geometry.nextBounds === nextBounds
+    )
+      return entry.geometry;
+    return (entry.geometry = {
+      old: old.hulls,
+      next: next.hulls,
+      oldHullBounds: old.hullBounds,
+      nextHullBounds: next.hullBounds,
+      oldBounds,
+      nextBounds,
+      bounds: oldBounds.clone().union(nextBounds),
     });
   }
   pair(
@@ -662,7 +781,7 @@ export class CorrectionWorkingSet {
     });
     return result;
   }
-  private checkBody(body: HullBody, snapshot: CorrectionBodySnapshot) {
+  private checkBody(body: HullBody, snapshot: CorrectionGeometrySnapshot) {
     if (snapshot.body !== body || !this.certificates.has(snapshot))
       throw new Error("Correction snapshot belongs to a different body/set");
   }

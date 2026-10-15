@@ -94,7 +94,8 @@ test("empty/foreign incident sets do no spatial discovery while validating the r
     index.pairs(bodies, bounds, diagnostics, new Set([body()])),
     [],
   );
-  assert.equal(diagnostics.staticRebuilds, 1);
+  assert.equal(diagnostics.staticRebuilds, 0);
+  assert.equal(diagnostics.treeRefits, 1);
   check(index, bodies, bounds, new Set([bodies[0]]));
   assert.deepEqual(index.pairs([], [], diagnostics, new Set()), []);
   assert.throws(
@@ -115,7 +116,8 @@ test("incident discovery validates changed static bounds, wake/sleep, replacemen
     index.pairs(bodies, bounds, diagnostics, new Set([bodies[1]])),
     [[0, 1]],
   );
-  assert.equal(diagnostics.staticRebuilds, 1);
+  assert.equal(diagnostics.staticRebuilds, 0);
+  assert.equal(diagnostics.treeRefits, 1);
   assert.deepEqual(
     index.pairs(bodies, bounds, diagnostics, new Set([bodies[1]])),
     [[0, 1]],

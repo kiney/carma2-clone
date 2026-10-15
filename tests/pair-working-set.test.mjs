@@ -582,7 +582,8 @@ test("sparse480 guard reduces discovery work while retaining exact results and p
     diagnostics,
   );
   assert.ok(Object.is(staticCrushed.get(moving), 1));
-  assert.equal(diagnostics.staticRebuilds, 1);
+  assert.equal(diagnostics.staticRebuilds, 0);
+  assert.ok(diagnostics.treeRefits > 0);
   staticHull.vertices.forEach((vertex, i) =>
     vertex.copy(staticOriginalVertices[i]),
   );
@@ -598,7 +599,8 @@ test("sparse480 guard reduces discovery work while retaining exact results and p
     diagnostics,
   );
   assert.ok(Object.is(staticRepaired.get(moving), expected.get(moving)));
-  assert.equal(diagnostics.staticRebuilds, 1);
+  assert.equal(diagnostics.staticRebuilds, 0);
+  assert.ok(diagnostics.treeRefits > 0);
 
   target.state.position.set(10, 0, 0);
   const changed = compare(
@@ -610,7 +612,8 @@ test("sparse480 guard reduces discovery work while retaining exact results and p
     diagnostics,
   );
   assert.ok(Object.is(changed.get(moving), 1));
-  assert.equal(diagnostics.staticRebuilds, 1);
+  assert.equal(diagnostics.staticRebuilds, 0);
+  assert.ok(diagnostics.treeRefits > 0);
   target.motor.sleeping = false;
   target.properties.immovable = false;
   target.state.position.set(0, 0, 0);

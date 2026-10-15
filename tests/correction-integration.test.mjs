@@ -173,8 +173,8 @@ test("lazy dormant geometry still discovers an in-place pose change before pair 
   assert.deepEqual(sim.collectBodyContacts([moving, prop]), []);
   assert.equal(
     sim.correctionDiagnostics.geometryTransforms,
-    2,
-    "unrelated stationary shape is not fully transformed",
+    undefined,
+    "neither unrelated body needs full narrow-phase transforms",
   );
   prop.state.position.x = 0.1;
   prop.state.predictedPosition.x = 0.1;
@@ -194,4 +194,67 @@ test("lazy dormant geometry still discovers an in-place pose change before pair 
     count,
     "stationary narrow-phase geometry is retained only after exact validation",
   );
+});
+
+test("sparse moving neighbors need bounds only, then receive fresh geometry on incident entry", () => {
+  const sim = new VehicleSimulation(
+      new WorldCollision(new Group()),
+      new Group(),
+    ),
+    a = body(),
+    b = body(10),
+    c = body(-10);
+  sim.correctionDiagnostics = {};
+  sim.correctionWorkingSet = new CorrectionWorkingSet(
+    sim.correctionDiagnostics,
+  );
+  const roster = [a, b, c],
+    incident = new Set([a]);
+  assert.deepEqual(sim.collectBodyContacts(roster, incident), []);
+  assert.equal(sim.correctionDiagnostics.geometryTransforms ?? 0, 0);
+  assert.equal(sim.correctionDiagnostics.validityChecks ?? 0, 0);
+  assert.equal(sim.correctionDiagnostics.boundsBuilds, 3);
+  // The neighbor is not incident. Its pose must still update the retained leaf.
+  b.state.position.x = 0.5;
+  b.state.predictedPosition.x = -0.1;
+  b.state.velocity.x = -15;
+  const rows = sim.collectBodyContacts(roster, incident);
+  assert.ok(rows.some((row) => row.a === a && row.b === b));
+  assert.equal(sim.correctionDiagnostics.geometryTransforms, 4);
+  assert.equal(sim.correctionDiagnostics.pairTests, 1);
+  assert.equal(sim.correctionDiagnostics.boundsBuilds, 4);
+  assert.equal(sim.correctionDiagnostics.boundsHits, 2);
+  // Moving the same neighbor away drops it; stale pair rows cannot survive.
+  b.state.position.x = b.state.predictedPosition.x = 20;
+  assert.deepEqual(sim.collectBodyContacts(roster, incident), []);
+});
+
+test("moving bounds observe in-place source edits and sealed crush/repair replacements", async () => {
+  const { sealCollisionHulls } = await import(
+    "../src/physics/immutable-hulls.ts"
+  );
+  for (const sealed of [false, true]) {
+    const sim = new VehicleSimulation(
+        new WorldCollision(new Group()),
+        new Group(),
+      ),
+      a = body(),
+      b = body(2);
+    sim.correctionWorkingSet = new CorrectionWorkingSet();
+    if (sealed) sealCollisionHulls(b.hulls);
+    const pristine = b.hulls;
+    assert.deepEqual(sim.collectBodyContacts([a, b]), []);
+    const enlarged = buildBoxHull(v(-2, -0.2, -0.2), v(0.2, 0.2, 0.2));
+    if (sealed) b.hulls = sealCollisionHulls([enlarged]);
+    else Object.assign(b.hulls[0], enlarged);
+    sim.collectBodyContacts([a, b]);
+    assert.ok(a.overlapDetected && b.overlapDetected);
+    b.hulls = sealed
+      ? pristine
+      : [buildBoxHull(v(-0.2, -0.2, -0.2), v(0.2, 0.2, 0.2))];
+    a.overlapDetected = b.overlapDetected = false;
+    assert.deepEqual(sim.collectBodyContacts([a, b]), []);
+    assert.equal(a.overlapDetected, false);
+    assert.equal(b.overlapDetected, false);
+  }
 });

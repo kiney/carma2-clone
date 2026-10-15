@@ -58,10 +58,11 @@ The user selected three priority-1 tickets on 2026-10-16, in this order:
    machinery from row2). Implemented checkpoint and limitations:
    [PERF-20](perf20-adaptive-movement-guard.md).
 2. **PERF-21:** incrementally maintained collision structures, pair/feature
-   identity and validity data (infrastructure in rows3-5).
+   identity and validity data (infrastructure in rows3-5). Implemented checkpoint:
+   [persistent collision data](perf21-persistent-collision-data.md).
 3. **PERF-22:** change-driven collision rediscovery during local response
    retries, consuming PERF-21's validity/ownership data (rows3/5).
 
 PERF-13 retains integration acceptance across these checkpoints. The original
-comparison above records the pre-PERF-20 baseline; it is not a claim that the
+comparison above records the pre-PERF-20/21 baseline; it is not a claim that the
 completed checkpoint removes every sampled fallback.
