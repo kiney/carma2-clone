@@ -467,3 +467,18 @@ binding diagnostics. Original Gold/Green/Blue/Mustang tests check actual
 principal-body vertices, cumulative local dents, collision-hull deformation,
 detachment requests and repair. The separate Chromium regression exercises
 loaded scene geometry and the runtime detachment/repair path.
+
+## PERF-20: motion-certified browser commitment guard (2026-10-16)
+
+Evidence: mathematical derivation over the implemented native-informed motion
+producers, checked by numerical/original-asset tests; this is **browser guard
+infrastructure**, not a newly recovered original executable algorithm.
+Whole-phase separating-plane witnesses use captured COM translation, global
+OLD-relative angular momentum bounds and explicit ball/hinge anchor-error
+envelopes. Fixed-orientation paths use continuous SAT time intervals. Native
+quantization prevents assuming a smooth local angular rate; unsupported paths
+and unresolved rotating contact cells retain sampled feature CCD. Native
+OLD-overlap admissions, normal/friction response, damage and world contacts
+remain their existing paths. See [implementation and retained adverse
+measurements](perf20-adaptive-movement-guard.md). PERF-13 remains open; persistent
+data and rediscovery are PERF-21/PERF-22.

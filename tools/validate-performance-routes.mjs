@@ -3,6 +3,7 @@
  * Run against an existing production server; each capture is only 2.5 seconds.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "playwright-core";
 import { installPerformanceProbe } from "./performance-probe.mjs";
@@ -14,6 +15,78 @@ const output =
   process.env.PERF_ROUTE_OUTPUT || "artifacts/perf13-current-routes.json";
 const profiling = process.env.PERF_ROUTE_PROFILE === "1";
 const bare = process.env.PERF_ROUTE_BARE === "1";
+const fixtureSeed =
+  process.env.PERF_ROUTE_SEED === undefined
+    ? null
+    : Number(process.env.PERF_ROUTE_SEED);
+assert.ok(
+  fixtureSeed === null ||
+    (Number.isSafeInteger(fixtureSeed) &&
+      fixtureSeed >= 0 &&
+      fixtureSeed <= 0xffffffff),
+  "PERF_ROUTE_SEED must be an unsigned 32-bit integer",
+);
+const pairDiagnostics = process.env.PERF_ROUTE_PAIR_DIAGNOSTICS === "1";
+const fingerprint = async () => {
+  const state = await page.evaluate(() => {
+    const c = window.carma,
+      sim = c.simulation,
+      bodies = sim.allBodies();
+    const vector = (value) => value?.toArray() ?? null;
+    return {
+      // Clocks are deliberately separate: matching geometry is not a claim of
+      // deterministic asynchronous loading or an identical timed drive.
+      clocks: { elapsed: sim.elapsed, gameTimeMs: c.stats.gameTimeMs },
+      rng: {
+        math: window.__perfRouteRandom?.state() ?? null,
+        native: c.noncarDebris?.random?.state ?? null,
+      },
+      bodies: bodies.map((body) => ({
+        name: body.group?.name ?? body.actor?.name ?? body.name ?? "",
+        kind: body.kind ?? (body.damage ? "car" : "body"),
+        owner: bodies.indexOf(body.owner),
+        part: body.part ?? null,
+        position: vector(body.state.position),
+        orientation: vector(body.state.orientation),
+        velocity: vector(body.state.velocity),
+        angularVelocity: vector(body.state.angularVelocity),
+        mass: body.properties.mass,
+        inertia: vector(body.properties.inertia),
+        centerOfMass: vector(body.properties.centerOfMass),
+        immovable: body.properties.immovable ?? false,
+        hulls: (body.hulls ?? []).map((hull) => ({
+          vertices: hull.vertices.map(vector),
+          faces: hull.faces.map((face) => ({
+            ...face,
+            normal: vector(face.normal),
+          })),
+          edges: hull.edges,
+        })),
+        attachment: body.joint
+          ? {
+              type: body.joint.type,
+              parent: bodies.indexOf(body.joint.parent),
+              childAnchor: vector(body.joint.childAnchor),
+              parentAnchor: vector(body.joint.parentAnchor),
+              childAxis: vector(body.joint.childAxis),
+              parentAxis: vector(body.joint.parentAxis),
+            }
+          : null,
+        parts:
+          body.damage?.runtimeParts.map((part) => ({
+            actor: part.actor.name,
+            mass: part.mass,
+            state: { ...part.state },
+            position: vector(part.actor.position),
+            orientation: vector(part.actor.quaternion),
+          })) ?? null,
+      })),
+    };
+  });
+  const hash = (value) =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return { ...state, sha256: hash(state), bodiesSha256: hash(state.bodies) };
+};
 assert.ok(
   !profiling || process.env.PERF_ROUTE_CASE,
   "Select one PERF_ROUTE_CASE when capturing a CPU profile",
@@ -39,8 +112,34 @@ const browser = await chromium.connectOverCDP(endpoint);
 const context = await browser.newContext({
   viewport: { width: 2100, height: 1466 },
 });
+if (fixtureSeed !== null) {
+  await context.addInitScript((seed) => {
+    let value = seed >>> 0,
+      draws = 0;
+    window.__perfRouteRandom = {
+      reset(next) {
+        value = next >>> 0;
+        draws = 0;
+      },
+      state() {
+        return { value, draws };
+      },
+    };
+    // Benchmark-only LCG; the native stream retains its real engine algorithm.
+    Math.random = () => {
+      value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
+      draws++;
+      return value / 0x100000000;
+    };
+  }, fixtureSeed);
+}
 const page = await context.newPage();
 const report = {
+  fixture: {
+    seed: fixtureSeed,
+    pairDiagnostics,
+    note: "Opt-in benchmark seeding only. Compare initial bodiesSha256 before claiming the same fixture; wall-clock warmup and capture remain nondeterministic.",
+  },
   cases: [],
   errors: [],
   failedRequests: [],
@@ -79,56 +178,76 @@ try {
       scenario.name !== process.env.PERF_ROUTE_CASE
     )
       continue;
-    await page.evaluate(async (scenario) => {
-      const c = window.carma;
-      c.paused = true;
-      document.querySelector("#track-select").value = c.assets.resolve(
-        `data/RACES/${scenario.track}/${scenario.track}.txt`,
-      );
-      document.querySelector("#car-select").value = c.assets.resolve(
-        "data/CARS/eagle3/eagle3.txt",
-      );
-      await c.loadRace();
-      c.paused = true;
-      document.querySelector("#panel").hidden = true;
-    }, scenario);
+    await page.evaluate(
+      async ({ scenario, seed }) => {
+        const c = window.carma;
+        c.paused = true;
+        if (seed !== null) {
+          window.__perfRouteRandom.reset(seed);
+          const seedRandom = c.player.damage.damageContext.seedRandom;
+          if (typeof seedRandom !== "function")
+            throw new Error("Native seed owner absent");
+          seedRandom(seed);
+        }
+        document.querySelector("#track-select").value = c.assets.resolve(
+          `data/RACES/${scenario.track}/${scenario.track}.txt`,
+        );
+        document.querySelector("#car-select").value = c.assets.resolve(
+          "data/CARS/eagle3/eagle3.txt",
+        );
+        await c.loadRace();
+        c.paused = true;
+        document.querySelector("#panel").hidden = true;
+      },
+      { scenario, seed: fixtureSeed },
+    );
     await page.waitForFunction(() => window.carma.opponentsReady, null, {
       timeout: 90000,
     });
-    const setup = await page.evaluate((scenario) => {
-      const c = window.carma,
-        car = c.player;
-      if (scenario.node !== undefined) {
-        const node = c.track.pathNodes[scenario.node];
-        const edge = c.track.pathEdges.find((edge) =>
-          edge.includes(scenario.node),
-        );
-        if (!node || !edge) throw new Error("Authored route node absent");
-        const target =
-          c.track.pathNodes[edge.find((index) => index !== scenario.node)];
-        car.state.position.fromArray(node);
-        car.state.position.y += 0.1;
-        car.state.heading =
-          Math.atan2(-(target[0] - node[0]), -(target[2] - node[2])) +
-          (scenario.reverse ? Math.PI : 0);
-        c.simulation.reset(car);
-      }
-      const requests = [];
-      if (scenario.damaged) {
-        for (const body of c.simulation.cars.slice(0, 3)) {
-          const result = c.simulation.spamCar(body, 0.35);
-          requests.push({
-            name: body.group.name,
-            detached: result?.detachedParts.length ?? 0,
-          });
+    const setup = await page.evaluate(
+      ({ scenario, seed }) => {
+        const c = window.carma,
+          car = c.player;
+        if (scenario.node !== undefined) {
+          const node = c.track.pathNodes[scenario.node];
+          const edge = c.track.pathEdges.find((edge) =>
+            edge.includes(scenario.node),
+          );
+          if (!node || !edge) throw new Error("Authored route node absent");
+          const target =
+            c.track.pathNodes[edge.find((index) => index !== scenario.node)];
+          car.state.position.fromArray(node);
+          car.state.position.y += 0.1;
+          car.state.heading =
+            Math.atan2(-(target[0] - node[0]), -(target[2] - node[2])) +
+            (scenario.reverse ? Math.PI : 0);
+          c.simulation.reset(car);
         }
-      }
-      return {
-        requests,
-        position: car.state.position.toArray(),
-        heading: car.state.heading,
-      };
-    }, scenario);
+        // Async asset initialization can consume unrelated random draws. Start
+        // the explicit damage operation from the requested stream state again.
+        if (seed !== null) {
+          window.__perfRouteRandom.reset(seed);
+          car.damage.damageContext.seedRandom(seed);
+        }
+        const requests = [];
+        if (scenario.damaged) {
+          for (const body of c.simulation.cars.slice(0, 3)) {
+            const result = c.simulation.spamCar(body, 0.35);
+            requests.push({
+              name: body.group.name,
+              detached: result?.detachedParts.length ?? 0,
+            });
+          }
+        }
+        return {
+          requests,
+          position: car.state.position.toArray(),
+          heading: car.state.heading,
+        };
+      },
+      { scenario, seed: fixtureSeed },
+    );
+    const initialFixture = await fingerprint();
     await page.evaluate(installPerformanceProbe);
     const gpu = await page.evaluate(() => window.__c2Perf.metadata().gpu);
     assert.ok(
@@ -146,6 +265,32 @@ try {
     );
     if (bare) await page.evaluate(() => window.__c2Perf.dispose());
     else await page.evaluate(installLivePerformanceRecorder);
+    const captureFixture = await fingerprint();
+    if (pairDiagnostics)
+      await page.evaluate(() => {
+        const sim = window.carma.simulation,
+          previous = sim.bodyPairDiagnostics;
+        const capture = { rows: [], totals: {}, dropped: 0 };
+        window.__perfRoutePairs = capture;
+        sim.bodyPairDiagnostics = (phase, counters) => {
+          previous?.(phase, counters);
+          const numeric = Object.fromEntries(
+            Object.entries(counters).filter(
+              ([, value]) =>
+                typeof value === "number" && Number.isFinite(value),
+            ),
+          );
+          const totals = (capture.totals[phase] ??= {});
+          for (const [key, value] of Object.entries(numeric))
+            totals[key] = (totals[key] ?? 0) + value;
+          if (capture.rows.length < 2048)
+            capture.rows.push({ phase, ...numeric });
+          else capture.dropped++;
+        };
+        capture.restore = () => {
+          sim.bodyPairDiagnostics = previous;
+        };
+      });
     const session = await context.newCDPSession(page);
     if (profiling) {
       await session.send("Profiler.enable");
@@ -225,8 +370,13 @@ try {
       recorder?.stop();
       window.__c2Perf?.dispose();
       const c = window.carma;
+      const pairs = window.__perfRoutePairs;
+      pairs?.restore();
       return {
         ...result,
+        pairGuard: pairs
+          ? { rows: pairs.rows, totals: pairs.totals, dropped: pairs.dropped }
+          : null,
         quiet: c.simulation.quietCensus(),
         debris: c.simulation.debris.length,
         activeCars: c.simulation.cars.filter((car) =>
@@ -239,6 +389,8 @@ try {
     const result = {
       scenario,
       setup,
+      initialFixture,
+      captureFixture,
       warmup,
       capture,
       live,

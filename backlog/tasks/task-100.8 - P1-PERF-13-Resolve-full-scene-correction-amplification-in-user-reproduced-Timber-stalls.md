@@ -3,10 +3,10 @@ id: TASK-100.8
 title: >-
   [P1] PERF-13: Resolve remaining damaged-scene physics stalls after structural
   integration
-status: next
+status: backlog
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-15 21:46'
+updated_date: '2026-10-15 22:16'
 labels:
   - priority-1
   - PERF-13
@@ -19,6 +19,9 @@ dependencies:
   - TASK-100.11
   - TASK-100.12
   - TASK-100.13
+  - TASK-100.15
+  - TASK-100.16
+  - TASK-100.17
 references:
   - docs/live-timber-drop.md
   - src/physics/simulation.ts
@@ -88,4 +91,6 @@ Final production Chromium crash matrix passes Stock Eagle/Buggy/Bigdump, Advance
 2026-10-13: structural implementation split into five new P1/next children plus reused PHY-13/TASK106. This residual integration/route-validation task moves to backlog because partial implementation alone is not WIP. Latest user authorization supersedes immutable preservation of browser-only guard/correction policies; native timebase and meaningful response remain the target. Earlier checked AC3/AC4 describe validation of the existing checkpoint; all changed systems require fresh child-ticket validation and final route integration.
 
 2026-10-15 integration audit: rendered Timber damaged grid remains slow (15.6 FPS, tick mean29.8/p95 50.8ms, 12 debris, 24.67 ticks/s, zero skipped). Profiled repeat15.3 FPS, tick mean31.0ms; bare RAF-only confirmation18.8 FPS with no engine measurement wrappers. Different random opponents/detachment states prevent A/B overhead estimates. CPU sampling attributes38.60% inclusive to local responses and14.39% to sibling final pair guards; local-response exclusive self only0.69%, so no single control-flow bottleneck is proven. GPU elapsed mean0.86ms in the first damaged case. Ordinary starts/directions and adverse cold tails retained. Existing AC1/AC2 remain open; literal full replay of historical user tick is not claimed. No production behavior changed; ticket returns to next as the concrete P1 implementation owner after this bounded diagnosis. See docs/perf13-integration-check.md and tools/validate-performance-routes.mjs.
+
+2026-10-16 user explicitly selected three implementation tickets from the algorithm comparison: PERF-20 adaptive movement guards (active), PERF-21 persistent collision-data ownership (next), PERF-22 repeated collision rediscovery (next). This ticket retains post-queue damaged-scene integration/validation, not duplicated implementation. Return to backlog while the selected checkpoints execute; preserve existing acceptance evidence.
 <!-- SECTION:NOTES:END -->

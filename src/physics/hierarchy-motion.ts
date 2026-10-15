@@ -2,7 +2,7 @@ import { Box3, Quaternion, Vector3 } from "three";
 import type { RigidBody, RigidProperties } from "./contact";
 import type { RigidJoint } from "./joint";
 import { advanceRigidBody } from "./integrate";
-import type { GuardPose, PosePath } from "./pair-guard";
+import type { GuardPose, PosePath, GuardMotionEnvelope } from "./pair-guard";
 
 export interface HierarchyMotionSample extends GuardPose {
   velocity: Vector3;
@@ -357,6 +357,63 @@ export function createHierarchyMotionPhase(
       .expandByScalar(parentOffset + childOffset)
       .expandByPoint(oldCOM));
   };
+  const envelopes = new Map<MotionNode, GuardMotionEnvelope | null>();
+  const chord = (angle: number) => 2 * Math.sin(Math.min(angle, Math.PI) / 2);
+  const envelope = (node: MotionNode): GuardMotionEnvelope | undefined => {
+    if (envelopes.has(node)) return envelopes.get(node) ?? undefined;
+    if (node.joint?.type === "translation") {
+      envelopes.set(node, null);
+      return;
+    }
+    const parent = node.parent ? envelope(node.parent) : undefined;
+    if (node.parent && !parent) {
+      envelopes.set(node, null);
+      return;
+    }
+    let theta = angularTravel(node);
+    if (parent && node.parent)
+      theta += Math.max(0, parent.angularTravel - angularTravel(node.parent));
+    // The native integrator performs no rotation anywhere in this interval
+    // when its initial OLD-local angle-squared stays below the source gate.
+    if (
+      !node.joint &&
+      !node.fixed &&
+      vec(node.oldOmega)
+        .applyQuaternion(node.oldPose.orientation.clone().invert())
+        .lengthSq() *
+        duration(node, 1) *
+        duration(node, 1) <
+        1e-7
+    )
+      theta = 0;
+    if (node.joint?.type === "hinge" && hingeRelativeRate(node) !== 0)
+      theta += (2 * Math.PI) / 65536;
+    const result: GuardMotionEnvelope = {
+      centerOfMass: vec(node.com),
+      angularTravel: theta,
+      delta: node.fixed
+        ? new Vector3()
+        : parent
+          ? parent.delta.clone()
+          : vec(node.oldVelocity).multiplyScalar(duration(node, 1)),
+      centerError: 0,
+    };
+    if (node.joint && node.parent && parent) {
+      const joint = node.joint;
+      // Anchors align for every f>0, while f=0 retains OLD. Explicitly enclose
+      // that jump; it is not a finite local speed and cannot scale with f.
+      result.centerError =
+        (parent.centerError ?? 0) +
+        worldPoint(node.parent.oldPose, joint.parentAnchor).distanceTo(
+          worldPoint(node.oldPose, joint.childAnchor),
+        ) +
+        joint.parentAnchor.clone().sub(vec(node.parent.com)).length() *
+          chord(parent.angularTravel) +
+        vec(node.com).sub(joint.childAnchor).length() * chord(theta);
+    }
+    envelopes.set(node, result);
+    return result;
+  };
   const paths = new Map<RigidBody, PosePath>();
   for (const node of nodes.values()) {
     const path: PosePath & {
@@ -372,6 +429,7 @@ export function createHierarchyMotionPhase(
     path.worldAngularSampling = worldAngularSampling(node);
     if (node.fixed) path.constantPose = node.oldPose;
     else if (node.joint) path.centerBounds = centerBounds(node);
+    if (!node.fixed) path.guardMotion = envelope(node);
     paths.set(node.body, path);
   }
   const writeCandidates = (targets: readonly RigidBody[], fraction = 1) => {

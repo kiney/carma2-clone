@@ -18,6 +18,10 @@ import {
   transformHull,
   type CollisionHull,
 } from "./geometry";
+import {
+  certifiedHullSeparation,
+  translationHullFraction,
+} from "./continuous-sat";
 import { hasImmutableCollisionHulls } from "./immutable-hulls";
 
 export type HullBody = RigidBody & {
@@ -31,6 +35,16 @@ export interface GuardPose {
   position: Vector3;
   orientation: Quaternion;
 }
+/** Captured COM translation and global OLD-relative motion envelope.
+ * angularTravel bounds excursions from OLD, NOT a Lipschitz angular rate.
+ * Joint envelopes additionally enclose parent lever motion and anchor jumps. */
+export interface GuardMotionEnvelope {
+  delta: Vector3;
+  centerOfMass: Vector3;
+  angularTravel: number;
+  /** COM deviation from linear translation, including an initial anchor jump. */
+  centerError?: number;
+}
 export type PosePath = ((fraction: number) => GuardPose) & {
   /** Total travel bounds, needed when a path makes complete rotations. */
   angularTravel?: number;
@@ -40,6 +54,8 @@ export type PosePath = ((fraction: number) => GuardPose) & {
   /** Pure poses and immutable source geometry for this synchronous guard phase.
    * Uncertified custom paths retain private samples and conservative bounds. */
   stable?: boolean;
+  /** Source-owned OLD motion envelope; unknown/custom trajectories omit it. */
+  guardMotion?: GuardMotionEnvelope;
   /** Captured constant pose; never infer stationarity from immovability alone. */
   constantPose?: GuardPose;
   /** Physical joints share time even when their contact masks exclude each other. */
@@ -99,6 +115,12 @@ export interface BodyGuardDiagnostics extends BodyBroadphaseDiagnostics {
   conservativeFallbacks: number;
   /** Source-qualified OLD hull cells, including ordinary flagless overlap. */
   recoveryHullAdmissions: number;
+  clearanceHullTests: number;
+  clearanceHullCertificates: number;
+  translationHullQueries: number;
+  sampledIntervals: number;
+  guardSatQueries: number;
+  guardFeatureSweeps: number;
 }
 interface GeometrySnapshot {
   hulls: CollisionHull[];
@@ -155,6 +177,17 @@ class GuardWorkingSet {
     private diagnostics?: BodyGuardDiagnostics,
     private immutable?: ImmutableGuardGeometry,
   ) {}
+  count(
+    key:
+      | "clearanceHullTests"
+      | "clearanceHullCertificates"
+      | "translationHullQueries"
+      | "sampledIntervals"
+      | "guardSatQueries"
+      | "guardFeatureSweeps",
+  ) {
+    if (this.diagnostics) this.diagnostics[key]++;
+  }
   admitRecoveryHull() {
     if (this.diagnostics) this.diagnostics.recoveryHullAdmissions++;
   }
@@ -269,16 +302,105 @@ export function guardPairTrajectory(
     (value.bounds[i] ??= hullBounds(value.hulls[i]));
   const depthAt = (sa: Sample, sb: Sample, i: number, j: number) => {
     const row = (sa.depths[i] ??= []);
-    return (row[j] ??= bounds(sa, i).intersectsBox(bounds(sb, j))
-      ? hullPenetration(sa.hulls[i], sb.hulls[j])
-      : 0);
+    if (row[j] !== undefined) return row[j];
+    if (!bounds(sa, i).intersectsBox(bounds(sb, j))) return (row[j] = 0);
+    workingSet?.count("guardSatQueries");
+    return (row[j] = hullPenetration(sa.hulls[i], sb.hulls[j]));
   };
   let oldSampleA = getA(0),
     oldSampleB = getB(0);
   let oldA = oldSampleA.hulls,
     oldB = oldSampleB.hulls;
+  const envelopeFor = (path: PosePath): GuardMotionEnvelope | undefined => {
+    if (path.constantPose)
+      return {
+        delta: new Vector3(),
+        centerOfMass: new Vector3(),
+        angularTravel: 0,
+      };
+    const result = path.guardMotion;
+    return result &&
+      Number.isFinite(result.angularTravel) &&
+      result.angularTravel >= 0 &&
+      Number.isFinite(result.centerError ?? 0) &&
+      (result.centerError ?? 0) >= 0 &&
+      result.delta.toArray().every(Number.isFinite)
+      ? result
+      : undefined;
+  };
+  const motionA = envelopeFor(pathA),
+    motionB = envelopeFor(pathB);
+  const allowance = (
+    body: HullBody,
+    i: number,
+    envelope: GuardMotionEnvelope,
+  ) => {
+    const centerError = envelope.centerError ?? 0;
+    if (envelope.angularTravel === 0) return centerError;
+    let radius = 0;
+    const hull = body.hulls[i];
+    for (const index of hull.vertexOrder ??
+      hull.vertices.map((_, index) => index))
+      radius = Math.max(
+        radius,
+        hull.vertices[index].distanceTo(envelope.centerOfMass),
+      );
+    return (
+      centerError +
+      radius * 2 * Math.sin(Math.min(envelope.angularTravel, Math.PI) / 2)
+    );
+  };
+  const relativeDelta =
+    motionA && motionB ? motionB.delta.clone().sub(motionA.delta) : undefined;
+  // Whole-phase separation uses a global OLD-relative angular envelope. It is
+  // valid across the native integrator's quantization/branch discontinuities;
+  // multiplying a presumed local angular rate by each small interval is not.
+  const clear = oldA.map((hullA, i) =>
+    oldB.map((hullB, j) => {
+      if (!motionA || !motionB || !relativeDelta) return false;
+      workingSet?.count("clearanceHullTests");
+      const rotationA = allowance(a, i, motionA),
+        rotationB = allowance(b, j, motionB);
+      const aa = bounds(oldSampleA, i),
+        bb = bounds(oldSampleB, j);
+      // Shared OLD AABBs cheaply witness separation for most broadphase
+      // candidates before support projections or any temporal sampling.
+      const separated = (axis: "x" | "y" | "z") => {
+        const d = relativeDelta[axis];
+        const gap = Math.max(
+          bb.min[axis] - aa.max[axis] + Math.min(0, d),
+          aa.min[axis] - bb.max[axis] + Math.min(0, -d),
+        );
+        const scale = Math.max(
+          1,
+          Math.abs(aa.min[axis]),
+          Math.abs(aa.max[axis]),
+          Math.abs(bb.min[axis]),
+          Math.abs(bb.max[axis]),
+          Math.abs(d),
+          rotationA + rotationB,
+        );
+        return gap > rotationA + rotationB + 1e-9 + 64 * Number.EPSILON * scale;
+      };
+      const result =
+        separated("x") ||
+        separated("y") ||
+        separated("z") ||
+        certifiedHullSeparation(
+          hullA,
+          hullB,
+          relativeDelta,
+          rotationA,
+          rotationB,
+        );
+      if (result) workingSet?.count("clearanceHullCertificates");
+      return result;
+    }),
+  );
   let allowed = oldA.map((_, i) =>
-    oldB.map((_, j) => depthAt(oldSampleA, oldSampleB, i, j)),
+    oldB.map((_, j) =>
+      clear[i][j] ? 0 : depthAt(oldSampleA, oldSampleB, i, j),
+    ),
   );
   // Native427b37..427b50 selects recovery rows using the prior recovery flag.
   // Ordinary CCD also accepts OLD overlap without that flag (4284e4..428512
@@ -289,6 +411,7 @@ export function guardPairTrajectory(
   const admitted = oldA.map((hullA, i) =>
     oldB.map((hullB, j) => {
       const result =
+        !clear[i][j] &&
         allowed[i][j] > DEPTH_EPSILON &&
         nativeHullRecoveryOverlap(hullA, hullB);
       if (result) workingSet?.admitRecoveryHull();
@@ -298,7 +421,33 @@ export function guardPairTrajectory(
   // Do not spend an angular sample walk proving a browser-only invariant on
   // pairs with source-qualified OLD overlap. Other hull/body/world pairs
   // retain their independent guards and ordinary source impulses/damage.
-  if (admitted.every((row) => row.every(Boolean))) return 1;
+  const ignored = (i: number, j: number) => clear[i][j] || admitted[i][j];
+  if (admitted.every((row, i) => row.every((_, j) => ignored(i, j)))) return 1;
+  if (
+    motionA?.angularTravel === 0 &&
+    motionB?.angularTravel === 0 &&
+    !(motionA.centerError || motionB.centerError) &&
+    oldA.every((hull) => hull.faces.length > 0) &&
+    oldB.every((hull) => hull.faces.length > 0)
+  ) {
+    let fraction = 1;
+    for (let i = 0; i < oldA.length; i++)
+      for (let j = 0; j < oldB.length; j++) {
+        if (ignored(i, j)) continue;
+        workingSet?.count("translationHullQueries");
+        fraction = Math.min(
+          fraction,
+          translationHullFraction(
+            oldA[i],
+            oldB[j],
+            motionA.delta,
+            motionB.delta,
+            allowed[i][j] + DEPTH_EPSILON,
+          ),
+        );
+      }
+    return fraction;
+  }
   const travel = (path: PosePath) => {
     const poses = [0, 0.25, 0.5, 0.75, 1].map(path);
     return {
@@ -340,7 +489,7 @@ export function guardPairTrajectory(
       hb = getB(t);
     return ha.hulls.some((_, i) =>
       hb.hulls.some((_, j) => {
-        if (admitted[i][j]) return false;
+        if (ignored(i, j)) return false;
         const limit = allowed[i][j] + DEPTH_EPSILON;
         const known = ha.depths[i]?.[j];
         if (known !== undefined) return known > limit;
@@ -348,15 +497,15 @@ export function guardPairTrajectory(
         // escape allowance. Otherwise only the strict SAT predicate matters.
         if (retainDepth && allowed[i][j] > 0)
           return depthAt(ha, hb, i, j) > limit;
-        return (
-          bounds(ha, i).intersectsBox(bounds(hb, j)) &&
-          hullPenetrationExceeds(ha.hulls[i], hb.hulls[j], limit)
-        );
+        if (!bounds(ha, i).intersectsBox(bounds(hb, j))) return false;
+        workingSet?.count("guardSatQueries");
+        return hullPenetrationExceeds(ha.hulls[i], hb.hulls[j], limit);
       }),
     );
   };
   let safe = 0;
   for (let step = 1; step <= steps; step++) {
+    workingSet?.count("sampledIntervals");
     const end = step / steps,
       nextSampleA = getA(end),
       nextSampleB = getB(end),
@@ -368,7 +517,7 @@ export function guardPairTrajectory(
     for (let i = 0; i < oldA.length; i++)
       for (let j = 0; j < oldB.length; j++) {
         if (
-          admitted[i][j] ||
+          ignored(i, j) ||
           allowed[i][j] > DEPTH_EPSILON ||
           !oldA[i].faces.length ||
           !oldB[j].faces.length
@@ -386,6 +535,7 @@ export function guardPairTrajectory(
           )
         )
           continue;
+        workingSet?.count("guardFeatureSweeps");
         const fraction = sweepHullsFraction(
           oldA[i],
           nextA[i],
@@ -418,7 +568,7 @@ export function guardPairTrajectory(
     allowed = nextA.map((_, i) =>
       nextB.map((_, j) =>
         // Zero cannot decrease: a full SAT depth here would be discarded.
-        admitted[i][j] || allowed[i][j] === 0
+        ignored(i, j) || allowed[i][j] === 0
           ? allowed[i][j]
           : Math.min(allowed[i][j], depthAt(nextSampleA, nextSampleB, i, j)),
       ),
@@ -537,6 +687,12 @@ export class BodyTrajectoryGuard {
         diagnostics.revalidationCalls =
         diagnostics.conservativeFallbacks =
         diagnostics.recoveryHullAdmissions =
+        diagnostics.clearanceHullTests =
+        diagnostics.clearanceHullCertificates =
+        diagnostics.translationHullQueries =
+        diagnostics.sampledIntervals =
+        diagnostics.guardSatQueries =
+        diagnostics.guardFeatureSweeps =
           0;
     }
     const workingSet = new GuardWorkingSet(diagnostics, this.immutable);
@@ -708,6 +864,15 @@ export class BodyTrajectoryGuard {
         path.stable = source.stable;
         // Total angular travel is a bound, not a promise of uniform rate.
         path.angularTravel = source.angularTravel;
+        if (source.guardMotion)
+          path.guardMotion = {
+            delta: source.guardMotion.delta.clone().multiplyScalar(value),
+            centerOfMass: source.guardMotion.centerOfMass,
+            // Keep the full OLD envelope: quantized joint rotations can have
+            // a fixed angular error which must not shrink with the prefix.
+            angularTravel: source.guardMotion.angularTravel,
+            centerError: source.guardMotion.centerError,
+          };
         wrappers.set(body, { limit: value, path });
         return path;
       };

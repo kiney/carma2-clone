@@ -67,5 +67,35 @@ export function createRigidBodyPosePath(
         Math.min(inertia.x, inertia.y, inertia.z)) *
       stepSeconds *
       worldFraction;
+  const com = body.properties.centerOfMass.clone();
+  const inertiaSnapshot = inertia.clone();
+  const locked = body.properties.rotationLocked;
+  const envelope = {
+    centerOfMass: com,
+    delta: probe.state.velocity
+      .clone()
+      .multiplyScalar(stepSeconds * worldFraction),
+    angularTravel:
+      probe.state.angularVelocity
+        .clone()
+        .applyQuaternion(probe.state.orientation.clone().invert())
+        .lengthSq() *
+        (stepSeconds * worldFraction) *
+        (stepSeconds * worldFraction) <
+      1e-7
+        ? 0
+        : path.angularTravel,
+  };
+  // This older producer intentionally borrows properties. A caller mutation
+  // invalidates its certificate, while ordinary captured paths stay eligible.
+  Object.defineProperty(path, "guardMotion", {
+    get: () =>
+      !body.properties.immovable &&
+      body.properties.rotationLocked === locked &&
+      body.properties.centerOfMass.equals(com) &&
+      body.properties.inertia.equals(inertiaSnapshot)
+        ? envelope
+        : undefined,
+  });
   return path;
 }

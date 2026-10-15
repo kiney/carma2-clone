@@ -49,3 +49,19 @@ The profile does not establish which theoretical worst case actually dominates.
 - Row 4: `src/physics/body-broadphase.ts`, `src/world-face-index.ts`.
 - Row 5: `src/physics/local-response.ts`.
 - Row 6: `src/physics/contact.ts`, `src/physics/joint.ts`.
+
+## Selected implementation checkpoints
+
+The user selected three priority-1 tickets on 2026-10-16, in this order:
+
+1. **PERF-20:** motion-certified/adaptive movement guarding (row1, with SAT
+   machinery from row2). Implemented checkpoint and limitations:
+   [PERF-20](perf20-adaptive-movement-guard.md).
+2. **PERF-21:** incrementally maintained collision structures, pair/feature
+   identity and validity data (infrastructure in rows3-5).
+3. **PERF-22:** change-driven collision rediscovery during local response
+   retries, consuming PERF-21's validity/ownership data (rows3/5).
+
+PERF-13 retains integration acceptance across these checkpoints. The original
+comparison above records the pre-PERF-20 baseline; it is not a claim that the
+completed checkpoint removes every sampled fallback.

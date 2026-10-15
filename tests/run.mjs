@@ -358,3 +358,7 @@ import "./local-response-integration.test.mjs";
 import "./response-input.test.mjs";
 
 import "./wam-resource-resolution.test.mjs";
+
+import "./continuous-sat.test.mjs";
+
+import "./adaptive-pair-guard.test.mjs";
