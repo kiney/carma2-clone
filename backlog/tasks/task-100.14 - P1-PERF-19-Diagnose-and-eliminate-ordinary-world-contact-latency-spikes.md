@@ -1,10 +1,10 @@
 ---
 id: TASK-100.14
 title: '[P1] PERF-19: Diagnose and eliminate ordinary world-contact latency spikes'
-status: wip
+status: done
 assignee: []
 created_date: '2026-10-15 18:19'
-updated_date: '2026-10-15 19:02'
+updated_date: '2026-10-15 21:14'
 labels:
   - priority-1
   - PERF-19
@@ -41,4 +41,8 @@ Remaining: validate the difficult live latency episode with uncontaminated instr
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented scoped ACT/MODEL preparation with mutation-owned invalidation, allocation-reduced native matrix/bounds kernels preserving Float32 order, and GROOVE no-op publication suppression. Controlled original desert2 contact hashes match all eight passes; selected MODEL checks reduce 11-16x, second cold-cache passes 7.2 to 4.3 ms and 7.1 to 3.3 ms. Fixed profiling artifacts: old wrappers disabled transform/response reuse; v4 preserves certificates and records bounded per-body slow contact subphases. Historical420ms attribution is incomplete because original recording used v3; AC1 intentionally remains open and ticket stays wip pending uncontaminated live-outlier validation. Hardware short captures retain mixed/adverse tails; no overall FPS promise. Full2959tests/build pass; focused final rollback tests and Chromium pile/crash checks covered. Extended stationary Porker secondary failure reproduces on unchanged1f33742 and is separately PHY-17/TASK-111 P1next. Detailed evidence, limitations and playtest focus: docs/world-contact-spikes.md.
+
+User accepted closure after further playtesting. PERF-19 is closed on that practical acceptance; the documented historical recording contamination and short-capture limits remain, and closure does not assert that the old420ms sample was reproduced exactly. New Carrier ground-entrapment and green Eagle damage reports are separate correctness investigations.
+
+AC1 remains unchecked to preserve the distinction between user-approved closure and the unreproduced historical outlier. User acceptance waives that remaining capture requirement for this ticket; it does not supply missing measurement evidence.
 <!-- SECTION:NOTES:END -->

@@ -158,9 +158,11 @@ A separate final Timber startup drive reports 58.4 FPS,
 median 16.1 / p95 27.1 / p99 44.4 / max 71.4 ms. Both final captures have no uncaught,
 network or WebGL errors. Neither recreates the user's ravine/pile episode.
 
-The structural fix is ready for playtesting, but PERF-19 remains `wip` until a
-clean live outlier capture or comparable difficult playtest establishes its
-remaining latency acceptance. PERF-01 remains the performance umbrella.
+On 2026-10-15 the user accepted the playtest result and requested closure;
+PERF-19 is `done`. The historical worst outlier was not reproduced exactly,
+so this is not a guarantee that all frame spikes are gone. PERF-01 remains
+the performance umbrella. The subsequent Carrier2 side-rest and Eagle variant
+damage reports are tracked separately under PHY-10 and DMG-06.
 Playtest focus: crowded damaged-car piles in Timber/desert2, loose parts and
 repair, plus contacts with moving scenery. Recorder v4 can retain the contact
 subphase/body evidence across the next pause without disabling reuse.

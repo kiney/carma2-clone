@@ -6,7 +6,7 @@ title: >-
 status: next
 assignee: []
 created_date: '2026-10-15 19:11'
-updated_date: '2026-10-15 19:12'
+updated_date: '2026-10-15 21:14'
 labels:
   - priority-1
   - DMG-06
@@ -40,4 +40,6 @@ Audit native WAM filename selection and resource scope before fixing; do not int
 
 <!-- SECTION:NOTES:BEGIN -->
 Independent read-only original-asset reproduction confirms the binding failure: normal WAM with Gold geometry gives0 runtime parts, component damage and hull revision but zero mesh influence. In an isolated in-memory configuration using the actual Gold WAM,18 parts bind and a matching impact deforms front body/bumper/wing (maximum influence approximately0.804). No original file or live state was changed. All11 inspected Eagle recolors contain the stale EAGLE3.WAM token while providing their own variant WAM: black, blue, blue2, cyan, gold, green, lime, pink, purp, white and yellow. Native filename-selection details remain to verify during implementation; do not guess an alias rule from the suffixes.
+
+2026-10-15 Carrier2 paused user playtest confirms the same defect for EAGLEGREEN: only four standard-named wing actors bind, versus 18 with its authored variant WAM. The principal EAGLENEG.ACT body remains unbound with zero vertex deformation; wings deform and one detaches. Health1, hull revision12 and structuralRevision1 show physical damage continues. The car is on its side (89.81 degrees), with no wheel support, and hierarchy doNothing=true (one sleep, zero wakes). Nearby static RUNGER deck triangles lie at Y=-6.824999809; the transformed physical hull minimum is -6.820544906, above the deck plane, while149 of720 principal body vertices are below that plane (minimum -6.906123333). This establishes visible/collision mismatch in the paused damaged pose, not physical deck tunnelling. Exact finite triangle and original-undamaged hull comparison remain useful regressions; missing WAM is confirmed, but not every visual protrusion is proven caused by it. Preserve artifacts/carrier-entrapment-{paused,support,visible}.json and screenshot locally. Address this binding defect before changing global collision/sleep behavior based on this scene.
 <!-- SECTION:NOTES:END -->
