@@ -162,7 +162,7 @@ test("retained immutable guard geometry preserves collisions across pose, wake a
   moving.properties.centerOfMass = fixed.properties.centerOfMass = v();
   moving.state.position.x = -0.6;
   const guard = new BodyTrajectoryGuard();
-  function run(fixedDelta = 0, certified = true) {
+  function run(fixedDelta = 0, certified = true, oldOverlap = false) {
     const paths = new Map(
       [moving, fixed].map((body) => {
         const path = (t) => ({
@@ -179,9 +179,21 @@ test("retained immutable guard geometry preserves collisions across pose, wake a
     );
     const bodies = [moving, fixed],
       diagnostics = {};
-    const expected = legacyGuardBodyTrajectories(bodies, paths);
+    const historical = legacyGuardBodyTrajectories(bodies, paths);
+    const privatePaths = new Map(
+      [...paths].map(([body, trajectory]) => [body, (t) => trajectory(t)]),
+    );
+    const expected = new BodyTrajectoryGuard().run(bodies, privatePaths);
     const actual = guard.run(bodies, paths, undefined, diagnostics);
     assert.deepEqual([...actual.values()], [...expected.values()]);
+    if (oldOverlap) {
+      // The in-place vertex edit below creates a real OLD hull overlap. PHY-16
+      // intentionally admits it; the frozen historical oracle still clips any
+      // depth increase. Cache invalidation must match fresh current geometry.
+      assert.ok(historical.get(moving) < 1);
+      assert.equal(actual.get(moving), 1);
+      assert.ok(diagnostics.recoveryHullAdmissions > 0);
+    } else assert.deepEqual([...actual.values()], [...historical.values()]);
     return diagnostics;
   }
   const cold = run(),
@@ -199,7 +211,7 @@ test("retained immutable guard geometry preserves collisions across pose, wake a
   fixed.hulls = source();
   run();
   fixed.hulls[0].vertices[0].x -= 0.5;
-  run();
+  run(0, true, true);
   fixed.hulls = sealCollisionHulls(source());
   run();
   const recached = run();

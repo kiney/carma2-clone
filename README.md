@@ -168,6 +168,11 @@ road support in the production Chromium build. See [old-overlap recovery](docs/o
 for native evidence, captured regressions and the deliberate guard-policy change.
 Optional ignored-capture tests skip when their local snapshots are absent.
 
+`npm run test:shallow-contact` replays the locally captured PHY-16 Timber pile
+through the production simulation, including world contacts, ordinary debris
+impulses, joints and repair. It skips without the private ignored capture.
+See [shallow-contact diagnosis](docs/shallow-contact-recovery.md).
+
 `npm run test:render-matrices` builds and checks real Stock/Advanced pedestrian
 reactivation, matrix parity, render-pass flags and population cleanup in Chromium.
 

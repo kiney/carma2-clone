@@ -98,7 +98,7 @@ test("guard work exhaustion seals one component and preserves a disconnected cle
 
   const clear = body(0, 1000.00005);
   const prop = body(0, 1000);
-  const blocker = body(0.00003, 1000, 0, true);
+  const blocker = body(0.00005, 1000, 0, true);
   path(clear, v(-0.00002, 0, 0));
   path(prop, v(0.00002, 0, 0));
   path(blocker);
@@ -135,8 +135,8 @@ test("guard work exhaustion seals one component and preserves a disconnected cle
   for (const item of [hubWall, ...walls, blocker])
     assert.equal(limits.get(item), 1);
 
-  // Check the accepted geometry independently, including the prop's initial
-  // overlap allowance and every masked star edge after conservative fallback.
+  // Check the accepted geometry independently, including every clear-start
+  // prop collision and every masked star edge after conservative fallback.
   const depth = (hullsA, hullsB) =>
     Math.max(
       ...hullsA.flatMap((a) => hullsB.map((b) => hullPenetration(a, b))),

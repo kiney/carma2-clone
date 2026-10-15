@@ -3,10 +3,10 @@ id: TASK-110
 title: >-
   [P1] PHY-16: Resolve coupled car stalls triggered by shallow loose-bodywork
   contact
-status: next
+status: done
 assignee: []
 created_date: '2026-10-14 00:17'
-updated_date: '2026-10-14 00:18'
+updated_date: '2026-10-15 17:57'
 labels:
   - priority-1
   - PHY-16
@@ -15,11 +15,8 @@ labels:
   - captured
 dependencies: []
 references:
-  - src/physics/pair-guard.ts
-  - src/physics/simulation.ts
-  - docs/old-overlap-recovery.md
-  - docs/guard-coupling-fix.md
-  - tools/replay-old-overlap.mjs
+  - docs/shallow-contact-recovery.md
+  - tests/browser-shallow-contact.mjs
 priority: high
 ordinal: 1250
 ---
@@ -33,7 +30,19 @@ User paused a partially interlocked Timber pile after PERF-18 (df4076b, elapsed 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 Retain the ignored captured pose and reproduce the shallow-contact near-zero guard fraction, impulse-response persistence and bumper-removal control without modifying original assets or the user paused game.
-- [ ] #2 Confirm the causal path in the full original-car/world/force/local-response integration and compare native C2 ongoing contact/recovery behavior before changing guard admission or dependency coupling.
-- [ ] #3 Allow practical movement/release from this shallow debris pile while preserving meaningful debris impulses, physical attachments, deep-overlap release, world support and new third-body collision checks; add numerical regressions and Stock/Advanced Chromium playtests.
-- [ ] #4 Provide a separately reviewed checkpoint and focused user playtest; record source evidence, intentional policy changes and any remaining approximations.
+- [x] #2 Confirm the causal path in the full original-car/world/force/local-response integration and compare native C2 ongoing contact/recovery behavior before changing guard admission or dependency coupling.
+- [x] #3 Allow practical movement/release from this shallow debris pile while preserving meaningful debris impulses, physical attachments, deep-overlap release, world support and new third-body collision checks; add numerical regressions and Stock/Advanced Chromium playtests.
+- [x] #4 Provide a separately reviewed checkpoint and focused user playtest; record source evidence, intentional policy changes and any remaining approximations.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Diagnosed with read-only HW disassembly and full production original-Timber reconstruction. Prior flag0x100 selects recovery vs ordinary CCD; it is not movement permission. Ordinary old-inside handling at0x4284e4..428512 and native 40ms reintegration impose no monotone SAT veto. Removed only extra guard prior-flag prerequisite; geometric qualification, per-hull scope, new-entry/world/mask/joint/revalidation checks retained. Full-world three-step baseline player displacement1.886e-6; fixed with physical bumper retained0.06545749, matching bumper-removal control. Positive type5 impulses, door/prop anchors and repair ownership remain. Portable regressions and optional private captured fixture added. Historical guard oracle frozen; intentional divergences explicit. Independent Sol review found no blockers. Build and2948 tests pass; Chromium captured forward/reverse/control, Eagle/Cerby old-overlap+reentry+repair, Stock/Advanced four-car crash matrix and grids/pair escape pass; screenshots inspected, no runtime/network/WebGL errors. DevTools MCP unavailable; reproducible Chromium SwiftShader1280x800 used for correctness, not hardware FPS. Full evidence, reconstruction limits and playtest focus in docs/shallow-contact-recovery.md.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed the reproduced PHY-16 flagless shallow-debris movement veto without changing native collision impulses or dependency orchestration. Original full-world before/after and bumper-removal control confirm cause and release. Reviewed source/test checkpoint; playtest damaged piles, reverse escape without repair, renewed contact and repair/recovery. Other interlock/performance tickets remain separate.
+<!-- SECTION:FINAL_SUMMARY:END -->

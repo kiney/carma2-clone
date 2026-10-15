@@ -32,6 +32,7 @@
     "test:native-ai": "npm run build && node tests/browser-native-ai.mjs",
     "test:crash-matrix": "npm run build && node tests/browser-crash-matrix.mjs",
     "test:overlap": "npm run build && node tests/browser-overlap-admission.mjs",
+    "test:shallow-contact": "npm run build && node tests/browser-shallow-contact.mjs",
     "test:smash-followup": "npm run build && node tests/browser-smash-followup.mjs",
     "test:smash-gameplay": "npm run build && node tests/browser-smash-gameplay.mjs",
     "test:combat-powerups": "npm run build && node tests/browser-combat-powerups.mjs",

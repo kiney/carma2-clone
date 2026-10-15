@@ -69,7 +69,7 @@ function clippedDepth(a, b, pathA, pathB, fractionA, fractionB) {
 test("a blocked prop does not freeze a clear, separated car", () => {
   const car = body([0, 10.5, 0]);
   const prop = body([0, 10, 0]);
-  const blocker = body([0.3, 10, 0], 0.2, true);
+  const blocker = body([0.45, 10, 0], 0.2, true);
   const carPath = path(car, v(-0.1, 0, 0));
   const propPath = path(prop, v(0.1, 0, 0));
   const blockerPath = path(blocker);
@@ -92,7 +92,7 @@ test("coupled limits are input-order independent and respect rejected pairs", ()
   const run = (order, pairAllowed) => {
     const car = body([0, 10.5, 0]);
     const prop = body([0, 10, 0]);
-    const blocker = body([0.3, 10, 0], 0.2, true);
+    const blocker = body([0.45, 10, 0], 0.2, true);
     const paths = new Map([
       [car, path(car, v(-0.1, 0, 0))],
       [prop, path(prop, v(0.1, 0, 0))],
@@ -116,7 +116,7 @@ test("coupled limits are input-order independent and respect rejected pairs", ()
 test("slowing a prop is revalidated against a car that would then run into it", () => {
   const car = body([-0.6, 0, 0]);
   const prop = body([0, 0, 0]);
-  const blocker = body([0.3, 0, 0], 0.2, true);
+  const blocker = body([0.45, 0, 0], 0.2, true);
   const paths = new Map([
     [car, path(car, v(1, 0, 0))],
     [prop, path(prop, v(1, 0, 0))],
@@ -209,7 +209,7 @@ test("an attached flap follows its blocked parent limit, while a released part d
   const parent = body([0, 0, 0]);
   const flap = body([0, 0.35, 0], 0.05);
   flap.joint = { parent };
-  const wall = body([0.3, 0, 0], 0.2, true);
+  const wall = body([0.45, 0, 0], 0.2, true);
   const parentPath = path(parent, v(0.1, 0, 0));
   const flapPath = path(flap, v(0.1, 0, 0));
   const limits = guardBodyTrajectories(
@@ -225,7 +225,7 @@ test("an attached flap follows its blocked parent limit, while a released part d
 
   const car = body([0, 10.5, 0]);
   const releasedPart = body([0, 10, 0]);
-  const obstacle = body([0.3, 10, 0], 0.2, true);
+  const obstacle = body([0.45, 10, 0], 0.2, true);
   const paths = new Map([
     [car, path(car, v(-0.1, 0, 0))],
     [releasedPart, path(releasedPart, v(0.1, 0, 0))],
@@ -392,7 +392,7 @@ test("stock Eagle remains free beside a generated prop while that prop is blocke
   if (!car) return;
   const bounds = hullsBounds(car.hulls);
   const prop = body([0, 10, 0], 0.2);
-  const blocker = body([0.3, 10, 0], 0.2, true);
+  const blocker = body([0.45, 10, 0], 0.2, true);
   const carPath = path(car, v(-0.1, 0, 0));
   const propPath = path(prop, v(0.1, 0, 0));
   const blockerPath = path(blocker);
@@ -442,7 +442,7 @@ test("an impacted stock Eagle stays free beside a blocked prop before and after 
     const bounds = hullsBounds(car.hulls);
     car.state.position.set(0, 10.25 - bounds.min.y, 0);
     const prop = body([0, 10, 0]);
-    const blocker = body([0.3, 10, 0], 0.2, true);
+    const blocker = body([0.45, 10, 0], 0.2, true);
     const paths = new Map([
       [car, path(car, v(-0.1, 0, 0))],
       [prop, path(prop, v(0.1, 0, 0))],

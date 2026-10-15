@@ -6,6 +6,7 @@ import {
   collideHulls,
   hullBounds,
   hullPenetration,
+  nativeHullRecoveryOverlap,
   transformHull,
 } from "../src/physics/geometry.ts";
 import { guardPairTrajectory } from "../src/physics/pair-guard.ts";
@@ -309,7 +310,7 @@ const scenarios = [
     "initial overlap deepens",
     linear(v(-0.1), v(0.1)),
     linear(v(0.1)),
-    "blocked",
+    "old-overlap-admitted",
   ],
   [
     "overlap clears then re-enters",
@@ -318,7 +319,7 @@ const scenarios = [
       orientation: new Quaternion(),
     }),
     linear(v(0.1)),
-    "blocked",
+    "old-overlap-admitted",
   ],
   [
     "no relative motion",
@@ -334,8 +335,27 @@ const scenarios = [
   ],
 ];
 for (const [name, pa, pb, outcome] of scenarios) {
-  test(`legacy guard fraction is exact for ${name}`, () => {
-    const fraction = compareGuard(body(), body(), pa, pb, name);
+  const title =
+    outcome === "old-overlap-admitted"
+      ? `qualified OLD overlap intentionally diverges from legacy clipping for ${name}`
+      : `legacy guard fraction is exact for ${name}`;
+  test(title, () => {
+    const a = body(),
+      b = body();
+    if (outcome === "old-overlap-admitted") {
+      const oldA = pose(a.hulls[0], pa(0).position, pa(0).orientation),
+        oldB = pose(b.hulls[0], pb(0).position, pb(0).orientation);
+      compareSAT(oldA, oldB, `${name} unchanged OLD SAT`);
+      assert.ok(hullPenetration(oldA, oldB) > 1e-6);
+      assert.equal(nativeHullRecoveryOverlap(oldA, oldB), true);
+      // Keep the historical monotone-depth oracle: PHY-16 changes commitment
+      // policy for native-qualified OLD overlap, not SAT numerical results.
+      const legacy = legacyGuardPairTrajectory(a, b, pa, pb);
+      assert.ok(legacy >= 0 && legacy < 1, `${name} legacy remains capped`);
+      exact(guardPairTrajectory(a, b, pa, pb), 1, `${name} phase admission`);
+      return;
+    }
+    const fraction = compareGuard(a, b, pa, pb, name);
     if (outcome === "blocked")
       assert.ok(fraction < 1, `${name} must exercise clamping`);
     else exact(fraction, 1, `${name} must remain clear`);

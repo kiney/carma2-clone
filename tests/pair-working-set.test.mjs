@@ -52,7 +52,7 @@ function assertResults(actual, expected, bodies, label) {
       baseline = expected.get(body);
     assert.ok(
       Object.is(value, baseline),
-      `${label}: body ${index}: ${value} != legacy ${baseline}`,
+      `${label}: body ${index}: ${value} != reference ${baseline}`,
     );
     assert.ok(baseline >= 0 && baseline <= 1, `${label}: bounded fraction`);
   }
@@ -61,6 +61,39 @@ function assertResults(actual, expected, bodies, label) {
 function refreshCertificates(paths) {
   for (const path of paths.values())
     if (path.constantPose) path.constantPose = path(0);
+}
+
+function uncertifiedPaths(paths) {
+  return new Map(
+    [...paths].map(([body, original]) => {
+      const path = (fraction) => original(fraction);
+      path.angularTravel = original.angularTravel;
+      return [body, path];
+    }),
+  );
+}
+
+// PHY-16 intentionally admits geometrically confirmed OLD overlap without a
+// prior recovery flag. For those explicit cases, compare retained certificates
+// with a fresh guard's private, uncertified geometry rather than changing the
+// frozen historical oracle's monotone-depth policy.
+function compareCurrent(
+  bodies,
+  paths,
+  label,
+  allowed,
+  guard = retainedGuard,
+  diagnostics,
+) {
+  refreshCertificates(paths);
+  const expected = new BodyTrajectoryGuard().run(
+    bodies,
+    uncertifiedPaths(paths),
+    allowed,
+  );
+  const actual = guard.run(bodies, paths, allowed, diagnostics);
+  assertResults(actual, expected, bodies, `${label} current uncached`);
+  return actual;
 }
 
 function compare(
@@ -80,13 +113,7 @@ function compare(
     bodies,
     `${label} certified`,
   );
-  const uncertified = new Map(
-    [...paths].map(([body, original]) => {
-      const path = (fraction) => original(fraction);
-      path.angularTravel = original.angularTravel;
-      return [body, path];
-    }),
-  );
+  const uncertified = uncertifiedPaths(paths);
   assertResults(
     fallbackGuard.run(bodies, uncertified, allowed),
     expected,
@@ -370,7 +397,7 @@ test("working sets observe wake, in-place hull, COM, pose and attachment changes
   assert.ok(Object.is(detached.get(c), 1));
 });
 
-test("repeated separated, touching and overlap-escape paths retain exact oracle results", () => {
+test("repeated paths preserve historical clear-contact results and explicit PHY-16 old-overlap admission", () => {
   const a = body(),
     b = body(),
     resting = body(v(8), v(0.2, 0.2, 0.2), true),
@@ -400,12 +427,24 @@ test("repeated separated, touching and overlap-escape paths retain exact oracle 
         [b, path(b)],
         [resting, path(resting)],
       ]);
-      const expected = compare(
-        repeat % 2 ? bodies.toReversed() : bodies,
+      const order = repeat % 2 ? bodies.toReversed() : bodies;
+      const admitted =
+        label === "overlap deepens" ||
+        label === "overlap escapes and re-enters";
+      const expected = (admitted ? compareCurrent : compare)(
+        order,
         paths,
         `${label} repeat ${repeat}`,
       );
-      if (blocked)
+      if (admitted) {
+        const legacy = legacyGuardBodyTrajectories(order, paths);
+        assert.ok(legacy.get(a) < 1, `${label}: historical depth guard clamps`);
+        assert.equal(
+          expected.get(a),
+          1,
+          `${label}: PHY-16 admits the OLD hull cell for this phase`,
+        );
+      } else if (blocked)
         assert.ok(expected.get(a) < 1, `${label} must exercise clamping`);
       else assert.ok(Object.is(expected.get(a), 1), `${label} remains free`);
       assert.ok(Object.is(expected.get(resting), 1));
@@ -616,8 +655,12 @@ test("shared partners reduce source geometry cloning without sharing pair depth 
           return clone();
         };
       }
-  const expected = legacyGuardBodyTrajectories(bodies, paths);
+  const legacy = legacyGuardBodyTrajectories(bodies, paths);
   const legacyClones = vertexClones;
+  const expected = new BodyTrajectoryGuard().run(
+    bodies,
+    uncertifiedPaths(paths),
+  );
   vertexClones = 0;
   const context = new BodyTrajectoryGuard(),
     diagnostics = {};
@@ -628,6 +671,14 @@ test("shared partners reduce source geometry cloning without sharing pair depth 
     "shared partners certified",
   );
   assert.ok(expected.get(moving) < 1);
+  assert.ok(
+    legacy.get(moving) < 1e-5,
+    "historical depth guard stalls on the initially overlapping partners",
+  );
+  assert.ok(
+    Math.abs(expected.get(moving) - 0.14 / 2.4) < 1e-6,
+    "PHY-16 admits old partners but the first initially clear target still clamps at its geometric gap",
+  );
   assert.ok(
     vertexClones < legacyClones,
     `${vertexClones} optimized source-point clones versus ${legacyClones} legacy`,
@@ -668,7 +719,7 @@ test("shared partners reduce source geometry cloning without sharing pair depth 
   sourceHull.faces.forEach((face, i) => {
     face.constant = sourceOriginalConstants[i];
   });
-  const repaired = compare(
+  const repaired = compareCurrent(
     bodies,
     paths,
     "shared partners repaired in place",

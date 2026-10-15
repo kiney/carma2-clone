@@ -6,6 +6,11 @@ The ordinary stock-car path has source-based motion, contact, persistent WAM cru
 
 ## Evidence and binary revisions
 
+PHY-16 corrects the extra guard's prior-recovery prerequisite: that flag selects
+the native contact emitter, while ordinary CCD also handles OLD overlap.
+[Fresh binary evidence and full-world before/after reproduction](shallow-contact-recovery.md)
+document the shallow bumper contact that stalled a coupled Timber pile.
+
 | Binary        | SHA-256                                                            | PE metadata                                                           |
 | ------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
 | carma2_HW.exe | `698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c` | PE32 i386, base 0x400000, entry RVA 0x177eb0, 1998-10-18 20:13:36 UTC |

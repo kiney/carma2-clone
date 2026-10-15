@@ -97,6 +97,7 @@ export interface BodyGuardDiagnostics extends BodyBroadphaseDiagnostics {
   dependencyMerges: number;
   revalidationCalls: number;
   conservativeFallbacks: number;
+  /** Source-qualified OLD hull cells, including ordinary flagless overlap. */
   recoveryHullAdmissions: number;
 }
 interface GeometrySnapshot {
@@ -279,14 +280,15 @@ export function guardPairTrajectory(
   let allowed = oldA.map((_, i) =>
     oldB.map((_, j) => depthAt(oldSampleA, oldSampleB, i, j)),
   );
-  // Native427d9c..427df0 returns recovery rows (including zero) instead of
-  // feature CCD for the full candidate step. It imposes no SAT-depth decrease.
+  // Native427b37..427b50 selects recovery rows using the prior recovery flag.
+  // Ordinary CCD also accepts OLD overlap without that flag (4284e4..428512
+  // marks old-inside vertices for the next tick). Neither source path imposes
+  // monotone SAT depth. Do not turn emitter selection into a movement veto.
   // Admission belongs to this actual OLD hull pair, not its owner/body/tree.
   // Rebuild next phase: once old geometry is clear, re-entry is checked again.
   const admitted = oldA.map((hullA, i) =>
     oldB.map((hullB, j) => {
       const result =
-        !!(a.overlapRecovery || b.overlapRecovery) &&
         allowed[i][j] > DEPTH_EPSILON &&
         nativeHullRecoveryOverlap(hullA, hullB);
       if (result) workingSet?.admitRecoveryHull();
@@ -294,7 +296,7 @@ export function guardPairTrajectory(
     }),
   );
   // Do not spend an angular sample walk proving a browser-only invariant on
-  // pairs already admitted by native recovery. Other hull/body/world pairs
+  // pairs with source-qualified OLD overlap. Other hull/body/world pairs
   // retain their independent guards and ordinary source impulses/damage.
   if (admitted.every((row) => row.every(Boolean))) return 1;
   const travel = (path: PosePath) => {

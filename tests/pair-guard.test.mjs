@@ -80,17 +80,17 @@ test("touching cars can separate or slide without being frozen by source toleran
   );
 });
 
-test("overlap without native recovery eligibility retains the conservative guard", () => {
+test("native-qualified old overlap does not require a prior recovery flag", () => {
   const a = box(-0.1),
     b = box(0.1),
     still = path(b);
   assert.equal(guardPairTrajectory(a, b, path(a, v(-1, 0, 0)), still), 1);
-  assert.ok(guardPairTrajectory(a, b, path(a, v(0.2, 0, 0)), still) < 0.001);
+  assert.equal(guardPairTrajectory(a, b, path(a, v(0.2, 0, 0)), still), 1);
   const oscillation = (t) => ({
     position: v(-0.1 - Math.sin(Math.PI * t), 0, 0),
     orientation: new Quaternion(),
   });
-  assert.ok(guardPairTrajectory(a, b, oscillation, still) < 1);
+  assert.equal(guardPairTrajectory(a, b, oscillation, still), 1);
 });
 
 test("rotation arcs are checked against authored hulls, not endpoint boxes", () => {

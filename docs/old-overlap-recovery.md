@@ -1,5 +1,11 @@
 # PHY-13: native-qualified old-overlap admission
 
+**PHY-16 follow-up:** the prior-recovery flag requirement described below was
+subsequently removed from the extra browser guard. Ordinary native CCD also
+handles OLD overlap without that flag. The flag still selects the actual source
+emitter. See [shallow-contact evidence and full-world regression](shallow-contact-recovery.md).
+The remaining sections retain the historical PHY-13 evidence.
+
 ## Evidence and scope
 
 The saved player/own-wing and Cerby/hood/jointed-parts captures reproduce a

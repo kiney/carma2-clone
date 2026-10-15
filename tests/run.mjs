@@ -15,6 +15,7 @@ import "./rigid-path.test.mjs";
 import "./hierarchy-motion.test.mjs";
 import "./hierarchy-original.test.mjs";
 import "./overlap-admission.test.mjs";
+import "./shallow-contact-guard.test.mjs";
 import "./captured-overlap.test.mjs";
 import "./guard-predicate.test.mjs";
 import "./moving-edge-kernel.test.mjs";

@@ -104,7 +104,7 @@ test("admission is geometry/state based, not former-owner collision immunity", (
   piece.owner = car;
   assert.equal(guardPairTrajectory(car, piece, inward, linear(piece)), 1);
   car.overlapRecovery = piece.overlapRecovery = false;
-  assert.ok(guardPairTrajectory(car, piece, inward, linear(piece)) < 0.001);
+  assert.equal(guardPairTrajectory(car, piece, inward, linear(piece)), 1);
   car.overlapRecovery = true;
   piece.state.position.x = 0.8;
   assert.ok(
