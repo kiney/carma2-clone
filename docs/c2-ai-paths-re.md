@@ -57,6 +57,25 @@ Run-away initialization differs: choose the nearest section and seed direction 0
 
 `GetNextSection` returns -1 at the end of the projected route. Its non-cheating type-2 check indexes global section metadata using the next projected _slot_, rather than the entry's actual section ID (`0x4ae7f1–0x4ae802`); both installed code and rec2 expose this suspicious indexing. The route-count guard precedes this type check, and cheating skips it. Any intentional browser correction must be documented instead of presented as native behavior.
 
+AI-06 defines one browser robustness boundary for that lookup: if the next slot
+is outside authored metadata, return -1 for this traversal. Do not substitute the
+route entry's section ID or invent metadata. The existing-slot type-2 quirk,
+cheating bypass and twelve-entry backing route remain unchanged. The native
+value beyond authored metadata has not been reconstructed; this boundary is not
+claimed as original C2 behavior.
+
+The original Stock `quarrynet` track has two nodes and one authored section, yet
+GetNearPlayer legitimately fills twelve route slots by alternating direction on
+that section. A captured Green Eagle playtest reached this path with BUZZ at
+fleet time 21638 ms. The previous browser exception repeated every RAF before
+physics and rendering; 1,000 buffered uncaught errors confirmed the visible
+freeze. Synthetic and original-installation tests cover straight grouping,
+corner/SOC queries, physical following and GetNearPlayer over this graph.
+The focused production check is
+`npm run build && node tests/browser-short-opponent-path.mjs`; it forces the
+native objective at the current fleet clock, then exercises ordinary frames.
+See [the freeze evidence](ai-short-path-freeze.md) for provenance and limitations.
+
 ## Nearest authored section
 
 The installed helper evaluates sections in authored order. Let `a=finish-start` and `p=position-start`; multiply the Y components of both by 2 for selection distance. Track the nearest endpoint and the nearest interior projection separately using strict improvements, preserving the earlier section on ties.
@@ -240,7 +259,7 @@ category. MungeOpponents recounts unfinished regular rivals each frame
 
 ProcessThisOpponent runs mode change, repair and selector even while stopped
 or stunned. After synchronous selection it clears new-required, applies
-Float32(10*stored mass) braking for countdown or race finish, then runs only
+Float32(10\*stored mass) braking for countdown or race finish, then runs only
 if unfinished, movement enabled, race unfinished and now strictly after stun.
 Countdown alone does not suppress RUN. Cheating cached-position copy is last.
 These adapters and their tests do not yet replace live RoadNavigator; world
@@ -336,7 +355,7 @@ scary bang,20s RunAway suppression of later reactions, big-bang hitter,
 player we hit, raised grudge, fresh sighting, then forced selection. First-frame
 suppresses reactive branches only. Freeze saves **current pursuit AND target
 is current player**, correcting rec2's OR. The scary probability is
-trunc((pursue?100:60)−50*nastiness), only when distance<10 and strength<5.
+trunc((pursue?100:60)−50\*nastiness), only when distance<10 and strength<5.
 
 General grudge increment is trunc(10+40*nastiness); hit/sighting updates cap
 max(20,grudge)+increment at100 then store unsigned byte. Raised-grudge handling

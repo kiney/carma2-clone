@@ -24,9 +24,11 @@ export function nextProjectedPathSlot(
   const next = current + 1;
   if (next >= route.length) return -1;
   if (!cheating) {
-    // Decline the native out-of-bounds read for malformed/custom tiny graphs.
-    if (!sections[next])
-      throw new Error("Opponent next-slot metadata is missing");
+    // A valid small graph can still fill all twelve projected slots by
+    // revisiting sections (Stock quarrynet has only one authored section).
+    // Native indexing then reads beyond global metadata. End this traversal
+    // at that undefined-read boundary instead of aborting the whole frame.
+    if (!sections[next]) return -1;
     if (sections[next].type === 2) return -1;
   }
   return next;

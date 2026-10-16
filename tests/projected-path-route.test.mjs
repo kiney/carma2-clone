@@ -55,14 +55,14 @@ test("GetNext bypasses metadata for cheating and returns at route end first", ()
   assert.equal(nextProjectedPathSlot([], route.slice(0, 1), 0), -1);
 });
 
-test("GetNext rejects invalid cursors and missing non-cheat slot metadata", () => {
+test("GetNext rejects invalid cursors and ends at absent non-cheat slot metadata", () => {
   const route = [
     { section: 0, direction: 1 },
     { section: 0, direction: 1 },
   ];
   assert.throws(() => nextProjectedPathSlot([], route, -1));
   assert.throws(() => nextProjectedPathSlot([], route, 2));
-  assert.throws(() => nextProjectedPathSlot([section(0, 1)], route, 0));
+  assert.equal(nextProjectedPathSlot([section(0, 1)], route, 0), -1);
 });
 
 test("projected route keeps twelve entries, shifts safely, and snapshots are copies", () => {

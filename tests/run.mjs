@@ -387,3 +387,5 @@ import "./minimal-runtime-probe.test.mjs";
 import "./summarize-cpu-profile.test.mjs";
 
 import "./response-trace-probe.test.mjs";
+
+import "./short-opponent-path.test.mjs";
