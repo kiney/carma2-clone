@@ -68,6 +68,9 @@ export interface WorldRecoveryResult {
   overlapDetected: boolean;
 }
 export interface PairSweepOptions {
+  /** Lazily obtain certified OLD target-local vertices and inside flags.
+   * Recovery may return before this data is needed; fraction guards stay live. */
+  getOldGeometry?: () => PairOldGeometry;
   /** Original flag0x100 enables old-geometry overlap recovery. */
   recovery?: {
     a: RigidBody;
@@ -75,6 +78,8 @@ export interface PairSweepOptions {
     sameAttachmentGroup?: boolean;
     boundsCenterA?: Vector3;
     boundsCenterB?: Vector3;
+    /** Certified OLD geometry only; live velocity/attachment gates still run. */
+    geometry?: HullRecoveryGeometry;
   };
   /** Original start-inside/recovery evidence sets flag0x200 for the next tick. */
   onOverlap?: () => void;
@@ -1412,28 +1417,37 @@ export function nativeHullRecoveryOverlap(
   return intersects(a, b) || intersects(b, a);
 }
 
-/** Original0x427f20 recovery uses old edge/hull intersections, center-facing
- * outward normals and positive closing speed. It supplies no arbitrary MTV. */
-export function recoverHullOverlap(
+export interface HullRecoveryGeometry {
+  readonly overlap: boolean;
+  /** Original A edges then B edges, before live closing-speed admission. */
+  readonly candidates: readonly {
+    readonly normal: Vector3;
+    readonly movingPoint: Vector3;
+    readonly targetPoint: Vector3;
+    readonly swapped: boolean;
+  }[];
+}
+
+/** OLD edge/hull intersections and center-facing normals of HW0x427f20.
+ * Consumers must recertify OLD hulls/bounds centers before reusing this record.
+ * No velocity, COM or attachment-dependent admission is retained. */
+export function collectHullRecoveryGeometry(
   oldA: CollisionHull,
   oldB: CollisionHull,
-  options: NonNullable<PairSweepOptions["recovery"]>,
-): { overlap: boolean; contact: HullContact | null } {
-  const centerA =
-    options.boundsCenterA ?? hullBounds(oldA).getCenter(new Vector3());
-  const centerB =
-    options.boundsCenterB ?? hullBounds(oldB).getCenter(new Vector3());
+  boundsCenterA?: Vector3,
+  boundsCenterB?: Vector3,
+): HullRecoveryGeometry {
+  const centerA = boundsCenterA ?? hullBounds(oldA).getCenter(new Vector3());
+  const centerB = boundsCenterB ?? hullBounds(oldB).getCenter(new Vector3());
   const direction = centerA.clone().sub(centerB);
   if (direction.length() <= 2.384185791015625e-7)
     direction.set(1, 0, 0).applyQuaternion(oldB.orientation!);
   else direction.normalize();
   let overlap = false;
-  const candidates: HullContact[] = [];
+  const candidates: Array<HullRecoveryGeometry["candidates"][number]> = [];
   const edges = (
     moving: CollisionHull,
     target: CollisionHull,
-    movingBody: RigidBody,
-    targetBody: RigidBody,
     swapped: boolean,
   ) => {
     const inverse = target.orientation!.clone().conjugate();
@@ -1458,29 +1472,92 @@ export function recoverHullOverlap(
       const normal = entry.normal.clone().applyQuaternion(target.orientation!);
       const outward = swapped ? direction.clone().negate() : direction;
       if (normal.dot(outward) < 0.20000000298023224) continue;
-      const relative = pairPointVelocity(movingBody, movingPoint).sub(
-        pairPointVelocity(targetBody, targetPoint),
-      );
-      if (-normal.dot(relative) <= 0) continue;
-      candidates.push({
-        normal: swapped ? normal.negate() : normal,
-        points: [swapped ? targetPoint : movingPoint],
-        pointsB: [swapped ? movingPoint : targetPoint],
-        penetration: 0,
-        fraction: 0,
-        measures: [0],
-        contactTypes: [6],
-      });
+      candidates.push({ normal, movingPoint, targetPoint, swapped });
     }
   };
-  edges(oldA, oldB, options.a, options.b, false);
-  edges(oldB, oldA, options.b, options.a, true);
+  edges(oldA, oldB, false);
+  edges(oldB, oldA, true);
+  return { overlap, candidates };
+}
+
+/** Original0x427f20 recovery applies live positive closing speed to OLD
+ * geometry. It supplies no arbitrary MTV and never exposes retained vectors
+ * as mutable solver rows. Attachment suppression remains a live final gate. */
+export function recoverHullOverlap(
+  oldA: CollisionHull,
+  oldB: CollisionHull,
+  options: NonNullable<PairSweepOptions["recovery"]>,
+): { overlap: boolean; contact: HullContact | null } {
+  const geometry =
+    options.geometry ??
+    collectHullRecoveryGeometry(
+      oldA,
+      oldB,
+      options.boundsCenterA,
+      options.boundsCenterB,
+    );
+  const candidates: HullContact[] = [];
+  for (const {
+    normal,
+    movingPoint,
+    targetPoint,
+    swapped,
+  } of geometry.candidates) {
+    const movingBody = swapped ? options.b : options.a,
+      targetBody = swapped ? options.a : options.b;
+    const relative = pairPointVelocity(movingBody, movingPoint).sub(
+      pairPointVelocity(targetBody, targetPoint),
+    );
+    if (-normal.dot(relative) <= 0) continue;
+    candidates.push({
+      normal: swapped ? normal.clone().negate() : normal.clone(),
+      points: [swapped ? targetPoint.clone() : movingPoint.clone()],
+      pointsB: [swapped ? movingPoint.clone() : targetPoint.clone()],
+      penetration: 0,
+      fraction: 0,
+      measures: [0],
+      contactTypes: [6],
+    });
+  }
   return {
-    overlap,
+    overlap: geometry.overlap,
     contact: options.sameAttachmentGroup
       ? null
       : reducePairContacts(candidates),
   };
+}
+
+export interface PairOldGeometry {
+  readonly aToB: {
+    readonly relativeOld: readonly Vector3[];
+    readonly inside: readonly boolean[];
+  };
+  readonly bToA: PairOldGeometry["aToB"];
+}
+
+/** Pure OLD target-local vertex preparation of the ordinary pair emitter.
+ * Shape/OLD-pose edits require a new record; NEXT, velocities and callbacks
+ * are not cached here. Relative vectors/flags retain authored vertex order. */
+export function collectPairOldGeometry(
+  oldA: CollisionHull,
+  oldB: CollisionHull,
+): PairOldGeometry {
+  const relative = (
+    moving: CollisionHull,
+    target: CollisionHull,
+  ): PairOldGeometry["aToB"] => {
+    const inverse = target.orientation!.clone().conjugate();
+    const relativeOld = moving.vertices.map((point) =>
+      hullLocal(target, point, inverse),
+    );
+    return {
+      relativeOld,
+      inside: relativeOld.map((point) =>
+        localPointInside(target.localHull!, point),
+      ),
+    };
+  };
+  return { aToB: relative(oldA, oldB), bToA: relative(oldB, oldA) };
 }
 
 /** Original object-pair feature CCD, local HW0x425c00 ->0x4277c0 ->
@@ -1539,6 +1616,7 @@ function sweepHullFeatures(
       return recovered.contact;
     }
   }
+  const oldGeometry = fractionOnly ? undefined : options.getOldGeometry?.();
   const candidates: HullContact[] = [];
   let firstFraction: number | undefined;
   const vertices = (
@@ -1548,22 +1626,26 @@ function sweepHullFeatures(
     nextTarget: CollisionHull,
     swapped: boolean,
   ) => {
-    const inverseOld = target.orientation!.clone().conjugate(),
+    const preparedOld = swapped ? oldGeometry?.bToA : oldGeometry?.aToB;
+    const inverseOld = preparedOld
+        ? undefined
+        : target.orientation!.clone().conjugate(),
       inverseNew = nextTarget.orientation!.clone().conjugate();
-    const relativeOld = moving.vertices.map((point) =>
-      hullLocal(target, point, inverseOld),
-    );
+    const relativeOld =
+      preparedOld?.relativeOld ??
+      moving.vertices.map((point) => hullLocal(target, point, inverseOld!));
     const relativeNew = nextMoving.vertices.map((point) =>
       hullLocal(nextTarget, point, inverseNew),
     );
     // Only A's old-inside flags suppress relative moving-edge features. The
     // fraction query has no overlap callback needing B's redundant flags.
     const inside =
-      fractionOnly && swapped
+      preparedOld?.inside ??
+      (fractionOnly && swapped
         ? []
         : relativeOld.map((point) =>
             localPointInside(target.localHull!, point),
-          );
+          ));
     const featureOrder =
       moving.vertexOrder ?? moving.vertices.map((_, index) => index);
     if (featureOrder.some((index) => inside[index])) options.onOverlap?.();

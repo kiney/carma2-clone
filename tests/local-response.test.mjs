@@ -574,3 +574,46 @@ test("hierarchy traversal uses OLD root X when a child lies left of its parent",
     new Set(["parent/world", "child/world"]),
   );
 });
+
+test("ring extension passes pair exclusions but each positive retry prepares and solves fresh rows", () => {
+  const a = body("a"),
+    b = body("b", 1),
+    f = fixture([a, b]);
+  const exclusions = [],
+    traces = [];
+  const original = f.host.pairRows;
+  f.host.pairRows = (roster, incident, alreadyCollected) => {
+    exclusions.push(!!alreadyCollected?.get(a)?.has(b));
+    return original(roster, incident);
+  };
+  f.host.trace = (event) => traces.push(event);
+  f.world = () => [];
+  f.pairsFor = (roster, incident) =>
+    incidentRows([row(a, b)], roster, incident);
+  let prepares = 0,
+    solves = 0;
+  f.preparation = (rows) => {
+    prepares += rows.length;
+    return rows;
+  };
+  f.response = (rows) => {
+    solves++;
+    return result(rows, solves < 3 ? 1 : 0);
+  };
+  f.run();
+  assert.equal(solves, 3);
+  assert.equal(
+    prepares,
+    3,
+    "raw discovery reuse cannot suppress repeated callbacks",
+  );
+  assert.ok(
+    exclusions.includes(true),
+    "second batch identifies its already emitted pair",
+  );
+  assert.equal(
+    traces.filter((x) => x.phase === "response" && x.positiveNormal).length,
+    2,
+  );
+  assert.equal(traces.filter((x) => x.phase === "response").length, 3);
+});

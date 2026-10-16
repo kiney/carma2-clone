@@ -22,6 +22,26 @@ export interface ResponseResult {
   /** Native report/failure status, not an ordinary positive lambda. */
   reportedFailure?: boolean;
 }
+export type LocalResponseTrace<Body extends RigidBody> =
+  | {
+      phase: "collection";
+      seed: Body;
+      batch: readonly Body[];
+      ringSize: number;
+      attempt: number;
+    }
+  | {
+      phase: "response";
+      seed: Body;
+      changed: readonly Body[];
+      ringSize: number;
+      attempt: number;
+      positiveNormal: boolean;
+      positiveJoint: boolean;
+      rejected: boolean;
+      worldChanged: boolean;
+      rosterChanged: boolean;
+    };
 export interface LocalResponseHost<Body extends RigidBody> {
   roster(): Body[];
   joints(): RigidJoint[];
@@ -33,10 +53,15 @@ export interface LocalResponseHost<Body extends RigidBody> {
   emptyPreparationIsPure?: boolean;
   predict(roster: Body[], changed: boolean): void;
   worldRows(body: Body): readonly Contact[];
-  pairRows(roster: Body[], incident: ReadonlySet<Body>): Contact[];
+  pairRows(
+    roster: Body[],
+    incident: ReadonlySet<Body>,
+    alreadyCollected?: ReadonlyMap<RigidBody, ReadonlySet<RigidBody>>,
+  ): Contact[];
   prepare(rows: Contact[]): Contact[];
   solve(rows: Contact[], joints: RigidJoint[]): ResponseResult;
   diagnostics?: LocalResponseDiagnostics;
+  trace?(event: LocalResponseTrace<Body>): void;
 }
 
 /** Native-informed OLD-X traversal and persistent geometry response rings.
@@ -196,6 +221,13 @@ export function runLocalResponses<Body extends RigidBody>(
           if (!batch.length) break;
           count("localCollections");
           count("consideredBodies", batch.length);
+          host.trace?.({
+            phase: "collection",
+            seed,
+            batch,
+            ringSize: ring.size,
+            attempt: attempts.get(seed) ?? 0,
+          });
           const collectionVersion = host.worldCollectionVersion?.();
           const world: Contact[] = [];
           for (const body of batch) {
@@ -220,7 +252,7 @@ export function runLocalResponses<Body extends RigidBody>(
             collectionStable = false;
             break;
           }
-          const discoveries = host.pairRows(roster, new Set(batch));
+          const discoveries = host.pairRows(roster, new Set(batch), pairKeys);
           for (const row of discoveries)
             if (!pairKeys.has(row.a)) pairKeys.set(row.a, new Set());
           const fresh = discoveries.filter(
@@ -292,6 +324,18 @@ export function runLocalResponses<Body extends RigidBody>(
         (row) =>
           row.solverAccepted && row.sourceType !== 9 && row.normalImpulse > 0,
       );
+      host.trace?.({
+        phase: "response",
+        seed,
+        changed: [...change.changed],
+        ringSize: current?.size ?? 0,
+        attempt: attempts.get(seed) ?? 0,
+        positiveNormal,
+        positiveJoint: result.positiveJointImpulse,
+        rejected: result.rejected,
+        worldChanged: change.worldChanged,
+        rosterChanged: change.rosterChanged,
+      });
       if (positiveNormal) count("normalResponseSolves");
       if (result.positiveJointImpulse) count("jointResponseSolves");
       if (!positiveNormal && !result.positiveJointImpulse)

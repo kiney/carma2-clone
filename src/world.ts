@@ -211,8 +211,18 @@ export class WorldCollision {
    * callbacks and moving-owner queries are deliberately not cached across passes.
    * Surface snapshots follow the explicit invalidateActors/rebuild contract. */
   getStaticGuardRevision(): object | undefined {
+    if (this.dynamicGuardOwners.size) return undefined;
+    return this.certifiedStaticSurfaceRevision();
+  }
+  /** Certificate for guards that discard EVERY owner-tagged query result.
+   * Dynamic snapshots are appended after static cells and cannot affect these
+   * consumers. Static geometry/material edits still require invalidateActors
+   * or rebuildStatic; native face collection/callbacks remain outside scope. */
+  getOwnerlessGuardRevision(): object | undefined {
+    return this.certifiedStaticSurfaceRevision();
+  }
+  private certifiedStaticSurfaceRevision(): object | undefined {
     if (
-      this.dynamicGuardOwners.size ||
       this.modifier !== WorldCollision.prototype.modifier ||
       this.querySurfaces !== WorldCollision.prototype.querySurfaces ||
       this.queryLocalSurfaces !== WorldCollision.prototype.queryLocalSurfaces

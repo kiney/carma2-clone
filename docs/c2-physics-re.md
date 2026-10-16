@@ -495,3 +495,22 @@ through their actual shape/pose/classification inputs. Normal/friction equations
 source ordering, damage and timestep remain unchanged. See
 [implementation and measurements](perf21-persistent-collision-data.md).
 PERF-22 retains redundant rediscovery; PERF-13 retains scene-level performance.
+
+## PERF-22: collision rediscovery lifetime (2026-10-16)
+
+Evidence: independent browser-engine orchestration using the existing native
+feature equations. Tick-owned candidate adjacency re-queries changed sources
+against the whole roster; raw pair features certify geometric inputs separately
+from solver state. C2 HW `0x425c00` / `0x4277c0` OLD relative vertex arrays and
+inside flags remain valid when only NEXT changes. HW `0x427f20` OLD edge/hull
+intersections and center-facing normals are likewise separate from live positive
+point-velocity and attachment admission. Every source/OLD-pose mutation changes
+the retained endpoint identity; unknown providers bypass reuse. This separation
+does not change thresholds, feature ordering, normal/friction formulae or damage.
+
+Native face-ring access, ACT/groove/water collection, preparation, positive
+stress callbacks and replay of empty overlap evidence still run at their former
+semantic boundaries. Only raw post-collection static feature emission is reusable;
+moving-owner/custom collection remains live. Exact original Stock/Advanced crash,
+repair and captured-interlock checks are recorded with the measurements in
+[PERF-22](perf22-contact-rediscovery.md). PERF-13 retains whole-scene stall acceptance.

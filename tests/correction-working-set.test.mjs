@@ -367,3 +367,169 @@ test("borrowed geometry inputs retain fresh motion validity and reject foreign o
     /different body\/set/,
   );
 });
+
+test("pure pair features survive solver-only and output flag changes at fixed endpoints", () => {
+  const diagnostics = {},
+    set = new CorrectionWorkingSet(diagnostics),
+    a = body(),
+    b = body(1);
+  let emitted = 0;
+  const query = () =>
+    set.pairFeatures(
+      a,
+      b,
+      set.captureGeometry(a),
+      set.captureGeometry(b),
+      false,
+      () => ({ contacts: [], overlap: ++emitted > 0 }),
+    );
+  const first = query();
+  a.state.velocity.x += 10;
+  b.state.angularVelocity.y += 5;
+  a.properties.inertia.x *= 2;
+  a.properties.worldFriction += 0.25;
+  a.properties.mass += 1;
+  a.overlapDetected = b.overlapDetected = true;
+  assert.equal(query(), first);
+  assert.equal(emitted, 1);
+  assert.equal(diagnostics.pairFeatureHits, 1);
+  b.state.predictedPosition.y += 0.1;
+  assert.notEqual(query(), first);
+  assert.equal(diagnostics.pairGeometryInvalidations, 1);
+});
+
+test("OLD pair recovery certifies both bodies' live velocities COM and attachment ancestry", () => {
+  const diagnostics = {},
+    set = new CorrectionWorkingSet(diagnostics),
+    a = body(),
+    b = body(1),
+    parent = body(3);
+  let emitted = 0;
+  const query = () =>
+    set.pairFeatures(
+      a,
+      b,
+      set.captureGeometry(a),
+      set.captureGeometry(b),
+      true,
+      () => ({ contacts: [], overlap: ++emitted > 0 }),
+    );
+  let old = query();
+  const changes = [
+    () => (b.state.velocity.x += 1),
+    () => (a.state.angularVelocity.z -= 1),
+    () => (b.properties.centerOfMass.x += 0.2),
+    () => (a.joint = { parent, type: "ball" }),
+    () => (a.joint.parent = b),
+  ];
+  for (const change of changes) {
+    change();
+    const next = query();
+    assert.notEqual(next, old);
+    assert.equal(query(), next);
+    old = next;
+  }
+  assert.equal(emitted, 1 + changes.length);
+  assert.equal(diagnostics.pairRecoveryInvalidations, changes.length);
+});
+
+test("feature results remain tick-local and uncachable shapes stay live", () => {
+  const owner = new CorrectionWorkingSet(),
+    a = body(),
+    b = body(1);
+  let emitted = 0;
+  const emit = () => ({ contacts: [], overlap: ++emitted > 0 });
+  const query = (set) =>
+    set.pairFeatures(
+      a,
+      b,
+      set.captureGeometry(a),
+      set.captureGeometry(b),
+      false,
+      emit,
+    );
+  const first = owner.createTick();
+  query(first);
+  query(first);
+  assert.equal(emitted, 1);
+  query(owner.createTick());
+  assert.equal(emitted, 2);
+  a.shape = { type: "CUSTOM" };
+  query(first);
+  query(first);
+  assert.equal(emitted, 4);
+});
+
+test("OLD recovery geometry survives response/NEXT changes but invalidates source/OLD edits", () => {
+  const diagnostics = {},
+    set = new CorrectionWorkingSet(diagnostics),
+    a = body(),
+    b = body(0.5);
+  const ca = v(),
+    cb = v(0.5);
+  const query = (owner = set, cacheable = true) => {
+    const oldA = owner.geometry(a, owner.captureGeometry(a)).old[0];
+    const oldB = owner.geometry(b, owner.captureGeometry(b)).old[0];
+    return owner.recoveryGeometry(oldA, oldB, ca, cb, cacheable);
+  };
+  let previous = query();
+  a.state.velocity.x = 3;
+  b.state.angularVelocity.y = 4;
+  b.properties.centerOfMass.z = 0.1;
+  a.state.predictedPosition.x += 0.3;
+  assert.equal(query(), previous);
+  assert.equal(diagnostics.pairRecoveryGeometryHits, 1);
+  for (const mutate of [
+    () => {
+      a.state.position.x += 0.1;
+    },
+    () => {
+      b.state.orientation.setFromAxisAngle(v(0, 1), 0.2);
+    },
+    () => {
+      a.hulls[0].vertices[0].z -= 0.1;
+    },
+    () => {
+      cb.x += 0.1;
+    },
+  ]) {
+    mutate();
+    const next = query();
+    assert.notEqual(next, previous);
+    assert.equal(query(), next);
+    previous = next;
+  }
+  assert.notEqual(query(set.createTick()), previous);
+  assert.notEqual(query(set, false), query(set, false));
+});
+
+test("OLD pair classification follows OLD/shape edits and resets each tick", () => {
+  const set = new CorrectionWorkingSet(),
+    a = body(),
+    b = body(2.1);
+  const query = (owner = set, cacheable = true) =>
+    owner.pairOldGeometry(
+      owner.geometry(a, owner.captureGeometry(a)).old[0],
+      owner.geometry(b, owner.captureGeometry(b)).old[0],
+      cacheable,
+    );
+  let previous = query();
+  a.state.predictedOrientation.setFromAxisAngle(v(0, 1), 0.4);
+  assert.equal(query(), previous);
+  for (const mutate of [
+    () => {
+      a.state.position.x += 0.1;
+    },
+    () => {
+      a.hulls[0].vertices[0].x -= 0.1;
+    },
+  ]) {
+    mutate();
+    const next = query();
+    assert.notEqual(next, previous);
+    assert.equal(query(), next);
+    previous = next;
+  }
+  assert.notEqual(query(set.createTick()), previous);
+  assert.notEqual(query(set, false), query(set, false));
+});

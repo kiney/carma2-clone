@@ -5,10 +5,33 @@ import type {
   RigidProperties,
   RigidState,
 } from "./contact";
-import { hullBounds, hullsBounds, type CollisionHull } from "./geometry";
+import {
+  hullBounds,
+  hullsBounds,
+  collectHullRecoveryGeometry,
+  collectPairOldGeometry,
+  type CollisionHull,
+  type HullRecoveryGeometry,
+  type PairOldGeometry,
+} from "./geometry";
 import type { HullBody } from "./pair-guard";
 import type { RigidJoint } from "./joint";
 import { hasImmutableCollisionHulls } from "./immutable-hulls";
+import type { Surface } from "../world";
+import {
+  NativeWorldContactCache,
+  type NativeWorldContactDiagnostics,
+  type NativeWorldContactResult,
+} from "./native-world-contact-cache";
+import {
+  RetainedPairDiscovery,
+  type PairDiscoveryDiagnostics,
+} from "./pair-discovery";
+import type {
+  BodyBroadphase,
+  BroadphaseBody,
+  BodyBroadphaseDiagnostics,
+} from "./body-broadphase";
 
 /** Contact/world maps last one tick. Exact source/pose certificates and weakly
  * owned geometry may persist; each new tick explicitly admits its snapshots. */
@@ -23,7 +46,7 @@ export interface CorrectionGeometrySnapshot {
 export interface CorrectionBodySnapshot extends CorrectionGeometrySnapshot {
   readonly token: CorrectionToken;
 }
-export interface CorrectionDiagnostics {
+export interface CorrectionDiagnostics extends NativeWorldContactDiagnostics {
   validityChecks?: number;
   geometryValidityChecks?: number;
   validityChanges?: number;
@@ -34,6 +57,15 @@ export interface CorrectionDiagnostics {
   boundsVertexTransforms?: number;
   pairTests?: number;
   pairHits?: number;
+  pairFeatureTests?: number;
+  pairFeatureHits?: number;
+  pairGeometryInvalidations?: number;
+  pairRecoveryInvalidations?: number;
+  pairRowsExcluded?: number;
+  pairRecoveryGeometryTests?: number;
+  pairRecoveryGeometryHits?: number;
+  pairOldGeometryTests?: number;
+  pairOldGeometryHits?: number;
   worldTests?: number;
   worldHits?: number;
 }
@@ -281,6 +313,7 @@ type CollisionBody = HullBody & {
 };
 function shapeValues(body: CollisionBody, visit: Visit) {
   visit(body);
+  visit(body.kind);
   visit(body.hulls);
   visit(body.hulls.length);
   // Only producer-owned, deeply frozen local geometry can use identity here.
@@ -404,6 +437,8 @@ interface BodyEntry {
   motion: ExactValues;
   ancestry: RigidBody[];
   response: ExactValues;
+  pairGeometry: ExactValues;
+  pairRecovery: ExactValues;
   snapshot?: CorrectionBodySnapshot;
   geometrySnapshot?: CorrectionGeometrySnapshot;
   old?: PoseGeometry;
@@ -437,6 +472,23 @@ export class CorrectionWorkingSet {
   private certificates = new WeakSet<CorrectionGeometrySnapshot>();
   private pairs = new Map<HullBody, Map<HullBody, PairEntry>>();
   private worlds = new Map<HullBody, Map<boolean, WorldEntry>>();
+  private nativeWorldFeatures?: NativeWorldContactCache;
+  private pairDiscovery?: {
+    index: BodyBroadphase;
+    value: RetainedPairDiscovery;
+  };
+  private oldPairFeatures = new Map<
+    CollisionHull,
+    Map<CollisionHull, PairOldGeometry>
+  >();
+  private recoveryFeatures = new Map<
+    CollisionHull,
+    Map<CollisionHull, { centers: number[]; value: HullRecoveryGeometry }>
+  >();
+  private featurePairs = new Map<
+    HullBody,
+    Map<HullBody, PairEntry & { geometryA: object; geometryB: object }>
+  >();
   constructor(
     public diagnostics?: CorrectionDiagnostics,
     private readonly bodies = new WeakMap<HullBody, BodyEntry>(),
@@ -460,6 +512,8 @@ export class CorrectionWorkingSet {
         nextPose: new ExactValues(),
         motion: new ExactValues(),
         response: new ExactValues(),
+        pairGeometry: new ExactValues(),
+        pairRecovery: new ExactValues(),
         ancestry: [],
       };
       this.bodies.set(body, entry);
@@ -718,6 +772,180 @@ export class CorrectionWorkingSet {
       nextBounds,
       bounds: oldBounds.clone().union(nextBounds),
     });
+  }
+  /** Relative OLD vertex arrays and inside flags depend on the validated OLD
+   * hull endpoints only. A real response can change NEXT without changing them.
+   * Selection/callbacks/new endpoints/roots and all solver state stay live. */
+  pairOldGeometry(
+    oldA: CollisionHull,
+    oldB: CollisionHull,
+    cacheable: boolean,
+  ): PairOldGeometry {
+    this.count("pairOldGeometryTests");
+    if (!cacheable) return collectPairOldGeometry(oldA, oldB);
+    const old = this.oldPairFeatures.get(oldA)?.get(oldB);
+    if (old) {
+      this.count("pairOldGeometryHits");
+      return old;
+    }
+    const value = collectPairOldGeometry(oldA, oldB);
+    let partners = this.oldPairFeatures.get(oldA);
+    if (!partners) this.oldPairFeatures.set(oldA, (partners = new Map()));
+    partners.set(oldB, value);
+    return value;
+  }
+  /** OLD transformed hulls come from this working set's validated endpoint
+   * storage. Their identities change on source-shape or OLD-pose edits, but
+   * remain stable when response only changes velocity or NEXT. Keep geometry
+   * only; recoverHullOverlap still selects rows using live point velocities. */
+  recoveryGeometry(
+    oldA: CollisionHull,
+    oldB: CollisionHull,
+    centerA: Vector3,
+    centerB: Vector3,
+    cacheable: boolean,
+  ): HullRecoveryGeometry {
+    this.count("pairRecoveryGeometryTests");
+    if (!cacheable)
+      return collectHullRecoveryGeometry(oldA, oldB, centerA, centerB);
+    const old = this.recoveryFeatures.get(oldA)?.get(oldB);
+    if (
+      old &&
+      Object.is(old.centers[0], centerA.x) &&
+      Object.is(old.centers[1], centerA.y) &&
+      Object.is(old.centers[2], centerA.z) &&
+      Object.is(old.centers[3], centerB.x) &&
+      Object.is(old.centers[4], centerB.y) &&
+      Object.is(old.centers[5], centerB.z)
+    ) {
+      this.count("pairRecoveryGeometryHits");
+      return old.value;
+    }
+    const value = collectHullRecoveryGeometry(oldA, oldB, centerA, centerB);
+    let partners = this.recoveryFeatures.get(oldA);
+    if (!partners) this.recoveryFeatures.set(oldA, (partners = new Map()));
+    partners.set(oldB, {
+      centers: [
+        centerA.x,
+        centerA.y,
+        centerA.z,
+        centerB.x,
+        centerB.y,
+        centerB.z,
+      ],
+      value,
+    });
+    return value;
+  }
+  /** Pure pair emission inputs differ from solver/response inputs. Ordinary
+   * CCD consumes endpoint geometry only. OLD-overlap recovery additionally
+   * reads live point velocities/COM and attachment ancestry (HW427f20). */
+  pairFeatureInput(
+    body: HullBody,
+    snapshot: CorrectionGeometrySnapshot,
+    recovery: boolean,
+  ): CorrectionToken {
+    this.checkBody(body, snapshot);
+    const entry = this.entry(body);
+    const values = recovery ? entry.pairRecovery : entry.pairGeometry;
+    values.update((visit) => {
+      visit(snapshot.shapeToken);
+      visit(snapshot.oldPoseToken);
+      visit(snapshot.nextPoseToken);
+      visit(recovery);
+      if (!recovery) return;
+      vector(body.state.velocity, visit);
+      vector(body.state.angularVelocity, visit);
+      vector(body.properties.centerOfMass, visit);
+      // Same-attachment recovery suppresses rows, so ancestry is an emission
+      // input even when a joint change leaves the endpoint pose unchanged.
+      let current: RigidBody = body;
+      entry.ancestry.length = 0;
+      while (!entry.ancestry.includes(current)) {
+        entry.ancestry.push(current);
+        visit(current);
+        const parent = (current as CollisionBody).joint?.parent;
+        visit(parent);
+        if (!parent) break;
+        current = parent;
+      }
+    }, !snapshot.cacheable);
+    return values.token;
+  }
+  /** Raw geometry rows only; callers recheck masks/mobility/direct joints and
+   * prepare/solve fresh copies. Recovery must be enabled for BOTH endpoint
+   * certificates whenever either polygon body requests the recovery branch. */
+  pairFeatures(
+    a: HullBody,
+    b: HullBody,
+    snapshotA: CorrectionGeometrySnapshot,
+    snapshotB: CorrectionGeometrySnapshot,
+    recovery: boolean,
+    emit: () => CorrectionPairResult,
+  ): CorrectionPairResult {
+    const tokenA = this.pairFeatureInput(a, snapshotA, recovery),
+      tokenB = this.pairFeatureInput(b, snapshotB, recovery),
+      old = this.featurePairs.get(a)?.get(b);
+    this.count("pairTests");
+    this.count("pairFeatureTests");
+    if (
+      snapshotA.cacheable &&
+      snapshotB.cacheable &&
+      old?.a === tokenA &&
+      old.b === tokenB
+    ) {
+      this.count("pairHits");
+      this.count("pairFeatureHits");
+      return old.result;
+    }
+    if (old)
+      this.count(
+        old.geometryA !== snapshotA || old.geometryB !== snapshotB
+          ? "pairGeometryInvalidations"
+          : "pairRecoveryInvalidations",
+      );
+    const result = emit();
+    let partners = this.featurePairs.get(a);
+    if (!partners) this.featurePairs.set(a, (partners = new Map()));
+    partners.set(b, {
+      a: tokenA,
+      b: tokenB,
+      geometryA: snapshotA,
+      geometryB: snapshotB,
+      result,
+    });
+    return result;
+  }
+  nativeWorld(
+    body: HullBody,
+    geometry: CorrectionGeometrySnapshot,
+    center: Vector3,
+    recovery: boolean,
+    surfaces: readonly Surface[],
+    emit: () => NativeWorldContactResult,
+  ): NativeWorldContactResult {
+    this.checkBody(body, geometry);
+    const cache = (this.nativeWorldFeatures ??= new NativeWorldContactCache());
+    cache.diagnostics = this.diagnostics;
+    return cache.get(body, geometry, center, recovery, surfaces, emit);
+  }
+  discoverPairs<Body extends BroadphaseBody>(
+    index: BodyBroadphase,
+    bodies: readonly Body[],
+    bounds: readonly Box3[],
+    versions: readonly object[],
+    diagnostics?: BodyBroadphaseDiagnostics & PairDiscoveryDiagnostics,
+    incident?: ReadonlySet<Body>,
+  ): [number, number][] {
+    if (this.pairDiscovery?.index !== index)
+      this.pairDiscovery = { index, value: new RetainedPairDiscovery(index) };
+    return this.pairDiscovery.value.pairs(
+      bodies,
+      bounds,
+      versions,
+      diagnostics,
+      incident,
+    );
   }
   pair(
     a: HullBody,

@@ -143,14 +143,21 @@ test("world guard reuse restores candidate endpoints and invalidates modified sc
   world.invalidateActors([mesh]);
   sim.advanceWorldContacts(a);
   assert.ok(sim.correctionDiagnostics.worldCollections > before);
+  sim.advanceWorldContacts(a); // Stabilize the guard-written NEXT endpoint.
   const original = sim.computeAdvanceWorldContacts.bind(sim);
   let calls = 0;
   sim.computeAdvanceWorldContacts = (...args) => {
     calls++;
     return original(...args);
   };
-  // Unknown/moving worlds stay live even when all body fields match.
+  // An unrelated moving roster does not invalidate ownerless polygon guards.
   sim.movingWorld.push({});
+  sim.advanceWorldContacts(a);
+  sim.advanceWorldContacts(a);
+  assert.equal(calls, 0);
+  // An unknown query provider can have hidden dependencies and stays live.
+  const query = world.queryLocalSurfaces;
+  world.queryLocalSurfaces = (...args) => query.apply(world, args);
   sim.advanceWorldContacts(a);
   sim.advanceWorldContacts(a);
   assert.equal(calls, 2);

@@ -362,3 +362,14 @@ import "./wam-resource-resolution.test.mjs";
 import "./continuous-sat.test.mjs";
 
 import "./adaptive-pair-guard.test.mjs";
+
+import "./native-world-contact-cache.test.mjs";
+import "./pair-discovery.test.mjs";
+
+import "./ownerless-guard-revision.test.mjs";
+
+import "./perf22-collection-integration.test.mjs";
+
+import "./pair-recovery-geometry.test.mjs";
+
+import "./pair-old-geometry.test.mjs";

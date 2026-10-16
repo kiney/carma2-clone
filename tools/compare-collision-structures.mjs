@@ -185,7 +185,22 @@ async function runOne(api, scenario) {
   const sim = new api.VehicleSimulation(new api.WorldCollision(scene), scene);
   for (const car of cars) sim.add(car);
   sim.correctionDiagnostics = {};
-  const pairEvents = [];
+  const pairEvents = [],
+    responseTrace = [];
+  const bodyIds = new Map();
+  const bodyId = (body) => {
+    if (!bodyIds.has(body)) bodyIds.set(body, bodyIds.size);
+    return bodyIds.get(body);
+  };
+  sim.onLocalResponseTrace = (event) => {
+    if (responseTrace.length >= 512) return;
+    responseTrace.push({
+      ...event,
+      seed: bodyId(event.seed),
+      ...(event.batch ? { batch: event.batch.map(bodyId) } : {}),
+      ...(event.changed ? { changed: event.changed.map(bodyId) } : {}),
+    });
+  };
   sim.bodyPairDiagnostics = (phase, counters) =>
     pairEvents.push({ phase, ...counters });
   if (scenario !== "sparse-intact") {
@@ -237,6 +252,7 @@ async function runOne(api, scenario) {
       tickMs,
       diagnostics: structuredClone(sim.correctionDiagnostics),
       bodyPairDiagnostics: pairEvents,
+      responseTrace,
       completedTicks: tickMs.length,
     };
   } finally {
@@ -314,7 +330,11 @@ function median(values) {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-const outDir = path.join(candidateRoot, "artifacts/perf21");
+const outDir = path.join(
+  candidateRoot,
+  "artifacts",
+  process.env.PERF_COLLISION_TAG || "perf21",
+);
 await mkdir(outDir, { recursive: true });
 const outPath = path.join(outDir, "collision-structures.json");
 await writeFile(outPath, `${JSON.stringify(report, null, 2)}\n`);
