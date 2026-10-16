@@ -1,3 +1,9 @@
+import { HierarchyPredictionCache } from "./cached-hierarchy-motion";
+import {
+  createEdgeFeatureIndex,
+  type EdgeFeatureIndex,
+  type EdgeFeatureDiagnostics,
+} from "./edge-feature-index";
 import { NativeHierarchyQuiet } from "./hierarchy-quiet";
 import type { WorldContactProfile } from "./world-contact-profile";
 import {
@@ -613,6 +619,8 @@ function copyContactRows(rows: readonly Contact[]): Contact[] {
  * explicitly tracked in docs/c2-physics-re.md rather than hidden as tuning.
  */
 export class VehicleSimulation {
+  /** Optional feature-work counters; disabled during normal play. */
+  edgeFeatureDiagnostics?: EdgeFeatureDiagnostics;
   cars: SimulatedCar[] = [];
   debris: DetachedBody[] = [];
   /** Retained ACT catalog, deliberately larger than the active PHIL roster. */
@@ -1116,7 +1124,7 @@ export class VehicleSimulation {
   private contactSurfaces = new Map<RigidBody, Surface[]>();
   private bodyBroadphase = new BodyBroadphase();
   private bodyTrajectoryGuard = new BodyTrajectoryGuard();
-  private hierarchyMotion?: HierarchyMotionPhase;
+  private hierarchyMotion?: Omit<HierarchyMotionPhase, "commit">;
   private collisionTraversalRevision = 0;
   /** Diagnostic A/B switch; production defaults to validated reuse. */
   correctionReuse = true;
@@ -3640,6 +3648,13 @@ export class VehicleSimulation {
       const allHits: HullContact[] = [];
       const staticNearby = nearby.filter((surface) => !surface.owner);
       for (let i = 0; i < old.length; i++) {
+        let edgeIndex: EdgeFeatureIndex | undefined;
+        const getEdgeIndex = () =>
+          (edgeIndex ??= createEdgeFeatureIndex(
+            old[i].vertices,
+            old[i].edges,
+            next[i].vertices,
+          ));
         if (profile) clock = performance.now();
         const recovery = carBody.worldRecovery
           ? recoverWorldContacts(
@@ -3683,6 +3698,8 @@ export class VehicleSimulation {
               suppressedVertices: recovery?.suppressedVertices,
               skipWorldEdges: !!recovery?.overlapDetected,
               skipWorldVertices: carBody.worldRecovery,
+              getEdgeIndex,
+              edgeDiagnostics: this.edgeFeatureDiagnostics,
             },
           );
           if (hit)
@@ -3879,6 +3896,13 @@ export class VehicleSimulation {
         transformHull(hull, position, orientation),
       );
       for (let shape = 0; shape < old.length; shape++) {
+        let edgeIndex: EdgeFeatureIndex | undefined;
+        const getEdgeIndex = () =>
+          (edgeIndex ??= createEdgeFeatureIndex(
+            old[shape].vertices,
+            old[shape].edges,
+            next[shape].vertices,
+          ));
         const bounds = hullBounds(old[shape])
           .union(hullBounds(next[shape]))
           .expandByScalar(0.005);
@@ -3956,6 +3980,8 @@ export class VehicleSimulation {
               suppressedVertices: faceRecovery?.suppressedVertices,
               skipWorldEdges: !!faceRecovery?.overlapDetected,
               skipWorldVertices: body.worldRecovery || !!shallow.get(surface),
+              getEdgeIndex,
+              edgeDiagnostics: this.edgeFeatureDiagnostics,
             },
           );
           if (hit)
@@ -4607,6 +4633,7 @@ export class VehicleSimulation {
             )
               continue;
             const hit = sweepHulls(oldA[ai], nextA[ai], oldB[bi], nextB[bi], {
+              edgeDiagnostics: this.edgeFeatureDiagnostics,
               getOldGeometry: working
                 ? () =>
                     working.pairOldGeometry(
@@ -5638,6 +5665,7 @@ export class VehicleSimulation {
       // records survive retries and are applied after normal pose commitment.
       const friction = new DeferredContactFriction();
       const responseInputs = this.responseInputs;
+      const predictions = new HierarchyPredictionCache();
       const restartGroups: Set<SimulationBody>[] = [];
       let revision = this.world.getStaticGuardRevision?.();
       let traversalRevision = this.collisionTraversalRevision;
@@ -5692,9 +5720,15 @@ export class VehicleSimulation {
           }
           return worldToken;
         },
-        predict: (roster, changed) => {
-          if (changed || !this.hierarchyMotion) this.predictHierarchy(roster);
-          else this.hierarchyMotion.writeCandidates(roster);
+        predict: (roster, changed, inputs) => {
+          if (changed || !this.hierarchyMotion)
+            this.hierarchyMotion = predictions.update(
+              roster,
+              this.allJoints(),
+              PHYSICS_STEP,
+              inputs,
+            );
+          this.hierarchyMotion!.writeCandidates(roster);
         },
         worldRows: (body) => {
           this.pullWakeSourceVelocity = sourceVelocities.get(body);
@@ -5804,6 +5838,7 @@ export class VehicleSimulation {
         paths,
         nativePairAllowed,
         pairDiagnostics,
+        this.edgeFeatureDiagnostics,
       );
       if (pairDiagnostics) this.bodyPairDiagnostics!("commit", pairDiagnostics);
       // Commit exactly the jointly constrained paths verified above. Supported

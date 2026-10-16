@@ -67,3 +67,9 @@ The user selected three priority-1 tickets on 2026-10-16, in this order:
 PERF-13 retains integration acceptance across these checkpoints. The original
 comparison above records the pre-PERF-20/21 baseline; it is not a claim that the
 completed checkpoint removes every sampled fallback.
+
+PERF-13 now extends rows1–3 with temporal SAT/curvature certificates, explicit
+native first-order rotation events, edge-feature spatial preselection and
+unchanged-tree prediction reuse. Conservative whole-phase angular enclosures
+remain separate from temporal sampling resolution. See the
+[implementation and measurement limits](perf13-residual-physics.md).

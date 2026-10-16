@@ -1,5 +1,11 @@
 import { Box3, Quaternion, Triangle, Vector3 } from "three";
 import type { RigidBody } from "./contact";
+import {
+  createEdgeFeatureIndex,
+  getHullEdgeFeatureIndex,
+  type EdgeFeatureIndex,
+  type EdgeFeatureDiagnostics,
+} from "./edge-feature-index";
 
 export interface HullFace {
   normal: Vector3;
@@ -38,6 +44,9 @@ export interface HullContact {
   sourceSurface?: import("../world").Surface;
 }
 export interface WorldSurfaceOptions {
+  /** Phase-owned transformed endpoints; acquired only for enabled edge tests. */
+  getEdgeIndex?: () => EdgeFeatureIndex;
+  edgeDiagnostics?: EdgeFeatureDiagnostics;
   materialIdentifier?: string;
   materialFlags?: number;
   /** BRender face bits1/2/4 suppress coplanar edges0/1/2 respectively. */
@@ -68,6 +77,7 @@ export interface WorldRecoveryResult {
   overlapDetected: boolean;
 }
 export interface PairSweepOptions {
+  edgeDiagnostics?: EdgeFeatureDiagnostics;
   /** Lazily obtain certified OLD target-local vertices and inside flags.
    * Recovery may return before this data is needed; fraction guards stay live. */
   getOldGeometry?: () => PairOldGeometry;
@@ -1591,10 +1601,16 @@ export function sweepHullsFraction(
   predictedA: CollisionHull,
   oldB: CollisionHull,
   predictedB: CollisionHull,
+  edgeDiagnostics?: EdgeFeatureDiagnostics,
 ): number | undefined {
-  return sweepHullFeatures(oldA, predictedA, oldB, predictedB, {}, true) as
-    | number
-    | undefined;
+  return sweepHullFeatures(
+    oldA,
+    predictedA,
+    oldB,
+    predictedB,
+    { edgeDiagnostics },
+    true,
+  ) as number | undefined;
 }
 
 function sweepHullFeatures(
@@ -1693,9 +1709,20 @@ function sweepHullFeatures(
   vertices(oldB, predictedB, oldA, predictedA, true);
   // Each original edge pair is tested in one target-local frame. Its relative
   // endpoints vary linearly exactly as the original precomputed vertex arrays.
+  const targetEdges =
+    oldB.edges === oldB.localHull!.edges
+      ? getHullEdgeFeatureIndex(oldB.localHull!)
+      : createEdgeFeatureIndex(oldB.localHull!.vertices, oldB.edges);
   for (const [a0, a1] of oldA.edges) {
     if (relative.inside[a0] || relative.inside[a1]) continue;
-    for (const [b0, b1] of oldB.edges) {
+    for (const slot of targetEdges.query(
+      relative.relativeOld[a0],
+      relative.relativeOld[a1],
+      relative.relativeNew[a0],
+      relative.relativeNew[a1],
+      options.edgeDiagnostics,
+    )) {
+      const [b0, b1] = oldB.edges[slot];
       const start = oldB.localHull!.vertices[b0],
         end = oldB.localHull!.vertices[b1];
       const hit = sweepMovingEdges(
@@ -1941,7 +1968,19 @@ export function sweepHullTriangle(
     if (options.skipWorldEdges) break;
     if (((options.faceFlags ?? 0) & (1 << i)) !== 0) continue;
     const intersections: HullContact[] = [];
-    for (const [start, end] of old.edges) {
+    const edgeSlots = options
+      .getEdgeIndex?.()
+      .query(
+        triangleVertices[i],
+        triangleVertices[(i + 1) % 3],
+        undefined,
+        undefined,
+        options.edgeDiagnostics,
+      );
+    // Generic callers retain the old live scan. Simulation-owned endpoint
+    // pairs supply one shared index across all of their world triangles.
+    for (const slot of edgeSlots ?? old.edges.map((_, slot) => slot)) {
+      const [start, end] = old.edges[slot];
       const candidate = sweepMovingEdges(
         triangleVertices[i],
         triangleVertices[(i + 1) % 3],

@@ -1,5 +1,12 @@
 # PERF-13 integration check after the structural queue
 
+## Follow-up implementation
+
+The residual implementation after PERF-20/21/22 is tracked in
+[PERF-13 residual physics](perf13-residual-physics.md). The measurements and
+no-behavior-change statement below describe the earlier `dbc7a0d` audit, not the
+new adaptive guarding and motion-cache implementation.
+
 ## Decision
 
 **Keep PERF-13 open.** The original eight-global-pass implementation is gone,

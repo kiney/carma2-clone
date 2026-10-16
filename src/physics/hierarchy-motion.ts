@@ -2,6 +2,7 @@ import { Box3, Quaternion, Vector3 } from "three";
 import type { RigidBody, RigidProperties } from "./contact";
 import type { RigidJoint } from "./joint";
 import { advanceRigidBody } from "./integrate";
+import { captureFirstOrderMotion } from "./first-order-guard";
 import type { GuardPose, PosePath, GuardMotionEnvelope } from "./pair-guard";
 
 export interface HierarchyMotionSample extends GuardPose {
@@ -430,6 +431,16 @@ export function createHierarchyMotionPhase(
     if (node.fixed) path.constantPose = node.oldPose;
     else if (node.joint) path.centerBounds = centerBounds(node);
     if (!node.fixed) path.guardMotion = envelope(node);
+    if (!node.fixed && !node.joint)
+      path.firstOrderMotion = captureFirstOrderMotion(
+        vec(node.oldOmega).applyQuaternion(
+          node.oldPose.orientation.clone().invert(),
+        ),
+        duration(node, 1),
+        vec(node.com),
+        node.properties!.rotationLocked,
+        node.oldPose.orientation,
+      );
     paths.set(node.body, path);
   }
   const writeCandidates = (targets: readonly RigidBody[], fraction = 1) => {

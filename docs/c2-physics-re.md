@@ -514,3 +514,36 @@ semantic boundaries. Only raw post-collection static feature emission is reusabl
 moving-owner/custom collection remains live. Exact original Stock/Advanced crash,
 repair and captured-interlock checks are recorded with the measurements in
 [PERF-22](perf22-contact-rediscovery.md). PERF-13 retains whole-scene stall acceptance.
+
+## PERF-13: residual guard and retry interpretation (2026-10-16)
+
+Verified from installed HW static code: `DoCollisions` at `0x4ba61e`/`0x4ba64a`
+repeats while response `0x4bac60` returns nonzero. The local retry count is 30
+(`0x4ba62e`), with three failure reports (`0x4ba637`). Response `0x4bafb8`
+returns zero when aggregate geometry/unilateral row count is zero; its ordinary
+`0x4bbf07`–`0x4bbf15` tail returns the saved row count, negated for the relevant
+mutation/callback status. Stable positive stresses are not a verified native
+termination condition. Do not infer that repeated zero/small impulses make
+callbacks or re-collection dispensable.
+
+The existing native free integration's first-order branch has affine COM and a
+fixed rotation axis when the entire captured interval has OLD-local
+`|omega|² * dt * dt <= 0.00800000037997961`. Below `1e-7`, rotation is absent;
+otherwise unsigned 16-bit angle quantization and the small-rotation gate create
+explicit events. This supports interval-specific curvature certificates without
+assuming that the general high-angle/jointed path is Lipschitz. Captured first-order
+metadata and exact native poses drive the new temporal SAT browser guard.
+
+Browser movement-guard tolerance is a policy, not a recovered C2 constant:
+`max(1e-6, min(.001, .05 * minimum local hull thickness))`. Thickness includes
+face-normal widths so diagonal thin geometry is protected. The .001 ceiling is
+smaller than the existing native-informed .005 contact skin; native contact
+rows, impulses, damage and repair are unchanged. See
+[the residual investigation](perf13-residual-physics.md) for adverse experiments,
+implementation scope and validation.
+
+Empty native endpoint CCD was evaluated as an additional continuation shortcut,
+but is **not implemented**. Clear OLD/NEXT geometry does not certify an
+intermediate full-turn arc. Such evidence also does not survive common-prefix
+clamps under the existing pair-component merge rules. Native discovery ownership
+and continuous interval clearance must remain distinct certificate types.

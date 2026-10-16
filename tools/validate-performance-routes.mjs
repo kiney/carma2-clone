@@ -8,6 +8,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "playwright-core";
 import { installPerformanceProbe } from "./performance-probe.mjs";
 import { installLivePerformanceRecorder } from "./live-performance-recorder.mjs";
+import { installMinimalRuntimeProbe } from "./minimal-runtime-probe.mjs";
 
 const endpoint = process.env.CDP_URL || "http://127.0.0.1:9222";
 const url = process.env.PERF_ROUTE_URL || "http://localhost:5221";
@@ -15,6 +16,14 @@ const output =
   process.env.PERF_ROUTE_OUTPUT || "artifacts/perf13-current-routes.json";
 const profiling = process.env.PERF_ROUTE_PROFILE === "1";
 const bare = process.env.PERF_ROUTE_BARE === "1";
+const minimal = process.env.PERF_ROUTE_MINIMAL === "1";
+// Explicit fallback for CPU attribution while desktop GPU access is unavailable.
+// No rendering means these RAF intervals are NOT playable/hardware FPS.
+const softwareDiagnostic = process.env.PERF_ROUTE_SOFTWARE_DIAGNOSTIC === "1";
+assert.ok(
+  !(bare && minimal),
+  "PERF_ROUTE_MINIMAL cannot be combined with PERF_ROUTE_BARE",
+);
 const fixtureSeed =
   process.env.PERF_ROUTE_SEED === undefined
     ? null
@@ -40,6 +49,20 @@ const fingerprint = async () => {
       // Clocks are deliberately separate: matching geometry is not a claim of
       // deterministic asynchronous loading or an identical timed drive.
       clocks: { elapsed: sim.elapsed, gameTimeMs: c.stats.gameTimeMs },
+      readiness: {
+        opponents: c.opponentsReady === true,
+        pedestrianSystemInstalled: !!c.pedestrians,
+      },
+      population: {
+        rivals: c.rivals?.length ?? 0,
+        pedestrians: c.pedestrians?.states?.length ?? 0,
+        activePedestrians:
+          c.pedestrians?.states?.filter((state) => state.active).length ?? 0,
+        cars: sim.cars.length,
+        debris: sim.debris.length,
+        noncars: sim.noncars.length,
+        movingWorld: sim.movingWorld?.length ?? 0,
+      },
       rng: {
         math: window.__perfRouteRandom?.state() ?? null,
         native: c.noncarDebris?.random?.state ?? null,
@@ -141,8 +164,15 @@ const report = {
   fixture: {
     seed: fixtureSeed,
     pairDiagnostics,
+    diagnosticMode: softwareDiagnostic
+      ? "Drawing-suppressed software CPU diagnostic; not hardware FPS or a whole-rendered-route acceptance run."
+      : "Normal hardware-rendered route.",
+    observerNote: pairDiagnostics
+      ? "Opt-in pair counters add overhead, including with the minimal recorder; use counter-free captures for FPS claims."
+      : "Pair diagnostics disabled.",
     fixedLoadRandom,
-    note: "Opt-in benchmark seeding only. Compare initial bodiesSha256 before claiming the same fixture; wall-clock warmup and capture remain nondeterministic.",
+    readinessGate: { opponents: true, pedestrianSystemInstalled: true },
+    note: "Opt-in benchmark seeding only. Route capture waits for opponentsReady and the public carma.pedestrians system. Compare initial bodiesSha256 before claiming the same fixture; wall-clock warmup and capture remain nondeterministic.",
   },
   cases: [],
   errors: [],
@@ -211,9 +241,11 @@ try {
       },
       { scenario, seed: fixtureSeed, fixedLoadRandom },
     );
-    await page.waitForFunction(() => window.carma.opponentsReady, null, {
-      timeout: 90000,
-    });
+    await page.waitForFunction(
+      () => window.carma.opponentsReady && !!window.carma.pedestrians,
+      null,
+      { timeout: 90000 },
+    );
     const setup = await page.evaluate(
       ({ scenario, seed }) => {
         const c = window.carma,
@@ -261,9 +293,14 @@ try {
     await page.evaluate(installPerformanceProbe);
     const gpu = await page.evaluate(() => window.__c2Perf.metadata().gpu);
     assert.ok(
-      gpu && !/SwiftShader|llvmpipe|software/i.test(gpu),
+      gpu &&
+        (softwareDiagnostic || !/SwiftShader|llvmpipe|software/i.test(gpu)),
       `Hardware GPU required: ${gpu}`,
     );
+    if (softwareDiagnostic)
+      await page.evaluate(() => {
+        window.carma.renderer.render = () => {};
+      });
     // One short warm-up is retained separately, never silently excluded.
     const warmup = await page.evaluate(() =>
       window.__c2Perf.capture({
@@ -273,8 +310,25 @@ try {
         key: "KeyW",
       }),
     );
-    if (bare) await page.evaluate(() => window.__c2Perf.dispose());
-    else await page.evaluate(installLivePerformanceRecorder);
+    if (bare || minimal) await page.evaluate(() => window.__c2Perf.dispose());
+    // The broad probe owns/restores renderer.render during dispose. Reapply
+    // explicit diagnostic suppression AFTER disposal and assert its marker.
+    if (softwareDiagnostic)
+      await page.evaluate(() => {
+        const suppress = () => {};
+        suppress.perfRouteDrawingSuppressed = true;
+        window.carma.renderer.render = suppress;
+      });
+    if (minimal) await page.evaluate(installMinimalRuntimeProbe);
+    else if (!bare) await page.evaluate(installLivePerformanceRecorder);
+    if (softwareDiagnostic)
+      assert.equal(
+        await page.evaluate(
+          () => window.carma.renderer.render.perfRouteDrawingSuppressed,
+        ),
+        true,
+        "Diagnostic renderer suppression was replaced before capture",
+      );
     const captureFixture = await fingerprint();
     if (pairDiagnostics)
       await page.evaluate(() => {
@@ -307,6 +361,12 @@ try {
       await session.send("Profiler.start");
     }
     const capture = await page.evaluate(async (name) => {
+      if (window.__c2MinimalRuntimeProbe)
+        return window.__c2MinimalRuntimeProbe.capture({
+          label: name,
+          durationMs: 2500,
+          key: "KeyW",
+        });
       if (window.__c2Perf)
         return window.__c2Perf.capture({
           label: name,
@@ -372,6 +432,27 @@ try {
     }
     await session.detach();
     const live = await page.evaluate(() => {
+      const minimal = window.__c2MinimalRuntimeProbe;
+      if (minimal) {
+        const result = minimal.snapshot();
+        minimal.dispose();
+        window.__perfRoutePairs?.restore();
+        return {
+          ...result,
+          pairGuard: window.__perfRoutePairs
+            ? {
+                rows: window.__perfRoutePairs.rows,
+                totals: window.__perfRoutePairs.totals,
+                dropped: window.__perfRoutePairs.dropped,
+              }
+            : null,
+          quiet: window.carma.simulation.quietCensus(),
+          debris: window.carma.simulation.debris.length,
+          activeCars: window.carma.simulation.cars.filter((car) =>
+            window.carma.simulation.isCarPhysicsActive(car),
+          ).length,
+        };
+      }
       const recorder = window.__perf01LiveRecorder;
       const result = recorder?.snapshot() ?? {
         columns: { ticks: [], updates: [] },
@@ -394,8 +475,10 @@ try {
         ).length,
       };
     });
-    const column = (kind, name) =>
-      live.rows[kind].map((row) => row[live.columns[kind].indexOf(name)]);
+    const column = (kind, name) => {
+      const index = live.columns[kind].indexOf(name);
+      return index < 0 ? [] : live.rows[kind].map((row) => row[index]);
+    };
     const result = {
       scenario,
       setup,
@@ -405,15 +488,25 @@ try {
       capture,
       live,
       summary: {
-        fps: capture.fps,
+        fps: softwareDiagnostic ? null : capture.fps,
         frameMs: capture.frameMs,
-        tickMs: distribution(column("ticks", "cpuMs")),
-        updateMs: distribution(column("updates", "cpuMs")),
-        ticksPerUpdate: distribution(column("updates", "ticks")),
-        executedTicks: bare ? null : live.rows.ticks.length,
-        tickRate: bare
+        tickMs:
+          capture.runtime?.tickMs ?? distribution(column("ticks", "cpuMs")),
+        updateMs:
+          capture.runtime?.updateMs ?? distribution(column("updates", "cpuMs")),
+        ticksPerUpdate:
+          capture.runtime?.ticksPerUpdate ??
+          distribution(column("updates", "ticks")),
+        executedTicks: bare
           ? null
-          : (live.rows.ticks.length * 1000) / capture.actualDurationMs,
+          : (capture.runtime?.tickCount ??
+            live.totalTicks ??
+            live.rows.ticks.length),
+        tickRate:
+          capture.runtime?.tickRate ??
+          (bare
+            ? null
+            : (live.rows.ticks.length * 1000) / capture.actualDurationMs),
         skippedMs: capture.physicsSkippedMs,
         displacement: Math.hypot(
           ...capture.final.position.map(
@@ -423,6 +516,17 @@ try {
       },
     };
     assert.equal(capture.glError, 0);
+    if (softwareDiagnostic) {
+      assert.equal(
+        await page.evaluate(
+          () => window.carma.renderer.render.perfRouteDrawingSuppressed,
+        ),
+        true,
+        "Diagnostic renderer suppression changed during capture",
+      );
+      capture.diagnosticRafRate = capture.fps;
+      capture.fps = null;
+    }
     await page.screenshot({
       path: `artifacts/perf13-route-${scenario.name}.png`,
     });

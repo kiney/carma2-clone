@@ -51,7 +51,11 @@ export interface LocalResponseHost<Body extends RigidBody> {
    * world collection. Unknown providers omit it and retain full inspection. */
   worldCollectionVersion?(): unknown;
   emptyPreparationIsPure?: boolean;
-  predict(roster: Body[], changed: boolean): void;
+  predict(
+    roster: Body[],
+    changed: boolean,
+    inputs: ReadonlyMap<Body, object>,
+  ): void;
   worldRows(body: Body): readonly Contact[];
   pairRows(
     roster: Body[],
@@ -202,7 +206,7 @@ export function runLocalResponses<Body extends RigidBody>(
       }
       attempts.set(seed, used + 1);
       if (used) count("retryRounds");
-      host.predict(roster, predictionChanged);
+      host.predict(roster, predictionChanged, inputs);
       predictionChanged = false;
       let rows: Contact[] = [];
       let collectionStable = false;
@@ -287,7 +291,7 @@ export function runLocalResponses<Body extends RigidBody>(
           }
           attempts.set(seed, consumed + 1);
           count("retryRounds");
-          host.predict(roster, predictionChanged);
+          host.predict(roster, predictionChanged, inputs);
           predictionChanged = false;
         }
       }

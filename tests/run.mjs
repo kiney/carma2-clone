@@ -373,3 +373,17 @@ import "./perf22-collection-integration.test.mjs";
 import "./pair-recovery-geometry.test.mjs";
 
 import "./pair-old-geometry.test.mjs";
+
+import "./edge-feature-index.test.mjs";
+
+import "./cached-hierarchy-motion.test.mjs";
+
+import "./first-order-guard.test.mjs";
+
+import "./native-guard-resolution.test.mjs";
+
+import "./minimal-runtime-probe.test.mjs";
+
+import "./summarize-cpu-profile.test.mjs";
+
+import "./response-trace-probe.test.mjs";

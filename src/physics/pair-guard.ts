@@ -1,3 +1,4 @@
+import type { EdgeFeatureDiagnostics } from "./edge-feature-index";
 import { Box3, Quaternion, Vector3 } from "three";
 import type { RigidBody } from "./contact";
 import {
@@ -23,6 +24,12 @@ import {
   translationHullFraction,
 } from "./continuous-sat";
 import { hasImmutableCollisionHulls } from "./immutable-hulls";
+import {
+  guardFirstOrderHull,
+  prefixFirstOrderMotion,
+  type FirstOrderMotion,
+  type FirstOrderGuardCounter,
+} from "./first-order-guard";
 
 export type HullBody = RigidBody & {
   hulls: CollisionHull[];
@@ -48,14 +55,17 @@ export interface GuardMotionEnvelope {
 export type PosePath = ((fraction: number) => GuardPose) & {
   /** Total travel bounds, needed when a path makes complete rotations. */
   angularTravel?: number;
-  /** Existing world-sweep angular-rate heuristic, including driven ancestors.
-   * Separate from the conservative pair-guard momentum bound above. */
+  /** Native sampling-rate heuristic, including driven ancestors. Pair/world
+   * resolution uses this together with observed finite turns. It is NOT the
+   * conservative whole-phase momentum enclosure used to certify clearance. */
   worldAngularSampling?: number;
   /** Pure poses and immutable source geometry for this synchronous guard phase.
    * Uncertified custom paths retain private samples and conservative bounds. */
   stable?: boolean;
   /** Source-owned OLD motion envelope; unknown/custom trajectories omit it. */
   guardMotion?: GuardMotionEnvelope;
+  /** Captured native free path entirely inside the fixed-axis first-order branch. */
+  firstOrderMotion?: FirstOrderMotion;
   /** Captured constant pose; never infer stationarity from immovability alone. */
   constantPose?: GuardPose;
   /** Physical joints share time even when their contact masks exclude each other. */
@@ -121,6 +131,10 @@ export interface BodyGuardDiagnostics extends BodyBroadphaseDiagnostics {
   sampledIntervals: number;
   guardSatQueries: number;
   guardFeatureSweeps: number;
+  firstOrderIntervals: number;
+  firstOrderCertificates: number;
+  firstOrderTranslationQueries: number;
+  firstOrderFallbacks: number;
 }
 interface GeometrySnapshot {
   hulls: CollisionHull[];
@@ -176,6 +190,7 @@ class GuardWorkingSet {
   constructor(
     private diagnostics?: BodyGuardDiagnostics,
     private immutable?: ImmutableGuardGeometry,
+    readonly edgeDiagnostics?: EdgeFeatureDiagnostics,
   ) {}
   count(
     key:
@@ -184,7 +199,8 @@ class GuardWorkingSet {
       | "translationHullQueries"
       | "sampledIntervals"
       | "guardSatQueries"
-      | "guardFeatureSweeps",
+      | "guardFeatureSweeps"
+      | FirstOrderGuardCounter,
   ) {
     if (this.diagnostics) this.diagnostics[key]++;
   }
@@ -448,12 +464,56 @@ export function guardPairTrajectory(
       }
     return fraction;
   }
+  if (
+    (pathA.constantPose || pathA.firstOrderMotion) &&
+    (pathB.constantPose || pathB.firstOrderMotion) &&
+    oldA.every((hull) => hull.faces.length > 0) &&
+    oldB.every((hull) => hull.faces.length > 0)
+  ) {
+    let fraction = 1,
+      complete = true;
+    for (let i = 0; i < oldA.length && complete; i++)
+      for (let j = 0; j < oldB.length; j++) {
+        if (ignored(i, j)) continue;
+        // Nonadmitted OLD depth retains the former decreasing escape allowance.
+        // This free-path algorithm certifies newly clear convex hull cells.
+        if (allowed[i][j] > 0) {
+          complete = false;
+          break;
+        }
+        const value = guardFirstOrderHull({
+          sourceA: a.hulls[i],
+          sourceB: b.hulls[j],
+          motionA: pathA.firstOrderMotion,
+          motionB: pathB.firstOrderMotion,
+          hullA: (t) => getA(t).hulls[i],
+          hullB: (t) => getB(t).hulls[j],
+          depthLimit: allowed[i][j] + DEPTH_EPSILON,
+          count: (key) => workingSet?.count(key),
+        });
+        if (value === undefined) {
+          complete = false;
+          break;
+        }
+        fraction = Math.min(fraction, value);
+      }
+    if (complete) return fraction;
+  }
   const travel = (path: PosePath) => {
     const poses = [0, 0.25, 0.5, 0.75, 1].map(path);
     return {
       poses,
       angle: Math.max(
-        path.angularTravel ?? 0,
+        // The momentum/min-inertia envelope is a whole-phase clearance
+        // bound, not the angular distance actually traversed. Using it as a
+        // sampling rate makes thin anisotropic parts take 128 steps for an
+        // ordinary ~0.2-radian turn. Captured native paths supply the same
+        // rate hint used by world CCD; observed finite turns can only raise
+        // this resolution. Unknown paths retain their supplied travel bound.
+        Number.isFinite(path.worldAngularSampling) &&
+          path.worldAngularSampling! >= 0
+          ? path.worldAngularSampling!
+          : (path.angularTravel ?? 0),
         poses
           .slice(1)
           .reduce(
@@ -541,6 +601,7 @@ export function guardPairTrajectory(
           nextA[i],
           oldB[j],
           nextB[j],
+          workingSet?.edgeDiagnostics,
         );
         if (fraction === undefined || fraction < 0 || fraction > 1) continue;
         // Source emitters extend edges and accept resting/tolerance contacts.
@@ -675,6 +736,7 @@ export class BodyTrajectoryGuard {
     paths: Map<HullBody, PosePath>,
     pairAllowed?: BodyPairPredicate,
     diagnostics?: BodyGuardDiagnostics,
+    edgeDiagnostics?: EdgeFeatureDiagnostics,
   ): Map<HullBody, number> {
     if (diagnostics) {
       diagnostics.hullTransforms =
@@ -693,9 +755,17 @@ export class BodyTrajectoryGuard {
         diagnostics.sampledIntervals =
         diagnostics.guardSatQueries =
         diagnostics.guardFeatureSweeps =
+        diagnostics.firstOrderIntervals =
+        diagnostics.firstOrderCertificates =
+        diagnostics.firstOrderTranslationQueries =
+        diagnostics.firstOrderFallbacks =
           0;
     }
-    const workingSet = new GuardWorkingSet(diagnostics, this.immutable);
+    const workingSet = new GuardWorkingSet(
+      diagnostics,
+      this.immutable,
+      edgeDiagnostics,
+    );
     const parents = bodies.map((_, i) => i);
     const roots = bodies.map(attachmentRoot);
     const find = (i: number): number =>
@@ -864,6 +934,13 @@ export class BodyTrajectoryGuard {
         path.stable = source.stable;
         // Total angular travel is a bound, not a promise of uniform rate.
         path.angularTravel = source.angularTravel;
+        if (source.worldAngularSampling !== undefined)
+          path.worldAngularSampling = source.worldAngularSampling * value;
+        if (source.firstOrderMotion)
+          path.firstOrderMotion = prefixFirstOrderMotion(
+            source.firstOrderMotion,
+            value,
+          );
         if (source.guardMotion)
           path.guardMotion = {
             delta: source.guardMotion.delta.clone().multiplyScalar(value),

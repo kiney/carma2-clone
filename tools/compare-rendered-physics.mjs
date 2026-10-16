@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { installResponseTraceProbe } from "./response-trace-probe.mjs";
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const { chromium } = require("playwright-core");
@@ -14,6 +15,8 @@ const candidate = process.env.CANDIDATE_URL || "http://localhost:5221";
 const output =
   process.env.PERF22_OUTPUT || "artifacts/perf22-browser-fixed-ticks.json";
 const snapshotPath = process.env.PERF22_SNAPSHOT;
+const responseDetail = process.env.PERF_RESPONSE_DETAIL === "1";
+const edgeDiagnostics = process.env.PERF_EDGE_DIAGNOSTICS === "1";
 const urls = [baseline, candidate, candidate, baseline];
 const hash = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -144,6 +147,13 @@ const report = {
     car: "eagle3",
     ticksPerPass: 4,
     seed: 20201016,
+    responseDetail,
+    edgeDiagnostics,
+    diagnosticOverhead: responseDetail
+      ? "Detailed response state tracing adds substantial CPU work; exclude these four-tick timings from FPS/performance claims."
+      : edgeDiagnostics
+        ? "Edge-feature counters add diagnostic overhead; interpret four-tick timings as diagnostic only."
+        : "No opt-in response/edge diagnostics; timings use the existing fixed-tick path.",
     installedFixture: snapshotPath
       ? {
           type: "captured-pile-install",
@@ -220,7 +230,7 @@ try {
       if (capturedFixtureBundle)
         await page.addScriptTag({ content: capturedFixtureBundle });
       const setup = await page.evaluate(
-        async ({ useCapturedFixture, snapshot }) => {
+        async ({ useCapturedFixture, snapshot, edgeDiagnostics }) => {
           const c = window.carma;
           const sim = c.simulation;
           c.paused = true;
@@ -252,6 +262,13 @@ try {
           c.player.input.brake = 0;
           c.player.input.handbrake = false;
           sim.correctionDiagnostics = {};
+          if (edgeDiagnostics)
+            sim.edgeFeatureDiagnostics = {
+              queries: 0,
+              edgesVisited: 0,
+              candidates: 0,
+              potentialEdges: 0,
+            };
           const capture = { trace: [], pairTotals: {} };
           const previousPairs = sim.bodyPairDiagnostics;
           sim.bodyPairDiagnostics = (phase, values) => {
@@ -297,10 +314,18 @@ try {
             capturedRoster,
             spam,
             motionStopTimer: sim.motionContext?.stopTimer ?? null,
+            edgeFeatureDiagnosticsInitial: edgeDiagnostics
+              ? { ...sim.edgeFeatureDiagnostics }
+              : null,
           };
         },
-        { useCapturedFixture: !!snapshotPath, snapshot: capturedSnapshot },
+        {
+          useCapturedFixture: !!snapshotPath,
+          snapshot: capturedSnapshot,
+          edgeDiagnostics,
+        },
       );
+      if (responseDetail) await page.evaluate(installResponseTraceProbe);
       const gpu = await page.evaluate(() => {
         const gl = window.carma.renderer.getContext();
         const extension = gl.getExtension("WEBGL_debug_renderer_info");
@@ -332,17 +357,24 @@ try {
       const initial = await page.evaluate(() => window.__perf22Snapshot());
       const initialSha256 = hash(initial);
       let timeoutId;
-      const measuredPromise = page.evaluate(() => {
+      const measuredPromise = page.evaluate((edgeDiagnostics) => {
         const c = window.carma;
         const sim = c.simulation;
         c.paused = true;
         const timings = [];
         const afterEachTick = [];
-        for (let tick = 0; tick < 4; tick++) {
-          const start = performance.now();
-          sim.step();
-          timings.push(performance.now() - start);
-          afterEachTick.push(window.__perf22Snapshot());
+        window.__perfResponseTraceProbe?.seed();
+        let responseTrace = null;
+        try {
+          for (let tick = 0; tick < 4; tick++) {
+            const start = performance.now();
+            sim.step();
+            timings.push(performance.now() - start);
+            afterEachTick.push(window.__perf22Snapshot());
+          }
+          responseTrace = window.__perfResponseTraceProbe?.snapshot() ?? null;
+        } finally {
+          window.__perfResponseTraceProbe?.dispose();
         }
         const glError = c.renderer.getContext().getError();
         return {
@@ -353,10 +385,14 @@ try {
           elapsedDelta: sim.elapsed - sim.__perf22Elapsed,
           gameTimeDelta: c.stats.gameTimeMs - sim.__perf22GameTime,
           diagnostics: structuredClone(sim.correctionDiagnostics ?? {}),
+          edgeFeatureDiagnostics: edgeDiagnostics
+            ? structuredClone(sim.edgeFeatureDiagnostics ?? {})
+            : null,
           trace: sim.__perf22.trace,
           pairTotals: sim.__perf22.pairTotals,
+          responseTrace,
         };
-      });
+      }, edgeDiagnostics);
       const measured = await Promise.race([
         measuredPromise,
         new Promise((_, reject) => {
@@ -402,6 +438,8 @@ try {
         elapsedDelta: measured.elapsedDelta,
         gameTimeDelta: measured.gameTimeDelta,
         diagnostics: measured.diagnostics,
+        edgeFeatureDiagnostics: measured.edgeFeatureDiagnostics,
+        responseTrace: measured.responseTrace,
         trace: measured.trace,
         pairTotals: measured.pairTotals,
       };
