@@ -173,15 +173,16 @@ sampling-resolution fix, delivered 17.74 FPS with mean tick 23.36 ms and p95 fra
 still has unacceptable tails. The final candidate must not inherit this
 intermediate result as its own measurement.
 
-Final hardware acceptance is externally blocked: both the existing desktop CDP
+Hardware acceptance was initially externally blocked: both the existing desktop CDP
 endpoint and newly isolated desktop Chromium instances stop responding to local
 CDP requests. A separate headless hardware EGL attempt cannot open
 `/dev/dri/renderD128` (permission denied); this user is not in the render group
 and the device currently has no per-user ACL entry. No device permissions,
 session settings or original user browser were changed. The controlled software
-browser remains available for correctness and CPU attribution. PERF-13 stays
-**wip**, with hardware whole-rendered-route AC2 open; PERF-04 remains deferred.
-No broader Goal is marked complete and no additional package is required.
+browser remained available for correctness and CPU attribution. At checkpoint
+`597b42d`, PERF-13 stayed **wip** with hardware whole-rendered-route AC2 open.
+The unlocked-desktop measurements below resolve that acceptance gap. No broader
+Goal is marked complete and no additional package is required.
 
 Earlier software fallback attempts accidentally restored drawing when disposing
 the broad warmup probe. Those reports are retained as
@@ -210,3 +211,49 @@ keeps full motion, visits fewer than 16 adaptive intervals, and retains an
 explicit fallback count. A companion relative-translation impact remains
 blocked. This is a correctness routing fix; the CPU measurements above precede
 this narrow change and are not relabelled as measurements of the final bundle.
+
+## Unlocked-desktop hardware acceptance
+
+After the user reported unlocking the workstation, the original desktop CDP
+endpoint immediately responded again. No Chromium restart, GPU permission change
+or package installation was required. The original user tab stayed paused and
+was not navigated or stepped. All measurements used isolated contexts of that
+same Chromium, AMD ANGLE/radeonsi gfx1150, at 2100 x 1466. Capture windows were
+2.5 seconds, serial, minimally instrumented and fully rendered. CPU sampling,
+detailed response tracing and pair counters were disabled.
+
+The ABBA comparison uses independently served production builds: baseline
+`baf9431` on port 5223, final `597b42d` on port 5221. Every initial body and full
+fixture fingerprint matches across all four windows. Populations remain seven
+cars, nine detached pieces, 584 pedestrians (19 initially active), and 466
+authored NONCARs. Subsequent timed driving/AI states differ; this is not a
+deterministic trajectory replay. Earlier adverse captures remain above, but are
+not used as the denominator for the new unlocked-session gain.
+
+| Hardware ABBA capture |   FPS | Tick mean / p95 (ms) | Update mean / p95 (ms) | Frame p95 / max (ms) | Executed ticks | Skipped time (ms) |
+| --------------------- | ----: | -------------------: | ---------------------: | -------------------: | -------------: | ----------------: |
+| A: baseline           | 26.77 |        21.42 / 38.70 |          20.50 / 54.00 |        71.60 / 92.70 |             64 |                 0 |
+| B: final              | 38.72 |        17.76 / 35.60 |          11.99 / 34.70 |        47.90 / 84.10 |             63 |                 0 |
+| C: final              | 38.23 |        17.28 / 37.80 |          12.57 / 36.10 |        56.40 / 77.00 |             65 |                 0 |
+| D: baseline           | 27.37 |        21.60 / 39.90 |          20.44 / 73.80 |       94.70 / 106.20 |             65 |                 0 |
+
+Average FPS improves about 42%, mean tick cost about 19%, and mean update cost
+about 40%. Whole-rendered-route p95 improves in both final windows; tick p95
+changes more modestly, so average savings must not be presented as elimination
+of every expensive native response. No clock/catch-up policy was changed.
+
+Additional final-build hardware route windows:
+
+| Route                  |   FPS | Tick mean / p95 (ms) | Frame p95 / max (ms) | Skipped time (ms) |
+| ---------------------- | ----: | -------------------: | -------------------: | ----------------: |
+| Timber canyon, forward | 54.74 |          5.62 / 9.00 |        32.50 / 40.60 |                 0 |
+| Timber canyon, reverse | 55.98 |         5.69 / 15.40 |        37.30 / 39.50 |                 0 |
+| Snow start             | 46.37 |        11.34 / 28.70 |        44.80 / 72.80 |                 0 |
+
+All seven captures report no console errors, failed requests/responses or WebGL
+errors. Screenshots were inspected. Raw reports and logs are ignored under
+`artifacts/perf13-unlocked-*`; final correctness remains backed by the 3,096
+headless tests and original Stock/Advanced crash/repair/interlock checks above.
+PERF-13 AC2 is now substantially met and the ticket is **done**. PERF-01 remains
+open: short recreated routes cannot guarantee the absence of rare user-created
+chaos stalls, and these results do not establish a universal 60 FPS target.

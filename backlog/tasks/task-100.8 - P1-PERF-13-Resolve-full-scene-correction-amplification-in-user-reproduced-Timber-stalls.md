@@ -3,10 +3,10 @@ id: TASK-100.8
 title: >-
   [P1] PERF-13: Resolve remaining damaged-scene physics stalls after structural
   integration
-status: wip
+status: done
 assignee: []
 created_date: '2026-10-13 01:22'
-updated_date: '2026-10-16 02:16'
+updated_date: '2026-10-16 13:26'
 labels:
   - priority-1
   - PERF-13
@@ -38,9 +38,9 @@ ordinal: 1180
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Current implementation (2026-10-16): adaptive first-order temporal SAT, geometric guard slop, complete endpoint face/edge-cross separation witnesses, changed-tree-only prediction reuse, spatial edge-feature discovery and separate native sampling resolution versus global inertia enclosures are implemented. Final full suite: 3,096 tests pass. Matching drawing-suppressed CPU profiles reduce mean tick 21.50 to 16.05 ms and sampled final pair guard 409.23 to 105.77 ms, with 67 executed ticks in both windows. These software measurements are not hardware FPS acceptance.
+Completed after hardware revalidation of engine checkpoint 597b42d (2026-10-16). Once the user unlocked the workstation, the original desktop Chromium CDP endpoint responded again without restart or permission changes. Matching fully rendered, minimal-observer hardware ABBA windows (AMD ANGLE/radeonsi gfx1150, 2100 x 1466) give baseline 26.77/27.37 FPS versus final 38.72/38.23 FPS; p95 frame 71.60/94.70 ms versus 47.90/56.40 ms. Mean tick falls about 19%, mean update about 40%, average FPS rises about 42%. All four seeded initial fixture/body fingerprints and full populations match; later timed AI/physics differ. No skipped simulation time, console errors, failed requests/responses or WebGL errors.
 
-Keep WIP: final hardware whole-rendered-route AC2 is blocked by unresponsive desktop Chromium CDP endpoints and unavailable headless GPU device access. The last hardware-rendered intermediate result was 17.74 FPS with p95 frame 132 ms; the final sampling-resolution implementation has not yet received a hardware FPS run. No physics clock/catch-up cap was changed. See docs/perf13-residual-physics.md for full/adverse evidence, observer modes, source policy and limitations. PERF-04 remains deferred.
+Final hardware route checks give Timber canyon forward/reverse 54.74/55.98 FPS and Snow start 46.37 FPS, with zero skipped time. All 3,096 headless tests, build, Stock/Advanced crash/damage/repair and captured-interlock Chromium checks pass. AC2 is now substantially met and all acceptance criteria are complete. PERF-01 remains open for broader performance work; these short recreated routes do not guarantee universal 60 FPS or rule out rare user-created chaos stalls. Original user tab remains paused and unchanged. Full evidence and retained adverse/software samples: docs/perf13-residual-physics.md.
 
 Historical scope and investigation evidence (retained):
 
@@ -64,7 +64,7 @@ The 2026-10-13 structural brainstorming found native joint candidate anchor plac
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 Identify persistent correction rows and exact motion/geometry/attachment changes per pass in the saved user scene; distinguish useful response from redundant scene-wide work.
-- [ ] #2 After the selected structural checkpoints, demonstrate substantially lower whole-tick/updateFrame costs and usable rendered frame-time tails in short serial hardware routes; retain adverse samples and observer overhead. Browser guard/recollection algorithms may change; simply slowing simulation or freezing moving objects does not qualify.
+- [x] #2 After the selected structural checkpoints, demonstrate substantially lower whole-tick/updateFrame costs and usable rendered frame-time tails in short serial hardware routes; retain adverse samples and observer overhead. Browser guard/recollection algorithms may change; simply slowing simulation or freezing moving objects does not qualify.
 - [x] #3 Prove contact, momentum, damage/restart ordering, activation and final body/world safeguards remain valid across original Stock/Advanced multi-car debris/crush/repair scenarios.
 - [x] #4 Validate running Chromium frames and regressions with clean console/WebGL; distinguish exact directional attribution from hypotheses and keep original data unmodified/unbundled.
 <!-- AC:END -->
@@ -111,4 +111,6 @@ Hardware intermediate 8.21 to 17.74 FPS is retained with adverse earlier 2.75/3.
 Final production validation: 3,094 headless tests pass without failures/skips; build passes; Chromium Stock Eagle/Buggy/Bigdump and Advanced 69mach1 crash/damage/repair core passes; saved ten-body forward/reverse/bumper-control cases each pass three ticks with clean console/requests. WebGL error 0 in the crash matrix. Screenshots inspected. Hardware whole-rendered-route AC2 remains open; ticket stays WIP rather than claiming completion from software CPU results.
 
 Final review fixes a coupled-angle regression: synchronous native quantization events could falsely block tangent co-rotating thin parts by testing impossible mixed orientations. Those ambiguous tiny brackets now use the existing actual-pose detailed fallback. Both tangent release and real relative-translation collision tests pass. Final headless suite is 3,096 tests, no failures/skips. Earlier CPU profiles precede this narrow correctness routing fix; hardware-rendered AC2 remains open.
+
+Unlocked-desktop final acceptance: four serial 2.5-second hardware-rendered ABBA windows on baf9431 versus 597b42d reproduce the same exact initial fixture/body hashes, seven cars, nine pieces, 584 pedestrians and 466 authored NONCARs. Baseline FPS 26.77/27.37; final 38.72/38.23. Tick means 21.42/21.60 to 17.76/17.28 ms; update means 20.50/20.44 to 11.99/12.57 ms; frame p95 71.60/94.70 to 47.90/56.40 ms. All skipped time zero. Forward/reverse Timber canyon 54.74/55.98 FPS, Snow start 46.37 FPS. No browser/requests/WebGL errors. Screenshots inspected; minimal wrappers only, no CPU profiler or pair counters. Actual AMD ANGLE 2100 x 1466; timed captures are not deterministic replays. Independent evidence review agrees AC2 is substantially met for this bounded ticket. Close PERF-13; PERF-01 remains open. Hardware blocker recorded earlier was resolved after unlocking, without browser restart, package installation or device/session permission changes.
 <!-- SECTION:NOTES:END -->

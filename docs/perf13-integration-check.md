@@ -7,7 +7,12 @@ The residual implementation after PERF-20/21/22 is tracked in
 no-behavior-change statement below describe the earlier `dbc7a0d` audit, not the
 new adaptive guarding and motion-cache implementation.
 
-## Decision
+Update after `597b42d`: the unlocked-desktop hardware ABBA comparison and
+Timber/Snow routes now satisfy PERF-13's remaining acceptance criterion. The
+ticket is done; see the linked follow-up for results and limitations. The
+broader PERF-01 umbrella remains open.
+
+## Historical decision at `dbc7a0d`
 
 **Keep PERF-13 open.** The original eight-global-pass implementation is gone,
 but current damaged-gameplay integration still fails the usable frame-time
