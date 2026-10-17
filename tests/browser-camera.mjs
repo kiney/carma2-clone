@@ -248,6 +248,7 @@ try {
         },
         stats: { ...c.stats },
         cameraState: c.cameraState,
+        visibility: c.visibility,
       };
     });
     assert.equal(capture.car.bboxCornersTotal > 0, true);
@@ -255,7 +256,8 @@ try {
     if (phase !== "baseline") {
       assert.equal(capture.camera.fov, 55.546875);
       assert.ok(Math.abs(capture.camera.near - 0.06) < 0.00001);
-      assert.equal(capture.camera.far, 35);
+      assert.equal(capture.camera.far, 140);
+      assert.equal(capture.visibility.nativeYon, 35);
       if (index === 0) {
         assert.ok(Math.abs(capture.cameraState.zoom - 0.2) < 0.000001);
         assert.equal(

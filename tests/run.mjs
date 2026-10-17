@@ -389,3 +389,9 @@ import "./summarize-cpu-profile.test.mjs";
 import "./response-trace-probe.test.mjs";
 
 import "./short-opponent-path.test.mjs";
+
+import "./visual-distance.test.mjs";
+import "./visual-fog.test.mjs";
+import "./distant-ped-matrices.test.mjs";
+import "./ped-presentation-distance.test.mjs";
+import "./opponent-presentation-notify.test.mjs";

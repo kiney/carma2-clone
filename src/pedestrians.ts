@@ -581,6 +581,13 @@ export class PedestrianSystem {
   readonly group = new THREE.Group();
   /** Render-only identities; population and physical ownership stay unchanged. */
   readonly renderActors = new Set<THREE.Object3D>();
+  /** Visible retained poses owned entirely by this system, without processing. */
+  readonly dormantRenderActors = new Set<THREE.Object3D>();
+  presentationRevision = 0;
+  private readonly presentationSphere = new THREE.Sphere(
+    new THREE.Vector3(),
+    2,
+  );
   readonly warnings: string[] = [];
   readonly specs: PedSpawnSpec[];
   readonly motionInfo?: { bones: number; frames: number };
@@ -631,6 +638,9 @@ export class PedestrianSystem {
   }
   get bloodStats() {
     return this.blood?.stats ?? { clouds: 0, giblets: 0, slicks: 0, smears: 0 };
+  }
+  get nativeProcessDistance() {
+    return this.settings.processDistance;
   }
   get states() {
     return this.peds.map((p) => ({
@@ -709,6 +719,8 @@ export class PedestrianSystem {
     if (character.body) character.body.pedestrianFlags = character.flags;
     ped.nativeCountingCharacter = character;
     this.nativeCountingOwners.set(owner, { ped, character });
+    this.dormantRenderActors.delete(actor);
+    this.presentationRevision++;
   }
 
   /** Native Kill has already set character flag100 before this outlet. Never
@@ -2171,11 +2183,44 @@ export class PedestrianSystem {
     this.previousCar.copy(car.position);
   }
 
+  /** Presentation alone may expose retained distant poses. Processing, combat
+   * eligibility, movement and animation still use the original active flag. */
+  updatePresentation(
+    cameraPosition: THREE.Vector3,
+    visualDistance: number,
+    frustum?: THREE.Frustum,
+  ): void {
+    this.dormantRenderActors.clear();
+    this.group.updateWorldMatrix(true, false);
+    const sphere = this.presentationSphere;
+    // Original pedestrian models fit comfortably inside this conservative
+    // envelope; include group scaling without traversing any limb hierarchy.
+    sphere.radius = 2 * this.group.matrixWorld.getMaxScaleOnAxis();
+    const distance = Math.max(0, visualDistance) + sphere.radius;
+    for (const ped of this.peds) {
+      // Native transport may reparent and animate this actor independently.
+      if (ped.nativeCountingCharacter) continue;
+      sphere.center
+        .copy(ped.object.position)
+        .applyMatrix4(this.group.matrixWorld);
+      ped.object.visible =
+        !ped.vanished &&
+        (ped.active ||
+          (sphere.center.distanceToSquared(cameraPosition) <=
+            distance * distance &&
+            (!frustum || frustum.intersectsSphere(sphere))));
+      if (ped.object.visible && !ped.active)
+        this.dormantRenderActors.add(ped.object);
+    }
+  }
+
   resetCar(position: THREE.Vector3) {
     this.previousCar.copy(position);
     this.nearReset = true;
   }
   reset() {
+    this.dormantRenderActors.clear();
+    this.presentationRevision++;
     this.population.reset();
     this.nativeCountingOwners.clear();
     for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);
@@ -2242,6 +2287,8 @@ export class PedestrianSystem {
     for (const mesh of this.repulseMeshes) mesh.visible = false;
   }
   dispose() {
+    this.dormantRenderActors.clear();
+    this.presentationRevision++;
     this.clearCombatRays();
     this.blood?.dispose();
     for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);

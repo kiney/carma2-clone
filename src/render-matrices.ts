@@ -8,14 +8,37 @@ export interface DormantRenderMatrices {
   matrixSkipAncestors: ReadonlySet<Object3D>;
 }
 
-/** Prepare the shared sky/main pose once. Only registered, invisible population
- * actors may defer descendant updates; explicit physics matrix APIs stay native.
+export interface DormantPedestrianMatrices {
+  actors: ReadonlySet<Object3D>;
+  revision: number;
+}
+const pedestrianPoses = new WeakMap<
+  Object3D,
+  { revision: number; matrix: Float64Array }
+>();
+function prepareDormantPedestrian(actor: Object3D, revision: number): void {
+  actor.updateWorldMatrix(false, false);
+  const previous = pedestrianPoses.get(actor),
+    matrix = actor.matrixWorld.elements;
+  if (
+    previous?.revision === revision &&
+    matrix.every((value, index) => value === previous.matrix[index])
+  )
+    return;
+  actor.updateMatrixWorld(true);
+  pedestrianPoses.set(actor, { revision, matrix: new Float64Array(matrix) });
+}
+
+/** Prepare the shared sky/main pose once. Registered invisible population actors
+ * and source-certified stationary distant poses may defer descendant updates;
+ * explicit physics matrix APIs stay native.
  * Ordinary branches retain updateMatrixWorld overrides (bones, LOD, etc.). */
 export function prepareSceneMatrices(
   scene: Scene,
   pedestrianGroup?: Object3D,
   pedestrianActors?: ReadonlySet<Object3D>,
   dormant?: DormantRenderMatrices,
+  dormantPedestrians?: DormantPedestrianMatrices,
 ): void {
   const update = (object: Object3D): void => {
     if (dormant?.matrixSkipRoots.has(object)) return;
@@ -39,6 +62,13 @@ export function prepareSceneMatrices(
     }
     child.updateWorldMatrix(false, false);
     for (const actor of child.children) {
+      if (actor.visible && dormantPedestrians?.actors.has(actor)) {
+        // This source-owned inactive population pose has no advancing limbs.
+        // Parent/root movement and reset/ownership revisions refresh it fully.
+        prepareDormantPedestrian(actor, dormantPedestrians.revision);
+        continue;
+      }
+      pedestrianPoses.delete(actor);
       if (!actor.visible && pedestrianActors.has(actor)) {
         // Keep the root pose current even while the unseen mesh/limbs sleep.
         // Becoming visible refreshes every descendant on the same render frame.

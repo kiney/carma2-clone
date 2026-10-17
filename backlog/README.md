@@ -62,11 +62,13 @@ choices remain open. The user then separated upcoming work as follows:
 | TASK-100   | PERF-01 | 1        | `wip`     | Cross-subsystem profiling, unresolved frame-time spikes and finding coordination         |
 | TASK-101   | PERF-02 | 1        | `done`    | Shared render preparation and dormant pedestrian subtree pruning, measured and validated |
 | TASK-104   | PERF-05 | 1        | `done`    | Lazy SAT and per-invocation guard caches, numerical and Chromium validation              |
-| TASK-103   | PERF-04 | 2        | `next`    | Higher visual visibility, dependent on TASK-101                                          |
+| TASK-103   | PERF-04 | 2        | `done`    | Fourfold visual ranges, native activation preserved; headed hardware before/after checks |
 | TASK-102   | PERF-03 | 4        | `backlog` | High-resolution rendering policy; deferred, measured gain was small                      |
 
 At the creation of this queue, the board had 111 tasks: 64 `backlog`, 8 `next`,
 1 `wip` and 38 `done`.
+PERF-04 subsequently extended visual ranges after the structural queue and
+PERF-13 integration; see [policy and hardware measurements](../docs/visual-visibility.md).
 Only the profiling investigation remains active; queued tickets do not consume
 WIP slots. Existing QUA-05/QUA-06/QUA-10 keep their narrower hardware-coverage,
 memory and FPS-diagnostic scopes and user-edited priorities.

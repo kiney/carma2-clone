@@ -16,8 +16,9 @@ implemented and validated; see [changes and measurements](physics-performance.md
 Web Workers remain a last resort.
 TASK-101 / PERF-02 scene-hierarchy work is implemented and validated; see the
 [implementation and measurements](render-hierarchy-performance.md).
-TASK-103 / PERF-04 owns higher visual visibility (P2,
-`next`, after TASK-101); TASK-102 / PERF-03 owns resolution policy (P4, `backlog`).
+TASK-103 / PERF-04 implements [extended visual visibility](visual-visibility.md)
+(P2), with separate native activation and headed hardware before/after checks.
+TASK-102 / PERF-03 owns resolution policy (P4, `backlog`).
 No production engine behavior, resolution, simulation distance or collision
 safeguard was changed during the initial analysis phase described below. The
 subsequent PERF-02 change reduces render matrix traversal while preserving those

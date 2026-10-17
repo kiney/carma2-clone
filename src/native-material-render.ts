@@ -67,6 +67,8 @@ export const NativeMaterialFlags = {
 } as const;
 export interface NativeMaterialRenderOptions {
   shading?: number;
+  /** Browser-only presentation extension; native retained MAT fields stay exact. */
+  visualFogDistanceScale?: number;
   depth?: NativeMaterialDepthEffect;
   directionalColor?: [number, number, number];
   interpolation?: boolean;
@@ -311,7 +313,10 @@ export function updateNativeRenderMaterial(
   u.c2Perspective.value = state.flags & 0x20 ? 1 : 0;
   u.c2Environment.value = state.flags & 8 ? 1 : state.flags & 16 ? 2 : 0;
   u.c2Fog.value = state.flags & 0x80000 ? 1 : 0;
-  u.c2FogRange.value.set(state.fogMin, state.fogMax);
+  const fogScale = options.visualFogDistanceScale ?? 1;
+  if (!Number.isFinite(fogScale) || fogScale <= 0)
+    throw new Error("Invalid visual fog distance scale");
+  u.c2FogRange.value.set(state.fogMin * fogScale, state.fogMax * fogScale);
   u.c2FogColor.value.set(
     ((state.fogColor >>> 16) & 255) / 255,
     ((state.fogColor >>> 8) & 255) / 255,

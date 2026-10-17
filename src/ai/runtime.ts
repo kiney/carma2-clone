@@ -50,6 +50,8 @@ export interface NativeOpponentFleetHooks {
   rayFraction(origin: Vector3, direction: Vector3): number;
   isPhysicsActive(body: SimulatedCar): boolean;
   setPhysicsActive(body: SimulatedCar, active: boolean): void;
+  /** Presentation observer after a committed nonphysical FOLLOW pose. */
+  onCheatyPose?(body: SimulatedCar): void;
   /** Placement owns collision probes, fallback and physics-on effects. */
   rematerialize(
     body: SimulatedCar,
@@ -760,6 +762,7 @@ export class NativeOpponentFleet {
             nativeActorLookUp(result.lookVector, result.position).quaternion,
           );
         this.syncActor(r.body);
+        this.hooks.onCheatyPose?.(r.body);
       },
       rematerializeOnSection: (slot, speed) =>
         this.hooks.rematerialize(

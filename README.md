@@ -37,7 +37,7 @@ The engine runs directly in the browser. See [architecture notes](docs/architect
 
 Tasks, evidence and priorities are maintained with [Backlog.md](backlog/README.md). Run `backlog board` for the terminal board or `backlog browser` for the editable local board. Columns are `backlog`, `next`, `wip`, `done`, sorted with priority 1 first. Original issue IDs and numeric priorities 1–5 are preserved; completed tasks remain in `done`. The `wip` column is limited to **3 actively worked-on tickets** by the project workflow; inactive partial implementations belong in `backlog`.
 
-Priority-1 PERF-01 tracks frame-time spikes and coordinates the separate performance scopes. [Scene-hierarchy preparation](docs/render-hierarchy-performance.md) avoids duplicate sky/main traversal and unseen pedestrian subtree updates. [Physics hot-path optimization](docs/physics-performance.md) now evaluates SAT axes lazily and reuses per-invocation bounds/depths while preserving numerical collision results. [Spatial body-pair discovery and shared phase geometry](docs/body-pair-performance.md) remove global pair scans and repeated transforms while preserving crash results. [Retained native MODEL bounds](docs/model-bounds-performance.md) avoid repeated raw-vertex scans for unchanged resources. [World synchronization](docs/world-sync-performance.md) retains unchanged collision geometry and prepares only query-selected native actors while preserving callback snapshots. Short hardware comparisons show lower CPU cost, with workload and cold-frame limitations documented; remaining spikes still need investigation. Resolution and distance policies remain open.
+Priority-1 PERF-01 tracks frame-time spikes and coordinates the separate performance scopes. [Scene-hierarchy preparation](docs/render-hierarchy-performance.md) avoids duplicate sky/main traversal and unseen pedestrian subtree updates. [Physics hot-path optimization](docs/physics-performance.md) now evaluates SAT axes lazily and reuses per-invocation bounds/depths while preserving numerical collision results. [Spatial body-pair discovery and shared phase geometry](docs/body-pair-performance.md) remove global pair scans and repeated transforms while preserving crash results. [Retained native MODEL bounds](docs/model-bounds-performance.md) avoid repeated raw-vertex scans for unchanged resources. [World synchronization](docs/world-sync-performance.md) retains unchanged collision geometry and prepares only query-selected native actors while preserving callback snapshots. Short hardware comparisons show lower CPU cost, with workload and cold-frame limitations documented; remaining spikes still need investigation. Resolution policy remains open. [Extended visual visibility](docs/visual-visibility.md) now presents landscape and opponents at four times authored Yon, and pedestrians at four times their original process distance, without widening native simulation activation.
 
 [PHY-12](docs/guard-coupling-fix.md) corrects a trajectory-guard defect where a
 nearby blocked prop could freeze a collision-free airborne car. Actual contact
@@ -144,8 +144,10 @@ Production world queries now use the native finite collector, prepared MODEL-gro
 ## Camera
 
 The chase camera reads the original GENERAL projection and track far-distance
-factor, and uses reconstructed COM tracking, zoom, reversal and obstacle
-clearance. Vehicle geometry retains its original scale. A documented browser
+factor for native gameplay, and uses reconstructed COM tracking, zoom, reversal
+and obstacle clearance. Rendering extends the authored far plane and fog range
+by 4×; [visual visibility](docs/visual-visibility.md) documents the separate
+opponent/pedestrian presentation and hardware measurements. Vehicle geometry retains its original scale. A documented browser
 extension chooses a fitting initial zoom for large cars, within the native
 0.1–2 range; Eagle retains the original 0.2 default. Zoom can then be changed
 with + / −. See [camera evidence](docs/c2-camera-re.md) for verified formulas
@@ -179,8 +181,8 @@ reactivation, matrix parity, render-pass flags and population cleanup in Chromiu
 `npm run test:render-presentation` checks Stock Timber and Advanced Carrier:
 pixel/matrix parity, interpolation/restoration, original scenery mutation,
 reparenting and physical wake. [PERF-18](docs/render-hierarchy-performance.md#perf-18-dormant-scenery-presentation)
-also avoids render-pose work for unchanged scenery; visibility distances remain
-unchanged.
+also avoids render-pose work for unchanged scenery. PERF-04 separately extends
+[visual distances](docs/visual-visibility.md), preserving native activation.
 
 Run `npm test` for parsers, assets and deterministic motion/contact/crush/component/structural/repair conformance, wheel rays, terrain contours, recovery history, pedestrian population/reactions/blood and WASTED tests. The real-installation tests skip when `carma2_orig` is absent. `npm run test:browser` builds the production app and runs installed Chromium when available: stock/Advanced driving and race completion, mine pickup/impact/repair, oil grip, water, Carrier lift, Airport door destruction, real-key Snow Way Out recovery, pedestrian reactions/blood and original WASTED drawing/audio dispatch. It also checks visible debug controls, timer freezing while driving, grants, ability use, repair/recovery, input isolation, disabling overrides and restarting; run `npm run test:debug` for that check alone. It additionally checks uneven-ground start grids with Eagle, Buggy and Bigdump, car-pair penetration, persistent crash deformation and real-key reverse escape on DUNE BUGGERED; run `npm run test:spawn-pairs` for that check alone. Original world pickup, actual checkpoint crossing, debug grants, ability use and expiry also have an event-audio regression; run `npm run test:event-audio` alone. Pickup/race voice selection follows the [audio evidence](docs/c2-event-audio-re.md). Player engine pitch and volume use motion RPM, special-volume indices and engine powerup state, following [verified native equations](docs/c2-engine-audio-re.md); `npm run test:engine-audio` checks stationary playback, those transforms and real keyboard driving. Screenshots and reports are saved under ignored test artifacts. `npm run test:crashes` records original-car plane/pair scenarios in ignored `artifacts/crash-conformance.json`. `npm run test:car-damage` sweeps original-stock impact/repair cases and saves an ignored diagnostic report. Small generated fixtures do not require game assets.
 

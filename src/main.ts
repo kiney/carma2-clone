@@ -1,3 +1,8 @@
+import {
+  DistantOpponentPresentation,
+  visualDistances,
+  VISUAL_DISTANCE_MULTIPLIER,
+} from "./visual-distance";
 import { NativeChaseCamera } from "./camera/chase";
 import { parseCameraSettings, type CameraSettings } from "./camera/settings";
 import { parseTrackCameraSettings } from "./camera/track-settings";
@@ -208,6 +213,11 @@ const nativeChase = new NativeChaseCamera();
 const cameraVehicleTravel = new CameraVehicleTravel();
 let cameraControlReset = false;
 let nativeCameraSettings: CameraSettings | undefined;
+let nativeCameraYon = 0;
+const distantOpponentPresentation = new DistantOpponentPresentation();
+const presentationFrustum = new THREE.Frustum();
+const presentationProjection = new THREE.Matrix4();
+let distantOpponentCount = 0;
 let cameraNeedsReset = true;
 const missionVariables = new MissionVariables();
 let smashAwardStates = new WeakMap<
@@ -408,6 +418,20 @@ const debug = {
   get camera() {
     return camera;
   },
+  get visibility() {
+    return nativeCameraYon > 0
+      ? {
+          ...visualDistances(
+            nativeCameraYon,
+            pedestrians?.nativeProcessDistance ?? 12,
+          ),
+          nativeOpponentDistance: nativeOpponentViewDistance(nativeCameraYon),
+          nativePedestrianDistance: pedestrians?.nativeProcessDistance,
+          distantPedestrians: pedestrians?.dormantRenderActors.size ?? 0,
+          distantOpponents: distantOpponentCount,
+        }
+      : undefined;
+  },
   get cameraState() {
     return { ...nativeChase.state, zoom: nativeChase.zoom };
   },
@@ -428,6 +452,12 @@ const debug = {
       pedestrians?.group,
       pedestrians?.renderActors,
       forceFull ? undefined : (noncarRenderBatch ?? undefined),
+      forceFull || !pedestrians
+        ? undefined
+        : {
+            actors: pedestrians.dormantRenderActors,
+            revision: pedestrians.presentationRevision,
+          },
     );
   },
   get renderPoses() {
@@ -813,6 +843,7 @@ async function loadRace() {
     const newTrack = parseTrackConfig(trackText);
     const generalText = await assets.text("data/GENERAL.TXT");
     nativeCameraSettings = parseCameraSettings(generalText);
+    distantOpponentPresentation.reset();
     // Native Glorify/Fog runs as materials are admitted, before actor creation.
     // Yon here is the base camera value; the track multiplier only clips views.
     assets.releaseRaceResources();
@@ -828,6 +859,7 @@ async function loadRace() {
         blue: depth?.color[2] ?? 0,
         baseYon: Math.fround(nativeCameraSettings.far),
       },
+      visualFogDistanceScale: VISUAL_DISTANCE_MULTIPLIER,
       interpolation: true,
       antialiasing: true,
       perspective: true,
@@ -947,12 +979,13 @@ async function loadRace() {
     });
     world.group.userData.nativeSmashTargets = nativeSmashTargets;
     camera.fov = nativeCameraSettings.runtimeFovDegrees;
-    camera.far = Math.fround(
+    nativeCameraYon = Math.fround(
       nativeCameraSettings.far * parseTrackCameraSettings(trackText),
     );
+    camera.far = visualDistances(nativeCameraYon, 12).landscape;
     if (
       !(
-        camera.far >
+        nativeCameraYon >
         Math.max(
           nativeCameraSettings.hitherGeneral,
           nativeCameraSettings.hitherCockpit,
@@ -1159,7 +1192,7 @@ async function loadRace() {
                 const cameraMatrix = camera.matrixWorld.elements;
                 const visible = nativePointVisible(
                   contact.point,
-                  Math.fround(camera.far * camera.far),
+                  Math.fround(nativeCameraYon * nativeCameraYon),
                   {
                     camera: {
                       position: new THREE.Vector3(
@@ -1172,7 +1205,7 @@ async function loadRace() {
                         cameraMatrix[9],
                         cameraMatrix[10],
                       ),
-                      yon: camera.far,
+                      yon: nativeCameraYon,
                     },
                   },
                 );
@@ -1859,7 +1892,7 @@ async function loadRace() {
         cameraBounds,
         player.properties.centerOfMass,
         player.hulls,
-        { ...nativeCameraSettings, far: camera.far },
+        { ...nativeCameraSettings, far: nativeCameraYon },
         camera.aspect,
       );
       nativeChase.zoom = initialFraming.zoom;
@@ -2246,7 +2279,7 @@ async function loadRivals(
       random: sharedNativeRandom.random,
       raceIndex,
       raceCount: catalog.races.length,
-      viewDistance: nativeOpponentViewDistance(camera.far),
+      viewDistance: nativeOpponentViewDistance(nativeCameraYon),
       repairLimits: readNativeOpponentRepairLimits(generalText),
       rayFraction: (origin, direction) => {
         const length = direction.length();
@@ -2255,9 +2288,11 @@ async function loadRivals(
       },
       isPhysicsActive: (body) => activeSimulation.isCarPhysicsActive(body),
       setPhysicsActive: (body, active) => {
+        distantOpponentPresentation.invalidate(body);
         activeSimulation.setCarPhysicsActive(body, active);
         body.group.visible = active;
       },
+      onCheatyPose: (body) => distantOpponentPresentation.publish(body),
       rematerialize: (body, view, slot, speed) =>
         placement.onSection(body, view, slot, speed),
       rematerializeNearest: (body, speed) => placement.nearest(body, speed),
@@ -3076,13 +3111,13 @@ function worldGrooveVisible(
   return nativePointVisible(
     actor.getWorldPosition(new THREE.Vector3()),
     definition.nature === "distance"
-      ? Math.fround(camera.far * camera.far)
+      ? Math.fround(nativeCameraYon * nativeCameraYon)
       : 36,
     {
       camera: {
         position: new THREE.Vector3(matrix[12], matrix[13], matrix[14]),
         backwards: new THREE.Vector3(matrix[8], matrix[9], matrix[10]),
-        yon: camera.far,
+        yon: nativeCameraYon,
       },
     },
   );
@@ -3575,6 +3610,29 @@ function animate(now: number) {
       (simulation.elapsed + simulation.accumulator) * 1000,
     );
   try {
+    if (nativeCameraYon > 0 && stats.ready && !loading) {
+      const distances = visualDistances(
+        nativeCameraYon,
+        pedestrians?.nativeProcessDistance ?? 12,
+      );
+      camera.updateWorldMatrix(true, false);
+      presentationFrustum.setFromProjectionMatrix(
+        presentationProjection.multiplyMatrices(
+          camera.projectionMatrix,
+          camera.matrixWorldInverse,
+        ),
+      );
+      pedestrians?.updatePresentation(
+        camera.position,
+        distances.pedestrians,
+        presentationFrustum,
+      );
+      distantOpponentCount = distantOpponentPresentation.apply(
+        simulation?.cars ?? [],
+        camera.position,
+        distances.opponents,
+      );
+    }
     // Original sky is a background pass, independent of track Yon clipping.
     skyCamera.copy(camera);
     skyCamera.layers.set(1);
@@ -3612,6 +3670,7 @@ function animate(now: number) {
     );
   } finally {
     renderer.autoClear = true;
+    distantOpponentPresentation.restore();
     renderPoses.restore();
   }
   stats.frames++;
