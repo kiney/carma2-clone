@@ -117,6 +117,15 @@ Missing previews leave labelled, selectable tiles. Unfamiliar custom map naming
 may group differently; individual events remain selectable. Run
 `npm run test:selection` for the focused Stock/Advanced selection browser check.
 
+Entries with missing track actors or player starts are shown as **Unavailable**
+and cannot replace the current loaded scene. Drivable maps without supported
+single-player rules, such as network arenas, are labelled **Free drive only**:
+practice has no race countdown, checkpoint victory or completion payout. Missions
+whose goals concern opponents, pedestrians or smash targets do not require gates.
+The menu checks required route data, not full mission-script compatibility or
+physical access to every objective. `npm run test:race-availability` checks these
+states through the normal loading path in headless Chromium.
+
 ## Drive
 
 Choose a race and car, then select **Load Race**. The browser menus and HUD are independent implementations; the rendered game world uses original game assets.

@@ -1,4 +1,5 @@
 import type { RaceCatalogEntry, RaceType, TrackConfig } from "./config";
+import type { RaceAvailability } from "./race-availability";
 
 export interface RaceChoice {
   path: string;
@@ -8,6 +9,7 @@ export interface RaceChoice {
   catalogOrder?: number;
   definition?: RaceCatalogEntry;
   config: TrackConfig;
+  availability?: RaceAvailability;
 }
 
 export interface TrackGroup {

@@ -100,8 +100,10 @@ export function applyRaceObjectives(
 ): ObjectiveResult {
   const result: ObjectiveResult = {
     completed: false,
-    objectiveText: objectiveText(definition, progress),
-    supported: isSupportedRace(definition),
+    objectiveText: race.practice
+      ? "Free drive · no race objectives"
+      : objectiveText(definition, progress),
+    supported: !race.practice && isSupportedRace(definition),
   };
   if (race.status !== "racing" || race.awardsClosed || !result.supported)
     return result;

@@ -176,6 +176,10 @@ import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
 import { SelectionMenu, type CarChoice } from "./selection-menu";
 import type { RaceChoice } from "./selection-catalog";
+import {
+  assessRaceAvailability,
+  type RaceAvailability,
+} from "./race-availability";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
@@ -323,6 +327,7 @@ const keys = new Set<string>(),
 const trackSelect = el("track-select") as HTMLSelectElement,
   carSelect = el("car-select") as HTMLSelectElement;
 let selectionMenu: SelectionMenu | undefined;
+const raceAvailability = new Map<string, RaceAvailability>();
 const stats = {
   ready: false,
   frames: 0,
@@ -556,8 +561,9 @@ async function init() {
     );
     const raceChoices: RaceChoice[] = [];
     for (const entry of tracks) {
-      if (!assets.resolve(`${dirOf(entry.path)}/${stemOf(entry.path)}.act`))
-        continue;
+      const geometry = !!assets.resolve(
+        `${dirOf(entry.path)}/${stemOf(entry.path)}.act`,
+      );
       const raceEntry = (
         raceCatalogs.get(entry.path.split("/")[0].toLowerCase())?.races ?? []
       ).find(
@@ -571,6 +577,7 @@ async function init() {
       );
       trackSelect.add(option);
       let selectionConfig: TrackConfig;
+      let configurationError: string | undefined;
       try {
         selectionConfig = parseTrackConfig(await assets.text(entry.path));
       } catch (error) {
@@ -579,7 +586,16 @@ async function init() {
           `${entry.path}: selection metadata: ${String(error)}`,
         );
         selectionConfig = parseTrackConfig("");
+        configurationError = String(error);
       }
+      const availability = assessRaceAvailability(selectionConfig, raceEntry, {
+        geometry,
+        configurationError,
+      });
+      raceAvailability.set(entry.path, availability);
+      option.disabled = availability.mode === "unavailable";
+      if (availability.mode !== "race")
+        option.textContent = `${option.textContent} · ${availability.label.toUpperCase()}`;
       raceChoices.push({
         path: entry.path,
         name: raceEntry?.name ?? stemOf(entry.path),
@@ -591,6 +607,7 @@ async function init() {
               .races.indexOf(raceEntry)
           : undefined,
         config: selectionConfig,
+        availability,
       });
     }
     const cars = assets.manifest.filter(
@@ -633,6 +650,12 @@ async function init() {
         if (assets.resolve(s.track)) trackSelect.value = s.track;
         if (assets.resolve(s.car)) carSelect.value = s.car;
       } catch {}
+    }
+    if (raceAvailability.get(trackSelect.value)?.mode === "unavailable") {
+      const fallback = raceChoices.find(
+        (choice) => choice.availability?.mode !== "unavailable",
+      );
+      if (fallback) trackSelect.value = fallback.path;
     }
     await audio.init();
     await assets.common(status);
@@ -872,7 +895,13 @@ function updateUpgradeFactors(body: SimulatedCar) {
 async function loadRace() {
   if (loading) return;
   selectionMenu?.sync();
+  const availability = raceAvailability.get(trackSelect.value);
+  if (availability?.mode === "unavailable") {
+    status(`Cannot load this track: ${availability.reasons.join(" ")}`);
+    return;
+  }
   loading = true;
+  selectionMenu?.setLoading(true);
   const loadGeneration = ++generation;
   rivalsReady = pedestriansReady = false;
   setPaused(true);
@@ -1880,13 +1909,16 @@ async function loadRace() {
     car.position.copy(start);
     car.quaternion.copy(vehicle.orientation);
     const lapRace =
-      !definition ||
-      ["carma", "checkpoints"].includes(String(definition.raceType));
+      availability?.mode !== "free-drive" &&
+      availability?.mode !== "combat" &&
+      (!definition ||
+        ["carma", "checkpoints"].includes(String(definition.raceType)));
     race = createRace(
       (lapRace ? track.checkpoints : []).map((c) => ({
         points: c.points.map((p) => new THREE.Vector3(...p)),
       })),
       {
+        practice: availability?.mode === "free-drive" || undefined,
         laps: definition?.laps ?? 4,
         disableTimeAwards: definition?.disableTimeAwards ?? false,
         timeLimit: definition?.initialTimer[0] ?? 180,
@@ -1965,13 +1997,21 @@ async function loadRace() {
       JSON.stringify({ track: currentTrack, car: currentCar }),
     );
     setPaused(false);
-    message("RACE START · W / ↑ TO DRIVE", 5);
+    message(
+      race.practice
+        ? "FREE DRIVE · W / ↑ TO DRIVE"
+        : "RACE START · W / ↑ TO DRIVE",
+      5,
+    );
     loadPedestrians(trackText, loadGeneration)
       .then(() => {
         if (loadGeneration === generation) pedestriansReady = true;
       })
       .catch((error) => console.warn("Pedestrian content:", error));
-    loadRivals(definition, loadGeneration, generalText)
+    (definition
+      ? loadRivals(definition, loadGeneration, generalText)
+      : Promise.resolve()
+    )
       .then(() => {
         if (loadGeneration === generation) rivalsReady = true;
       })
@@ -1987,6 +2027,7 @@ async function loadRace() {
     loading = false;
     selectionMenu?.resumePreviews();
     el("play").removeAttribute("disabled");
+    selectionMenu?.setLoading(false);
   }
 }
 /** Shared world/WAM effect outlets. Native alternatives select one sound.
@@ -3620,29 +3661,34 @@ function animate(now: number) {
     el("speed").textContent = String(Math.round(Math.abs(speedMph(vehicle))));
     el("damage").textContent = `ARMOUR ${Math.round(vehicle.health)}%`;
     const time = Math.max(0, Math.ceil(race.timeLeft));
-    el("timer").textContent = `${Math.floor(time / 60)
-      .toString()
-      .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`;
-    el("laps").textContent =
-      `LAP ${Math.min(race.lap, race.laps)}/${race.laps}`;
+    el("timer").textContent = race.practice
+      ? "FREE DRIVE"
+      : `${Math.floor(time / 60)
+          .toString()
+          .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`;
+    el("laps").textContent = race.practice
+      ? "PRACTICE"
+      : `LAP ${Math.min(race.lap, race.laps)}/${race.laps}`;
     el("credits").textContent = `CR ${race.credits}`;
-    el("checkpoint").textContent = race.checkpoints.length
-      ? `CHECKPOINT ${race.nextCheckpoint + 1}/${race.checkpoints.length}`
-      : objectiveText(definition, {
-          opponentInstances: rivals.map((r) => ({
-            id: r.id,
-            wasted: r.body.knackered,
-          })),
-          opponentsTotal: rivals.length,
-          opponentsWasted: rivals.filter((r) => r.wasted).length,
-          pedestriansTotal: pedestrians?.count ?? 0,
-          pedestriansKilled: pedestrians?.hits ?? 0,
-          groupCounts: pedestrians?.groupCounts,
-          smashValue:
-            definition?.smashVariable != null
-              ? missionVariables.get(definition.smashVariable)
-              : undefined,
-        });
+    el("checkpoint").textContent = race.practice
+      ? "NO RACE OBJECTIVES"
+      : race.checkpoints.length
+        ? `CHECKPOINT ${race.nextCheckpoint + 1}/${race.checkpoints.length}`
+        : objectiveText(definition, {
+            opponentInstances: rivals.map((r) => ({
+              id: r.id,
+              wasted: r.body.knackered,
+            })),
+            opponentsTotal: rivals.length,
+            opponentsWasted: rivals.filter((r) => r.wasted).length,
+            pedestriansTotal: pedestrians?.count ?? 0,
+            pedestriansKilled: pedestrians?.hits ?? 0,
+            groupCounts: pedestrians?.groupCounts,
+            smashValue:
+              definition?.smashVariable != null
+                ? missionVariables.get(definition.smashVariable)
+                : undefined,
+          });
     if (!isSupportedRace(definition)) el("timer").textContent = "FREE DRIVE";
     el("timer").classList.toggle("debug-frozen", debugPanel.timerFrozen);
     el("timer").title = debugPanel.timerFrozen

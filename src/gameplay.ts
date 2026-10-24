@@ -226,6 +226,8 @@ export interface Checkpoint {
   direction?: -1 | 0 | 1;
 }
 export interface RaceOptions {
+  /** Browser practice for drivable assets lacking supported single-player rules. */
+  practice?: boolean;
   laps: number;
   timeLimit: number;
   credits: number;
@@ -284,7 +286,7 @@ export function createRace(
     lap: 1,
     timeLeft: o.timeLimit,
     elapsed: 0,
-    status: o.timeLimit > 0 ? "racing" : "failed",
+    status: o.practice || o.timeLimit > 0 ? "racing" : "failed",
   };
 }
 
@@ -375,7 +377,8 @@ export function awardRaceTime(race: RaceState, seconds: number): boolean {
  * Browser races defer settlement to RacePayout; standalone headless callers
  * may request the final total immediately with the default option. */
 export function completeRace(race: RaceState, reason: 0 | 1 | 2 | 3): boolean {
-  if (race.status !== "racing" || race.awardsClosed) return false;
+  if (race.status !== "racing" || race.awardsClosed || race.practice)
+    return false;
   race.status = "completed";
   race.completionReason = reason;
   if (!race.deferCompletionAwards)
@@ -403,6 +406,10 @@ export function updateRace(
     dt < 0
   )
     return [];
+  if (race.practice) {
+    race.elapsed += dt;
+    return [];
+  }
   const events: RaceEvent[] = [];
   let previousFraction = 0;
   let checks = 0;

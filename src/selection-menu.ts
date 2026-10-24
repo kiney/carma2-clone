@@ -39,6 +39,7 @@ export class SelectionMenu {
     run: () => Promise<void>;
   }> = [];
   private busy = false;
+  private loading = false;
   private source: string;
   private activeGroup: string;
   private readonly raceSearch: HTMLInputElement;
@@ -250,10 +251,18 @@ export class SelectionMenu {
           `${sourceName(group.source)} · ${group.races.length} ${group.races.length === 1 ? "event" : "events"}`,
         ),
       );
+      if (
+        group.races.every((race) => race.availability?.mode === "unavailable")
+      )
+        tile.append(element("span", "race-availability", "Unavailable"));
       tile.onclick = () => {
         this.activeGroup = group.id;
         if (!group.races.some((r) => r.path === this.trackSelect.value))
-          this.trackSelect.value = group.previewRace.path;
+          this.trackSelect.value = (
+            group.races.find(
+              (race) => race.availability?.mode !== "unavailable",
+            ) ?? group.previewRace
+          ).path;
         for (const button of this.tracks.querySelectorAll<HTMLButtonElement>(
           "button",
         ))
@@ -277,6 +286,7 @@ export class SelectionMenu {
       const button = element("button", "mission-tile");
       button.type = "button";
       button.dataset.race = race.path;
+      button.disabled = race.availability?.mode === "unavailable";
       button.setAttribute(
         "aria-pressed",
         String(race.path === this.trackSelect.value),
@@ -295,6 +305,18 @@ export class SelectionMenu {
       );
       const laps = race.definition?.laps;
       if (laps) button.append(element("span", "tile-meta", `${laps} laps`));
+      if (race.availability && race.availability.mode !== "race") {
+        button.append(
+          element("span", "race-availability", race.availability.label),
+        );
+        button.append(
+          element(
+            "span",
+            "availability-reason",
+            race.availability.reasons.join(" "),
+          ),
+        );
+      }
       button.onclick = () => {
         this.trackSelect.value = race.path;
         for (const other of this.missions.querySelectorAll<HTMLButtonElement>(
@@ -378,6 +400,14 @@ export class SelectionMenu {
     const race = this.races.find((r) => r.path === this.trackSelect.value);
     const car = this.cars.find((c) => c.path === this.carSelect.value);
     this.summary.textContent = `Selected: ${race?.name ?? "No race"} (${sourceName(race?.source ?? "data")}) · ${car?.name ?? "No vehicle"} (${sourceName(car?.source ?? "data")})`;
+    const availability = race?.availability;
+    if (availability && availability.mode !== "race")
+      this.summary.textContent += ` · ${availability.label}: ${availability.reasons.join(" ")}`;
+    const play = document.getElementById("play") as HTMLButtonElement;
+    play.disabled =
+      this.loading || !race || !car || availability?.mode === "unavailable";
+    play.textContent =
+      availability?.mode === "free-drive" ? "START FREE DRIVE" : "LOAD RACE";
   }
 
   sync() {
@@ -391,5 +421,11 @@ export class SelectionMenu {
 
   resumePreviews() {
     void this.pump();
+  }
+
+  setLoading(value: boolean) {
+    this.loading = value;
+    this.host.inert = value;
+    this.updateSummary();
   }
 }

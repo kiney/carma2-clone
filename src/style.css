@@ -398,6 +398,25 @@ h1 {
 .mission-objective {
   display: block;
 }
+.race-availability,
+.availability-reason {
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 6px;
+  color: #edc77d;
+}
+.location-tile .race-availability {
+  padding: 0 9px;
+}
+.availability-reason {
+  font-weight: normal;
+  color: #c9bea4;
+}
+.mission-tile:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
 .mission-tile strong {
   font-size: 13px;
   margin: 4px 0;
