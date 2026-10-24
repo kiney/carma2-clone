@@ -260,6 +260,7 @@ import "./selection-catalog.mjs";
 import "./selection-previews.mjs";
 import "./server-startup.test.mjs";
 import "./actor-compatibility.test.mjs";
+import "./advanced-assets-audit.test.mjs";
 import "./engine-noise.test.mjs";
 
 import "./suspension-powerups.test.mjs";

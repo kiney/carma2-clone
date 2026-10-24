@@ -22,7 +22,16 @@ Source water/oil formulas and native noncar lift activation, forces, joints and 
 
 Some source content has concrete data issues. Legacy ACT string references with stale chunk lengths, including `CPOINT.ACT`, are supported. Both `PROG.ACT` files are short text placeholders, not BRender streams; executable filename literals exist, but their original loading context is unresolved. The Advanced Digga ACT has a complete hierarchy followed by one newline byte, which the strict parser rejects; it is not truncated. See the [bounded ACT classification audit](actor-compatibility.md) for hashes, exact END offsets, consumer limits and safe handling. Two Forklift DATs contain non-finite UV values, normalized with diagnostics while preserving strict finite geometry parsing. All 52 stock car mechanics/shape pipelines now load, including Forklift. The Nuke race config has no player start and its expected ACT is absent. These entries may fail to load or cannot be driven as configured. Some mission/arena configs contain no usable checkpoint gates and therefore cannot complete a checkpoint race.
 
-The Advanced installation also contains malformed MAT and UI PIX files. Some Advanced track texture references point to TIFF images in nested directories; those are supported, but unresolvable or missing source files can still produce fallback materials or incomplete surfaces. Large scenes may be limited by browser and GPU memory, especially when building collision queries.
+The current [Advanced asset census](advanced-assets-audit.md) parses all 1,029 MAT
+files. It identifies 96 standalone UI PIX files using a distinct, currently
+unsupported serialization convention; they should not be described as ordinary
+truncations. Texture labels outside the browser's scene scope and labels with no
+match in audited containers are reported separately, without assuming missing
+data. DAT-05 and DAT-06 retain the native-loader and resource-scope follow-ups.
+Some Advanced track texture references point to TIFF images in nested directories;
+those are supported. Unresolved source references can still produce fallback
+materials or incomplete surfaces. Large scenes may be limited by browser and GPU
+memory, especially when building collision queries.
 
 ## Tests
 
