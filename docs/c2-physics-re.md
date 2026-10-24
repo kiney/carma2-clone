@@ -601,3 +601,14 @@ Hot rod being removed by either grip or suspension pickups. Numeric Stock/Advanc
 and original Eagle/Buggy tests plus headless Chromium application checks pass.
 No new force equations or render validation are asserted; see
 [the evidence and remaining boundaries](c2-powerup-overlap-re.md).
+
+## PUP-20: accepted-bend powerup removal (2026-10-24)
+
+Installed HW `BendCar 0x433bc0`, call `0x433d6a`, removes active flag-`0x04`
+powerups through `0x4dee90` before an accepted structural transformation. Only
+the owning local driver 8 loses those effects; missing, immune or already bent
+cars do not enter this boundary. The browser now uses the ordinary lose handlers
+and immediately updates live engine, grip, suspension and protection fields.
+Ordinary repair and vehicle splitting are separate operations. Stock/Advanced
+and original-car numerical cases cover the predicates and ordering. See the
+[exact evidence and remaining icon boundary](c2-powerup-overlap-re.md#structural-bending-removes-flag-sensitive-effects-pup-20).

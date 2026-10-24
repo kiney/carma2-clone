@@ -81,6 +81,7 @@ import {
   PowerupSystem,
   type PowerupEvent,
   type PowerupDefinition,
+  type PowerupModifiers,
 } from "./powerups";
 import { DebugPanel } from "./debug-panel";
 import { SmokeSystem, type SmokeRigid } from "./smoke";
@@ -2450,10 +2451,42 @@ function dispatchFollowupSmash(
   activeSimulation.synchronizeWorldDestruction();
 }
 
+/** Bind the current effect fields without advancing powerup time. Also used
+ * synchronously when native BendCar loses flag-sensitive effects mid-physics. */
+function applyPlayerPowerupModifiers(modifiers: PowerupModifiers | undefined) {
+  if (!player || !simulation) return;
+  simulation.gravityMultiplier =
+    modifiers?.gravityMultiplier ?? simulation.gravityMultiplier;
+  simulation.pinballFactor = modifiers?.pinballFactor ?? 0;
+  player.state.engineFactor = modifiers?.accelerationMultiplier ?? 1;
+  player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
+  player.state.underwaterAbility = modifiers?.underwaterAbility ?? false;
+  player.state.bounceRate = modifiers?.bouncePeriodMs ?? 0;
+  player.state.wallClimb = modifiers?.wallClimb ?? false;
+  player.damage.damageContext.invulnerable =
+    debugPanel.invulnerable || (modifiers?.invulnerable ?? false);
+  player.damageMultiplier = modifiers?.damageMultiplier ?? 1;
+  player.protection = modifiers?.protection ?? 1;
+  player.freeRepairs =
+    debugPanel.freeRepairs || (modifiers?.freeRepairs ?? false);
+  if (
+    modifiers?.suspension &&
+    modifiers.suspension !== player.suspensionPowerup
+  ) {
+    player.suspensionPowerup = modifiers.suspension;
+    setMotionSuspension(player.motion, modifiers.suspension);
+  }
+}
+
 function bindWamEffects(
   body: SimulatedCar,
   materials: ReadonlyMap<string, THREE.Material>,
 ) {
+  body.damage.onBeforeStructuralBend = () => {
+    if (body !== player) return;
+    const modifiers = powerups?.removeForStructuralBend(body.state);
+    if (modifiers) applyPlayerPowerupModifiers(modifiers);
+  };
   body.damage.onStructuralBendSound = (playbackRate) =>
     void audio.playSound(5099, 0.65, playbackRate);
   body.damage.onWamSmash = (event) => {
@@ -3540,27 +3573,7 @@ function animate(now: number) {
       );
       previous.copy(vehicle.position);
       if (player && simulation) {
-        simulation.gravityMultiplier =
-          modifiers?.gravityMultiplier ?? simulation.gravityMultiplier;
-        simulation.pinballFactor = modifiers?.pinballFactor ?? 0;
-        player.state.engineFactor = modifiers?.accelerationMultiplier ?? 1;
-        player.state.tyreGripFactor = modifiers?.lateralGripMultiplier ?? 1;
-        player.state.underwaterAbility = modifiers?.underwaterAbility ?? false;
-        player.state.bounceRate = modifiers?.bouncePeriodMs ?? 0;
-        player.state.wallClimb = modifiers?.wallClimb ?? false;
-        player.damage.damageContext.invulnerable =
-          debugPanel.invulnerable || (modifiers?.invulnerable ?? false);
-        player.damageMultiplier = modifiers?.damageMultiplier ?? 1;
-        player.protection = modifiers?.protection ?? 1;
-        player.freeRepairs =
-          debugPanel.freeRepairs || (modifiers?.freeRepairs ?? false);
-        if (
-          modifiers?.suspension &&
-          modifiers.suspension !== player.suspensionPowerup
-        ) {
-          player.suspensionPowerup = modifiers.suspension;
-          setMotionSuspension(player.motion, modifiers.suspension);
-        }
+        applyPlayerPowerupModifiers(modifiers);
         player.repairing = updateRepairControl(
           repairControl,
           keys.has("KeyE"),

@@ -484,6 +484,33 @@ export class PowerupSystem {
           effect.duration > 0 ? Math.max(0, effect.remaining) : null,
       }));
   }
+  /**
+   * Remove effects the installed structural-bend handler loses for the local
+   * driver. This is deliberately a state-only operation: it does not sample or
+   * expire time, and removal follows the POWERUP.TXT catalog order.
+   */
+  removeForStructuralBend(
+    recipient: VehicleState,
+  ): PowerupModifiers | undefined {
+    if (recipientDriver(recipient) !== 8) return undefined;
+
+    const removed = new Set<ActiveEffect>();
+    for (const definition of this.definitions) {
+      if (!(definition.flags & 4)) continue;
+      const effect = this.active.find(
+        (candidate) =>
+          candidate.index === definition.index &&
+          candidate.recipient === recipient,
+      );
+      if (!effect) continue;
+      this.resetEffect(effect.action, effect.recipient);
+      removed.add(effect);
+    }
+    if (removed.size === 0) return undefined;
+
+    this.active = this.active.filter((effect) => !removed.has(effect));
+    return this.currentModifiers();
+  }
   /** Keyboard powerups use an input edge, not an every-frame cooldown.
    * Negative initialValue is the native charge count; successful calls consume
    * one even when an oil allocator refuses unsuitable placement. */
@@ -893,7 +920,7 @@ export class PowerupSystem {
                 );
         if (suspension) this.suspension = suspension;
         if (def.action === 19) this.bounce = setBouncePowerup(def.floatParams);
-        this.recordEffect(def, def.action);
+        this.recordEffect(def, def.action, vehicle);
         onEvent?.({
           kind: "engine",
           name: def.message,

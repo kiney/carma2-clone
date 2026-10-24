@@ -121,7 +121,7 @@ when checking instant handbrake before integration; its obsolete `update` hook
 previously timed out after the timebase migration. Debug grants, repeated input
 edges, voucher recovery, jump velocity and ordinary driving remain checked.
 
-### Icon transition evidence boundary (PUP-16/UI-01)
+### Icon transition evidence boundary (PUP-16)
 
 Community reconstruction names three image variants `CIRCLES`, `SQUARES` and
 `DIAMONDS`, loaded from the configured graphics directory's POWERUPS package.
@@ -142,5 +142,6 @@ installed function/global layout differs from rec2 annotations; exact native
 negative-type handling and image-rendering call order require further tracing.
 None of those visual states establishes a command cooldown or activation
 probability. The browser HUD remains an independent presentation; its missing
-active-icon transitions are explicitly PUP-16/UI-01, rather than a hidden
-condition for the native command charge contract completed under PUP-15.
+active-icon transitions remain PUP-16; UI-01 now exposes a read-only status
+list. These transitions are not a hidden condition for the native command charge
+contract completed under PUP-15.

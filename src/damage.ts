@@ -426,6 +426,8 @@ export class DamageSystem {
   onWastageCheck?: () => void;
   onWamSmash?: (event: WamSmashEvent) => void;
   onStructuralBendSound?: (playbackRate: number) => void;
+  /** BendCar 0x433d6a removes flag-4 powerups before an accepted bend. */
+  onBeforeStructuralBend?: () => void;
   readSmashStartingVelocity?: () => Vector3;
   /** Native full repair removes deferred SPAM, not ordinary impact records. */
   cancelQueuedSpam?: () => void;
@@ -1446,6 +1448,11 @@ export class DamageSystem {
     human: boolean,
     damageComponents = true,
   ): void {
+    // BendCar's entry gates apply even if a deferred request was queued before
+    // immunity changed. Rejected or repeated bends do not remove powerups.
+    if (!this.wam || this.damageContext.invulnerable || this.structuralBend)
+      return;
+    this.onBeforeStructuralBend?.();
     this.shellModelActive = false;
     this.bendVertexReferences.clear();
     this.bendVertexClasses.clear();

@@ -122,3 +122,62 @@ keyboard budgets such as Afterburner, the full generic inventory grammar and
 cancellificator's additional pedestrian/global resets remain outside this
 change. Existing supported inventory dispatch and debug authorization are
 preserved. Application integration was additionally checked with `tests/browser-motion-powerups.mjs` in headless Chromium using SwiftShader: original Eagle3 and Buggy accepted the normal debug-grant sequence Hot rod → Greased tyres → Jelly suspension → Hot rod → Jelly suspension. Actual player engine/grip fields, spring/damper/travel and active definition identities matched the native-derived expectations. Expiry returned original suspension; the existing keyboard-drive, bounce, wall-climb, gravity and pinball checks also passed, with no fatal console/network errors and WebGL error0. The desktop was locked, so this is state/runtime validation rather than a physical-display or hardware-performance claim.
+
+## Structural bending removes flag-sensitive effects (PUP-20)
+
+This behavior is **verified from installed HW instructions**, using the binary
+hash above. It is not inferred from Carmageddon 1. `BendCar` at `0x433bc0`
+rejects a missing crush specification (`car + 0x18d4`), nonzero crush immunity
+(`car + 0x1b4`), or an already bent specification (`spec + 0x144`). Once it
+accepts a new bend, its call at `0x433d6a` invokes the removal helper `0x4dee90`
+**before** changing the model, collision candidates, wheels, or component damage.
+Collision `DoBending` calls this path at `0x438c3c`; direct SPAM bending also
+uses `BendCar` with its component-damage argument disabled.
+
+A separate read-only SW check confirms the same shared gameplay path:
+`BendCar 0x433c00` calls helper `0x4dab90` at `0x433daa`, with the same entry,
+driver, ownership, flag and lose-handler gates. Both executable hashes match
+those recorded above. The differing helper address is not a renderer-specific
+change to the cancellation rule.
+
+The helper requires a non-null car whose driver is exactly 8. It visits the
+powerup definitions in ascending order and selects definitions for which both
+that car's ownership slot (`car + 0x1710 + 4*index`) is nonzero and the authored
+flags contain `0x04` (tested at `0x4deedc`). For active entries it invokes the
+ordinary lose handler, clears active/deadline state, and starts the corresponding
+outgoing icon transition where applicable. It does not reinstate an older effect.
+
+Both supplied Stock and Advanced tables mark exactly these definitions:
+
+| Index | Name               | Action | Duration   | Installed lose handler |
+| ----- | ------------------ | ------ | ---------- | ---------------------- |
+| 5     | Hot rod!           | 9      | 30 seconds | `0x4de3d0`             |
+| 23    | Jelly suspension   | 20     | 30 seconds | `0x4de560`             |
+| 39    | Solid granite car! | 27     | 30 seconds | `0x4dea00`             |
+
+The independent browser port adds a callback at the accepted-bend boundary in
+`DamageSystem`. `PowerupSystem.removeForStructuralBend` checks driver, exact
+recipient identity, active state, and the data flag before dispatching existing
+lose handlers in catalog order. Engine/suspension/grip effects now retain their
+recipient when activated; previously those records omitted it. The application
+synchronously binds the resulting effect fields to the player, using the same
+setter routine as ordinary frame admission. Subsequent structural synchronization
+still recomputes suspension from the new wheel/COM geometry. There is no blanket
+cancellation on ordinary repair, splitting, or repeated/rejected bend requests.
+
+Numerical tests check ordering before geometry and component writes, immunity,
+missing data, repeated requests, SPAM bending, ordinary repair, actual original
+scenery-induced splitting, removal ownership, preserved inventory and effects,
+and absence of a second reset after a removed deadline has passed. Original-data
+cases also check the exact Stock/Advanced flags and all three normal grant/lose
+paths. These tests do not claim native icon animation parity: outgoing icon
+transitions and the remaining metadata rules stay in PUP-16. UI-01's read-only
+status list reflects the active records but does not imitate the native fizzle.
+
+Application integration also passes `npm run test:powerup-bend` against original
+Newcity/Eagle3 in headless Chromium (SwiftShader WebGL2, 1280×800, zero JS,
+failed-request or GL errors). The test observes live fields synchronously inside
+the accepted-bend callback for all three authored definitions; verifies normal
+repair, immune/repeated requests and rival ownership; retains the unflagged
+whole-race pedestrian-map effect; and checks the SPAM path with an explicit
+in-memory non-splitting fixture. It is not a hardware or full-game playtest.

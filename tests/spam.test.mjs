@@ -72,6 +72,79 @@ async function fixture(bend = 0, snap = 0) {
   return { system, shapes, mesh };
 }
 
+test("accepted deferred bending notifies before geometry and component writes, only once", async () => {
+  const { system, mesh } = await fixture(1);
+  system.damageContext.random = () => 0;
+  const before = Array.from(mesh.geometry.attributes.position.array);
+  let calls = 0;
+  system.onBeforeStructuralBend = () => {
+    calls++;
+    assert.equal(system.structuralBend, undefined);
+    assert.equal(system.structuralRevision, 0);
+    assert.deepEqual(Array.from(system.componentLevels), Array(12).fill(0));
+    assert.deepEqual(
+      Array.from(mesh.geometry.attributes.position.array),
+      before,
+    );
+  };
+  const bend = () =>
+    system.applyDeferredBend(v(0, 0, -0.4), v(0, 0, 1), 6, 40, true);
+  assert.equal(bend(), true);
+  assert.equal(calls, 1);
+  assert.ok(system.structuralBend);
+  assert.ok(system.componentLevels[0] >= 80);
+  assert.notDeepEqual(
+    Array.from(mesh.geometry.attributes.position.array),
+    before,
+  );
+  // A later native mark still consumes sound RNG, but BendCar rejects geometry.
+  assert.equal(bend(), true);
+  assert.equal(calls, 1);
+});
+
+test("rejected, immune and middle-region bend requests do not notify removal", async () => {
+  const { system } = await fixture(1);
+  system.damageContext.random = () => 0;
+  let calls = 0;
+  system.onBeforeStructuralBend = () => calls++;
+  assert.equal(
+    system.applyDeferredBend(v(0, 0, 0), v(0, 0, 1), 6, 40, true),
+    false,
+  );
+  system.damageContext.invulnerable = true;
+  system.applyDeferredBend(v(0, 0, -0.4), v(0, 0, 1), 6, 40, true);
+  assert.equal(calls, 0);
+  assert.equal(system.structuralBend, undefined);
+  system.damageContext.invulnerable = false;
+  const saved = system.wam;
+  system.wam = undefined;
+  assert.equal(
+    system.applyDeferredBend(v(0, 0, -0.4), v(0, 0, 1), 6, 40, true),
+    false,
+  );
+  system.wam = saved;
+  assert.equal(calls, 0);
+});
+
+test("SPAM bend notifies before its structural transform; ordinary repair does not", async () => {
+  const { system } = await fixture(1);
+  system.componentLevels.fill(40);
+  const levels = Array.from(system.componentLevels);
+  system.damageContext.random = () => 0.5;
+  let calls = 0;
+  system.onBeforeStructuralBend = () => {
+    calls++;
+    assert.equal(system.structuralBend, undefined);
+    assert.equal(system.structuralRevision, 0);
+    assert.deepEqual(Array.from(system.componentLevels), levels);
+  };
+  assert.ok(system.spamModel(1, 40).bendCase);
+  assert.equal(calls, 1);
+  system.repair();
+  assert.equal(system.structuralBend, undefined);
+  assert.equal(calls, 1, "full repair is not BendCar's removal boundary");
+});
+
 test("spam generates ten one-point rays and bypasses component programs, car softness and minimum force", async () => {
   const { system, shapes, mesh } = await fixture();
   system.damagePrograms = { softness: 0 };

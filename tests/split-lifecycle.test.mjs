@@ -153,6 +153,8 @@ function belongs(actor, parent) {
 async function splitEagle(t) {
   const car = await stock(t);
   if (!car) return;
+  let bendNotifications = 0;
+  car.damage.onBeforeStructuralBend = () => bendNotifications++;
   const originalGeometry = geometries(car.group),
     scene = new Group(),
     geometry = new BufferGeometry();
@@ -178,6 +180,11 @@ async function splitEagle(t) {
   assert.ok(
     secondary && car.damage.snapped,
     "Original qualifying scenery edge splits the Eagle",
+  );
+  assert.equal(
+    bendNotifications,
+    0,
+    "split creation is not the bend-removal boundary",
   );
   t.after(() => {
     sim.dispose();
