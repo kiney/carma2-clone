@@ -203,6 +203,12 @@ export interface PowerupAbility {
   definition: PowerupDefinition;
   charges: number;
 }
+export interface ActivePowerupStatus {
+  index: number;
+  name: string;
+  /** Remaining game time; null means the authored whole-race duration. */
+  remainingSeconds: number | null;
+}
 type AssetTextSource = { text(path: string): Promise<string> };
 
 /**
@@ -465,6 +471,18 @@ export class PowerupSystem {
     if (!Number.isSafeInteger(index) || !this.definitions[index]) return false;
     this.apply(index, vehicle, race, onEvent);
     return true;
+  }
+  /** Copied display data from normal effect ownership/expiry. Reading this
+   * never advances timers, grants effects, or exposes mutable effect records. */
+  activeEffectsFor(recipient: VehicleState): readonly ActivePowerupStatus[] {
+    return this.active
+      .filter((effect) => !effect.recipient || effect.recipient === recipient)
+      .map((effect) => ({
+        index: effect.index,
+        name: this.definitions[effect.index].message,
+        remainingSeconds:
+          effect.duration > 0 ? Math.max(0, effect.remaining) : null,
+      }));
   }
   /** Keyboard powerups use an input edge, not an every-frame cooldown.
    * Negative initialValue is the native charge count; successful calls consume

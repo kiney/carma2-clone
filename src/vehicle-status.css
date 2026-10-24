@@ -1,0 +1,186 @@
+.vehicle-status {
+  color: #f4dfad;
+  font-family: Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.vehicle-status[hidden],
+.vehicle-status [hidden] {
+  display: none !important;
+}
+
+.vehicle-status--hud {
+  width: min(300px, 40vw);
+  padding: 5px 7px;
+  border: 1px solid #80643a;
+  border-radius: 3px;
+  background: #17130fc9;
+  color: #f5dea7;
+  text-shadow: 1px 1px #100b05;
+  pointer-events: none;
+}
+
+.vehicle-status__title,
+.vehicle-status__section-title {
+  margin: 0 0 4px;
+  color: #ffd369;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.vehicle-status__components--hud {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px 5px;
+}
+
+.vehicle-status__component {
+  min-width: 0;
+}
+
+.vehicle-status__component--hud {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 21px auto;
+  align-items: center;
+  gap: 3px;
+  font-size: 8px;
+  line-height: 11px;
+}
+
+.vehicle-status__label,
+.vehicle-status__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vehicle-status__value {
+  color: #ffe8bd;
+  font-family: monospace;
+  font-size: 8px;
+}
+
+.vehicle-status progress {
+  display: block;
+  width: 100%;
+  height: 4px;
+  margin: 0;
+  border: 0;
+  border-radius: 2px;
+  accent-color: #d58b35;
+}
+
+.vehicle-status progress::-webkit-progress-bar {
+  border-radius: 2px;
+  background: #65543b;
+}
+
+.vehicle-status progress::-webkit-progress-value {
+  border-radius: 2px;
+  background: #d58b35;
+}
+
+.vehicle-status__effects--hud {
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid #80643a;
+}
+
+.vehicle-status__effect-list {
+  display: grid;
+  gap: 2px 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vehicle-status__effect-list--hud {
+  grid-template-columns: minmax(0, 1fr);
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.vehicle-status__effect {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vehicle-status__effect-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vehicle-status__effect-duration {
+  flex: 0 0 auto;
+  color: #ffdc83;
+  font-family: monospace;
+}
+
+.vehicle-status__more,
+.vehicle-status__empty,
+.vehicle-status__unavailable {
+  margin: 4px 0 0;
+  color: #d8c59d;
+  font-size: 11px;
+}
+
+.vehicle-status--menu {
+  display: grid;
+  gap: 18px;
+  color: #f5e8ca;
+}
+
+.vehicle-status__components--menu {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.vehicle-status__component--menu {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(36px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 12px;
+}
+
+.vehicle-status__component--menu .vehicle-status__value {
+  font-size: 11px;
+}
+
+.vehicle-status__effects--menu {
+  padding-top: 12px;
+  border-top: 1px solid #715a35;
+}
+
+.vehicle-status__effect-list--menu {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.vehicle-status__empty {
+  margin-top: 0;
+}
+
+@media (max-width: 680px) {
+  .vehicle-status--hud {
+    width: min(270px, 52vw);
+    padding: 4px 5px;
+  }
+
+  .vehicle-status__components--menu {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vehicle-status__effect-list--menu {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
