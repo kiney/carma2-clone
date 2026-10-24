@@ -112,6 +112,10 @@ import {
   PHYSICS_STEP,
 } from "./physics/simulation";
 import { RenderPoses } from "./render-pose";
+import {
+  RenderWheelControls,
+  type WheelControlPose,
+} from "./render-wheel-controls";
 import { hasGraphicalPoseOwner } from "./render-ownership";
 import { parseSurfaceModifiers, DEFAULT_SURFACE } from "./physics/surfaces";
 import {
@@ -288,6 +292,11 @@ let damage: DamageSystem | undefined,
   definition: RaceCatalogEntry | undefined;
 let simulation: VehicleSimulation | undefined, player: SimulatedCar | undefined;
 let renderPoses = new RenderPoses();
+let renderWheelControls = new RenderWheelControls();
+const wheelPresentationTarget: WheelControlPose = {
+  wheelLengths: [],
+  curvature: 0,
+};
 let noncarRenderBatch: NonCarRenderBatch | undefined;
 let mineModel: THREE.Group | undefined;
 let explosions: ExplosionRuntime | undefined;
@@ -1859,8 +1868,9 @@ async function loadRace() {
     for (const warning of simulation.specialVolumes.diagnostics)
       assets.warnings.push(`${currentTrack}: ${warning}`);
     renderPoses = new RenderPoses();
+    renderWheelControls = new RenderWheelControls();
     const activeSimulation = simulation;
-    simulation.onBeforeStep = () =>
+    simulation.onBeforeStep = () => {
       renderPoses.capture([
         ...activeSimulation.cars,
         ...activeSimulation.debris,
@@ -1869,6 +1879,8 @@ async function loadRace() {
         ...activeSimulation.mineBodies,
         ...activeSimulation.pedBoneBodies,
       ]);
+      renderWheelControls.capture(activeSimulation.cars);
+    };
     simulation.settings = upgradeSettings;
     simulation.skill = raceDifficulty;
     simulation.crashDamageAwards = parseCrashDamageAwards(generalText);
@@ -2889,14 +2901,17 @@ async function loadPedestrians(text: string, loadGeneration: number) {
   );
   scene.add(system.group);
 }
-function motionAnimation(body: SimulatedCar) {
+function motionAnimation(
+  body: SimulatedCar,
+  controls: WheelControlPose = body.state,
+) {
   const p = body.motion,
     s = body.state;
   return {
-    wheelLengths: s.wheelLengths,
+    wheelLengths: controls.wheelLengths,
     wheelRayHeights: p.wheelPositions.map((w) => w.y),
     steeringAngle: Math.atan(
-      (p.wheelPositions[0].z - p.wheelPositions[2].z) * s.curvature,
+      (p.wheelPositions[0].z - p.wheelPositions[2].z) * controls.curvature,
     ),
     rpm: s.rpm,
     gear: s.gear,
@@ -4041,12 +4056,27 @@ function animate(now: number) {
           )
         )
           renderPoses.apply(body, body.actor, renderAlpha);
+    // Wheel matrices are temporary too. Camera/collision queries above consumed
+    // committed geometry; only the drawing pass receives sampled controls.
+    const presentWheels = (body: SimulatedCar, animation: CarAnimation) => {
+      const alpha = simulation?.isCarPhysicsActive(body) ? renderAlpha : 1;
+      const controls = renderWheelControls.sample(
+        body,
+        alpha,
+        wheelPresentationTarget,
+      );
+      animation.applyPresentation(motionAnimation(body, controls));
+    };
+    if (player && carAnimation) presentWheels(player, carAnimation);
+    for (const rival of rivals) presentWheels(rival.body, rival.animation);
     renderScenePasses(renderer, scene, [skyCamera, camera], () =>
       debug.prepareRenderMatrices(),
     );
   } finally {
     renderer.autoClear = true;
     distantOpponentPresentation.restore();
+    carAnimation?.restorePresentation();
+    for (const rival of rivals) rival.animation.restorePresentation();
     renderPoses.restore();
   }
   stats.frames++;
