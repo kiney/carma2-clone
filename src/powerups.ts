@@ -2,6 +2,11 @@ import * as THREE from "three";
 import { NativeDrinkDriving } from "./drink-driving";
 import { GlobalGravityState } from "./physics/global-gravity";
 import {
+  NativePowerupRespawns,
+  readPowerupRespawnSpecs,
+  type PowerupRespawnSettings,
+} from "./powerup-respawn";
+import {
   setBouncePowerup,
   bouncePowerup,
   type BouncePowerup,
@@ -87,8 +92,13 @@ export function isPowerupImplemented(definition: PowerupDefinition): boolean {
   return implementedActions.has(definition.action);
 }
 
-/** Parse the line-oriented powerup table, retaining positional parameters. */
-export function parsePowerups(text: string): PowerupDefinition[] {
+export interface PowerupCatalog {
+  definitions: PowerupDefinition[];
+  respawnSpecs: readonly Uint8Array[];
+}
+
+/** Parse definitions and the optional authored respawn-specification tail. */
+export function parsePowerupCatalog(text: string): PowerupCatalog {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
   let cursor = 0;
   const next = (what: string): string => {
@@ -163,7 +173,27 @@ export function parsePowerups(text: string): PowerupDefinition[] {
       flags,
     });
   }
-  return definitions;
+  const remaining = lines.slice(cursor);
+  // Network auto-goodies follow the respawn masks in the original table.
+  // Their separate network-only grammar is not a single-player respawn spec.
+  const network = remaining.findIndex((line) =>
+    /^\s*\/\/\s*NETWORK\s+AUTO-GOODIES\b/i.test(line),
+  );
+  const tail = (network < 0 ? remaining : remaining.slice(0, network)).flatMap(
+    (raw) => {
+      const value = raw.split("//", 1)[0].trim();
+      return value ? [value] : [];
+    },
+  );
+  return {
+    definitions,
+    respawnSpecs: readPowerupRespawnSpecs(tail, definitions.length),
+  };
+}
+
+/** Compatibility API for consumers that only need the definition catalog. */
+export function parsePowerups(text: string): PowerupDefinition[] {
+  return parsePowerupCatalog(text).definitions;
 }
 
 interface Pickup {
@@ -280,6 +310,12 @@ export class PowerupSystem {
   selectedAbility: number | null = null;
   /** Actual world collection is distinct from applying/granting an effect. */
   onPickup?: (definition: PowerupDefinition) => void;
+  /** Actual actor reactivation, after effect expiry and before final grants. */
+  onRespawn?: (index: number, actor: THREE.Group) => void;
+  private respawns?: NativePowerupRespawns<Pickup>;
+  get pendingRespawns(): number {
+    return this.respawns?.pendingCount ?? 0;
+  }
   private active: ActiveEffect[] = [];
   private previous?: THREE.Vector3;
   private unsupportedWarned = new Set<number>();
@@ -291,6 +327,10 @@ export class PowerupSystem {
     private readonly random: () => number = Math.random,
     exclusions: readonly number[] = [],
     defaultGravityMultiplier = 1,
+    private readonly respawnSettings?: Pick<
+      PowerupRespawnSettings,
+      "minimumMs" | "extraMs"
+    >,
   ) {
     this.gravity = new GlobalGravityState(defaultGravityMultiplier);
     this.drinkDriving = new NativeDrinkDriving(random);
@@ -307,7 +347,20 @@ export class PowerupSystem {
       return this;
     }
     try {
-      this.definitions.push(...parsePowerups(text));
+      const catalog = parsePowerupCatalog(text);
+      // Race initialization selects spec[network != 0]; this engine currently
+      // runs local single-player races. Definition-only synthetic tables need
+      // neither an invented mask nor a fallback delay.
+      const respawns =
+        this.respawnSettings && catalog.respawnSpecs[0]
+          ? new NativePowerupRespawns<Pickup>(
+              catalog.respawnSpecs[0],
+              this.respawnSettings.minimumMs,
+              this.respawnSettings.extraMs,
+            )
+          : undefined;
+      this.definitions.push(...catalog.definitions);
+      this.respawns = respawns;
     } catch (error) {
       this.warnings.push(
         `Power-up table could not be parsed: ${String(error)}`,
@@ -365,7 +418,9 @@ export class PowerupSystem {
     gameTimeMs?: number,
   ): PowerupModifiers {
     this.beginFrame(dt, vehicle, race, onEvent, gameTimeMs);
-    return this.finishFrame();
+    const modifiers = this.finishFrame();
+    this.updateRespawns();
+    return modifiers;
   }
 
   /** Sample grant time and collect swept pickups; retain existing effects for
@@ -410,8 +465,10 @@ export class PowerupSystem {
     for (const { pickup } of hits) {
       pickup.collected = true;
       pickup.object.visible = false;
+      pickup.object.userData.c2ActorRenderStyle = 1;
       this.onPickup?.(this.definitions[pickup.index]);
       this.apply(pickup.index, vehicle, race, onEvent);
+      this.respawns?.queue(pickup.index, pickup, this.elapsedMs);
     }
     this.previous = current;
     return this.currentModifiers();
@@ -430,6 +487,20 @@ export class PowerupSystem {
       (effect) => effect.duration <= 0 || effect.remaining > 0,
     );
     return this.currentModifiers();
+  }
+
+  /** Installed updater 0x4db670 changes render style, not pose or mesh state.
+   * MainGameLoop calls it after expiry/current collection, before final grants;
+   * a restored actor can therefore be collected again on the next frame. */
+  updateRespawns(nowMs = this.elapsedMs): number {
+    return (
+      this.respawns?.update(nowMs, (index, pickup) => {
+        pickup.object.visible = true;
+        pickup.object.userData.c2ActorRenderStyle = 4;
+        pickup.collected = false;
+        this.onRespawn?.(index, pickup.object);
+      }) ?? 0
+    );
   }
 
   private currentModifiers(): PowerupModifiers {
@@ -580,6 +651,7 @@ export class PowerupSystem {
     this.pickups.length = 0;
     this.abilities.clear();
     this.selectedAbility = null;
+    this.respawns?.clear();
     this.cancelEffects();
     this.vouchers = 0;
   }

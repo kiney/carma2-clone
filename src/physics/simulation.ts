@@ -3491,9 +3491,11 @@ export class VehicleSimulation {
       car.damage.configureWamSmashQueue(this.smashQueue);
   }
   /** Standalone tools return to immediate effects after their outer frame. */
-  flushSmashEffects(): number {
+  flushSmashEffects(beforeFinalFlush?: () => void): number {
     // Installed493752 runs the shared delayed pass once before final49378b.
     this.worldActivations.update(this.smashClock());
+    // MainGameLoop493770 restores eligible pickups between these two phases.
+    beforeFinalFlush?.();
     const count = this.flushSmashEffectsBarrier(0);
     this.destruction?.configureSmashQueue();
     for (const car of this.cars) car.damage.configureWamSmashQueue();

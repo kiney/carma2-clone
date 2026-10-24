@@ -84,6 +84,8 @@ import {
   type PowerupModifiers,
 } from "./powerups";
 import { DebugPanel } from "./debug-panel";
+import { parsePowerupRespawnSettings } from "./powerup-respawn";
+import { emitPowerupRespawnEffects } from "./powerup-respawn-effects";
 import { SmokeSystem, type SmokeRigid } from "./smoke";
 import type { SmokeCar } from "./smoke";
 import { prepareCarSmokeSampler, parseNativeDriverZOffset } from "./car-smoke";
@@ -1249,15 +1251,19 @@ async function loadRace() {
     camera.updateProjectionMatrix();
     cameraNeedsReset = true;
     const defaultGravityMultiplier = parseDefaultGravityMultiplier(generalText);
+    const powerupRespawnSettings = parsePowerupRespawnSettings(generalText);
     const loadedPowerups = new PowerupSystem(
       assets,
       world.group,
       sharedNativeRandom.random,
       definition?.powerupExclusions ?? [],
       defaultGravityMultiplier,
+      powerupRespawnSettings,
     );
     loadedPowerups.onPickup = (definition) =>
       audio.powerupPickup(definition.index);
+    loadedPowerups.onRespawn = (_index, actor) =>
+      dispatchPowerupRespawn(powerupRespawnSettings.connotations, actor);
     await loadedPowerups.init();
     status("Parsing original car…");
     if (!assets.textures.has("oil")) {
@@ -1288,13 +1294,17 @@ async function loadRace() {
     });
     const explosionSettings = parseWastedExplosionSettings(generalText);
     for (const frame of new Set(
-      explosionSettings.groups.flatMap((group) =>
-        group.frames.map((frame) => frame.pixelmap),
-      ),
+      [
+        ...explosionSettings.groups,
+        ...powerupRespawnSettings.connotations.explosions,
+      ].flatMap((group) => group.frames.map((frame) => frame.pixelmap)),
     )) {
       const path = assets.resolve(`data/COMMON/boom/PIX8/${frame}.PIX`);
-      if (path && !assets.textures.has(frame.toLowerCase()))
-        await assets.pixelmaps(path);
+      if (!assets.textures.has(frame.toLowerCase())) {
+        if (path) await assets.pixelmaps(path);
+        else
+          assets.warnings.push(`Missing original explosion pixelmap: ${frame}`);
+      }
     }
     const mineMass = parseMineMass(generalText);
     if (!mineMass) throw new Error("GENERAL.TXT: mine/mortar weight missing");
@@ -2248,6 +2258,58 @@ async function loadRace() {
     selectionMenu?.setLoading(false);
   }
 }
+/** Respawn connotations have a narrower native consumer than ordinary smashes:
+ * only sound, visible explosions and slicks; no gameplay awards or followups. */
+function dispatchPowerupRespawn(data: SmashConnotations, actor: THREE.Group) {
+  const warn = (kind: string, error: unknown) => {
+    const warning = `Powerup respawn ${kind}: ${String(error)}`;
+    if (!assets.warnings.includes(warning)) assets.warnings.push(warning);
+  };
+  emitPowerupRespawnEffects(data, actor, {
+    random: sharedNativeRandom.random,
+    sound: (id, volume, playbackRate) => {
+      void audio.playSound(id, volume, playbackRate);
+    },
+    isVisible: (source) => worldGrooveVisible(source, { nature: "distance" }),
+    explode: (groups, source) => {
+      if (!explosions || !simulation) return;
+      try {
+        const follower = nativeOilActorFollower(source);
+        source.updateWorldMatrix(true, false);
+        explosions.spawn(
+          groups,
+          new THREE.Vector3().setFromMatrixPosition(source.matrixWorld),
+          follower.readModelBounds(),
+          simulation.elapsed * 1000,
+          undefined,
+          undefined,
+          () => {
+            source.updateWorldMatrix(true, false);
+            return source.matrixWorld;
+          },
+        );
+      } catch (error) {
+        warn("explosions", error);
+      }
+    },
+    slick: (spec, source) => {
+      if (!simulation?.oil) return;
+      try {
+        const spill = queueWorldSlick(
+          simulation.oil,
+          spec,
+          nativeOilActorFollower(source),
+          worldSlickMaterials,
+          stats.gameTimeMs >>> 0,
+        );
+        if (spill) scene.add(spill.mesh);
+      } catch (error) {
+        warn("slick", error);
+      }
+    },
+  });
+}
+
 /** Shared world/WAM effect outlets. Native alternatives select one sound.
  * Positional audio and unsupported connotation classes remain tracked gaps.
  */
@@ -3929,7 +3991,9 @@ function animate(now: number) {
       // before fragments and the final authored smash queue are processed.
       smoke?.updateColumns(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);
       shrapnel?.update(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);
-      simulation.flushSmashEffects();
+      simulation.flushSmashEffects(() =>
+        powerups?.updateRespawns(stats.gameTimeMs),
+      );
       explosions?.update(simulation.elapsed * 1000);
       shards?.update(stats.gameTimeMs);
       skidmarks?.update();

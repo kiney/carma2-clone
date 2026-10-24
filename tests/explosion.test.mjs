@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { Box3, DataTexture, Group, Quaternion, Vector3 } from "three";
+import { Box3, DataTexture, Group, Matrix4, Quaternion, Vector3 } from "three";
 import { createAssetStore } from "../server/assets.mjs";
 import { decodeText, parsePix } from "../src/formats.ts";
 import {
@@ -53,6 +53,55 @@ function setup(random = () => 0.5) {
 function block(g = group()) {
   return `// Wasted explosion settings\n100\n5400\nBOOM.PIX\n1\n${g.amount}\n${g.delaySeconds}\n${g.offset}\n${g.xFactor}\n${g.yFactor}\n${g.zFactor}\n${g.frameRate}\n${g.scale}\n${g.rotation}\n${g.frames.length}\n${g.frames.map((f) => `${f.opacity}\n${f.pixelmap}`).join("\n")}\n// following unrelated GENERAL section\n999`;
 }
+
+test("respawn explosion offsets follow the complete live ACT matrix, including scale and shear", () => {
+  const { runtime, scene } = setup();
+  const matrix = new Matrix4().set(
+    2,
+    0.5,
+    0,
+    10,
+    0,
+    3,
+    0,
+    -4,
+    0,
+    0,
+    -1,
+    8,
+    0,
+    0,
+    0,
+    1,
+  );
+  const before = [...matrix.elements];
+  runtime.spawn(
+    [group({ offset: [1, 2, 3] })],
+    v(999, 999, 999),
+    bounds,
+    1000,
+    undefined,
+    new Quaternion(),
+    () => matrix,
+  );
+  const sprite = scene.children[0];
+  assert.deepEqual(sprite.position.toArray(), [13, 2, 5]);
+  assert.deepEqual(
+    sprite.scale.toArray(),
+    [0.5, 0.25, 1],
+    "ACT scaling transforms offsets, not billboard pixel size",
+  );
+  assert.deepEqual(
+    [...matrix.elements],
+    before,
+    "borrowed ACT matrix is never mutated",
+  );
+  matrix.elements[12] = 20;
+  matrix.elements[0] = 4;
+  runtime.update(1001);
+  assert.deepEqual(sprite.position.toArray(), [25, 2, 5]);
+  runtime.dispose();
+});
 
 test("marked GENERAL explosion parser preserves authored frames and validates source bounds", () => {
   const settings = parseWastedExplosionSettings(block());

@@ -2,6 +2,7 @@ import {
   Box3,
   BufferGeometry,
   Float32BufferAttribute,
+  Matrix4,
   Object3D,
   Quaternion,
   Sprite,
@@ -119,6 +120,7 @@ interface ExplosionSprite {
   localOffset: Vector3;
   position: Vector3;
   orientation?: Quaternion;
+  readTransform?: () => Matrix4;
 }
 
 /** Visual effects only. Native Explode 0x4eaa70 / MungeExplosions 0x4ea860.
@@ -171,7 +173,9 @@ export class ExplosionRuntime {
   }
 
   /** Positions/bounds use native model units. Like the source actor pointer,
-   * position/orientation remain live references until the animation expires. */
+   * position/orientation remain live references until the animation expires.
+   * A full ACT matrix provider preserves scale/shear for respawn offsets and
+   * takes precedence over the position/quaternion pair. */
   spawn(
     groups: readonly SmashExplosion[],
     position: Vector3,
@@ -179,6 +183,7 @@ export class ExplosionRuntime {
     timeMs: number,
     offset?: Vector3,
     orientation?: Quaternion,
+    readTransform?: () => Matrix4,
   ): number {
     if (
       !Number.isFinite(timeMs) ||
@@ -287,6 +292,7 @@ export class ExplosionRuntime {
           frames: group.frames.slice(),
           position,
           orientation,
+          readTransform,
           localOffset,
         };
         spawned++;
@@ -321,8 +327,14 @@ export class ExplosionRuntime {
       // and MungeExplosions never applies a frame opacity. PIX alpha still works.
       material.opacity = 1;
       this.rotated.copy(entry.localOffset);
-      if (entry.orientation) this.rotated.applyQuaternion(entry.orientation);
-      entry.sprite.position.copy(entry.position).add(this.rotated);
+      if (entry.readTransform)
+        entry.sprite.position
+          .copy(this.rotated)
+          .applyMatrix4(entry.readTransform());
+      else {
+        if (entry.orientation) this.rotated.applyQuaternion(entry.orientation);
+        entry.sprite.position.copy(entry.position).add(this.rotated);
+      }
       const image = texture.image as
         | { width?: number; height?: number }
         | undefined;
