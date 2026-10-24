@@ -2,6 +2,14 @@
 
 Backlog.md is the task source of truth. The former `TODO.md` entries have been migrated with their complete descriptions, evidence, source references, original issue IDs and numeric priorities. Use the installed `backlog` CLI from the repository root; it stores tasks in `backlog/tasks/` without committing automatically or checking remote branches.
 
+Current performance status (2026-10-24): PERF-02 and PERF-04 through PERF-23,
+including all 18 direct PERF-01 subtasks, are done. PERF-03 resolution-policy
+implementation and the PERF-01 umbrella are explicitly deferred at P5 at the
+bottom of `backlog`, in that order. No performance ticket remains in `wip` or
+`next`. PERF-01 retains its unresolved exact Snow tunnel-transition attribution
+and consolidation criteria; moving it is not a claim that every performance issue
+is fixed. Earlier dated entries below describe historical work and board states.
+
 ```sh
 backlog board
 backlog browser
@@ -59,7 +67,7 @@ choices remain open. The user then separated upcoming work as follows:
 
 | Backlog ID | Issue   | Priority | Status    | Scope / order                                                                            |
 | ---------- | ------- | -------- | --------- | ---------------------------------------------------------------------------------------- |
-| TASK-100   | PERF-01 | 1        | `wip`     | Cross-subsystem profiling, unresolved frame-time spikes and finding coordination         |
+| TASK-100   | PERF-01 | 5        | `backlog` | Profiling umbrella deferred after concrete implementation queue completion              |
 | TASK-101   | PERF-02 | 1        | `done`    | Shared render preparation and dormant pedestrian subtree pruning, measured and validated |
 | TASK-104   | PERF-05 | 1        | `done`    | Lazy SAT and per-invocation guard caches, numerical and Chromium validation              |
 | TASK-103   | PERF-04 | 2        | `done`    | Fourfold visual ranges, native activation preserved; headed hardware before/after checks |

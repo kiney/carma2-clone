@@ -1,15 +1,15 @@
 ---
 id: TASK-100
-title: '[P1] PERF-01: Diagnose frame-time spikes and coordinate performance findings'
-status: wip
+title: '[P5] PERF-01: Diagnose frame-time spikes and coordinate performance findings'
+status: backlog
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-17 19:31'
+updated_date: '2026-10-24 15:43'
 labels:
-  - priority-1
   - PERF-01
   - performance
   - profiling
+  - priority-5
 dependencies: []
 references:
   - docs/performance-investigation.md
@@ -18,8 +18,8 @@ references:
   - tools/performance-probe.mjs
   - docs/live-timber-drop.md
   - docs/perf13-root-cause-analysis.md
-priority: high
-ordinal: 1000
+priority: low
+ordinal: 5103
 ---
 
 ## Description
@@ -27,11 +27,11 @@ ordinal: 1000
 <!-- SECTION:DESCRIPTION:BEGIN -->
 User reports roughly 30 FPS in Chromium on modern hardware and severe frame-time spikes, notably when leaving the tunnel in Snow Way Out. Investigate first. Separate CPU simulation/collision/AI work, rendering and GPU cost, resource upload/shader compilation, garbage collection, frame pacing and development-versus-production overhead. Initial hardware evidence identifies expensive scene traversal and post-solver collision guarding as independent CPU bottlenecks.
 
-This active ticket owns cross-subsystem profiling, the unresolved tunnel-exit spike, ranked findings and coordination of implementation scopes. Scene-hierarchy implementation belongs to completed PERF-02 / TASK-101 (P1, done); the initial code/algorithm physics optimization belongs to completed PERF-05 / TASK-104 (P1, done); resolution policy to PERF-03 / TASK-102 (P4, backlog); higher visual visibility to PERF-04 / TASK-103 (P2, next, after TASK-101). Do not duplicate these implementation scopes. The user's physics policy is code/algorithm optimization first, with Web Workers reserved as a last resort if residual measurements justify the larger redesign.
+This umbrella retains cross-subsystem profiling evidence, the unresolved exact tunnel-exit attribution and findings coordination. It is deferred, not active implementation. PERF-02 and PERF-04 through PERF-23 are done, including all 18 direct subtasks. PERF-03 / TASK-102 is explicitly deferred at P5 in backlog after resolution analysis found no consistent FPS gain on the tested workstation. No selected concrete PERF implementation ticket remains. Do not duplicate completed implementation scopes. The user's physics policy is code/algorithm optimization first, with Web Workers reserved as a last resort if residual measurements justify the larger redesign.
 
 Use short, serial profiling captures and static algorithm review because the workstation is simultaneously used by the user; no sustained simulation or parallel stress workloads. Preserve C2 behavior, destruction, assets and existing gameplay. Existing QUA-05 hardware measurement, QUA-06 memory and QUA-10 FPS diagnostics retain their narrower scopes and user-edited priorities.
 
-Latest report: Timber! canyon/ravine drops to roughly 4 FPS after PERF-05. The user requests a fresh structural investigation and findings before implementation. Analyze global collision working sets, repeated correction/geometry work and event invalidation rather than selecting more coefficient/micro optimizations. No new engine change is authorized in this investigation phase.
+Historical investigation trigger: Timber! canyon/ravine drops to roughly 4 FPS after PERF-05. The user requests a fresh structural investigation and findings before implementation. Analyze global collision working sets, repeated correction/geometry work and event invalidation rather than selecting more coefficient/micro optimizations. No new engine change is authorized in this investigation phase.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -109,5 +109,10 @@ Post-PHY-16 live recording (2026-10-15, HEAD 5fcbec0): original data/RACES/deser
 created: 2026-10-15 18:19
 ---
 Follow-up implementation work is now TASK-100.14 / PERF-19 (P1, next, ordinal1260 before visual visibility). Scope: attribute and eliminate the newly recorded ordinary world-contact latency spikes. Structural audit and conditional solution sequence are in docs/world-contact-spikes.md; no engine changes in this analysis.
+---
+
+created: 2026-10-24 15:43
+---
+2026-10-24 user-directed deferral: audited all PERF tickets. PERF-02 and PERF-04 through PERF-23 are done; all 18 direct subtasks of this umbrella are done. PERF-03 is analyzed and explicitly deferred at P5. No concrete selected performance implementation work remains. Move this umbrella out of WIP to P5 at the bottom of backlog so other topics can take priority. Preserve open acceptance criteria for exact Snow tunnel-exit attribution and final findings consolidation; this is deferral, not a claim that all performance issues are eliminated. Existing QUA-05/06/10 remain independent quality scopes at their user-maintained priorities. Resume performance work only when selected again or fresh evidence establishes a concrete issue.
 ---
 <!-- COMMENTS:END -->
