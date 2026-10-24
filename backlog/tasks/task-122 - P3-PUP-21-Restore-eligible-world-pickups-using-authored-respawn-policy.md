@@ -4,7 +4,7 @@ title: '[P3] PUP-21: Restore eligible world pickups using authored respawn polic
 status: done
 assignee: []
 created_date: '2026-10-24 19:58'
-updated_date: '2026-10-24 20:24'
+updated_date: '2026-10-24 20:33'
 labels:
   - priority-3
   - PUP-21
@@ -38,5 +38,7 @@ Bounded follow-up to PUP-17. Parse original POWERUP.TXT respawn masks and GENERA
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Implemented original respawn masks/settings, fixed first-free 100-slot queue, signed deadline arithmetic and post-delay/pre-final-grant hook. Actual world collections retain their original index; null-source grants do not queue. Restoration changes visibility/render style only; disposal clears slots. Dedicated original sound/visible-explosion/slick outlets ignore generic gameplay connotation channels. Full live ACT matrices and MODEL-local bounds are retained. A strengthened browser check caught missing TWINK/BING preloads; startup now loads every authored respawn frame. Focused policy/parser/effect/source/phase/matrix checks and full 3276-case original suite pass. Final production browser check passed original Newcity/Eagle3: 120000ms/deadline boundary, disabled entries, original actor/mesh restoration, sound5402 gain1, fourteen visible original-textured sprites, timer-freeze-independent live respawn using explicit300ms fixture, pause and reload cleanup. Confirmed ANGLE/Vulkan SwiftShader, WebGL2 1280×800; no console, request, respawn-warning or GL errors. PUP-17 native wheel/body contact and source integration remains open; network notification/spatial audio remain separate.
+Implemented original respawn masks/settings, fixed first-free 100-slot queue, signed deadline arithmetic and post-delay/pre-final-grant hook. Actual world collections retain their original index; null-source grants do not queue. Restoration changes visibility/render style only; disposal clears slots. Dedicated original sound/visible-explosion/slick outlets ignore generic gameplay connotation channels. Full live ACT matrices and MODEL-local bounds are retained. A strengthened browser check caught missing TWINK/BING preloads; startup now loads every authored respawn frame. Focused policy/parser/effect/source/phase/matrix checks and full 3276-case original suite pass. Final production browser check passed original Newcity/Eagle3: 120,000 ms / deadline boundary, disabled entries, original actor/mesh restoration, sound 5402 at gain 1, fourteen visible original-textured sprites, timer-freeze-independent live respawn using explicit 300 ms fixture, pause and reload cleanup. Confirmed ANGLE/Vulkan SwiftShader, WebGL2 1280×800; no console, request, respawn-warning or GL errors. PUP-17 native wheel/body contact and source integration remains open; network notification/spatial audio remain separate.
+
+Final combined verification at runtime source checkpoint 42e0cc3: all 3,276 original-installation tests pass with no skips; isolated asset-free build passes with 2,826 tests passed / 398 expected skips/zero failures. Broader production Chromium smoke passes keyboard driving, controlled checkpoint/race completion and Stock Quarry/Delorean plus Advanced Acid Reign/69mach1 scene switching. These are headless SwiftShader functional checks, not hardware performance measurements. Session summary: docs/offline-session-2026-10-24.md.
 <!-- SECTION:NOTES:END -->
