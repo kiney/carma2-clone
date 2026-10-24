@@ -41,20 +41,23 @@ Vehicle damage applies original WAM eligibility planes, per-part softness, cumul
 
 ## Main modules
 
-| File                 | Responsibility                                                                            |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| `server/assets.mjs`  | TWT indexing, root-confined reads, and virtual archive paths                              |
-| `src/formats.ts`     | Binary, texture, and encoded-text readers                                                 |
-| `src/config.ts`      | Track, car, race-catalog, and opponent config parsing                                     |
-| `src/content.ts`     | Texture, material, geometry, and actor scene assembly                                     |
-| `src/render-pose.ts` | Physics-pose interpolation for rendering and camera targets                               |
-| `src/world.ts`       | Ground, wall, and world-space queries                                                     |
-| `src/gameplay.ts`    | Race state, recovery and retained legacy handling helpers                                 |
-| `src/physics/`       | Source motion, contact groups, joints, crush, components, structural splitting and repair |
-| `src/powerups.ts`    | Source power-up definitions, pickup actors, awards, and timed modifiers                   |
-| `src/ai.ts`          | Road graph navigation and opponent steering                                               |
-| `src/damage.ts`      | WAM-guided vehicle deformation and repair                                                 |
-| `src/pedestrians.ts` | Original pedestrian models, simple motion, fleeing, and hits                              |
-| `src/animation.ts`   | Supported FUNK/GROOVE model and texture animation                                         |
-| `src/audio.ts`       | Original WAV engine loops and event sounds                                                |
-| `src/main.ts`        | Startup, input, menus, cameras, HUD, opponents, pedestrians, and audio                    |
+| File                        | Responsibility                                                                            |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| `server/assets.mjs`         | TWT indexing, root-confined reads, and virtual archive paths                              |
+| `src/formats.ts`            | Binary, texture, and encoded-text readers                                                 |
+| `src/config.ts`             | Track, car, race-catalog, and opponent config parsing                                     |
+| `src/selection-catalog.ts`  | Source-scoped map-series grouping and location/objective labels for race selection        |
+| `src/selection-menu.ts`     | Searchable location, event and vehicle tiles backed by the existing load selection        |
+| `src/selection-previews.ts` | Original menu fragment composition and disposable static track preview rendering          |
+| `src/content.ts`            | Texture, material, geometry, and actor scene assembly                                     |
+| `src/render-pose.ts`        | Physics-pose interpolation for rendering and camera targets                               |
+| `src/world.ts`              | Ground, wall, and world-space queries                                                     |
+| `src/gameplay.ts`           | Race state, recovery and retained legacy handling helpers                                 |
+| `src/physics/`              | Source motion, contact groups, joints, crush, components, structural splitting and repair |
+| `src/powerups.ts`           | Source power-up definitions, pickup actors, awards, and timed modifiers                   |
+| `src/ai.ts`                 | Road graph navigation and opponent steering                                               |
+| `src/damage.ts`             | WAM-guided vehicle deformation and repair                                                 |
+| `src/pedestrians.ts`        | Original pedestrian models, simple motion, fleeing, and hits                              |
+| `src/animation.ts`          | Supported FUNK/GROOVE model and texture animation                                         |
+| `src/audio.ts`              | Original WAV engine loops and event sounds                                                |
+| `src/main.ts`               | Startup, input, menus, cameras, HUD, opponents, pedestrians, and audio                    |

@@ -91,6 +91,21 @@ CARMA2_ROOT=/path/to/carmageddon2 npm run dev
 
 For a production build, run `npm run build` and then `npm start`. The production server serves the built app and local assets on `127.0.0.1:5173`; set `PORT` to change the port.
 
+The race menu uses image tiles: choose a **location**, then an individual **race
+or mission**, and a **vehicle**. Locations use the original `LOCATION` names where
+available and group event variants by their authored map series. Stock and Advanced
+have separate filters; searches include race/mission names and vehicle names.
+Your last loaded race and vehicle are remembered locally. Controls are available
+under **Controls & engine status**; debug tools remain selectable beside Load Race.
+
+Vehicle pictures assemble the six original menu-image fragments using the installed
+interface layout. Location pictures are static views rendered from original track
+geometry at the start grid. Previews are generated lazily while the menu is open,
+cached for the browser session and never bundled or written into the installation.
+Missing previews leave labelled, selectable tiles. Unfamiliar custom map naming
+may group differently; individual events remain selectable. Run
+`npm run test:selection` for the focused Stock/Advanced selection browser check.
+
 ## Drive
 
 Choose a race and car, then select **Load Race**. The browser menus and HUD are independent implementations; the rendered game world uses original game assets.

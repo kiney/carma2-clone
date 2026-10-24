@@ -174,9 +174,11 @@ import { RoadNavigator } from "./ai";
 import { PedestrianSystem } from "./pedestrians";
 import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
+import { SelectionMenu, type CarChoice } from "./selection-menu";
+import type { RaceChoice } from "./selection-catalog";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -320,6 +322,7 @@ const keys = new Set<string>(),
   previous = new THREE.Vector3();
 const trackSelect = el("track-select") as HTMLSelectElement,
   carSelect = el("car-select") as HTMLSelectElement;
+let selectionMenu: SelectionMenu | undefined;
 const stats = {
   ready: false,
   frames: 0,
@@ -551,6 +554,7 @@ async function init() {
         stemOf(e.path).toLowerCase() ===
           dirOf(e.path).split("/").pop()!.toLowerCase(),
     );
+    const raceChoices: RaceChoice[] = [];
     for (const entry of tracks) {
       if (!assets.resolve(`${dirOf(entry.path)}/${stemOf(entry.path)}.act`))
         continue;
@@ -566,6 +570,28 @@ async function init() {
         entry.path,
       );
       trackSelect.add(option);
+      let selectionConfig: TrackConfig;
+      try {
+        selectionConfig = parseTrackConfig(await assets.text(entry.path));
+      } catch (error) {
+        // A bad add-on's optional menu metadata must not hide other races.
+        assets.warnings.push(
+          `${entry.path}: selection metadata: ${String(error)}`,
+        );
+        selectionConfig = parseTrackConfig("");
+      }
+      raceChoices.push({
+        path: entry.path,
+        name: raceEntry?.name ?? stemOf(entry.path),
+        source: entry.path.split("/")[0].toLowerCase() as "data" | "adv_data",
+        definition: raceEntry,
+        catalogOrder: raceEntry
+          ? raceCatalogs
+              .get(entry.path.split("/")[0].toLowerCase())!
+              .races.indexOf(raceEntry)
+          : undefined,
+        config: selectionConfig,
+      });
     }
     const cars = assets.manifest.filter(
       (e) =>
@@ -573,6 +599,7 @@ async function init() {
         stemOf(e.path).toLowerCase() ===
           dirOf(e.path).split("/").pop()!.toLowerCase(),
     );
+    const carChoices: CarChoice[] = [];
     for (const entry of cars) {
       const opponent = opponents.find(
         (o) =>
@@ -585,6 +612,12 @@ async function init() {
           entry.path,
         ),
       );
+      carChoices.push({
+        path: entry.path,
+        name: opponent?.carName ?? stemOf(entry.path),
+        source: entry.path.split("/")[0].toLowerCase() as "data" | "adv_data",
+        opponent,
+      });
     }
     const initialRace = findConfig(
       "RACES",
@@ -603,6 +636,15 @@ async function init() {
     }
     await audio.init();
     await assets.common(status);
+    selectionMenu = new SelectionMenu(
+      el("selection"),
+      assets,
+      raceChoices,
+      carChoices,
+      trackSelect,
+      carSelect,
+      () => paused && !loading && !el("panel").hidden,
+    );
     await initializeShrapnel();
     await wastedFeedback.init();
     await loadRace();
@@ -829,6 +871,7 @@ function updateUpgradeFactors(body: SimulatedCar) {
 }
 async function loadRace() {
   if (loading) return;
+  selectionMenu?.sync();
   loading = true;
   const loadGeneration = ++generation;
   rivalsReady = pedestriansReady = false;
@@ -1942,6 +1985,7 @@ async function loadRace() {
     console.error(error);
   } finally {
     loading = false;
+    selectionMenu?.resumePreviews();
     el("play").removeAttribute("disabled");
   }
 }

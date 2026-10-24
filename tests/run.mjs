@@ -256,6 +256,8 @@ import "./crash-components.test.mjs";
 import "./crash-components-simulation.test.mjs";
 import "./crash-direction.test.mjs";
 import "./opponent-selection.test.mjs";
+import "./selection-catalog.mjs";
+import "./selection-previews.mjs";
 import "./engine-noise.test.mjs";
 
 import "./suspension-powerups.test.mjs";
