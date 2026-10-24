@@ -4,9 +4,11 @@ Evidence: read-only installed HW, hashes in the physics notes; rec2 is a symbol
 map. Installed `DoCrashEarnings` is0x440550. The browser implements base waste
 and damage awards, component redistribution and the offline pair selector below
 in the ordered damage dispatcher. Native row grouping and non-car ownership
-are integrated. Remaining primitive/vector precision, AI reaction binding and
-secondary reward branches are still RAC-04/AI-01 work;
-this does not establish complete crash-earnings conformance.
+are integrated. Regular AI crash reactions are connected before redistribution
+and accumulator cleanup. Primitive generation and contact-vector precision
+remain physics-provider limitations; police/network AI reactions remain separate
+AI scope. Verified reward arithmetic does not establish complete physical
+crash equivalence.
 
 ## Snapshot and contact records
 
@@ -130,7 +132,52 @@ Final reward requires new wasting, local-human attacker and no prior award;
 final-goal completion occurs before ordinary EarnCredits/AddTime. Front/front
 speeds>0.001 and direction dot<-0.7 set a separate head-on multiplier0x4411e1,
 which does not change pair selection. Damage awards are bound as described
-below; stunt consumers and global earned-credit multiplication remain RAC-04.
+below; stunt consumers and the shared earned-credit multiplier are documented
+in [pedestrian and stunt award evidence](c2-pedestrian-awards-re.md).
+
+## Wasted-car arithmetic and conversion boundaries
+
+Installed `0x440e99` loads victim softness as Float32. It divides double `.7`
+(`0x588c08`) by that field and spills the ratio as double at `0x440ea8`.
+The helper `0x512ef0` multiplies that double by itself. `0x440eb6` multiplies
+the square by the signed integer GENERAL skill value; the next instructions
+subtract double`−50` (`0x588c10`) and multiply by double`.01` (`0x588c18`).
+Maintain that association:
+
+```text
+q = double(.7) / F32(softness)
+units = nativeIntegerLow32(((q*q)*base + 50)*double(.01))
+credits = I32(units*100)
+```
+
+`__ftol0x575190` selects truncation, converts through signed64 and returns its
+low signed DWORD. Invalid signed64 conversions yield low DWORD0. The LEA/shift
+sequence `0x440ece–0x440ed4` wraps multiplication by100 as signed32. The
+existing shared converter and `Math.imul` now implement this boundary. Ordinary
+finite/nonnegative-base and finite/positive-softness browser validation remains;
+no extra positivity clamp or rejection is added after Float32 storage. Extreme
+positive JS softness that stores as zero/infinity follows the native arithmetic
+and conversion result. Fractional/non-int32 GENERAL tables are not native inputs.
+
+The original startup selects PC53/CW027f; see the full startup chain in
+[award precision evidence](c2-pedestrian-awards-re.md). A private bounded 32-bit
+probe mapped the read-only original PE into anonymous memory, called its actual
+FP initializer, then executed `0x440e99` through `0x440ed4`, returning before
+EarnCredits. All 91 captures matched the corrected consumer: 18 installed
+softness values across all three skill bases; five synthetic storage-boundary
+values across all skills; seven small/extreme stored values across all skills;
+and INT_MAX base. No original file was modified. Committed tests keep only
+scalar inputs and numeric outcomes; the original image remains private.
+The independent optional probe and driver are redistributable tooling, with
+generated reports confined to ignored `artifacts/`; see the reproduction command
+in [race rules](c2-race-rules-re.md).
+
+The installed header audit found 122 drivable records (52 Stock, 70 Advanced;
+README, dashboard and auxiliary TXT files excluded). All three skill payouts
+remain unchanged for these cars, and ordinary/3× earnings use the same shared
+outlet. Synthetic softness `1.8073922282301278`, base 1000 exposed the old
+200-versus-native100 defect. The original-data tests skip when the installation
+is absent.
 
 ## Component redistribution and damage awards
 
@@ -157,6 +204,14 @@ Damage award equations at0x440fd2–4410e4 use the original GENERAL tables:
 `damage=trunc(componentDelta*(double(.7)/F32(softness)))`;
 `rawCredits=100*trunc((F32(creditsRate)*F32(damage)*min(multiplier,8)+F32(50))*F32(.01))`;
 `seconds=min(5*trunc((F32(secondsRate)*F32(damage)+2.5)*.2),90)`.
+Damage credit `.01` is Float32 at `0x588c28`, unlike the waste branch's double
+`.01`. The double time constants are `−2.5` at `0x588c30` and `.2` at
+`0x588c38`. Tests preserve this distinction for all three original skill rates
+and multipliers 1/2/4/8. For Easy delta 10, multiplier 1, the credit subtotal 200
+times Float32`.01` is below 2 and awards 100, not 200. Live intermediates follow
+PC53 arithmetic; the damage helper's existing malformed/out-of-range input
+rejections remain browser policy, rather than emulating arbitrary corrupted
+component records.
 Credits are capped at2000 before EarnCredits. A knackered victim gets no
 additional damage award. A nonknackered zero-credit path skips both time and
 baseline advancement; otherwise the victim baseline advances within the frame.
@@ -180,8 +235,9 @@ Global earned-credit multiplication belongs to Drink Driving action48:
 SetPissed0x4df040 stores integer parameter0, ResetPissed0x4df120 stores0.
 EarnCredits2 at0x44b960 applies signed wrapping IMUL when nonzero; zero means
 identity. Completion and remaining-time payouts add directly, bypassing this
-global. Action48's control reversal/intoxication and the live global earned-
-credit path remain unimplemented; these are explicit RAC-04/PUP-12 gaps.
+global. Action48's control reversal/intoxication and live earned-credit outlet
+are integrated; their evidence and finite signed arithmetic tests are in
+[pedestrian awards](c2-pedestrian-awards-re.md).
 
 Tests cover numerical component baselines, attenuation, persistent wasting,
 local omega on a rolled car, thresholds, caps and callback order. Production
@@ -195,9 +251,10 @@ provides the runtime evidence, not a claim that MCP was exercised.
 
 Verified installed setter `0x4aec90` receives the selected attacker/victim at
 `0x440cc5`, before accumulator cleanup. `applyNativeCrashReaction` reconstructs
-the regular driver6/local-human8 branches independently. It is tested but not
-yet connected to the live opponent controller; police/network branches are
-explicitly unsupported in this adapter.
+the regular driver6/local-human8 branches independently. The simulation's
+`onCrashAttribution` outlet calls the live opponent fleet before component
+redistribution and accepted-pair cleanup; police/network branches are explicitly
+unsupported in this adapter.
 
 Severity is integer truncation of `min(100,sqrt(F32(victimAccumulator)*300000))`.
 Values below5 leave contact facts unchanged. Otherwise both contact timestamps,

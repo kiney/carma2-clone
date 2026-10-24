@@ -195,6 +195,110 @@ test("native local hit ratio, sideways velocity, spin ratio and reverse signs pr
   );
 });
 
+test("native DWORD field loads round supplied geometry before ordered classification", () => {
+  for (const [overrides, expected] of [
+    [{ height: 1.00000001 }, "ordinary"],
+    [{ height: 1.0000001192092896 }, "falling-height"],
+    [{ killerAngularVelocity: v(5.00000001) }, "ordinary"],
+    [
+      { killerAngularVelocity: v(-5.000000476837158) },
+      "rolling-or-burning-cache",
+    ],
+    [{ killerAngularVelocity: v(0, 0, -5.00000001) }, "ordinary"],
+    [
+      { killerAngularVelocity: v(0, 0, 5.000000476837158) },
+      "rolling-or-burning-cache",
+    ],
+    [{ killerUpY: Math.fround(0.1) - 1e-10 }, "ordinary"],
+    [{ killerUpY: 0.09999999403953552 }, "rolling-or-burning-cache"],
+    [{ killerActorOriginY: Math.fround(0.05) + 1e-10 }, "ordinary"],
+    [{ killerActorOriginY: 0.05000000447034836 }, "rolling-or-burning-cache"],
+    [{ pedVelocity: v(1, 1 - 1e-10) }, "moving-pedestrian"],
+    [{ pedStartingVelocity: v(1, 1 - 1e-10) }, "moving-pedestrian"],
+    [{ pedVelocity: v(1, 0.9999999403953552) }, "ordinary"],
+    [
+      {
+        localPedPosition: v(0.5 - 1e-10, 0, -1),
+        killerLocalVelocity: v(2, 0, -1),
+      },
+      "sideways-or-reverse",
+    ],
+    [
+      {
+        localPedPosition: v(0.5, 0, -1),
+        killerLocalVelocity: v(1 + 1e-10, 0, -1),
+      },
+      "ordinary",
+    ],
+    [
+      {
+        localPedPosition: v(0.5, 0, -1),
+        killerLocalVelocity: v(1.0000001192092896, 0, -1),
+      },
+      "sideways-or-reverse",
+    ],
+    [
+      {
+        localPedPosition: v(0.5, 0, -1),
+        killerAngularVelocity: v(0, 600 + 1e-7),
+      },
+      "ordinary",
+    ],
+    [
+      {
+        localPedPosition: v(0.5, 0, -1),
+        killerAngularVelocity: v(0, 600.0000610351562),
+      },
+      "sideways-or-reverse",
+    ],
+    [
+      {
+        localPedPosition: v(0, 0, Number.MIN_VALUE),
+        killerLocalVelocity: v(0, 0, 1),
+      },
+      "ordinary",
+    ],
+    [
+      { localPedPosition: v(0, 0, 2 ** -149), killerLocalVelocity: v(0, 0, 1) },
+      "sideways-or-reverse",
+    ],
+    [
+      { height: Number.MIN_VALUE, killerAngularVelocity: v(6) },
+      "rolling-or-burning-cache",
+    ],
+  ]) {
+    const input = context(overrides);
+    const snapshot = structuredClone(input);
+    assert.equal(
+      classifyNativePedAward(input, 1).classification,
+      expected,
+      JSON.stringify(overrides),
+    );
+    assert.deepEqual(
+      input,
+      snapshot,
+      "classification does not mutate its retained inputs",
+    );
+  }
+});
+
+test("native stored Y operands retain their unspilled PC53 difference", () => {
+  const originY = 0.0625;
+  const pedestrianY = 0.012499998323619366;
+  assert.equal(Math.fround(originY), originY);
+  assert.equal(Math.fround(pedestrianY), pedestrianY);
+  assert.ok(originY - pedestrianY > Math.fround(0.05));
+  assert.equal(Math.fround(originY - pedestrianY), Math.fround(0.05));
+  assert.equal(
+    classifyNativePedAward(
+      context({ killerActorOriginY: originY, pedestrianY }),
+      1,
+    ).classification,
+    "rolling-or-burning-cache",
+    "4cd206..20c compares a live difference, without a Float32 result store",
+  );
+});
+
 test("eligibility precedes inclusive unsigned combo clock; combo cap and giblet flag do not multiply time", () => {
   const counter = new NativePedAwardCounter();
   assert.equal(
@@ -310,19 +414,55 @@ test("original Stock/Advanced points, fixed times and Drink Driving authored act
     assert.equal(drink.index, 90);
     assert.equal(drink.duration, 30);
     assert.deepEqual(drink.integerParams, [3]);
-    const raw = new NativePedAwardCounter().score(
-      2000,
-      parsed,
-      0,
-      context({ cacheFlags: 0x20 }),
-    );
-    const earned = consumeNativeEarnCredits({
-      amount: raw.credits,
-      currentCredits: 0,
-      creditMultiplier: drink.integerParams[0],
-      raceFinished: false,
-    });
-    assert.equal(earned.amount, 1800);
-    assert.equal(raw.seconds, time[0]);
+    for (const skill of [0, 1, 2])
+      for (const [cause, multiplier] of [
+        [{}, 1],
+        [{ cacheFlags: 0x10 }, 20],
+        [{ cacheFlags: 0x08 }, 5],
+        [{ cacheFlags: 0x40 }, 2],
+        [{ cacheFlags: 0x01 }, 4],
+        [{ cacheFlags: 0x20 }, 2],
+        [{ killerAngularVelocity: v(6) }, 4],
+        [{ height: 1.0000001192092896 }, 2],
+        [{ pedVelocity: v(1, 1 - 1e-10) }, 4],
+        [
+          {
+            localPedPosition: v(0.5 - 1e-10, 0, -1),
+            killerLocalVelocity: v(2, 0, -1),
+          },
+          2,
+        ],
+        [{ cacheFlags: 0x02 }, 2],
+      ])
+        for (const combo of [1, 10]) {
+          const counter = new NativePedAwardCounter();
+          for (let previous = 1; previous < combo; previous++)
+            counter.score(2000, parsed, skill, context());
+          const raw = counter.score(2000, parsed, skill, context(cause));
+          const factor =
+            cause.cacheFlags === 0x02 && combo > 1 ? 1 : multiplier;
+          assert.equal(raw.combo, combo);
+          assert.equal(raw.credits, parsed.points[skill] * combo * factor);
+          assert.equal(
+            raw.seconds,
+            time[skill],
+            "classes/combos never multiply fixed time",
+          );
+          for (const creditMultiplier of [0, drink.integerParams[0]]) {
+            const earned = consumeNativeEarnCredits({
+              amount: raw.credits,
+              currentCredits: 100,
+              creditMultiplier,
+              raceFinished: false,
+            });
+            const amount =
+              parsed.points[skill] * combo * factor * (creditMultiplier || 1);
+            assert.deepEqual(earned, {
+              accepted: true,
+              amount,
+              credits: 100 + amount,
+            });
+          }
+        }
   }
 });

@@ -37,6 +37,17 @@ export interface NativePedAwardClassification {
   missingInputs: string[];
 }
 
+const storedScalar = (value: number | undefined) =>
+  value === undefined ? undefined : Math.fround(value);
+const storedVector = (value: PedAwardVector | undefined) =>
+  value === undefined
+    ? undefined
+    : {
+        x: Math.fround(value.x),
+        y: Math.fround(value.y),
+        z: Math.fround(value.z),
+      };
+
 /** Installed ordered alternatives4cd104..3c2; classifications never stack. */
 export function classifyNativePedAward(
   context: NativePedAwardContext,
@@ -65,8 +76,13 @@ export function classifyNativePedAward(
   ] as const)
     if (flags & flag) return result(name, multiplier, fancyIndex, 30);
 
-  const omega = context.killerAngularVelocity;
-  const height = context.height;
+  // Native loads these inputs from DWORD fields/arguments. Round those stores,
+  // then retain PC53 double arithmetic for differences, squares and ratios.
+  const omega = storedVector(context.killerAngularVelocity);
+  const height = storedScalar(context.height);
+  const upY = storedScalar(context.killerUpY);
+  const originY = storedScalar(context.killerActorOriginY);
+  const pedestrianY = storedScalar(context.pedestrianY);
   if (height === undefined) missingInputs.push("height");
   if (
     (context.napalmDeadlineMs !== undefined &&
@@ -74,12 +90,10 @@ export function classifyNativePedAward(
     (height === 0 &&
       ((omega !== undefined &&
         (Math.abs(omega.x) > 5 || Math.abs(omega.z) > 5)) ||
-        (context.killerUpY !== undefined &&
-          context.killerUpY < Math.fround(0.1)) ||
-        (context.killerActorOriginY !== undefined &&
-          context.pedestrianY !== undefined &&
-          context.killerActorOriginY - context.pedestrianY >
-            Math.fround(0.05))))
+        (upY !== undefined && upY < Math.fround(0.1)) ||
+        (originY !== undefined &&
+          pedestrianY !== undefined &&
+          originY - pedestrianY > Math.fround(0.05))))
   )
     return result("rolling-or-burning-cache", 4, 3, 30);
   if (height === 0) {
@@ -94,8 +108,12 @@ export function classifyNativePedAward(
   if (height !== undefined && height > 1)
     return result("falling-height", 2, 6, 30);
 
-  const lengthSquared = (v: PedAwardVector) =>
-    v.x * v.x + v.y * v.y + v.z * v.z;
+  const lengthSquared = (v: PedAwardVector) => {
+    const x = Math.fround(v.x);
+    const y = Math.fround(v.y);
+    const z = Math.fround(v.z);
+    return x * x + y * y + z * z;
+  };
   if (
     (context.pedVelocity !== undefined &&
       lengthSquared(context.pedVelocity) >= 2) ||
@@ -108,8 +126,8 @@ export function classifyNativePedAward(
     missingInputs.push("pedStartingVelocity");
 
   if (height === 0) {
-    const hit = context.localPedPosition;
-    const velocity = context.killerLocalVelocity;
+    const hit = storedVector(context.localPedPosition);
+    const velocity = storedVector(context.killerLocalVelocity);
     if (hit === undefined) missingInputs.push("localPedPosition");
     if (velocity === undefined) missingInputs.push("killerLocalVelocity");
     if (

@@ -3,15 +3,14 @@ id: TASK-39
 title: >-
   [P2] RAC-04: Match race credits, time bonuses, payouts, stunt rewards, and
   attribution
-status: backlog
+status: done
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-24 18:43'
 labels:
   - priority-2
   - RAC-04
   - races
-  - legacy-partial
 dependencies: []
 references:
   - docs/c2-race-rules-re.md
@@ -31,7 +30,7 @@ Category: **Races, Campaign, and Game State**
 
 ## Scope and evidence
 
-Native checkpoint credits from GENERAL (no gate time and no finishing-gate credits), completion reason/skill rows and rest-time bonus, six-state delayed payout/Enter skip, PEDS points/time and capped 1-second combos, softness-scaled waste rewards and immediate finished guards are integrated. Only player-attributed rival wrecks pay; nullable attacker state supports the verified strict-5-second static-world continuation. Original outer-frame damage/speed/contact snapshots, native sector/control attacker selection, accepted-pair cleanup, raw platform history time, greedy four-row normal grouping and the strict Float32 .02 gate are integrated. Native sticky ownership for free parts, splits and world props is connected, including noncar/noncar ownership and driver1 exclusion. Numerical original-Eagle tests cover raw-clock wrap, callback ordering, immunity, first-owner continuation and thresholds. Native per-role component redistribution, outer-frame/intra-frame baselines, persistent wasting, body-local spin/head-on multipliers and authored damage-credit/time equations are now integrated. Numerical tests and W-driven original green Eagle/Diablo head-on/oblique Chromium crashes verify real damage awards and reverse escape. The loaded rolling award tables have no native consumers in the checked executable. Native pedestrian cause writers and articulated contact inputs still need PED-03. Regular AI crash reactions now bind to the live fleet before accumulator cleanup; broader native reaction coverage remains under AI-01. Ordered native pedestrian cause/geometry classes, local-killer eligibility, persistent napalm flags, current/starting velocity and fixed time bonuses now feed the shared signed EarnCredits outlet. Drink Driving action48/index90 applies authored 3x earnings and native projection/audio; source wild/landing cunning stunts are integrated with distinct raw PD timestamps and recovery cancellation. Native articulated pedestrian contacts, indirect/tail cause writers and exact x87 boundary behavior remain separate gaps; final payout stays unmultiplied.
+Native checkpoint credits from GENERAL (no gate time and no finishing-gate credits), completion reason/skill rows and rest-time bonus, six-state delayed payout/Enter skip, PEDS points/time and capped 1-second combos, softness-scaled waste rewards and immediate finished guards are integrated. Only player-attributed rival wrecks pay; nullable attacker state supports the verified strict-5-second static-world continuation. Original outer-frame damage/speed/contact snapshots, native sector/control attacker selection, accepted-pair cleanup, raw platform history time, greedy four-row normal grouping and the strict Float32 .02 gate are integrated. Native sticky ownership for free parts, splits and world props is connected, including noncar/noncar ownership and driver1 exclusion. Numerical original-Eagle tests cover raw-clock wrap, callback ordering, immunity, first-owner continuation and thresholds. Native per-role component redistribution, outer-frame/intra-frame baselines, persistent wasting, body-local spin/head-on multipliers and authored damage-credit/time equations are now integrated. Numerical tests and W-driven original green Eagle/Diablo head-on/oblique Chromium crashes verify real damage awards and reverse escape. The loaded rolling award tables have no native consumers in the checked executable. Native pedestrian cause writers and articulated contact inputs still need PED-03. Regular AI crash reactions now bind to the live fleet before accumulator cleanup; broader native reaction coverage remains under AI-01. Ordered native pedestrian cause/geometry classes, local-killer eligibility, persistent napalm flags, current/starting velocity and fixed time bonuses now feed the shared signed EarnCredits outlet. Drink Driving action48/index90 applies authored 3x earnings and native projection/audio; source wild/landing cunning stunts are integrated with distinct raw PD timestamps and recovery cancellation. Native articulated pedestrian contacts and indirect/tail cause writers remain PED-09 provider gaps; final payout stays unmultiplied. Installed PC53 startup and Float32 field stores, signed credit products, payout timer and clock wrap are now verified directly against original functions.
 
 ## Source references
 
@@ -43,3 +42,11 @@ Scope clarification after PED-03 split: native articulated/indirect pedestrian c
 
 Related tasks: [TASK-99](task-99%20-%20P2-PED-09-Bind-native-pedestrian-contact-causes-awards-and-effect-outlets.md).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Offline native-consumer audit: CRT startup selects PC53/CW027f, so blanket80-bit intermediate caveat requires correction. Concrete consumer bugs: wasted softness and pedestrian geometry/omega/height fields are loaded as native DWORD Float32, while browser raw doubles can cross exact thresholds. Verify complete reward arithmetic/storage boundary path, add native-derived numerical cases and bounded headless consumer checks. PED09 articulated/cause providers remain explicitly separate.
+
+Completed reward-consumer precision audit: 135 hash-verified read-only original-function captures (91 waste, 22 pedestrian, 22 payout) match browser helpers; actual CRT initializer selects CW027f/PC53. Fixed stored Float32 classification/softness boundaries, native signed32 payout arithmetic and unsigned clock wrap. All 122 drivable original car headers retain their normal three-skill waste values. Full original-install suite: 3,223 passed, no skips/failures. Production build and serial headless Chromium terminal feedback, native reward/3x/stunt paths and Stock/Advanced race-award/payout checks passed with no console/request errors and GL error 0. Desktop lock prevents real-display validation; no physical/contact-provider parity claim. Remaining native pedestrian inputs are explicitly PED-09, broader AI/provider work remains separate.
+<!-- SECTION:NOTES:END -->

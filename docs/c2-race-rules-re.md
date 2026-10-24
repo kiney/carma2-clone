@@ -33,9 +33,9 @@ RAC-04 remains separate: the installed `IncrementCheckpoint` at
 `0x502f70–0x503079` awards credits without calling `AddTimeAward`, consistent
 with rec2's `structur.c`. The earlier checkpoint time-bonus approximation was gated by RAC-03 and
 is now removed by the subsequent RAC-04 work. Normal pedestrian and opponent
-award quantities are verified separately below; special kill classification and
-complete attacker selection remain open. The time flag alone establishes no
-award quantity.
+award quantities, ordered special-kill consumers and attacker selection are
+verified separately below. Physical contact and cause providers retain their own
+subsystem limits. The time flag alone establishes no award quantity.
 
 Tests cover parsing, substitution, weighted random choices, collection,
 charge exclusion, time suppression and original Stock/Advanced race catalogs.
@@ -120,11 +120,13 @@ that row's skill value plus floor(remaining timer milliseconds / 1000) times
 GENERAL's skill-indexed credits-per-second. The browser calculates this amount
 once using original tables, then presents the native finish delay and transfer
 states described below. Runtime variable 99 and Enter skip retain full final
-settlement. Special pedestrian classification and complete native attacker
-selection remain open; this is not a claim of full RAC-04 acceptance.
+settlement. Ordered pedestrian classification and native attacker selection
+are integrated; their consumer equations are documented below and in the
+linked subsystem notes. This does not establish native contact-provider parity.
 
-The GENERAL parser consumes original three-skill records; runtime skill remains
-0/Easy until separate RAC-05. Installed checkpoint table is at 0x75f660 and
+The GENERAL parser consumes original three-skill records; the race-scoped
+Easy/Medium/Hard selection is bound by [RAC-05](c2-difficulty-re.md). Installed
+checkpoint table is at 0x75f660 and
 time-bonus table at 0x75f410. Wrong-order native announcements are separately
 throttled (different gate >2 seconds, same gate >20 seconds); wrong gates grant
 no credits or time.
@@ -134,13 +136,14 @@ Integrated normal-award paths and separate limits:
 - Pedestrian rewards come from PEDS/settings.txt (installed ScoreForKilledPedestrian
   0x4cd010), not GENERAL's pedestrian-time tuple. Stock and Advanced have different
   time tables. Credit combo increments on kills within 1000ms, capped at 10;
-  classified-kill inputs remain absent from the browser callback. Time is
-  unaffected by the combo. OneLessPed accounts objectives separately.
+  ordered classified-kill consumers use retained cause/motion inputs. Time is
+  unaffected by the combo. OneLessPed accounts objectives separately; native
+  physical input/cause providers remain PED-09/TASK-99 work.
 - Wasting reward branch 0x440e85 rounds to hundreds using
-  `100 * trunc((GENERAL.wastingCredits[skill] * (0.7 / victim.softness)^2 + 50) / 100)`.
+  `I32(100 * nativeIntegerLow32(((.7/F32(softness))² * base + 50) * double(.01)))`.
   Time uses GENERAL's wastingTime. Normal player ownership, environmental
-  continuation and duplicate guards are integrated; complete car-car attacker
-  selection remains open. Every knackered car must not automatically earn credit.
+  continuation, duplicate guards and native car-car attacker selection are
+  integrated. Every knackered car must not automatically earn credit.
 - AddTime0x44baf0 rejects finished/countdown/network/no-time and zero awards.
   The shared browser helper now also rejects finished races and zero seconds;
   countdown and network play are not yet implemented.
@@ -149,7 +152,11 @@ Integrated normal-award paths and separate limits:
 
 All instruction addresses below were checked in the installed HW
 binary; rec2 supplies symbol and structure mappings, not the critical stub logic.
-The implemented subset does not establish full RAC-04 acceptance.
+Reward-consumer evidence is separate from the physical contact/cause providers
+owned by their respective physics/AI/pedestrian tasks. See the current
+[precision and native captures](c2-pedestrian-awards-re.md) and
+[crash earnings](c2-crash-earnings-re.md) for Float32 input stores, PC53 live
+arithmetic, signed conversion and attribution limits.
 
 ### Normal pedestrian awards and remaining classification inputs
 
@@ -166,11 +173,10 @@ killer pointer at `+0xc0`, and killer `driver == 8` (`0x4cd052–0x4cd072`).
 At `0x4cd078–0x4cd0b6`, a credited kill within an unsigned elapsed time of
 **at most 1000ms** increments the combo, capped at 10; otherwise combo becomes
 
-1. Credits are `points[skill] * combo * classificationMultiplier`. At
-   `0x4cd3c2` credits are submitted to `EarnCredits`; at `0x4cd3da` the fixed
-   `times[skill]` value goes to `AddTimeAward`. Combo and classification never
-   multiply the time award. `src/race-awards.ts` and the normal pedestrian callback
-   now implement the original normal multiplier of 1 and combo/time tables.
+1. Credits are signed32 `points[skill] * combo * classificationMultiplier`.
+   `EarnCredits` is called at `0x4cd3c4`; fixed `times[skill]` goes to
+   `AddTimeAward` at `0x4cd3e1`. Combo and classification never multiply time.
+   `src/ped-awards.ts` owns the ordered consumer and signed products.
 
 Special classes are ordered alternatives, not cumulative multipliers. Cache
 cause flags `0x10`, `0x08`, `0x40`, `0x01`, and `0x20` select multipliers
@@ -185,17 +191,22 @@ velocity squared at least 2, and 2 for sideways/spinning or reverse-position
 conditions (`0x4cd1ae–0x4cd399`). A final flag-`0x02` doubling applies only when
 the combo is 1 and no previous class matched (`0x4cd39b–0x4cd3c2`).
 
-The current browser death callback does not carry these native collision/cache
-inputs. Speed alone cannot classify them. The normal award path is implemented;
-special classification and native kill eligibility remain tied to PED-03.
+The current browser death callback supplies retained cause, killer, height and
+body-local/world motion inputs. The consumer rounds each native stored field
+to Float32 before applying the ordered alternatives. Missing inputs remain
+explicit diagnostics rather than invented values. Actual native physical
+contact, indirect/tail cause writers and articulated inputs are separately
+owned by PED-09/TASK-99; consumer tests do not claim those providers are exact.
 
 ### Wasting value, eligibility and attribution limits
 
 The installed waste branch at `0x440e85` calculates:
 
-`credits = 100 * trunc((GENERAL.wastingCredits[skill] * (0.7 / victim.softness)^2 + 50) / 100)`
+`credits = I32(100 * nativeIntegerLow32(((double(.7)/F32(softness))² * GENERAL.wastingCredits[skill] + 50) * double(.01)))`
 
-The helper at `0x512ef0` squares its argument; it is not an exponential.
+The helper at `0x512ef0` squares its double argument; it is not an exponential.
+The Float32 softness load and signed conversion/wrapping boundaries are covered
+by actual original-function captures in [crash earnings evidence](c2-crash-earnings-re.md).
 Victim softness is the authored car field at `+0x18d0`, read by the installed
 car loader at `0x48934d`. Waste time is `GENERAL.wastingTime[skill]`, passed to
 `AddTimeAward` at `0x440ee9`. The browser uses these original tables and formula.
@@ -218,11 +229,12 @@ is not the earnings window.
 The browser now retains a nullable earnings attacker and timestamp separately
 from damage scaling, refreshes accepted static-world continuations, and prevents
 a known AI attacker from inheriting earlier player credit. A zero initial
-timestamp alone never establishes ownership. Direct car-car selection still
-assumes the contacting other car is the attacker; native selection also uses
-pre-impact sectors, speed and control branches now mapped in [crash earnings evidence](c2-crash-earnings-re.md), awaiting integration. Its pointer-based strict750ms fallback is likewise mapped but not yet implemented. Native mapping of ordinary
-non-car callbacks to a null car argument also remains open. These limitations
-are explicit; any knackered car must not automatically earn player credit.
+timestamp alone never establishes ownership. Direct car-car selection uses
+pre-impact sectors, speed/control branches and the strict750ms pointer fallback
+verified in [crash earnings evidence](c2-crash-earnings-re.md). Drivers2/3/4
+normalize noncar ownership before the ordinary null-other selector. Primitive
+generation and physical contact-vector precision remain provider limits; any
+knackered car must not automatically earn player credit.
 
 ### Native post-race transfer and final settlement
 
@@ -274,10 +286,13 @@ applied at `0x44b989`; that modifier is separate from these base formulas.
 The shared browser credit helper now rejects finished-race awards, including
 ordinary credit pickups; their resulting event amount is zero. Closing normal
 credit awards when completion sets the finish flag is consistent with the later
-payout snapshot. The global multiplier remains a separate TODO gap. Debug grants
-are administrative overrides.
+payout snapshot. The shared signed EarnCredits consumer applies Drink Driving
+once to ordinary earnings; final completion/remaining-time settlement bypasses
+that multiplier. [Pedestrian/stunt award evidence](c2-pedestrian-awards-re.md)
+records its native call sites and arithmetic. Debug grants are administrative
+overrides.
 
-The integrated numerical conformance suite passes 653 tests. Actual Chromium validation (`tests/browser-race-awards.mjs`) passes original Eye of the Beaver completion, natural ten-second delay, completion sound8015 once, deferred credits and Enter full settlement. Stock pedestrian callbacks award300/+15 then600/+15; Advanced awards300/+10. An unattributed wreck pays nothing, while an attributed softness1.5 victim pays700/+120. The last Nice Beaver opponent completes with reason2 before its individual reward. Real keyboard driving, console/network and WebGL checks pass. Screenshots and reports remain ignored; MCP remains unavailable. These deterministic handler checks do not prove every collision classification.
+The earlier integrated numerical conformance suite passed 653 tests. Actual Chromium validation (`tests/browser-race-awards.mjs`) passes original Eye of the Beaver completion, natural ten-second delay, completion sound8015 once, deferred credits and Enter full settlement. Stock pedestrian callbacks award300/+15 then600/+15; Advanced awards300/+10. An unattributed wreck pays nothing, while an attributed softness1.5 victim pays700/+120. The last Nice Beaver opponent completes with reason2 before its individual reward. Real keyboard driving, console/network and WebGL checks pass. Screenshots and reports remain ignored; MCP remains unavailable. These deterministic handler checks do not prove every collision classification.
 
 ### Final normal kill ordering
 
@@ -334,3 +349,77 @@ These rules are integrated in opponent-selection, main and rules. Numerical test
 The Hard Core final selected-pedestrian regression now uses a real group-56 sweep with the mission counter at18/19: it completes reason3 without a pedestrian credit/time award and snapshots the new race credits. This also reproduced and fixed a race-load reentrancy defect: ensureRacePayout must not recreate the previous completed race payout while loadRace awaits original assets.
 
 Ordinary offline AI car contacts do not overwrite saved human attribution: installed driver guard0x440dce skips those stores. This is now corrected and tested separately from immediate AI-caused wasting (no player reward). AI mine/free-part ownership can overwrite through their separate explicit paths; do not generalize the car-car guard to those paths.
+
+### Signed payout and unsigned clock boundaries
+
+The current reward boundary follow-up verifies the original initializer's
+PC53/CW027f mode, rounds native pedestrian and softness fields at their actual
+Float32 stores, and uses the source integer conversions. The detailed constants
+and actual-function captures are in [pedestrian awards](c2-pedestrian-awards-re.md)
+and [crash earnings](c2-crash-earnings-re.md).
+
+The offline payout is signed32 arithmetic, even when a positive completion bonus
+makes credits wrap negative. `0x493b1f` multiplies truncated signed timer seconds
+by the skill rate with low32 IMUL; `0x493b22` wraps addition of the completion
+bonus. The final snapshot addition at `0x493c53` wraps too. Negative snapshots
+are legitimate results of the shared signed EarnCredits outlet and are now
+accepted. The immediate `completeRace` adapter uses the same arithmetic and
+retains its practice-race guard; live races still defer to `RacePayout`.
+
+State1's completion addition at `0x493507` is signed32. State3 uses unsigned
+`delta/15` (`0x493568–0x493571`), wraps `timerMs−1000*steps`, then clamps a
+negative signed timer to zero (`0x493583–0x493591`). The actual signed reduction
+is truncated to seconds, multiplied by the skill rate, and wrapping-added to
+displayed bonus (`0x493596–0x4935c3`). State5 first forms a low32 rate×delta
+product, divides that product **unsigned** by 15, wraps displayed subtraction,
+then clamps its signed negative result to zero (`0x493686–0x49369a`). Only the
+actual displayed reduction is wrapping-added to credits. Last-rattle increments
+wrap as UInt32. These operations are intentionally not generic saturation.
+
+`0x49349d` subtracts the state timestamp as a DWORD, with unsigned JB/JBE gates.
+The helper now retains UInt32 elapsed/delta semantics across clock rollover
+and a regressing raw timestamp. The previous test expecting a negative JS
+elapsed value to defer a state transition contradicted the native dispatcher:
+start 2000/now 1032 wraps and passes the threshold. A raw clock's behavior belongs
+to its upstream adapter; the payout consumer does not invent monotonicity.
+Browser API validation still rejects nonfinite/negative timesteps and timestamps,
+and nonfinite/negative time/bonus/rate inputs. Those error policies do not claim
+native behavior for corrupt tables or invalid clock values. Signed credit
+snapshots have no nonnegative restriction.
+
+A bounded original-function probe matches **22 payout fixtures**, covering total
+calculation, every presentation states 1–6, all threshold sides, actual state3/5
+rounding and overflow, negative snapshots, final settlement and DWORD clock
+wrap/regression. It runs the installed calculation at `0x493aca`, presentation
+dispatch at `0x49348c` and final addition at `0x493c4d`. Only state1's
+format/audio prefix and later UI/finalization outlets are bypassed in a private
+memory copy; source gates, arithmetic and state writes remain intact. Final
+settlement is invoked when the native finish countdown becomes 1. This is
+consumer conformance, not execution of an original graphical race.
+
+Reproduce explicitly on Linux x86 with installed `gcc` and kernel IA32 support:
+
+```sh
+node --import tsx tools/native-race-awards-probe.mjs
+```
+
+The driver honors `CARMA2_ROOT`, verifies the complete installed HW SHA256 and
+PE identity before execution, builds a freestanding temporary i386 probe without
+libc dependencies, limits compilation to 20 seconds and native execution to 5 seconds,
+and removes the temporary binary. The C loader opens the original O_RDONLY,
+bounds-checks sections, and populates only anonymous memory. All capture stubs
+are independently authored; no original instructions/assets are embedded in the
+repository. The report is ignored `artifacts/native-race-awards-probe.json`.
+The recorded run matched **135 captures: 91 waste, 22 pedestrian, 22 payout**, with
+zero differences and actual CW027f. A sandbox that blocks IA32 syscalls can
+reject execution before the probe runs; that is a tooling limitation, not an
+award mismatch. This tool is optional and is not part of CI, npm test or runtime.
+
+The known offline reward equations, their ordered consumers and shared signed
+EarnCredits outlet now match the audited source/captured boundaries for supplied
+native inputs. Ordinary installed-car/three-skill amounts remain unchanged.
+Separate PED-09/TASK-99 contact/cause providers, collision primitive/vector
+precision, police/network behavior, and arbitrary changed FPU modes or corrupted
+records are not certified by this reward-consumer work. No broader physical
+or campaign parity claim follows from these captures. Application browser
+integration is checked separately from this display-free numerical proof.

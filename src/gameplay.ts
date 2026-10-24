@@ -187,11 +187,16 @@ export function completeRace(race: RaceState, reason: 0 | 1 | 2 | 3): boolean {
     return false;
   race.status = "completed";
   race.completionReason = reason;
-  if (!race.deferCompletionAwards)
-    race.credits +=
-      (race.completionCreditsByReason?.[reason] ?? race.completionCredits) +
-      Math.floor(Math.max(0, race.timeLeft)) *
-        (race.completionTimeCreditRate ?? 0);
+  if (!race.deferCompletionAwards) {
+    const timerMs = Math.trunc(Math.max(0, race.timeLeft) * 1000) | 0;
+    const completion =
+      race.completionCreditsByReason?.[reason] ?? race.completionCredits;
+    const timeBonus = Math.imul(
+      Math.trunc(timerMs / 1000),
+      race.completionTimeCreditRate ?? 0,
+    );
+    race.credits = (race.credits + ((completion + timeBonus) | 0)) | 0;
+  }
   return true;
 }
 

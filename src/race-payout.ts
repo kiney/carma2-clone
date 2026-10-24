@@ -34,24 +34,29 @@ export class RacePayout {
   private finishDelayMs = 10000;
 
   constructor(options: RacePayoutOptions) {
+    if (!Number.isFinite(options.snapshotCredits))
+      throw new RangeError("Race payout credit snapshot must be finite");
     for (const value of [
-      options.snapshotCredits,
       options.completionBonus,
       options.timeLeft,
       options.rate,
     ]) {
       if (!Number.isFinite(value) || value < 0)
-        throw new RangeError("Race payout inputs must be finite and nonnegative");
+        throw new RangeError(
+          "Race payout inputs must be finite and nonnegative",
+        );
     }
-    this.snapshotCredits = options.snapshotCredits;
-    this.credits = options.snapshotCredits;
-    this.completionBonus = options.completionBonus;
-    this.rate = options.rate;
+    this.snapshotCredits = options.snapshotCredits | 0;
+    this.credits = this.snapshotCredits;
+    this.completionBonus = options.completionBonus | 0;
+    this.rate = options.rate | 0;
     this.suppressPresentation = options.suppressPresentation;
-    this.timerMs = Math.trunc(options.timeLeft * 1000);
+    this.timerMs = Math.trunc(options.timeLeft * 1000) | 0;
     // Snapshot precedes the runtime-99 presentation guard, 0x493b01–0x493b34.
     this.totalBonus =
-      this.completionBonus + Math.trunc(this.timerMs / 1000) * this.rate;
+      (this.completionBonus +
+        Math.imul(Math.trunc(this.timerMs / 1000), this.rate)) |
+      0;
   }
 
   get timeLeft(): number {
@@ -62,24 +67,32 @@ export class RacePayout {
   skip(): void {
     if (this.finished) return;
     // Race-loop exit reconciles even partially displayed awards, 0x493c4d.
-    this.credits = this.snapshotCredits + this.totalBonus;
+    this.credits = (this.snapshotCredits + this.totalBonus) | 0;
     this.finished = true;
   }
 
   update(dtMs: number, gameTimeMs?: number): RacePayoutSound[] {
     if (!Number.isFinite(dtMs) || dtMs < 0)
-      throw new RangeError("Race payout timestep must be finite and nonnegative");
-    if (gameTimeMs !== undefined &&
-      (!Number.isFinite(gameTimeMs) || gameTimeMs < 0))
+      throw new RangeError(
+        "Race payout timestep must be finite and nonnegative",
+      );
+    if (
+      gameTimeMs !== undefined &&
+      (!Number.isFinite(gameTimeMs) || gameTimeMs < 0)
+    )
       throw new RangeError("Invalid race payout game timestamp");
     if (this.finished) return [];
-    const previousClock = Math.floor(this.clockMs);
+    const previousClock = Math.floor(this.clockMs) >>> 0;
     this.clockMs = gameTimeMs ?? this.clockMs + dtMs;
-    const now = Math.floor(this.clockMs);
+    const now = Math.floor(this.clockMs) >>> 0;
     if (this.state === 0) {
       // Native finish countdown uses frame period, while later states use
       // absolute GetTotalTime timestamps, which can regress after stalls.
-      this.finishDelayMs -= gameTimeMs === undefined ? now - previousClock : dtMs;
+      const period =
+        gameTimeMs === undefined
+          ? (now - previousClock) >>> 0
+          : Math.trunc(dtMs) >>> 0;
+      this.finishDelayMs = (this.finishDelayMs - period) | 0;
       if (this.finishDelayMs <= 0) {
         // 0x493b6f–0x493bf3: no animation with zero timer or runtime 99.
         if (this.timerMs === 0 || this.suppressPresentation) this.skip();
@@ -88,11 +101,11 @@ export class RacePayout {
       return [];
     }
 
-    const elapsed = now - this.stateStartMs;
+    const elapsed = (now - this.stateStartMs) >>> 0;
     switch (this.state) {
       case 1:
         if (elapsed >= 500) {
-          this.credits += this.completionBonus;
+          this.credits = (this.credits + this.completionBonus) | 0;
           this.enter(2, now);
           return [8015]; // Clap, 0x4934e3–0x493513.
         }
@@ -103,14 +116,21 @@ export class RacePayout {
       case 3:
         if (this.timerMs === 0) this.enter(4, now);
         else {
-          const delta = elapsed - this.lastRattleMs;
+          const delta = (elapsed - this.lastRattleMs) >>> 0;
           if (delta > 15) {
             const steps = Math.floor(delta / 15);
             const previousTimer = this.timerMs;
-            this.timerMs = Math.max(0, previousTimer - 1000 * steps);
-            this.displayedBonus +=
-              Math.trunc((previousTimer - this.timerMs) / 1000) * this.rate;
-            this.lastRattleMs += 15 * steps;
+            this.timerMs = Math.max(
+              0,
+              (previousTimer - Math.imul(1000, steps)) | 0,
+            );
+            const seconds = Math.trunc(
+              ((previousTimer - this.timerMs) | 0) / 1000,
+            );
+            this.displayedBonus =
+              (this.displayedBonus + Math.imul(seconds, this.rate)) | 0;
+            this.lastRattleMs =
+              (this.lastRattleMs + Math.imul(15, steps)) >>> 0;
           }
         }
         break;
@@ -120,16 +140,18 @@ export class RacePayout {
       case 5:
         if (this.displayedBonus === 0) this.enter(6, now);
         else {
-          const delta = elapsed - this.lastRattleMs;
+          const delta = (elapsed - this.lastRattleMs) >>> 0;
           if (delta > 15) {
             const previousBonus = this.displayedBonus;
-            // Native truncates delta*rate/15, not floor(delta/15)*rate.
-            this.displayedBonus = Math.max(
-              0,
-              previousBonus - Math.floor((delta * this.rate) / 15),
+            // 493686..690: low32 product, unsigned /15, signed subtraction.
+            const reduction = Math.floor(
+              (Math.imul(delta, this.rate) >>> 0) / 15,
             );
-            this.credits += previousBonus - this.displayedBonus;
-            this.lastRattleMs += 15 * Math.floor(delta / 15);
+            this.displayedBonus = Math.max(0, (previousBonus - reduction) | 0);
+            this.credits =
+              (this.credits + ((previousBonus - this.displayedBonus) | 0)) | 0;
+            this.lastRattleMs =
+              (this.lastRattleMs + Math.imul(15, Math.floor(delta / 15))) >>> 0;
           }
         }
         break;

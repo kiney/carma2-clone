@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import { createAssetStore } from "../server/assets.mjs";
 import { decodeText } from "../src/formats.ts";
+import { parseDamagePrograms } from "../src/damage-program.ts";
+import { consumeNativeEarnCredits } from "../src/ped-awards.ts";
+import { nativeCrashDamageAward } from "../src/physics/crash-components.ts";
 import {
   parsePedAwards,
   parseRaceAwards,
@@ -154,6 +157,154 @@ test("wasted-car credits scale by squared softness and round to the nearest hund
       () => wastedCarCredits(base, softness),
       /Invalid wasted car award inputs/,
     );
+});
+
+test("native waste rounding first stores softness, retaining double ratio and square", () => {
+  // Source440e99..ec9: DWORD softness, QWORD ratio/square and .01.
+  // Each pair supplies different JS values that store as the same native field.
+  for (const [softness, stored, expected] of [
+    [1.8073922282301278, 1.8073922395706177, [400, 300, 100]],
+    [1.1832159566199232, 1.1832159757614136, [1000, 700, 300]],
+    [0.9438798074485389, 0.9438797831535339, [1700, 1100, 600]],
+    [0.8082903768654761, 0.8082903623580933, [2300, 1500, 800]],
+    [0.7181848464596079, 0.7181848287582397, [2900, 1900, 1000]],
+  ]) {
+    assert.equal(Math.fround(softness), stored);
+    for (const skill of [0, 1, 2]) {
+      const base = [3000, 2000, 1000][skill];
+      assert.equal(wastedCarCredits(base, softness), expected[skill]);
+      assert.equal(wastedCarCredits(base, stored), expected[skill]);
+    }
+  }
+});
+
+test("native waste conversion returns the signed low DWORD before wrapping multiplication by100", () => {
+  for (const [softness, expected] of [
+    [0.001, [1469999900, 979999900, 490000000]],
+    [0.0001, [971119336, -784242808, 1755362244]],
+    [1e-8, [1346534912, -1965621056, -982810528]],
+    [1e-12, [0, 0, 0]],
+    [2 ** -149, [0, 0, 0]],
+  ])
+    for (const skill of [0, 1, 2])
+      assert.equal(
+        wastedCarCredits([3000, 2000, 1000][skill], softness),
+        expected[skill],
+      );
+  assert.equal(wastedCarCredits(0x7fffffff, 0.7), -2147483596);
+  assert.equal(
+    wastedCarCredits(3000, 1e-100),
+    0,
+    "softness underflow uses native invalid-integer low zero",
+  );
+  assert.equal(
+    wastedCarCredits(3000, 1e100),
+    0,
+    "softness overflow leaves a zero ratio",
+  );
+});
+
+test("native damage credits use Float32 .01 while fixed time uses double .2 across all skills", () => {
+  // Installed441033..44109d: native .01 is below double .01. Exact
+  // hundreds after adding50 therefore truncate to the preceding hundred.
+  for (const [rate, secondsRate, delta, multiplier, rawCredits, seconds] of [
+    [15, 1, 10, 1, 100, 10],
+    [15, 1, 11, 1, 200, 10],
+    [15, 1, 5, 2, 100, 5],
+    [15, 1, 6, 2, 200, 5],
+    [13, 0.75, 50, 1, 600, 40],
+    [13, 0.75, 51, 1, 700, 40],
+    [13, 0.75, 25, 2, 600, 20],
+    [13, 0.75, 26, 2, 700, 20],
+    [11, 0.5, 50, 1, 500, 25],
+    [11, 0.5, 51, 1, 600, 25],
+    [11, 0.5, 25, 2, 500, 15],
+    [11, 0.5, 26, 2, 600, 15],
+    [15, 1, 2, 4, 100, 0],
+    [15, 1, 3, 4, 200, 5],
+    [13, 0.75, 9, 8, 900, 5],
+    [13, 0.75, 10, 8, 1000, 10],
+    [11, 0.5, 4, 8, 400, 0],
+    [11, 0.5, 5, 8, 400, 5],
+  ])
+    assert.deepEqual(
+      nativeCrashDamageAward(delta, 0.7, multiplier, rate, secondsRate),
+      { rawCredits, credits: rawCredits, seconds },
+      `${rate}/${secondsRate}, delta${delta}, multiplier${multiplier}`,
+    );
+});
+
+test("every installed car softness retains three-skill waste rewards and shared earned multipliers", async (t) => {
+  try {
+    await access(new URL("../carma2_orig", import.meta.url));
+  } catch {
+    t.skip("Original installation is absent");
+    return;
+  }
+  const assets = await createAssetStore();
+  const expected = new Map([
+    [0.05, [588000, 392000, 196000]],
+    [0.1, [147000, 98000, 49000]],
+    [0.125, [94100, 62700, 31400]],
+    [0.13, [87000, 58000, 29000]],
+    [0.2, [36700, 24500, 12200]],
+    [0.25, [23500, 15700, 7800]],
+    [0.3, [16300, 10900, 5400]],
+    [0.35, [12000, 8000, 4000]],
+    [0.4, [9200, 6100, 3100]],
+    [0.46, [6900, 4600, 2300]],
+    [0.5, [5900, 3900, 2000]],
+    [0.6, [4100, 2700, 1400]],
+    [0.7, [3000, 2000, 1000]],
+    [0.8, [2300, 1500, 800]],
+    [0.999, [1500, 1000, 500]],
+    [1, [1500, 1000, 500]],
+    [1.4, [800, 500, 300]],
+    [1.5, [700, 400, 200]],
+  ]);
+  for (const root of ["data", "adv_data"]) {
+    const awards = parseRaceAwards(
+      decodeText(await assets.read(`${root}/GENERAL.TXT`)),
+    );
+    let checked = 0;
+    for (const { path } of assets.manifest) {
+      if (
+        !path.toLowerCase().startsWith(`${root}/cars/`) ||
+        !/^\w+\/cars\/[^/]+\/[^/]+\.txt$/i.test(path)
+      )
+        continue;
+      const text = decodeText(await assets.read(path));
+      // Car directories also contain README, dashboard and auxiliary TXT files.
+      if (!/^START OF DRIVABLE STUFF\s*(?:\/\/.*)?$/im.test(text)) continue;
+      const { softness } = parseDamagePrograms(text);
+      const rewards = expected.get(softness);
+      assert.ok(rewards, `known installed softness ${softness}: ${path}`);
+      for (const skill of [0, 1, 2]) {
+        const credits = wastedCarCredits(
+          awards.wastingCredits[skill],
+          softness,
+        );
+        assert.equal(credits, rewards[skill], `${path}, skill${skill}`);
+        for (const multiplier of [0, 3]) {
+          const earned = consumeNativeEarnCredits({
+            amount: credits,
+            creditMultiplier: multiplier,
+            currentCredits: 100,
+            raceFinished: false,
+          });
+          const amount = rewards[skill] * (multiplier || 1);
+          assert.deepEqual(earned, {
+            accepted: true,
+            amount,
+            credits: 100 + amount,
+          });
+        }
+      }
+      checked++;
+    }
+    assert.ok(checked > 0, `installed drivable car headers: ${root}`);
+    t.diagnostic(`${root}: ${checked} car headers × three skills`);
+  }
 });
 
 test("installed stock and Advanced pedestrian settings retain their award triplets", async (t) => {

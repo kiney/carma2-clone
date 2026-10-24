@@ -1,3 +1,5 @@
+import { nativeIntegerLow32 } from "./ai/integer";
+
 export type SkillAward = [number, number, number];
 export interface RaceAwards {
   checkpointCredits: SkillAward;
@@ -110,9 +112,9 @@ export function parsePedAwards(text: string): PedAwards {
   };
 }
 
-/** Installed ScoreForKilledPedestrian0x4cd078: inclusive1000ms, cap10.
- * Special collision classifications need PED-03's native cause/cache inputs;
- * ordinary swept contacts currently use multiplier1 explicitly. */
+/** Legacy ordinary-score test adapter: inclusive1000ms, cap10.
+ * Production uses NativePedAwardCounter for source eligibility, ordered
+ * classifications and signed credit products. */
 export class PedAwardCounter {
   private previousMs: number | undefined;
   private combo = 0;
@@ -131,7 +133,8 @@ export class PedAwardCounter {
   }
 }
 
-/** Installed DoCrashEarnings0x440e85: nearest100, squared softness ratio. */
+/** Installed440e99..ed4: stored Float32 softness, double ratio/square,
+ * integer skill base, then double .01 and truncation to hundreds. */
 export function wastedCarCredits(base: number, softness: number): number {
   if (
     !Number.isFinite(base) ||
@@ -140,5 +143,8 @@ export function wastedCarCredits(base: number, softness: number): number {
     softness <= 0
   )
     throw new Error("Invalid wasted car award inputs");
-  return 100 * Math.trunc((base * (0.7 / softness) ** 2 + 50) * 0.01);
+  const storedSoftness = Math.fround(softness);
+  const ratio = 0.7 / storedSoftness;
+  const units = nativeIntegerLow32((ratio * ratio * base + 50) * 0.01);
+  return Math.imul(units, 100);
 }

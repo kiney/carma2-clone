@@ -19,6 +19,53 @@ ownership, body-axis angular/linear velocity, live world COM displacement and
 actor up/origin-Y. Those browser states do not certify the separate PED-03
 contact and articulated-body mechanics, which remain approximations.
 
+## Stored inputs and native floating-point precision
+
+Verified startup selects nearest-rounded **53-bit precision**, not a 64-bit
+x87 significand. Entry `0x577eb0` calls `0x577ac0` at `0x577f61`; the FP-init
+pointer at `0x671fc0` points to `0x575110`, which calls `0x5798e0` at
+`0x57511f`. Its `_controlfp(0x10000,0x30000)` call maps to x87 PC bits
+`0x0200` at `0x582e87–0x582e99`. A bounded private 32-bit probe called that
+actual initializer from CW037f and measured **CW027f**. The independent startup
+capture in [passive pedestrian evidence](c2-ped-passive-stillify-re.md) agrees.
+
+The score consumer loads stored Float32 fields/arguments before doing live
+double arithmetic. `classifyNativePedAward` now rounds supplied inputs at
+those boundaries, preserving absent providers and leaving the context unchanged:
+
+| Stored input                               | Installed loads                          |
+| ------------------------------------------ | ---------------------------------------- |
+| Caller height                              | `0x4cd1ae`, `0x4cd23f`, `0x4cd2f6`       |
+| Killer body-axis angular velocity          | `0x4cd1c2`, `0x4cd1d7`, `0x4cd34e`       |
+| Actor up-Y                                 | `0x4cd1f2`                               |
+| Actor origin-Y / pedestrian Y              | `0x4cd206`, `0x4cd209`                   |
+| Current / starting pedestrian velocity     | `0x4cd264–0x4cd291`, `0x4cd2a2–0x4cd2d8` |
+| Transformed local hit / car-local velocity | `0x4cd30b–0x4cd31d`, `0x4cd32f–0x4cd351` |
+
+The Y difference, `(vx²+vy²)+vz²`, local hit ratio and spin ratio remain
+unspilled double expressions. Rounding every intermediate to Float32 would
+change the source result. For example, stored origin Y `.0625` minus stored
+pedestrian Y `.012499998323619366` is strictly above Float32 `.05`, even though
+rounding that difference to Float32 would make it equal to the threshold.
+Threshold constants are Float32 `5` at `0x589a50`, `.1` at `0x589a54`, `.05` at
+`0x589a58`, double2 at `0x589a60`, and Float32 600 at `0x589a68`.
+
+The same private probe called the **whole installed `0x4cd010` score function**
+with synthetic cache/car/actor/simple-body records. Only clock and HUD/credit/time
+outlets were replaced with capture stubs in its anonymous memory copy; input
+field loads, relative transform, ordered classification and credit arithmetic
+were the original instructions. All 22 captures matched credits, fancy index and
+fixed time: adjacent height/omega/up thresholds, current/starting velocity,
+sideways/spin/reverse boundaries, subnormal position and the unspilled Y difference.
+Raw browser height `1.00000001` must store as1 and avoid the falling multiplier;
+omega X `5.00000001` must store as5 and avoid the rolling multiplier. These
+were reproducible consumer defects before the fix. The independent optional
+[probe source](../tools/native-race-awards-probe.c) and
+[hash-checking driver](../tools/native-race-awards-probe.mjs) embed no original
+code or assets. Temporary native executables are removed; generated numeric
+reports stay in ignored `artifacts/`. Committed fixtures contain synthetic
+values and numerical outcomes only.
+
 ## Death and score ownership
 
 Installed `ScoreForKilledPedestrian` is `0x4cd010`. It first clears the
@@ -209,7 +256,11 @@ pause-adjusted gameplay clock. Landing samples that clock again after the
 shared earned-credit outlet. Race loading and recovery cancel pending stunts
 without resetting the last-award cooldown. The X/Y formulas use JavaScript
 double temporaries and Z is explicitly Float32, matching the source store;
-pathological x87 80-bit boundary identity is not claimed.
+the verified PC53 startup supports those double temporaries. This does not
+claim equivalence for corrupt/nonfinite physics states or a changed FPU control
+word. Source constants are Float32 `47.61` at `0x5887d0`, double negative
+offsets `−3.3/−3.57/−.44` at `0x5888d8/e0/e8`, double `.5` at `0x588638`,
+and Float32 wild/mild thresholds at `0x5888f0–0x588900`.
 
 ## Integration and checks
 
@@ -219,11 +270,15 @@ objective-before-score ordering where the caller does so. Send raw returned
 credits through one shared EarnCredits consumer. Fixed time remains on the
 ordinary guarded time path. The module intentionally reports missing geometric
 providers; authored napalm flags can still be exact while PED-03 collision
-causes, indirect culprits and motion snapshots remain incomplete.
+causes, indirect culprits and motion snapshots remain incomplete. Those physical
+providers are owned by PED-09/TASK-99 after the PED-03 scope split; reward
+consumer conformance does not establish their native physical behavior.
 
 `tests/ped-awards-binary.test.mjs` verifies ordered flags, geometry thresholds,
 raw current/starting velocity, local reverse/spin/sideways conditions, signed
 deadline semantics, ownership gates, combo timing/cap/clock wrap, dismemberment
 priority, signed credit products and earned multiplication/addition. Optional
 read-only Stock/Advanced cases check original table values and action48's
-authored multiplier without copied fixtures.
+authored multiplier without copied fixtures. Every skill is exercised with all
+ordered classes, combo1/10 and ordinary/Drink Driving earnings. Fixed time is
+checked independently of class, combo and earned-credit multipliers.
