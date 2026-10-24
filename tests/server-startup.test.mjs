@@ -52,11 +52,15 @@ function launch({ port, root, production = true }) {
   };
 }
 
-function waitForExit(child, timeoutMs = 5000) {
+function waitForExit(child, timeoutMs = 5000, readOutput = () => "") {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`Child process did not exit within ${timeoutMs} ms`));
+      reject(
+        new Error(
+          `Child process did not exit within ${timeoutMs} ms: ${readOutput()}`,
+        ),
+      );
     }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timeout);
@@ -267,7 +271,7 @@ test("development server closes Vite before waiting on its open HMR socket", asy
     socket = await openHmrSocket(port);
 
     child.kill("SIGTERM");
-    const exit = await waitForExit(child);
+    const exit = await waitForExit(child, 15000, () => launched.output);
     assert.equal(exit.code, 0, launched.output);
     assert.match(launched.output, /local assets/);
 

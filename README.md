@@ -76,6 +76,11 @@ PERF-01 remains open.
 
 ## Run it
 
+GitHub Actions is configured to build and run the asset-free test suite using
+pinned Node/action versions and `npm ci`. Local original-data tests remain
+optional; no game data is uploaded by the workflow. See
+[CI setup and validation limits](docs/continuous-integration.md).
+
 Use Node.js 20 or newer and a modern browser with WebGL support:
 
 ```sh
