@@ -9,8 +9,6 @@ try {
   await access(executable);
   await access(process.env.CARMA2_ROOT || "carma2_orig");
 } catch {
-  assert.deepEqual(errors, []);
-  assert.deepEqual(failedRequests, []);
   console.log(
     "SKIP terminal feedback browser regression: Chromium or local C2 assets absent.",
   );

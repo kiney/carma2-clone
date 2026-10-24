@@ -9,18 +9,6 @@ try {
   await access(executable);
   await access(process.env.CARMA2_ROOT || "carma2_orig");
 } catch {
-  await page.evaluate(() => (window.carma.paused = true));
-  await checkInitialTables(2);
-  assert.deepEqual(errors, []);
-  assert.deepEqual(failedRequests, []);
-  await page.close();
-  const fresh = await browser.newPage();
-  await fresh.goto(`http://127.0.0.1:${port}`);
-  await fresh.waitForFunction(() => window.carma?.stats.ready, null, {
-    timeout: 90000,
-  });
-  assert.equal(await fresh.locator("#difficulty-select").inputValue(), "0");
-  assert.equal(await fresh.evaluate(() => window.carma.simulation.skill), 0);
   console.log(
     "SKIP difficulty browser regression: Chromium or local C2 assets absent.",
   );

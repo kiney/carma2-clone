@@ -11,6 +11,19 @@ import { parsePort } from "../server/startup.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tempRoots = [];
+const processExits = new WeakMap();
+
+function observeExit(child) {
+  let exit = processExits.get(child);
+  if (!exit) {
+    exit = new Promise((resolve) => {
+      child.once("error", (error) => resolve({ error }));
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    processExits.set(child, exit);
+  }
+  return exit;
+}
 
 async function emptyAssetRoot() {
   const root = await mkdtemp(path.join(os.tmpdir(), "carma-startup-test-"));
@@ -41,6 +54,7 @@ function launch({ port, root, production = true }) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  observeExit(child);
   let output = "";
   child.stdout.setEncoding("utf8").on("data", (chunk) => (output += chunk));
   child.stderr.setEncoding("utf8").on("data", (chunk) => (output += chunk));
@@ -62,13 +76,10 @@ function waitForExit(child, timeoutMs = 5000, readOutput = () => "") {
         ),
       );
     }, timeoutMs);
-    child.once("error", (error) => {
+    observeExit(child).then((exit) => {
       clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
+      if (exit.error) reject(exit.error);
+      else resolve(exit);
     });
   });
 }
@@ -149,6 +160,16 @@ test("PORT parser defaults only when unset and accepts only TCP port integers", 
   for (const value of ["", "0", "-1", "1.5", "70000", "abc"]) {
     assert.throws(parsePort.bind(null, value), /integer from 1 to 65535/);
   }
+});
+
+test("waitForExit observes a child that closes before the caller starts waiting", async () => {
+  const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
+    stdio: "ignore",
+  });
+  const observed = observeExit(child);
+  await observed;
+
+  assert.deepEqual(await waitForExit(child, 100), { code: 0, signal: null });
 });
 
 test("occupied port reports a clear startup error and exits unsuccessfully", async () => {
