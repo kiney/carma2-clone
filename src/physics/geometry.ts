@@ -60,6 +60,9 @@ export interface WorldSurfaceOptions {
   skipWorldEdges?: boolean;
   /** Prior object+ed disables world-vertex tests even without current recovery. */
   skipWorldVertices?: boolean;
+  /** Browser guard certificate for world-space moving hull features only.
+   * Static world vertices follow an inverse-frame path and remain enabled. */
+  skipMovingHullFeatures?: boolean;
   sourceSurface?: import("../world").Surface;
   edgeOnly?: boolean;
 }
@@ -307,6 +310,35 @@ export function recoverShallowWorldContacts(
     centerOfMassWorld,
   );
   return result.overlapDetected ? result : undefined;
+}
+
+/** Browser commit guard only. World-space vertex secants and their interpolated
+ * edges remain in a common closed halfspace when both endpoint hulls do.
+ * This certifies only moving hull features, never inverse-frame world-vertex
+ * sweeps or a complete rotating path. Apply separately per angular sample. */
+export function worldFaceSeparatesHullSweep(
+  old: CollisionHull,
+  predicted: CollisionHull,
+  surface: WorldRecoverySurface,
+): boolean {
+  if (!old.faces.length || surface.edgeOnly) return false;
+  const { normal, constant } = worldTrianglePlane(
+    surface.a,
+    surface.b,
+    surface.c,
+    surface.sourceSurface,
+  );
+  if (!normal.lengthSq()) return false;
+  let above = true,
+    below = true;
+  for (const hull of [old, predicted])
+    for (const vertex of hull.vertices) {
+      const distance = normal.dot(vertex) - constant;
+      above &&= distance >= -EPS;
+      below &&= distance <= EPS;
+      if (!above && !below) return false;
+    }
+  return above || below;
 }
 
 /** Original per-shape world emitter deduplication and four-contact limit.
@@ -1906,7 +1938,7 @@ export function sweepHullTriangle(
   const finiteTriangle = new Triangle(a, b, c);
   const vertexContacts: HullContact[] = [];
   for (const i of old.vertexOrder ?? old.vertices.map((_, index) => index)) {
-    if (options.edgeOnly) break;
+    if (options.edgeOnly || options.skipMovingHullFeatures) break;
     if (options.suppressedVertices?.has(i)) continue;
     const start = old.vertices[i];
     const direction = predicted.vertices[i].clone().sub(start);
@@ -1965,7 +1997,7 @@ export function sweepHullTriangle(
     faceContacts.push(candidate);
   }
   for (let i = 0; i < 3; i++) {
-    if (options.skipWorldEdges) break;
+    if (options.skipWorldEdges || options.skipMovingHullFeatures) break;
     if (((options.faceFlags ?? 0) & (1 << i)) !== 0) continue;
     const intersections: HullContact[] = [];
     const edgeSlots = options

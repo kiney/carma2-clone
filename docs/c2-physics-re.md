@@ -547,3 +547,13 @@ but is **not implemented**. Clear OLD/NEXT geometry does not certify an
 intermediate full-turn arc. Such evidence also does not survive common-prefix
 clamps under the existing pair-component merge rules. Native discovery ownership
 and continuous interval clearance must remain distinct certificate types.
+
+## PHY-17: grounded split-secondary guard (2026-10-24)
+
+Evidence: bounded original Porker2 data and experimentally isolated browser
+commitment defect. An old separating support touch could cap a PHIL-active split
+secondary at fraction zero. A per-sample common-halfspace certificate now excludes
+only moving hull features in the independent guard; inverse-frame world-vertex
+features, recovery and native contact response remain live. No new original
+binary constant or impulse rule is asserted. See
+[reproduction, angular counterexample and scope](grounded-split-recovery.md).

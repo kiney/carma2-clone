@@ -31,6 +31,7 @@
     "test:wam-effects": "npm run build && node tests/browser-wam-effects.mjs",
     "test:native-ai": "npm run build && node tests/browser-native-ai.mjs && node tests/browser-short-opponent-path.mjs",
     "test:crash-matrix": "npm run build && node tests/browser-crash-matrix.mjs",
+    "test:grounded-split": "node tests/browser-phy17-split.mjs",
     "test:overlap": "npm run build && node tests/browser-overlap-admission.mjs",
     "test:shallow-contact": "npm run build && node tests/browser-shallow-contact.mjs",
     "test:smash-followup": "npm run build && node tests/browser-smash-followup.mjs",

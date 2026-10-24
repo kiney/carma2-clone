@@ -1,9 +1,10 @@
 ---
 id: TASK-111
 title: '[P1] PHY-17: Diagnose a stationary split secondary after grounded Porker2 SPAM'
-status: next
+status: done
 assignee: []
 created_date: '2026-10-15 18:55'
+updated_date: '2026-10-24 13:52'
 labels:
   - priority-1
   - PHY-17
@@ -13,6 +14,7 @@ labels:
 dependencies: []
 references:
   - docs/world-contact-spikes.md
+  - docs/grounded-split-recovery.md
 priority: high
 ordinal: 1270
 ---
@@ -25,7 +27,15 @@ The extended original Porker2 crash-matrix scenario produces a split secondary w
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Extract a bounded original-data reproduction and attribute the stationary state to the responsible admission, quiet, collision or guard path.
-- [ ] #2 Implement the evidence-backed correction without adding an arbitrary velocity nudge or globally disabling sleeping/guards.
-- [ ] #3 Validate grounded and airborne split secondaries, mass/moments, detached attachments and repair in numerical tests and Chromium.
+- [x] #1 Extract a bounded original-data reproduction and attribute the stationary state to the responsible admission, quiet, collision or guard path.
+- [x] #2 Implement the evidence-backed correction without adding an arbitrary velocity nudge or globally disabling sleeping/guards.
+- [x] #3 Validate grounded and airborne split secondaries, mass/moments, detached attachments and repair in numerical tests and Chromium.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-24: User selected implementation together with PERF-23. A bounded read-only investigation runs alongside renderer work; root will integrate and validate the physics correction after the PERF-23 checkpoint. WIP count remains three including PERF-01.
+
+2026-10-24: Reduced to eight original Porker2 component impacts, real WAM parts 6/7, ten SPAM rays and one production tick. PHIL and quiet admission are correct; a separating old support-plane row incorrectly returned zero browser world-guard commitment. Corrected only moving-hull feature admission using a per-sample common-halfspace certificate. Nearby faces, overlap recovery, native response and inverse-frame world vertices remain live; independent review caught and added the rotating-vertex counterexample. Full 3119 tests/build and four-car production crash core passed. Chromium original-data grounded/airborne/new-wall fixture passed with attachments, moments, mass and repair; headed DevTools AMD inspection independently confirmed motion and repair with clean GL/console. Historical complete damaged orientation is unavailable; documented controlled reproduction limits. PERF-23 separately checkpointed as 78175d9; PERF-01 umbrella remains open.
+<!-- SECTION:NOTES:END -->

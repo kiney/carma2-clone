@@ -192,6 +192,8 @@ Run `npm test` for parsers, assets and deterministic motion/contact/crush/compon
 
 `npm run test:crash-matrix` checks four Stock/Advanced cars with real driving input, severe crash chains, simultaneous Eagle bumper joints, native Porker2 splitting and repair. Controlled impact setups are recorded separately from driven collisions. Reports and screenshots stay in ignored `artifacts/`.
 
+`npm run test:grounded-split` runs the bounded original Porker2 grounded/airborne split and independent-wall browser cases, including real WAM attachments and repair. It starts its own development server and needs no production build. [PHY-17 evidence and scope](docs/grounded-split-recovery.md) distinguish this controlled reproduction from the unavailable complete historical damaged scene.
+
 `npm run test:ped-gameplay` checks the native pedestrian resource/contact adapter
 in Stock and Advanced Chromium: keyboard-driven Eagle contact, original death
 models, attribution and count/score callbacks; a separately labeled controlled
