@@ -3,9 +3,10 @@ id: TASK-116
 title: >-
   [P1] PHY-19: Trace the first excessive-energy impulse in original world-prop
   crashes
-status: next
+status: done
 assignee: []
 created_date: '2026-10-24 14:42'
+updated_date: '2026-10-24 15:07'
 labels:
   - priority-1
   - PHY-19
@@ -29,4 +30,19 @@ PHY-18 contains escaped free props and eliminates their empty-world high-spin gu
 - [ ] #1 Capture or construct a bounded original-mechanics collision exposing the first excessive energy increase, rather than starting from the final runaway state.
 - [ ] #2 Attribute the increase to contact/joint solve, force, placement or integration with numerical evidence and original C2 references where available.
 - [ ] #3 Implement the demonstrated cause correction with strong-crash, mass/inertia, joint and damage regressions; retain PHY-18 escape containment as a backstop.
+- [x] #4 Complete the user-authorized bounded investigation, retain confirmed and uncertain findings, and explicitly record acceptance rather than claiming a demonstrated cause fix.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-24 14:54 UTC: User requested an approximately fifteen-minute causal investigation. If no concrete hot lead emerges, close with known facts and accept occasional explosions protected by PHY-18. No speculative global damping/solver rewrite.
+
+2026-10-24: Bounded audit started14:54UTC and closed within approximately15minutes per user instruction. Eight original-inertia prescribed contact solves expose biased near-dependent-row amplification (speed4047,omega89084), but nine actual guard-geometry cases did not reproduce an explosion. Original HW dependence-removal, single-row gate and residual-correction safeguards were verified statically; exact native outcome and historical first contact remain unproven. Wake/release callback invalidation, inertia scaling and basic coupling/Jacobian signs showed no defect. No solver/physics or live scene changes. Original cause-fix criteria remain intentionally unchecked; user-authorized closure accepts the remaining occasional-explosion limitation protected by PHY-18.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed as investigated / accepted remaining compatibility gap, not fixed. Native numerical safeguard differences and bounded counterexamples are documented in docs/timber-runaway-props.md. No reliable initiating Timber-contact reproduction or small evidence-backed patch emerged. Retain PHY-18 containment; reopen for frequent explosions, disruptive in-world stalls or an available first-event contact packet.
+<!-- SECTION:FINAL_SUMMARY:END -->

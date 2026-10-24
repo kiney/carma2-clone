@@ -574,4 +574,19 @@ whole-motion world-clearance tube, eliminating expensive off-world angular
 sampling without changing final integration. Current ownerless geometry is
 enclosed at publication, including unindexed large triangles. See
 [evidence, restrictions and tests](timber-runaway-props.md). The initiating-energy
-investigation remains PHY-19, separate from this completed containment path.
+gap is recorded by PHY-19, separate from this completed containment path.
+
+## PHY-19: bounded numerical-cause audit (2026-10-24)
+
+Verified installed HW normal-solver differences: single-row diagonal gate
+`.0001` at `0x4c3937–0x4c3962`; triangular-factor dependence check against
+`abs(lastDiagonal * 100000)` at `0x4c3ad2–0x4c3b0d`, followed by active-row
+removal/rebuild; final `.01` residual correction at `0x4c446c–0x4c4492`;
+fifty-iteration failure returns `-1`. The factor uses orthogonal rotations;
+these are not thresholds for a generic Gaussian pivot. Browser parity remains
+incomplete. A prescribed original-inertia biased wedge amplifies motion, but
+nine geometry-admission cases did not reproduce the historical explosion.
+Noncar callback mass/inertia ordering and basic Jacobian signs showed no defect.
+User accepted this remaining gap after the bounded audit; PHY-19 is closed as
+investigated, without a solver change. See the
+[full confidence and closure record](timber-runaway-props.md#phy-19-bounded-causal-investigation-and-accepted-limitation).

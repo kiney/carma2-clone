@@ -157,3 +157,83 @@ Correction evidence: `artifacts/phy18-copied-state-comparison.json`,
 `artifacts/browser-escaped-bodies.json`, `artifacts/phy18-full-tests.log` and
 `artifacts/phy18-build.log`. Isolated candidate reports are under
 `/tmp/carma-phy18/artifacts/` until integration.
+
+## PHY-19 bounded causal investigation and accepted limitation
+
+On 2026-10-24 the user limited further investigation to approximately fifteen
+minutes unless a strong actionable cause emerged, accepting occasional
+explosions while PHY-18 prevents their ongoing off-world simulation cost.
+Investigation started at 14:54 UTC and closed within that window. No solver,
+physics coefficient or live playtest state was changed during this investigation.
+
+### Excluded and unproven paths
+
+- All ten captured props retain authored `mass * inertiaPerMass`, within about
+  `2.3e-8` relative error. There is no persistent factor-50 scaling error.
+- Waking/admitting or releasing a noncar invalidates the solve before cached
+  impulses are applied. Released mass/inertia is finalized before the following
+  matrix construction. No transient callback mismatch was demonstrated.
+- Captured free props have no motor/world joint/tumble force producer. Their
+  current force path only applies gravity. Free gyro integration preserves world
+  angular momentum algebraically and cannot itself create linear velocity.
+- Contact coupling and joint Jacobian signs are consistent with symmetric
+  `J M^-1 J^T`; no isolated sign/COM response coding defect was found.
+
+### Reproduced artificial amplification
+
+Eight bounded prescribed-contact solves used captured original prop mass/inertia
+and three constructed normals: normalized `(epsilon,+1,0)`,
+`(epsilon,-1,0)` and `(0,0,-1)`. Initial velocity was `(0,0,1)`, with no initial
+spin and production-style deferred friction. At `epsilon=1e-6`, a lever offset
+of `.04` produced speed **4047.3** and spin **89084.4 rad/s**. At zero lever
+offset it produced speed **6667.2**. Nearly dependent biased contact demands can
+therefore amplify motion substantially in the browser solver.
+
+This is a constructed numerical counterexample, **not** a replay of the first
+Timber impact. Native world reduction rejects nearby opposing normals and keeps
+one aligned normal prefix. Browser angular augmentation groups directions before
+reduction and can retain opposing groups, but its geometric entering-motion
+gates still have to pass. The prescribed Vz-only contact fixture does not prove
+those gates or the native/angular merge admitted this exact packet.
+
+Nine additional bounded geometry cases used the captured original prop hulls and
+mechanics against procedural nearly opposing surfaces, translations and ordinary
+10 rad/s rotations. One case retained opposing guard contacts, but **none**
+reproduced an explosion; speed stayed approximately 3.08–3.18 and spin at most
+11.13 rad/s. This narrows the admission question without proving the historical
+event or excluding other configurations.
+
+### Verified native safeguards not yet reproduced
+
+Installed HW SHA-256 remains
+`698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c`.
+Static inspection confirms:
+
+| HW address                      | Observation                                                                                                                                                 | Confidence                                                                              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `0x4c3937–0x4c3962`             | Single-row diagonal at most `.0001` yields zero impulse.                                                                                                    | Verified binary.                                                                        |
+| `0x4c3ad2–0x4c3b0d`             | Compare earlier entries in the final triangular-factor row against `abs(lastDiagonal * 100000)`. A larger earlier entry selects active-row removal/rebuild. | Verified binary; factor helper uses orthogonal rotations, not ordinary Gaussian pivots. |
+| `0x4c3ce8–0x4c3d6e`             | Remove an active row and rebuild the factor.                                                                                                                | Verified binary control flow.                                                           |
+| `0x4c446c–0x4c4492`             | Final residual discrepancy beyond `.01` triggers a correction pass.                                                                                         | Verified binary; not an immediate failure return.                                       |
+| `0x4c3a11`, `0x4c43cb–0x4c43e2` | Fifty-iteration exhaustion returns `-1`.                                                                                                                    | Verified binary; existing native three-report handling remains distinct.                |
+
+The browser instead regularizes dense Gaussian elimination and lacks the same
+dependence handling and final residual correction/status. Native protection is
+relevant to the artificial near-dependent packet, but its exact outcome was not
+executed. Substituting `100000` into an unrelated Gaussian-pivot check would not
+faithfully port the native triangular-factor rule. No such speculative patch was
+made.
+
+### Closure meaning
+
+PHY-19 is closed **as investigated with an accepted remaining compatibility
+gap**, not as a fixed or proven initiating cause. The saved scene lacks its first
+contact packet, and the bounded geometry experiments did not reproduce it.
+Occasional extreme impulses remain possible; PHY-18 containment and empty-space
+clearance remain the operational protection. Reopen if explosions become common,
+in-world spikes remain disruptive, or a first-event contact packet becomes
+available. This closure does not assert that every possible frame stall is fixed.
+
+Ignored experiment scripts/reports: `artifacts/phy19-biased-wedge.{mjs,json}` and
+`artifacts/phy19-world-admission.{mjs,json}`. No proprietary fixtures or executable
+contents were committed.
