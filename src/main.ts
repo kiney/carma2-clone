@@ -201,6 +201,10 @@ const scene = new THREE.Scene();
 scene.add(new THREE.AmbientLight(0xffffff, 1.25));
 const sun = new THREE.DirectionalLight(0xfff6df, 1.4);
 sun.position.set(-3, 10, 4);
+// Both passes share Three's scene render-state cache. Keep the directional
+// light count stable so unchanged Lambert programs are not reselected each
+// frame. The sky's Basic material ignores lighting; main-pass light is unchanged.
+sun.layers.enable(1);
 scene.add(sun);
 const camera = new THREE.PerspectiveCamera(
   65,
