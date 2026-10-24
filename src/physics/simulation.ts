@@ -1,4 +1,6 @@
 import { HierarchyPredictionCache } from "./cached-hierarchy-motion";
+import { freeWorldEnvelope } from "./free-world-envelope";
+import { escapedBodyReason } from "./escaped-bodies";
 import {
   createEdgeFeatureIndex,
   type EdgeFeatureIndex,
@@ -1579,6 +1581,107 @@ export class VehicleSimulation {
           (this.noncarQuiet.get(b) ?? this.hierarchyQuiet.get(b))?.doNothing,
       ).length,
     };
+  }
+  readonly escapedBodyCounts = { noncars: 0, parts: 0 };
+  /** Browser containment, deliberately separate from native once/second quiet
+   * reclaim. Far escaped free props cannot keep paying high-spin CCD forever.
+   * Keep authored identities/resources; car repairs still own loose part ACTs. */
+  containEscapedBodies(): number {
+    const bounds = this.world.escapeBounds;
+    if (!bounds) return 0;
+    const parents = new Set<RigidBody>();
+    for (const body of [
+      ...this.debris,
+      ...this.noncars,
+      ...this.pedBoneBodies,
+      ...this.mineBodies,
+    ])
+      if ("joint" in body && body.joint) parents.add(body.joint.parent);
+    const reason = (body: SimulationBody) => {
+      let radius = 0;
+      for (const hull of body.hulls)
+        for (const vertex of hull.vertices)
+          radius = Math.max(radius, vertex.length());
+      return escapedBodyReason(bounds, body.state.position, radius);
+    };
+    const retired = new Set<SimulationBody>();
+    for (const body of this.activeNonCars()) {
+      if (body.attached || body.joint || parents.has(body) || !reason(body))
+        continue;
+      // Return linked native actors at their valid original pose, avoiding huge
+      // column coordinates and nonfinite Float32 matrices during retirement.
+      body.state.position.copy(body.originalPosition);
+      body.state.orientation.copy(body.originalOrientation);
+      body.state.velocity.set(0, 0, 0);
+      body.state.angularVelocity.set(0, 0, 0);
+      body.state.predictedPosition = undefined;
+      body.state.predictedOrientation = undefined;
+      body.previousVelocity.set(0, 0, 0);
+      body.actor.userData.physicsEscaped = true;
+      body.actor.userData.worldSmashDisabled = true;
+      body.actor.visible = false;
+      this.syncActor(body);
+      this.applyNonCarReclaimEffect({
+        kind: "set-driver",
+        owner: body,
+        value: 0,
+      });
+      this.applyNonCarReclaimEffect({
+        kind: "return-actor",
+        owner: body,
+        position: body.originalPosition,
+        carId: this.noncarReturnIds.get(body) ?? 0xffff,
+        destination:
+          this.noncarReturnIds.get(body) === 0xffff
+            ? "additional-actors"
+            : "track-column",
+      });
+      this.applyNonCarReclaimEffect({
+        kind: "clear-actor-binding",
+        owner: body,
+      });
+      this.applyNonCarReclaimEffect({ kind: "remove-physics", owner: body });
+      this.noncarReturnIds.delete(body);
+      this.escapedBodyCounts.noncars++;
+      retired.add(body);
+    }
+    this.debris = this.debris.filter((body) => {
+      if (
+        body.part < 0 ||
+        body.owner.damage.runtimeParts[body.part]?.state.phase !== 2 ||
+        body.owner.damage.runtimeParts[body.part]?.actor !== body.actor ||
+        body.joint ||
+        parents.has(body) ||
+        !reason(body)
+      )
+        return true;
+      // Repair reparents this same actor and resets phase; hiding it would
+      // survive repair, so detach only from the render scene without disposal.
+      body.actor.removeFromParent();
+      this.escapedBodyCounts.parts++;
+      retired.add(body);
+      return false;
+    });
+    if (!retired.size) return 0;
+    for (const body of retired) {
+      this.phil.remove(body);
+      this.hierarchyQuiet.remove(body);
+      this.quietGravity.delete(body);
+      this.pedContactRings.delete(body);
+      this.contactSurfaces.delete(body);
+      this.worldFaceStates.delete(body);
+      this.cameraContacts.forget(body);
+    }
+    for (const ring of this.pedContactRings.values())
+      for (const body of retired) ring.delete(body);
+    this.lastImpacts = this.lastImpacts.filter(
+      (impact) =>
+        !retired.has(impact.a as SimulationBody) &&
+        (!impact.b || !retired.has(impact.b as SimulationBody)),
+    );
+    this.hierarchyMotion = undefined;
+    this.invalidateWorldFaceCache();
+    return retired.size;
   }
   /** Installed4203e0, once after FinishCars, never a TTL/speed-based eviction.
    * Generic hierarchy ec comes from the shared native quiet owner. */
@@ -3818,6 +3921,20 @@ export class VehicleSimulation {
           PHYSICS_STEP,
         );
     const path = phase.paths.get(body)!;
+    // A complete COM tube proves physical clearance without 128 integrations
+    // of a free spinner in empty space. Native contacts and body pairs remain
+    // live; unknown/custom providers and spheres keep their existing path.
+    const envelope = !isNativeSphereBody(body)
+      ? freeWorldEnvelope(body, path)
+      : undefined;
+    if (envelope && this.world.ownerlessGuardBoundsClear?.(envelope)) {
+      const end = path(1);
+      (body.state.predictedPosition ??= new Vector3()).copy(end.position);
+      (body.state.predictedOrientation ??= new Quaternion()).copy(
+        end.orientation,
+      );
+      return { fraction: 1, crossingFraction: 1, contacts: [] };
+    }
     const samples = Math.min(
       128,
       Math.max(
@@ -5404,6 +5521,7 @@ export class VehicleSimulation {
     return changed;
   }
   step() {
+    this.containEscapedBodies();
     this.onBeforeStep?.();
     this.physicsQueryDepth++;
     const previousWorkingSet = this.correctionWorkingSet;

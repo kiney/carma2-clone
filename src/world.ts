@@ -198,12 +198,20 @@ export class WorldCollision {
     Map<number, number>
   >();
   private initialMinimumWorldY: number | null = null;
+  private initialWorldBounds: THREE.Box3 | null = null;
+  /** Authored load-time footprint for browser escape containment, never a
+   * collision-clearance certificate for later moving or destroyed scenery. */
+  get escapeBounds(): THREE.Box3 | null {
+    return this.initialWorldBounds?.clone() ?? null;
+  }
   /** Retained load-time bounds are independent of admitted or smashed geometry. */
   get minimumWorldY(): number | null {
     return this.initialMinimumWorldY;
   }
   private cellSize = 4;
   private staticGuardRevision: object = {};
+  private ownerlessGuardBounds = new THREE.Box3();
+  private ownerlessGuardBoundsValid = true;
   private staticGuardFriction: number[] = [];
   private staticGuardDefaultFriction = NaN;
   private dynamicGuardOwners = new Set<RigidBody>();
@@ -220,6 +228,61 @@ export class WorldCollision {
    * or rebuildStatic; native face collection/callbacks remain outside scope. */
   getOwnerlessGuardRevision(): object | undefined {
     return this.certifiedStaticSurfaceRevision();
+  }
+  /** Complete ownerless scenery exclusion, independent of capped cell queries.
+   * Publication grows the aggregate before the grid can reject large faces.
+   * Retired geometry may retain conservative bounds until rebuildStatic; neither
+   * guard calls nor revision changes traverse the scenery population. */
+  ownerlessGuardBoundsClear(bounds: THREE.Box3): boolean {
+    if (
+      !this.ownerlessGuardBoundsValid ||
+      bounds.isEmpty() ||
+      !Number.isFinite(bounds.min.x) ||
+      !Number.isFinite(bounds.min.y) ||
+      !Number.isFinite(bounds.min.z) ||
+      !Number.isFinite(bounds.max.x) ||
+      !Number.isFinite(bounds.max.y) ||
+      !Number.isFinite(bounds.max.z) ||
+      this.modifier !== WorldCollision.prototype.modifier ||
+      this.querySurfaces !== WorldCollision.prototype.querySurfaces ||
+      this.queryLocalSurfaces !== WorldCollision.prototype.queryLocalSurfaces
+    )
+      return false;
+    return !this.ownerlessGuardBounds.intersectsBox(bounds);
+  }
+  private publishOwnerlessGuardBounds(surface: Surface): void {
+    if (surface.owner || !this.ownerlessGuardBoundsValid) return;
+    const points = [surface.a, surface.b, surface.c];
+    const min = [Infinity, Infinity, Infinity],
+      max = [-Infinity, -Infinity, -Infinity];
+    let magnitude = 1;
+    for (const point of points)
+      for (let axis = 0; axis < 3; axis++) {
+        const value = point.getComponent(axis),
+          rounded = Math.fround(value);
+        if (!Number.isFinite(value) || !Number.isFinite(rounded)) {
+          this.ownerlessGuardBoundsValid = false;
+          return;
+        }
+        min[axis] = Math.min(min[axis], value, rounded);
+        max[axis] = Math.max(max[axis], value, rounded);
+        magnitude = Math.max(magnitude, Math.abs(value), Math.abs(rounded));
+      }
+    for (let axis = 0; axis < 3; axis++) {
+      // Match the face index's Float32/barycentric locality allowance.
+      const padding =
+        2 * 0.0001 * (max[axis] - min[axis]) + 32 * Number.EPSILON * magnitude;
+      const low = min[axis] - padding,
+        high = max[axis] + padding;
+      if (!Number.isFinite(low) || !Number.isFinite(high)) {
+        this.ownerlessGuardBoundsValid = false;
+        return;
+      }
+      if (low < this.ownerlessGuardBounds.min.getComponent(axis))
+        this.ownerlessGuardBounds.min.setComponent(axis, low);
+      if (high > this.ownerlessGuardBounds.max.getComponent(axis))
+        this.ownerlessGuardBounds.max.setComponent(axis, high);
+    }
   }
   private certifiedStaticSurfaceRevision(): object | undefined {
     if (
@@ -314,6 +377,27 @@ export class WorldCollision {
         });
       }
     this.rebuildStatic();
+    const authoredBounds = nativeScene?.initialBounds;
+    const initialBounds = authoredBounds
+      ? new THREE.Box3(
+          new THREE.Vector3().fromArray(authoredBounds.min),
+          new THREE.Vector3().fromArray(authoredBounds.max),
+        )
+      : new THREE.Box3();
+    if (!authoredBounds)
+      for (const entry of this.staticOwners.values())
+        for (const face of entry.surfaces)
+          initialBounds
+            .expandByPoint(face.a)
+            .expandByPoint(face.b)
+            .expandByPoint(face.c);
+    if (
+      !initialBounds.isEmpty() &&
+      [...initialBounds.min.toArray(), ...initialBounds.max.toArray()].every(
+        Number.isFinite,
+      )
+    )
+      this.initialWorldBounds = initialBounds;
     const nativeMinimum = nativeScene?.initialBounds?.min[1];
     if (nativeMinimum !== undefined && Number.isFinite(nativeMinimum))
       this.initialMinimumWorldY = nativeMinimum;
@@ -328,6 +412,8 @@ export class WorldCollision {
     }
   }
   rebuildStatic() {
+    this.ownerlessGuardBounds.makeEmpty();
+    this.ownerlessGuardBoundsValid = true;
     this.invalidateNativePreparation();
     this.staticGuardRevision = {};
     if (this.syncDiagnostics)
@@ -547,6 +633,7 @@ export class WorldCollision {
     entry?: StaticColliderState,
     ordered = false,
   ) {
+    this.publishOwnerlessGuardBounds(s);
     const { a, b, c } = s;
     const minX = Math.floor(Math.min(a.x, b.x, c.x) / this.cellSize),
       maxX = Math.floor(Math.max(a.x, b.x, c.x) / this.cellSize);

@@ -8,6 +8,11 @@ export class CameraContactFrame {
   private previousOvershoot = false;
   readonly bodies = new Set<RigidBody>();
 
+  forget(body: RigidBody) {
+    this.bodies.delete(body);
+    this.lastStep.delete(body);
+  }
+
   begin() {
     this.bodies.clear();
     if (this.previousOvershoot)

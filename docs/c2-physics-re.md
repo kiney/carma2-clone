@@ -557,3 +557,21 @@ only moving hull features in the independent guard; inverse-frame world-vertex
 features, recovery and native contact response remain live. No new original
 binary constant or impulse rule is asserted. See
 [reproduction, angular counterexample and scope](grounded-split-recovery.md).
+
+## PHY-18: escaped props and free-motion world clearance (2026-10-24)
+
+Evidence: experimentally captured runaway original props, original mechanics
+comparison and the browser's native-informed free-integrator algebra. Inertia
+still matches authored mass/inertiaPerMass; current free forces cannot explain
+the original excessive launch impulse. Native below-world/quiet reclaim is
+retained. User-authorized padded X/Z/below-world retirement is an explicit
+browser extension for escaped free props/fully detached parts, preserving
+resources, physical ownership cleanup and repair. No global speed/spin cap or
+new original-binary constant is asserted.
+
+The exact linear free COM trajectory plus complete local radius provides a
+whole-motion world-clearance tube, eliminating expensive off-world angular
+sampling without changing final integration. Current ownerless geometry is
+enclosed at publication, including unindexed large triangles. See
+[evidence, restrictions and tests](timber-runaway-props.md). The initiating-energy
+investigation remains PHY-19, separate from this completed containment path.

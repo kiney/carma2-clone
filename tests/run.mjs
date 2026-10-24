@@ -396,3 +396,11 @@ import "./distant-ped-matrices.test.mjs";
 import "./ped-presentation-distance.test.mjs";
 import "./opponent-presentation-notify.test.mjs";
 import "./phy17-grounded-split.test.mjs";
+
+import "./escaped-bodies.test.mjs";
+
+import "./ownerless-guard-clearance.test.mjs";
+
+import "./free-world-envelope.test.mjs";
+
+import "./escaped-body-lifecycle.test.mjs";

@@ -66,15 +66,94 @@ its direct certificate cost as the explanation here. It does **not** exclude an
 indirect earlier contact change. Do not declare the new fix innocent or guilty
 without a controlled original-contact reproduction.
 
-The follow-up should trace the first implausible impulse/angular-energy increase,
-test solver/integration failures with original prop mass/inertia, and remove
-unnecessary off-world trajectory work using valid complete-motion clearance.
-Preserve normal strong crashes, in-world fast rotating objects, re-entry and
-nearby third-body contacts. Avoid treating an arbitrary global speed cap, blanket
-guard disable or an FPS rendering tweak as a demonstrated root-cause fix.
+PHY-19 tracks the first implausible impulse/angular-energy increase separately.
+The user explicitly authorized containment without first proving that initiating
+cause. PHY-18 implements the backstop and continuing-cost correction below; it
+does not claim to prevent every initial extreme-energy event or long collision
+solve inside the track.
+
+## Implemented containment
+
+At the start of each normal physics tick, free noncars and fully detached car
+parts are checked against the retained authored track footprint. A conservative
+whole-hull sphere must be entirely outside the X/Z footprint or below its minimum
+Y, with padding `max(32, worldDiagonal * 0.25)`. This padding is an explicit
+browser policy, not a recovered C2 constant. Missing/invalid bounds disable the
+extension. High Y alone, high speed and high spin are not deletion criteria.
+Cars, split secondaries, attached/jointed bodies and physical parents are retained.
+
+Escaped noncars are hidden/disabled and leave PHIL, physical slots, dynamic world
+participation and quiet/contact caches through the existing reclaim lifecycle.
+Native ACT return uses the valid original pose, avoiding pathological column and
+Float32 coordinates. Original mechanics, ACT and model identities remain owned;
+no resources are disposed and no mission destruction reward is fabricated.
+Detached parts retain their original DamageSystem actor, phase and ownership.
+Removing their scene attachment leaves visibility intact so repair can restore
+them. A current phase-2 and actor-identity check protects parts already repaired
+before the next ordinary debris cleanup. Shared contact rings and both current
+and overshoot camera contact sets forget retired bodies.
+
+## Implemented complete-path clearance
+
+A native parent-free body's world COM follows an exact line through free
+integration. The line expanded by the maximum local vertex-to-COM radius bounds
+all gyro poses, including full turns. When this complete tube misses current
+ownerless world geometry, the browser guard evaluates only the final pose.
+Native contact solving, body/body guarding and nearby world contacts remain live.
+Unknown/custom trajectories/providers and analytic sphere bodies retain the
+existing sampled path. Hull/COM changes are read afresh.
+
+`WorldCollision.ownerlessGuardBoundsClear` checks a conservative aggregate of
+actual ownerless surface publications, including triangles too large for the
+legacy grid. It never treats a capped query's empty result as clearance. The
+aggregate grows during existing surface publication and resets on a full rebuild;
+deletions may retain extra conservative bounds. Queries take constant work and
+never rescan the track after prop admission, geometry edits or revision changes.
+Nonfinite publication disables the certificate until a rebuild.
+
+This certificate bounds physical geometry. The old inverse-frame world-vertex
+interpolation can produce artificial remote contacts at large turns outside that
+physical tube; those artifacts are deliberately not preserved. Actual re-entry
+and the existing angular-vertex regression continue through the sampled guard
+when the complete tube overlaps scenery.
+
+## Validation of the correction
+
+Four copied captured bodies were compared once per implementation in the same
+Node process against an empty world. Angular samples fell **512 -> 0**, world
+queries **1024 -> 0**, with exactly identical final candidate positions and
+quaternions. Combined CPU was 154.4 -> 4.6 ms in that one comparison. These
+JIT/host-sensitive Node numbers are not browser FPS or a full-tick speedup claim;
+the work counts and pose equality are the stable evidence.
+
+Visible Chromium/AMD loaded a separate production Timber race and applied all ten
+recorded free-prop states to matching original actors (matching the source ID,
+whose release marker changes in play). All ten retired, physical prop slots
+returned to zero, PHIL retained the seven cars, and subsequent W-key driving
+advanced normally with clean console and GL. Initial authored joints were
+explicitly removed in this controlled post-release fixture, matching the capture;
+the initiating collision was not replayed. The automated production browser
+regression also passes Stock Timber and Advanced Carrier with six controlled
+escaped original props each, retained identities and continued driving.
+
+Numerical checks cover complete turns, offset COM, hull/COM changes, re-entry,
+large unindexed triangles, capped queries, geometry mutation, no whole-track
+query scans, lifecycle cleanup, preserved in-world/high-flight objects,
+physical parents, missing bounds and repair both before and after retirement.
+The four-car production crash core and grounded/airborne Porker2 browser
+split/repair checks pass. The integrated full suite passes all 3,140 tests with
+zero failures/skips, and the production build succeeds. Original installation
+data remains read only. The old reference target later timed out in
+`Runtime.evaluate`; candidate validation used a separate Chromium context. After
+preserving the evidence and completing validation, that unresponsive tab was
+replaced by a fresh integrated production playtest.
 
 Ignored evidence: `artifacts/freeze-20261024-state.json`,
 `artifacts/freeze-20261024-bodies.json`,
 `artifacts/reproduce-freeze-20261024.mjs`,
 `artifacts/freeze-20261024-clone-sweeps.json`. These local captures contain
 original-derived geometry/mechanics and must not be committed.
+Correction evidence: `artifacts/phy18-copied-state-comparison.json`,
+`artifacts/browser-escaped-bodies.json`, `artifacts/phy18-full-tests.log` and
+`artifacts/phy18-build.log`. Isolated candidate reports are under
+`/tmp/carma-phy18/artifacts/` until integration.
