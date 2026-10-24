@@ -6,6 +6,7 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
+updated_date: '2026-10-24 19:40'
 labels:
   - priority-1
   - AI-05
@@ -36,3 +37,9 @@ Shared safe starting placement for player/opponents: four original wheel anchors
 
 [spawn.ts](../../src/physics/spawn.ts), [main.ts](../../src/main.ts), [spawn/pair browser test](../../tests/browser-spawn-pairs.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Read-only capture audit (2026-10-24): the retained October 15 Bigdump/Dune capture is a passing eleven-car roster without Newhawk. Newhawk appears only in a separate passing Newcity/Eagle3 grid. Initial poses are retained, but no qualifying failed Bigdump/Newhawk roster or RNG state exists. Those passes cannot establish resolution of the reported early active-AI waste, especially after later physics changes. Keep open: a new deterministic qualifying reproduction must record fleet, seed and poses, separating safe initial placement from subsequent AI crash behavior.
+<!-- SECTION:NOTES:END -->
