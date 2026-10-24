@@ -3480,6 +3480,11 @@ function worldGrooveVisible(
 
 function animate(now: number) {
   requestAnimationFrame(animate);
+  // Loading retires native resource storages before awaiting the next scene.
+  // Drawing the preceding scene in that interval reuploads disposed textures
+  // whose owners are then removed without another GPU release. Keep the last
+  // complete frame beneath the DOM loading/error UI until a scene is ready.
+  if (loading || !stats.ready) return;
   let renderAlpha = 1;
   const gameFrame = gameClock.sample(
     performance.now(),
