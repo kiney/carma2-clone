@@ -180,6 +180,7 @@ import {
 import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
 import { SelectionMenu, type CarChoice } from "./selection-menu";
+import type { DifficultySkill } from "./difficulty";
 import type { RaceChoice } from "./selection-catalog";
 import {
   assessRaceAvailability,
@@ -322,6 +323,8 @@ const cunningStunts = new NativeCunningStuntCounter();
 let cunningStuntCredits: ReturnType<typeof parseCunningStuntBonus> | undefined;
 let rivalsReady = false,
   pedestriansReady = false;
+let selectedDifficulty: DifficultySkill = 0,
+  raceDifficulty: DifficultySkill = 0;
 let opponentFleet: NativeOpponentFleet | undefined;
 const keys = new Set<string>(),
   target = new THREE.Vector3(),
@@ -669,6 +672,9 @@ async function init() {
       trackSelect,
       carSelect,
       () => paused && !loading && !el("panel").hidden,
+      (skill) => {
+        selectedDifficulty = skill;
+      },
     );
     await initializeShrapnel();
     await wastedFeedback.init();
@@ -895,6 +901,8 @@ function updateUpgradeFactors(body: SimulatedCar) {
 }
 async function loadRace() {
   if (loading) return;
+  // Capture the menu choice; failed preflight must not change the live race.
+  const loadDifficulty = selectedDifficulty;
   selectionMenu?.sync();
   const availability = raceAvailability.get(trackSelect.value);
   if (availability?.mode === "unavailable") {
@@ -1475,6 +1483,7 @@ async function loadRace() {
       world.textures,
       trackText,
     );
+    raceDifficulty = loadDifficulty;
     damage = loadedDamage;
     content = world.group;
     scene.add(content);
@@ -1500,7 +1509,9 @@ async function loadRace() {
     start.copy(player.state.position);
     vehicle = player.state;
     repairControl = createRepairControl();
-    player.upgrades = createUpgradeState(upgradeSettings, { skill: 0 });
+    player.upgrades = createUpgradeState(upgradeSettings, {
+      skill: raceDifficulty,
+    });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
     const dustCount = parseDustShades(trackText).length;
@@ -1711,6 +1722,7 @@ async function loadRace() {
         ...activeSimulation.pedBoneBodies,
       ]);
     simulation.settings = upgradeSettings;
+    simulation.skill = raceDifficulty;
     simulation.crashDamageAwards = parseCrashDamageAwards(generalText);
     simulation.onCrashAttribution = (attacker, victim) =>
       opponentFleet?.onCrashAttribution(attacker, victim);
@@ -1795,7 +1807,7 @@ async function loadRace() {
           body.upgrades,
           cost,
           upgradeSettings,
-          { skill: 0 },
+          { skill: raceDifficulty },
           body.freeRepairs,
         );
         race.credits = body.upgrades.credits;
@@ -1925,13 +1937,18 @@ async function loadRace() {
         credits: player.upgrades.credits,
         checkpointBonusSeconds: 0,
         deferCompletionAwards: true,
-        checkpointCredits: raceAwards.checkpointCredits[0],
-        completionTimeCreditRate: raceAwards.timeBonusCredits[0],
+        checkpointCredits: raceAwards.checkpointCredits[raceDifficulty],
+        completionTimeCreditRate: raceAwards.timeBonusCredits[raceDifficulty],
         completionCreditsByReason:
           definition?.raceType === "carma"
-            ? definition.raceCompletedBonus.map((bonus) => bonus[0])
-            : Array(4).fill(definition?.raceCompletedBonus[0]?.[0] ?? 20000),
-        completionCredits: definition?.raceCompletedBonus[0]?.[0] ?? 20000,
+            ? definition.raceCompletedBonus.map(
+                (bonus) => bonus[raceDifficulty],
+              )
+            : Array(4).fill(
+                definition?.raceCompletedBonus[0]?.[raceDifficulty] ?? 20000,
+              ),
+        completionCredits:
+          definition?.raceCompletedBonus[0]?.[raceDifficulty] ?? 20000,
       },
     );
     el("race-name").textContent = definition?.name ?? stemOf(currentTrack);
@@ -2630,25 +2647,30 @@ async function loadPedestrians(text: string, loadGeneration: number) {
               .clone()
               .applyQuaternion(player.state.orientation)
               .add(player.state.position);
-            const award = pedAwardCounter.score(event.timeMs, pedAwards, 0, {
-              ...event.awardContext,
-              killerDriver: player.state.driver,
-              killerAngularVelocity: player.state.angularVelocity
-                .clone()
-                .applyQuaternion(inverse),
-              killerUpY: new THREE.Vector3(0, 1, 0).applyQuaternion(
-                player.state.orientation,
-              ).y,
-              killerActorOriginY: player.state.position.y,
-              pedestrianY: event.position.y,
-              localPedPosition: event.position
-                .clone()
-                .sub(center)
-                .applyQuaternion(inverse),
-              killerLocalVelocity: player.state.velocity
-                .clone()
-                .applyQuaternion(inverse),
-            });
+            const award = pedAwardCounter.score(
+              event.timeMs,
+              pedAwards,
+              raceDifficulty,
+              {
+                ...event.awardContext,
+                killerDriver: player.state.driver,
+                killerAngularVelocity: player.state.angularVelocity
+                  .clone()
+                  .applyQuaternion(inverse),
+                killerUpY: new THREE.Vector3(0, 1, 0).applyQuaternion(
+                  player.state.orientation,
+                ).y,
+                killerActorOriginY: player.state.position.y,
+                pedestrianY: event.position.y,
+                localPedPosition: event.position
+                  .clone()
+                  .sub(center)
+                  .applyQuaternion(inverse),
+                killerLocalVelocity: player.state.velocity
+                  .clone()
+                  .applyQuaternion(inverse),
+              },
+            );
             if (award) {
               const before = race.credits;
               awardRaceCredits(race, award.credits);
@@ -2716,11 +2738,11 @@ function finishRivalWastage(r: Rival) {
     race.status === "racing"
   ) {
     const credits = wastedCarCredits(
-      raceAwards.wastingCredits[0],
+      raceAwards.wastingCredits[raceDifficulty],
       r.damage.carSoftness,
     );
     awardRaceCredits(race, credits);
-    awardRaceTime(race, raceAwards.wastingTime[0]);
+    awardRaceTime(race, raceAwards.wastingTime[raceDifficulty]);
     message(`OPPONENT WASTED · +${credits} CR`);
   }
   r.object.traverse((o) => {
@@ -3169,7 +3191,7 @@ function onPowerupEvent(event: PowerupEvent) {
     applyUpgradePickup(
       player.upgrades,
       upgradeSettings,
-      { skill: 0 },
+      { skill: raceDifficulty },
       event.definition.action as 46 | 47,
       event.definition.integerParams,
     );
@@ -3496,7 +3518,7 @@ function animate(now: number) {
         wheelsDown: player.state.groundedWheelCount ?? 0,
         volumeGravity: player.specialVolume?.volume?.gravityMultiplier,
         actionReplay: false,
-        skill: 0,
+        skill: raceDifficulty,
         creditsBySkill: cunningStuntCredits,
       });
       if (award) {

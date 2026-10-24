@@ -272,6 +272,17 @@ h1 {
   color: #c9bea4;
   font-size: 12px;
 }
+.difficulty-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffdc82;
+  font-size: 12px;
+}
+.difficulty-choice select {
+  min-width: 112px;
+  margin: 0;
+}
 .source-tab {
   padding: 7px 13px;
   font-size: 12px;

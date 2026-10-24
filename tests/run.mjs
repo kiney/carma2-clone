@@ -416,3 +416,5 @@ import "./free-world-envelope.test.mjs";
 import "./escaped-body-lifecycle.test.mjs";
 
 import "./render-fps.test.mjs";
+
+import "./difficulty.test.mjs";

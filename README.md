@@ -106,7 +106,7 @@ The race menu uses image tiles: choose a **location**, then an individual **race
 or mission**, and a **vehicle**. Locations use the original `LOCATION` names where
 available and group event variants by their authored map series. Stock and Advanced
 have separate filters; searches include race/mission names and vehicle names.
-Your last loaded race and vehicle are remembered locally. Controls are available
+Your last loaded race and vehicle are remembered locally. **Easy / Medium / Hard** selects the original skill-table column for handling damage, AI, starting upgrades/money, prices and rewards. The choice is remembered and takes effect when a race loads; changing it leaves the current race intact. Controls are available
 under **Controls & engine status**; debug tools remain selectable beside Load Race.
 
 Vehicle pictures assemble the six original menu-image fragments using the installed

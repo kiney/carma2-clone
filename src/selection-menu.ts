@@ -8,6 +8,8 @@ import {
   type TrackGroup,
 } from "./selection-catalog";
 import { SelectionPreviews } from "./selection-previews";
+import { DIFFICULTIES, parseDifficultySkill } from "./difficulty";
+import type { DifficultySkill } from "./difficulty";
 
 export interface CarChoice {
   path: string;
@@ -57,6 +59,7 @@ export class SelectionMenu {
     private readonly trackSelect: HTMLSelectElement,
     private readonly carSelect: HTMLSelectElement,
     private readonly canPreview: () => boolean,
+    onDifficultyChange: (skill: DifficultySkill) => void = () => {},
   ) {
     this.groups = groupRaceChoices(races);
     this.previews = new SelectionPreviews(assets);
@@ -66,7 +69,7 @@ export class SelectionMenu {
     this.source = selected?.source ?? "data";
     this.activeGroup = selected?.id ?? this.groups[0]?.id ?? "";
     host.innerHTML = `
-      <div class="selection-toolbar"><div class="source-tabs" role="group" aria-label="Content library"></div><p>Choose a location, then its race or mission.</p></div>
+      <div class="selection-toolbar"><div class="source-tabs" role="group" aria-label="Content library"></div><label class="difficulty-choice">Difficulty<select id="difficulty-select" aria-label="Difficulty"></select></label><p>Choose a location, then its race or mission.</p></div>
       <div class="selection-columns">
         <section class="location-selection" aria-labelledby="location-heading">
           <div class="selection-heading"><h2 id="location-heading">1 · Location</h2><label class="search-label">Find a location or mission<input type="search" id="race-search" placeholder="Search locations & missions"></label></div>
@@ -86,6 +89,25 @@ export class SelectionMenu {
     this.missions = host.querySelector(".mission-list")!;
     this.vehicles = host.querySelector(".vehicle-grid")!;
     this.summary = host.querySelector(".selection-summary")!;
+    const difficultySelect =
+      host.querySelector<HTMLSelectElement>("#difficulty-select")!;
+    for (const difficulty of DIFFICULTIES) {
+      const option = document.createElement("option");
+      option.value = String(difficulty.skill);
+      option.textContent = difficulty.label;
+      difficultySelect.append(option);
+    }
+    const savedDifficulty = parseDifficultySkill(
+      localStorage.getItem("c2-difficulty"),
+    );
+    difficultySelect.value = String(savedDifficulty);
+    onDifficultyChange(savedDifficulty);
+    difficultySelect.addEventListener("change", () => {
+      const skill = parseDifficultySkill(difficultySelect.value);
+      difficultySelect.value = String(skill);
+      localStorage.setItem("c2-difficulty", String(skill));
+      onDifficultyChange(skill);
+    });
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
