@@ -23,11 +23,11 @@ Source water/oil formulas and native noncar lift activation, forces, joints and 
 Some source content has concrete data issues. Legacy ACT string references with stale chunk lengths, including `CPOINT.ACT`, are supported. Both `PROG.ACT` files are short text placeholders, not BRender streams; executable filename literals exist, but their original loading context is unresolved. The Advanced Digga ACT has a complete hierarchy followed by one newline byte, which the strict parser rejects; it is not truncated. See the [bounded ACT classification audit](actor-compatibility.md) for hashes, exact END offsets, consumer limits and safe handling. Two Forklift DATs contain non-finite UV values, normalized with diagnostics while preserving strict finite geometry parsing. All 52 stock car mechanics/shape pipelines now load, including Forklift. The Nuke race config has no player start and its expected ACT is absent; it is visible but disabled in the selection. Drivable maps without supported catalog rules or usable required gates offer explicit browser practice instead of an unfinishable checkpoint race. Opponent, pedestrian and smash missions remain enabled without gates; classic races with an unusable route retain combat objectives only. These static checks do not certify complete mission scripts or physical reachability.
 
 The current [Advanced asset census](advanced-assets-audit.md) parses all 1,029 MAT
-files. It identifies 96 standalone UI PIX files using a distinct, currently
-unsupported serialization convention; they should not be described as ordinary
-truncations. Texture labels outside the browser's scene scope and labels with no
+files and all 321 UI pixel containers. The 96 standalone RGB565 UI fragments
+use a distinct CarEd serialization, now supported by a bounded reader and the
+selection-preview fallback; see [format evidence](pix-legacy.md). Texture labels outside the browser's scene scope and labels with no
 match in audited containers are reported separately, without assuming missing
-data. DAT-05 and DAT-06 retain the native-loader and resource-scope follow-ups.
+data. DAT-06 retains the resource-scope follow-up.
 Some Advanced track texture references point to TIFF images in nested directories;
 those are supported. Unresolved source references can still produce fallback
 materials or incomplete surfaces. Large scenes may be limited by browser and GPU

@@ -181,6 +181,47 @@ test("native Eagle3 car preview composes six authored fragments", async (t) => {
       }
     }
 
+    const legacyFragments = "ABCDEF"
+      .split("")
+      .map(
+        (letter) =>
+          store.manifest.find(
+            (entry) =>
+              entry.path.toLowerCase() ===
+              `adv_data/intrface/carimage/diggaci/pix16/digga${letter}.pix`.toLowerCase(),
+          )?.path,
+      );
+    // The Advanced install may omit this optional add-on car. When present,
+    // it has individual headerless PIX16 fragments instead of PIXIES.P16.
+    if (legacyFragments.every(Boolean)) {
+      writes.length = 0;
+      const image = await previews.car("adv_data/cars/digga.txt");
+      assert.equal(image, "data:image/png;mock,192x128");
+      assert.equal(writes.length, 6);
+      for (const [index, letter] of "ABCDEF".split("").entries()) {
+        const maps = parsePix(
+          new Uint8Array(await store.read(legacyFragments[index])),
+        );
+        assert.equal(maps.length, 1);
+        assert.deepEqual(
+          [maps[0].width, maps[0].height, maps[0].format],
+          [64, 64, 5],
+        );
+        assert.deepEqual(
+          [
+            ...writes[index].image.data.slice(
+              (32 * 64 + 32) * 4,
+              (32 * 64 + 32) * 4 + 4,
+            ),
+          ],
+          [...maps[0].rgba.slice((32 * 64 + 32) * 4, (32 * 64 + 32) * 4 + 4)],
+          `Advanced standalone ${letter} fragment sample`,
+        );
+      }
+    } else {
+      t.diagnostic("Advanced DIGGA standalone PIX16 resources unavailable");
+    }
+
     await assert.rejects(
       previews.car("data/cars/no-such-car.txt"),
       /Original car picture missing/,

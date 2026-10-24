@@ -266,6 +266,36 @@ try {
       .getAttribute("aria-pressed"),
     "true",
   );
+  const standaloneCar = await page
+    .locator("#car-select")
+    .evaluate(
+      (select) =>
+        Array.from(select.options).find((option) =>
+          /^adv_data\/cars\/digga\/digga\.txt$/i.test(option.value),
+        )?.value,
+    );
+  assert.ok(
+    standaloneCar,
+    "original Advanced DIGGA is available for the standalone preview check",
+  );
+  await page.locator("#car-search").fill("DIGGA");
+  const standaloneTile = page.locator(
+    `#selection .vehicle-tile[data-car="${standaloneCar}"]`,
+  );
+  await standaloneTile.scrollIntoViewIfNeeded();
+  await standaloneTile
+    .locator(".selection-picture.preview-ready")
+    .waitFor({ timeout: 45000 });
+  assert.deepEqual(
+    await standaloneTile
+      .locator(".selection-picture img")
+      .evaluate((image) => ({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      })),
+    { width: 192, height: 128 },
+    "standalone C2 RGB565 fragments produce a complete preview in Chromium",
+  );
   await page.locator("#race-search").fill("BLOOD ON THE ROOF TOPS");
   const advancedRace = await page
     .locator("#track-select")

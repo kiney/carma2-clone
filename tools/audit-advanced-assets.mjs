@@ -82,9 +82,13 @@ async function safeReportDestination(root, reportPath) {
   const fromRoot = relative(rootReal, candidate);
   if (
     fromRoot === "" ||
-    (fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot))
+    (fromRoot !== ".." &&
+      !fromRoot.startsWith(`..${sep}`) &&
+      !isAbsolute(fromRoot))
   )
-    throw new Error("Refusing to write audit report inside the configured original installation");
+    throw new Error(
+      "Refusing to write audit report inside the configured original installation",
+    );
   return candidate;
 }
 
@@ -268,7 +272,7 @@ export async function auditAdvancedAssets({
       for (const material of records)
         if (material.texture)
           materials.push({
-          path,
+            path,
             sceneDir: materialSceneRoot(path),
             texture: material.texture,
           });
@@ -409,6 +413,7 @@ export async function auditAdvancedAssets({
     },
     classificationNotes: [
       "Parser rejection categories are based on bounded error text; unclassified failures are retained as such rather than labeled malformed.",
+      "Standalone headerless C2 RGB565 PIX fragments are recognized only with their bounded 0x3d/0x21 fields and exact terminal END record.",
       "Unknown asset labels are checked against runtime-scoped texture maps, original file basenames, and parsed PIX/P16 embedded map names; unmatched labels are not asserted to be genuinely absent when an unparsed container might contain the map.",
       "TIFF fallback matches the production scene loader: nested local TIFFs load by basename only when no PIX/P16 map already claimed that key.",
       "The original palette container is parsed as PIX/PAL data; a present palette is supplied to indexed maps to avoid false palette-missing reports.",

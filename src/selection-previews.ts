@@ -39,9 +39,11 @@ export class SelectionPreviews {
         this.assets.resolve(`${root}/${relative.replace(/P16$/, "P08")}`) ??
         this.assets.resolve(`data/${relative}`) ??
         this.assets.resolve(`data/${relative.replace(/P16$/, "P08")}`);
-      if (!file) throw new Error(`Original car picture missing: ${path}`);
+      let standaloneMaps:
+        | Map<string, ReturnType<typeof parsePix>[number]>
+        | undefined;
       let palette = this.assets.palette;
-      if (!palette && /\.p08$/i.test(file)) {
+      if (file && !palette && /\.p08$/i.test(file)) {
         const palettePath =
           this.assets.resolve(`${root}/Reg/PALETTES/DRRENDER.PAL`) ??
           this.assets.resolve("data/Reg/PALETTES/DRRENDER.PAL");
@@ -52,10 +54,64 @@ export class SelectionPreviews {
         if (!palette)
           throw new Error(`Original car picture palette missing: ${path}`);
       }
-      const maps = parsePix(await this.assets.bytes(file), palette);
+      let maps: ReturnType<typeof parsePix> = [];
+      if (file) maps = parsePix(await this.assets.bytes(file), palette);
+      else {
+        // CarEd also installs six individual 64x64 fragments when no
+        // PIXIES package exists. Prefer the native RGB565 PIX16 files, with
+        // indexed PIX8 fragments as a palette-backed fallback.
+        for (const pixelmapDirectory of ["PIX16", "PIX8"]) {
+          for (const pictureRoot of [root, "data"]) {
+            const paths = "ABCDEF"
+              .split("")
+              .map((letter) =>
+                this.assets.resolve(
+                  `${pictureRoot}/INTRFACE/CarImage/${stem}CI/${pixelmapDirectory}/${stem}${letter}.PIX`,
+                ),
+              );
+            if (paths.some((candidate) => !candidate)) continue;
+            let fragmentPalette = palette;
+            if (pixelmapDirectory === "PIX8" && !fragmentPalette) {
+              const palettePath =
+                this.assets.resolve(
+                  `${pictureRoot}/Reg/PALETTES/DRRENDER.PAL`,
+                ) ?? this.assets.resolve("data/Reg/PALETTES/DRRENDER.PAL");
+              if (palettePath) {
+                const paletteMaps = parsePix(
+                  await this.assets.bytes(palettePath),
+                );
+                fragmentPalette =
+                  paletteMaps[0]?.palette ?? paletteMaps[0]?.rgba;
+              }
+              if (!fragmentPalette) continue;
+            }
+            try {
+              const parsed = await Promise.all(
+                paths.map(async (candidate) =>
+                  parsePix(
+                    await this.assets.bytes(candidate!),
+                    fragmentPalette,
+                  ),
+                ),
+              );
+              if (parsed.some((fragment) => fragment.length !== 1)) continue;
+              standaloneMaps = new Map(
+                parsed.map((fragment, index) => ["ABCDEF"[index], fragment[0]]),
+              );
+              break;
+            } catch {
+              // A present but unsupported candidate may have a sibling
+              // encoding; try the next complete fragment set.
+            }
+          }
+          if (standaloneMaps) break;
+        }
+        if (!standaloneMaps)
+          throw new Error(`Original car picture missing: ${path}`);
+      }
       const name = (value: string) =>
         value.replace(/\.pix$/i, "").toLowerCase();
-      const pictureRoot = file.split("/")[0];
+      const pictureRoot = file?.split("/")[0] ?? root;
       const layoutPath =
         this.assets.resolve(`${pictureRoot}/INTRFACE/changecar.txt`) ??
         this.assets.resolve("data/INTRFACE/changecar.txt");
@@ -91,6 +147,7 @@ export class SelectionPreviews {
             `Invalid original Car${letter} tile bounds: ${layoutPath}`,
           );
         const map =
+          standaloneMaps?.get(letter) ??
           maps.find(
             (map) => name(map.name) === `${stem}${letter}`.toLowerCase(),
           ) ??

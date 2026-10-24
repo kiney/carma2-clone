@@ -1,0 +1,13 @@
+# Standalone Carmageddon II PIX16 fragments
+
+The Advanced UI installation has 96 individual `CarImage/*CI/PIX16/*.PIX` files that use a standalone C2 serialization. They omit the usual 16-byte BRender file-info header. All 96 are 8,238-byte, 64×64 RGB565 maps with a single terminal END record.
+
+For the representative `69mach1a.PIX`, the big-endian `0x3d` tag is at byte 0 and its declared length is 21. A sequential reader consumes format 5, row size 128, width 64, height 64, six zero reserved bytes, and an empty NUL-terminated name. This reaches the `0x21` tag at byte 22. Its data length is 8,192, count is 4,096, and pixel size is two bytes. Pixel data begins at byte 38 and ends at byte 8,229; the zero tag and zero length at bytes 8,230–8,237 terminate the file. The `0x3d` length is stale and cannot safely be used as the next-record offset.
+
+Evidence supports this as an intended Carmageddon II menu-image form. The public [ToxicRagers BRender PIX reader](https://github.com/MaxxWyndham/ToxicRagers/blob/master/ToxicRagers/Brender/Formats/brPIX.cs) explicitly rewinds when the standard file header is absent, consumes `0x3d` and `0x21` records sequentially, and names format 5 `C2_16bit` with RGB565 decoding. The [CarEd menu-image instructions](https://rr2000.cwaboard.co.uk/R4/TUT/cared/docs/part2.html) say its menu-image generator writes six individual PIX files under `data/intrface/carimage/<carname>CI/PIX16` for the C2 car-selection screen. These establish format and intended use, though they do not directly prove the precise native BRender call path.
+
+The ToxicRagers repository listing has no LICENSE file, and `brPIX.cs` has no file-level license header. Its code was inspected as evidence only; no source was copied. The reader below is an independent bounded implementation.
+
+`parsePix` recognizes this variant only when it has the exact 21-byte declared header length, format 5, an empty name, six zero reserved bytes, row size exactly twice the width, a `0x21` data length equal to the full pixel payload, matching width×height count, two-byte pixels, and an exact zero END record with no trailing bytes. It does not relax normal chunk parsing or skip arbitrary declared lengths. Synthetic corruption tests and an optional original-installation test cover the strict path; all 96 installed Advanced fragments parse to 64×64 format-5 maps.
+
+`SelectionPreviews.car` uses six individual `PIX16` fragments only when packed `PIXIES.P16` and `PIXIES.P08` files are absent. It tries the indexed `PIX8` fragment set with the installed palette if no complete, parseable `PIX16` set exists. The existing `changecar.txt` layout continues to control placement.

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  mkdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -128,10 +135,20 @@ test("nested scene MAT references resolve PIX maps from sibling directories", as
   const root = await mkdtemp(path.join(os.tmpdir(), "c2-advanced-scope-"));
   try {
     const matDir = path.join(root, "adv_data", "CARS", "Fixture", "materials");
-    const pixDir = path.join(root, "adv_data", "CARS", "Fixture", "textures", "nested");
+    const pixDir = path.join(
+      root,
+      "adv_data",
+      "CARS",
+      "Fixture",
+      "textures",
+      "nested",
+    );
     await mkdir(matDir, { recursive: true });
     await mkdir(pixDir, { recursive: true });
-    await writeFile(path.join(matDir, "SCENE.MAT"), validMaterial("SiblingMap"));
+    await writeFile(
+      path.join(matDir, "SCENE.MAT"),
+      validMaterial("SiblingMap"),
+    );
     await writeFile(path.join(pixDir, "OTHERNAME.PIX"), validPix("SiblingMap"));
     const report = await auditAdvancedAssets({ root, writeReport: false });
     assert.equal(report.materialParsing.parsedFiles, 1);
@@ -186,6 +203,8 @@ test("original Advanced audit parses scoped MATs, palette, UI PIX, and bounded r
   );
   assert.equal(report.inventory.uiPalette.status, "parsed-palette-container");
   assert.ok(report.uiPixelParsing.files > 0);
+  assert.equal(report.uiPixelParsing.parsedFiles, report.uiPixelParsing.files);
+  assert.deepEqual(report.uiPixelParsing.failureCategories, {});
   assert.equal(
     report.materialTextureReferences.resolution["resolved-in-runtime-scope"] >
       0,

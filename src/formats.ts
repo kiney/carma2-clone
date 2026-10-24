@@ -568,6 +568,65 @@ function pixels(raw: RawPix, palette?: Uint8Array): PixMap {
 }
 
 export function parsePix(bytes: Uint8Array, palette?: Uint8Array): PixMap[] {
+  // CarEd's C2 standalone PIX16 fragments omit the standard 0x12 file header.
+  // Their 0x3d and 0x21 length words use a legacy convention, so parse only
+  // this fully identified single-map form sequentially and validate every
+  // field, exact RGB565 payload size, and the final END record.
+  if (
+    bytes.length >= 8 &&
+    new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0) === 0x3d
+  ) {
+    const legacy = new Reader(bytes, "PIX");
+    legacy.u32();
+    const headerLength = legacy.u32();
+    if (headerLength === 21) {
+      const format = legacy.u8();
+      const rowBytes = legacy.u16();
+      const width = legacy.u16();
+      const height = legacy.u16();
+      const reserved = legacy.bytes.subarray(legacy.pos, legacy.pos + 6);
+      legacy.skip(6);
+      const name = legacy.string();
+      if (
+        format === 5 &&
+        name === "" &&
+        reserved.length === 6 &&
+        reserved.every((value) => value === 0) &&
+        width > 0 &&
+        height > 0 &&
+        width * height <= 16_777_216 &&
+        rowBytes === width * 2 &&
+        legacy.remaining >= 4 &&
+        legacy.view.getUint32(legacy.pos) === 0x21
+      ) {
+        legacy.u32();
+        const dataLength = legacy.u32();
+        const pixelCount = legacy.u32();
+        const pixelSize = legacy.u32();
+        const expectedLength = rowBytes * height;
+        if (
+          dataLength !== expectedLength ||
+          pixelCount !== width * height ||
+          pixelSize !== 2
+        )
+          throw new Error("PIX: invalid standalone C2 RGB565 data record");
+        legacy.need(expectedLength);
+        const raw: RawPix = {
+          name,
+          width,
+          height,
+          format,
+          rowBytes,
+          pixelSize,
+          bytes: legacy.bytes.subarray(legacy.pos, legacy.pos + expectedLength),
+        };
+        legacy.skip(expectedLength);
+        if (legacy.u32() !== 0 || legacy.u32() !== 0 || legacy.remaining !== 0)
+          throw new Error("PIX: invalid standalone C2 RGB565 END record");
+        return [pixels(raw, palette)];
+      }
+    }
+  }
   const r = binaryReader(bytes, 2, "PIX", true);
   const stack: RawPix[] = [],
     raw: RawPix[] = [];
