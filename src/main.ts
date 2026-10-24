@@ -191,9 +191,16 @@ import {
   assessRaceAvailability,
   type RaceAvailability,
 } from "./race-availability";
+import {
+  createDiagnosticsPanel,
+  type BackgroundDiagnostic,
+  type DiagnosticInput,
+  type DiagnosticProvider,
+  type DiagnosticsPanel,
+} from "./diagnostics";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><p id="population-status" class="population-status" role="status" hidden></p><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><p id="population-menu-status" class="population-menu-status" role="status" hidden></p><p id="terminal-state" class="terminal-state" role="status" hidden></p><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><p id="population-status" class="population-status" role="status" hidden></p><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><p id="population-menu-status" class="population-menu-status" role="status" hidden></p><p id="terminal-state" class="terminal-state" role="status" hidden></p><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details id="diagnostics" class="diagnostics-panel"></details><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -436,6 +443,12 @@ const debug = {
       },
     };
   },
+  get diagnosticsReport() {
+    return diagnosticsPanel?.report;
+  },
+  refreshDiagnostics() {
+    return diagnosticsPanel?.refresh();
+  },
   get rivals() {
     return rivals;
   },
@@ -524,6 +537,98 @@ const debug = {
   loadRace,
 };
 (window as unknown as { carma: typeof debug }).carma = debug;
+function recordBackgroundDiagnostic(
+  source: string,
+  error: unknown,
+  raceContext?: string,
+) {
+  backgroundDiagnostics.push({
+    source,
+    message: error instanceof Error ? error.message : String(error),
+    race: (raceContext ?? definition?.name ?? currentTrack) || undefined,
+    time: new Date().toISOString(),
+  });
+  if (backgroundDiagnostics.length > 100) backgroundDiagnostics.shift();
+}
+function readDiagnosticInput(): DiagnosticInput {
+  const providers: DiagnosticProvider[] = [
+    {
+      source: "Asset and runtime warnings",
+      scope: "session",
+      messages: assets.warnings,
+    },
+    {
+      source: "Player animation",
+      scope: "current race",
+      messages: carAnimation?.warnings ?? [],
+    },
+    {
+      source: "Player texture animation",
+      scope: "current race",
+      messages: carTextures?.warnings ?? [],
+    },
+    {
+      source: "World texture animation",
+      scope: "current race",
+      messages: worldAnimation?.warnings ?? [],
+    },
+    {
+      source: "Power-up loading",
+      scope: "current race",
+      messages: powerups?.warnings ?? [],
+    },
+    {
+      source: "Pedestrian loading and effects",
+      scope: "current race",
+      messages: pedestrians?.warnings ?? [],
+    },
+    {
+      source: "Smoke effects",
+      scope: "current race",
+      messages: smoke?.diagnostics ?? [],
+    },
+    {
+      source: "World destruction effects",
+      scope: "current race",
+      messages: simulation?.destruction?.diagnostics ?? [],
+    },
+    {
+      source: "World groove diagnostics",
+      scope: "current race",
+      messages:
+        simulation?.grooves?.diagnostics.map(
+          (diagnostic) =>
+            `Block ${diagnostic.block}${diagnostic.actor ? ` · ${diagnostic.actor}` : ""}: ${diagnostic.message}`,
+        ) ?? [],
+    },
+    {
+      source: "Special-volume diagnostics",
+      scope: "current race",
+      messages: simulation?.specialVolumes?.diagnostics ?? [],
+    },
+  ];
+  for (const rival of rivals) {
+    providers.push(
+      {
+        source: `Opponent ${rival.id} animation`,
+        scope: "current race",
+        messages: rival.animation.warnings,
+      },
+      {
+        source: `Opponent ${rival.id} texture animation`,
+        scope: "current race",
+        messages: rival.textures.warnings,
+      },
+    );
+  }
+  return {
+    track: currentTrack || undefined,
+    race: definition?.name,
+    providers,
+    background: backgroundDiagnostics,
+    populations: populationLoads,
+  };
+}
 function status(text: string) {
   el("status").textContent = text;
 }
@@ -537,6 +642,7 @@ function setPaused(value: boolean) {
   keys.clear();
   el("panel").hidden = !value;
   el("menu-button").textContent = value ? "RESUME · ESC" : "MENU · ESC";
+  if (value) diagnosticsPanel?.refresh();
   if (!value) view.focus();
 }
 function resize() {
@@ -707,6 +813,7 @@ async function init() {
     await loadRace();
     setPaused(true);
   } catch (error) {
+    recordBackgroundDiagnostic("Startup", error);
     status(`Cannot start: ${error instanceof Error ? error.message : error}`);
     console.error(error);
   }
@@ -870,6 +977,8 @@ let pedestrians: PedestrianSystem | undefined;
 let powerups: PowerupSystem | undefined;
 let upgradeSettings: UpgradeSettings | undefined;
 const noPowerups: readonly PowerupDefinition[] = [];
+const backgroundDiagnostics: BackgroundDiagnostic[] = [];
+let diagnosticsPanel: DiagnosticsPanel | undefined;
 const debugPanel = new DebugPanel(app, {
   ready: () => stats.ready && !loading && !!player && !!race && !!simulation,
   running: () => race?.status === "racing",
@@ -1733,8 +1842,11 @@ async function loadRace() {
       random: sharedNativeRandom.random,
       onDue: (context) =>
         dispatchFollowupSmash(followupSimulation, loadedDestruction, context),
-      onUnsupportedDirection: () =>
-        console.warn("Native parallel followup direction is unresolved"),
+      onUnsupportedDirection: () => {
+        const warning = "Native parallel followup direction is unresolved";
+        recordBackgroundDiagnostic("World follow-up", warning);
+        console.warn(warning);
+      },
     });
     simulation.grooves = loadedGrooves;
     for (const body of movingWorld) simulation.addMovingWorld(body);
@@ -2068,9 +2180,15 @@ async function loadRace() {
       checkRaceObjective();
       checkSmashObjective();
     };
+    const populationRaceContext = definition?.name ?? currentTrack;
     loadPedestrians(trackText, loadGeneration).then(
       () => settlePopulation("pedestrians", { state: "ready" }),
       (error) => {
+        recordBackgroundDiagnostic(
+          "Pedestrian background loading",
+          error,
+          populationRaceContext,
+        );
         console.warn("Pedestrian content:", error);
         settlePopulation("pedestrians", {
           state: "failed",
@@ -2084,6 +2202,11 @@ async function loadRace() {
     ).then(
       () => settlePopulation("opponents", { state: "ready" }),
       (error) => {
+        recordBackgroundDiagnostic(
+          "Opponent background loading",
+          error,
+          populationRaceContext,
+        );
         console.warn("Opponent content:", error);
         settlePopulation("opponents", {
           state: "failed",
@@ -2092,6 +2215,7 @@ async function loadRace() {
       },
     );
   } catch (error) {
+    recordBackgroundDiagnostic("Race loading", error);
     status(`Load failed: ${error instanceof Error ? error.message : error}`);
     console.error(error);
   } finally {
@@ -3925,5 +4049,9 @@ function animate(now: number) {
   stats.drawCalls = renderer.info.render.calls;
   stats.triangles = renderer.info.render.triangles;
 }
+diagnosticsPanel = createDiagnosticsPanel(
+  el("diagnostics"),
+  readDiagnosticInput,
+);
 requestAnimationFrame(animate);
 void init();

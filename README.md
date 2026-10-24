@@ -107,7 +107,7 @@ or mission**, and a **vehicle**. Locations use the original `LOCATION` names whe
 available and group event variants by their authored map series. Stock and Advanced
 have separate filters; searches include race/mission names and vehicle names.
 Your last loaded race and vehicle are remembered locally. **Easy / Medium / Hard** selects the original skill-table column for handling damage, AI, starting upgrades/money, prices and rewards. The choice is remembered and takes effect when a race loads; changing it leaves the current race intact. Controls are available
-under **Controls & engine status**; debug tools remain selectable beside Load Race.
+under **Controls & engine status**; debug tools remain selectable beside Load Race. **Diagnostics** consolidates loading, compatibility and animation warnings with source/scope labels and a local JSON download.
 
 Vehicle pictures assemble the six original menu-image fragments using the installed
 interface layout. Location pictures are static views rendered from original track

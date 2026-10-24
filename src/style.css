@@ -488,6 +488,65 @@ h1 {
 .menu-help summary {
   cursor: pointer;
 }
+.diagnostics-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #675638;
+  background: #15110df2;
+  color: #e7d6b0;
+  font-size: 12px;
+}
+.diagnostics-panel > summary {
+  cursor: pointer;
+  color: #ffdc82;
+  font-weight: 700;
+}
+.diagnostics-scope,
+.diagnostics-context {
+  color: #bdb09a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.diagnostics-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.diagnostics-actions button {
+  padding: 6px 9px;
+  font-size: 11px;
+}
+.diagnostics-content {
+  max-height: 220px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.diagnostics-content section {
+  margin-top: 10px;
+  border-top: 1px solid #473b29;
+  padding-top: 7px;
+}
+.diagnostics-content h3 {
+  margin: 0 0 5px;
+  color: #e7c979;
+  font-size: 11px;
+}
+.diagnostics-content ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.diagnostics-content li {
+  margin: 3px 0;
+}
+.diagnostics-repeat-count {
+  display: block;
+  color: #a99b81;
+  font-size: 10px;
+}
+.diagnostics-empty {
+  color: #bdb09a;
+  font-style: italic;
+}
 .selection-empty {
   color: #c9bea4;
   font-size: 12px;
