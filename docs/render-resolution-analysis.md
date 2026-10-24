@@ -122,7 +122,9 @@ that those qualities were measured here.
    here and cannot be disabled on an already-created default WebGL context.
 
 No production source, resizing behavior, simulation activation or view distance
-changed during this investigation. PERF-03 remains open for the policy decision.
+changed during this investigation. Following review, the user chose to retain
+current rendering unchanged and defer implementation. PERF-03 is P5 at the bottom
+of the backlog; the options above are retained as future proposals, not active work.
 
 ## References
 
