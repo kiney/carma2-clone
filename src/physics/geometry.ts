@@ -922,13 +922,17 @@ export function buildHull(points: readonly Vector3[]): CollisionHull {
     // after inserting redundant collinear edge vertices. The installed native
     // hull accepts both stock monorails. Repair this undefined incidence only;
     // successful native-order car hulls retain their full original path.
-    const retained = points.flatMap((point, index) => {
-      for (let a = 0; a < points.length; a++) {
+    // Classify the same stored geometry used by the primary builder. Crush
+    // coordinates can retain double precision between source float stores;
+    // raw-double collinearity must not distinguish identical native inputs.
+    const geometry = points.map((point) => storedVector(point.clone()));
+    const retained = geometry.flatMap((point, index) => {
+      for (let a = 0; a < geometry.length; a++) {
         if (a === index) continue;
-        const offset = point.clone().sub(points[a]);
-        for (let b = a + 1; b < points.length; b++) {
+        const offset = point.clone().sub(geometry[a]);
+        for (let b = a + 1; b < geometry.length; b++) {
           if (b === index) continue;
-          const segment = points[b].clone().sub(points[a]);
+          const segment = geometry[b].clone().sub(geometry[a]);
           const projection = offset.dot(segment);
           if (
             projection > 0 &&
