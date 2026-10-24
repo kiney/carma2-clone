@@ -258,6 +258,7 @@ import "./crash-direction.test.mjs";
 import "./opponent-selection.test.mjs";
 import "./selection-catalog.mjs";
 import "./selection-previews.mjs";
+import "./server-startup.test.mjs";
 import "./engine-noise.test.mjs";
 
 import "./suspension-powerups.test.mjs";

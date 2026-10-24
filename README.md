@@ -91,6 +91,12 @@ CARMA2_ROOT=/path/to/carmageddon2 npm run dev
 
 For a production build, run `npm run build` and then `npm start`. The production server serves the built app and local assets on `127.0.0.1:5173`; set `PORT` to change the port.
 
+If that port is occupied, startup reports the conflict and exits instead of
+silently changing ports. Stop your previous server or use, for example,
+`PORT=5174 npm run dev` (or `PORT=5174 npm start`). Invalid ports and inaccessible
+asset roots also produce a concise diagnostic. Ctrl+C closes the HTTP server and
+development HMR connections cleanly.
+
 The race menu uses image tiles: choose a **location**, then an individual **race
 or mission**, and a **vehicle**. Locations use the original `LOCATION` names where
 available and group event variants by their authored map series. Stock and Advanced
