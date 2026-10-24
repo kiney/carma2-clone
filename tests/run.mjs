@@ -418,3 +418,5 @@ import "./escaped-body-lifecycle.test.mjs";
 import "./render-fps.test.mjs";
 
 import "./difficulty.test.mjs";
+
+import "./race-feedback.test.mjs";

@@ -137,6 +137,7 @@ import type { SmashShrapnel } from "./world-smash";
 import { nativeDirectSmashSeed, prepareNativeGhostFrame } from "./ghost-frame";
 import { MissionVariables } from "./mission-variables";
 import { RacePayout } from "./race-payout";
+import { RaceFeedback, terminalRaceMessage } from "./race-feedback";
 import {
   resolveOpponentRequests,
   selectOpponentIds,
@@ -188,7 +189,7 @@ import {
 } from "./race-availability";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><p id="terminal-state" class="terminal-state" role="status" hidden></p><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -264,8 +265,8 @@ let carTargetHeight = 0.18;
 let repairControl = createRepairControl();
 const gameClock = new BrowserGameClock();
 const renderFps = new RenderFpsSampler(performance.now());
-let messageUntil = 0,
-  fps = 0,
+const raceFeedback = new RaceFeedback();
+let fps = 0,
   currentTrack = "",
   currentCar = "",
   generation = 0;
@@ -502,8 +503,8 @@ function status(text: string) {
   el("status").textContent = text;
 }
 function message(text: string, duration = 3) {
+  raceFeedback.notify(text, performance.now(), duration);
   el("message").textContent = text;
-  messageUntil = performance.now() + duration * 1000;
 }
 function setPaused(value: boolean) {
   gameClock.setPaused(value, performance.now());
@@ -909,6 +910,7 @@ async function loadRace() {
     status(`Cannot load this track: ${availability.reasons.join(" ")}`);
     return;
   }
+  raceFeedback.clear();
   loading = true;
   selectionMenu?.setLoading(true);
   const loadGeneration = ++generation;
@@ -3728,7 +3730,22 @@ function animate(now: number) {
       : "";
     drawMap();
   }
-  if (now > messageUntil) el("message").textContent = paused ? "PAUSED" : "";
+  const terminalMessage =
+    !loading && race
+      ? terminalRaceMessage({
+          status: race.status,
+          playerWasted: !!player?.knackered,
+          payoutActive: !!racePayout && !racePayout.finished,
+        })
+      : undefined;
+  const terminalState = el("terminal-state");
+  terminalState.textContent = terminalMessage ?? "";
+  terminalState.hidden = !paused || !terminalMessage;
+  el("message").textContent = raceFeedback.current(
+    now,
+    paused,
+    terminalMessage,
+  );
   feedbackContext.clearRect(0, 0, feedbackCanvas.width, feedbackCanvas.height);
   if (simulation)
     wastedFeedback.draw(

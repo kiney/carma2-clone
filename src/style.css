@@ -142,6 +142,16 @@ button:disabled {
 #panel[hidden] {
   display: none;
 }
+.terminal-state {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #a9582c;
+  background: #351b12;
+  color: #ffe090;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+}
 #app:has(#panel:not([hidden])) #hud,
 #app:has(#panel:not([hidden])) #map,
 #app:has(#panel:not([hidden])) #feedback {
