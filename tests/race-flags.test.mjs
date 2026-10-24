@@ -1,16 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVehicle } from "../src/legacy-arcade.ts";
 import { access } from "node:fs/promises";
 import * as THREE from "three";
 import { createAssetStore } from "../server/assets.mjs";
 import { decodeText } from "../src/formats.ts";
 import { parsePowerupExclusions, parseRaceCatalog } from "../src/config.ts";
-import {
-  awardRaceTime,
-  createRace,
-  createVehicle,
-  updateRace,
-} from "../src/gameplay.ts";
+import { awardRaceTime, createRace, updateRace } from "../src/gameplay.ts";
 import { PowerupSystem } from "../src/powerups.ts";
 
 function table(definitions) {

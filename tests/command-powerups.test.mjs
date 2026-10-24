@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVehicle } from "../src/legacy-arcade.ts";
 import { access } from "node:fs/promises";
 import * as THREE from "three";
 import { createAssetStore } from "../server/assets.mjs";
 import { decodeText } from "../src/formats.ts";
-import { createRace, createVehicle } from "../src/gameplay.ts";
+import { createRace } from "../src/gameplay.ts";
 import { parsePowerups, PowerupSystem } from "../src/powerups.ts";
 import {
   commandJump,

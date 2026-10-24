@@ -21,7 +21,7 @@ flowchart LR
 
 A short source review compared a browser engine with a WebAssembly adaptation. rec2 reconstructs C2 in C and has a native SDL path, but still contains unimplemented behavior; no ready browser target was found. Dethrace and OpenC1 target the first game. A native TypeScript/WebGL2 engine offered the quickest route from this installation to a playable scene. The references informed formats and behavior, without incorporating their source.
 
-Vehicle simulation lives in `src/physics/` and runs at the original 40 ms tick with at most five catch-up steps. Authored car mechanics feed four-wheel spring/damper loads, tyre force limits, steering, gears, mass and diagonal inertia. Moving-feature contacts and joints share a connected-group impulse solve. Its pre-impulse callback feeds C2 damage/crush and invalidates/recollects contacts when a car splits. Three.js supplies rendering; hull topology and vehicle simulation are independent implementations verified against the installed C2 executable. `src/gameplay.ts` retains race state and legacy handling helpers; the browser drives through `VehicleSimulation`.
+Vehicle simulation lives in `src/physics/` and runs at the original 40 ms tick with at most five catch-up steps. Authored car mechanics feed four-wheel spring/damper loads, tyre force limits, steering, gears, mass and diagonal inertia. Moving-feature contacts and joints share a connected-group impulse solve. Its pre-impulse callback feeds C2 damage/crush and invalidates/recollects contacts when a car splits. Three.js supplies rendering; hull topology and vehicle simulation are independent implementations verified against the installed C2 executable. `src/gameplay.ts` contains active race state, shared vehicle/control types and speed conversion; the browser drives through `VehicleSimulation`. The obsolete arcade stepper and its car adapter are isolated in `src/legacy-arcade.ts` and `src/legacy-handling.ts` for historical unit tests, with no production imports.
 
 `src/render-pose.ts` interpolates committed car and physical-part poses between ticks, including camera targets. Recovery invalidates the previous pose. Rendered transforms are restored immediately after drawing, so interpolation never changes collision, damage, attachment or race state.
 
@@ -52,7 +52,7 @@ Vehicle damage applies original WAM eligibility planes, per-part softness, cumul
 | `src/content.ts`            | Texture, material, geometry, and actor scene assembly                                     |
 | `src/render-pose.ts`        | Physics-pose interpolation for rendering and camera targets                               |
 | `src/world.ts`              | Ground, wall, and world-space queries                                                     |
-| `src/gameplay.ts`           | Race state, recovery and retained legacy handling helpers                                 |
+| `src/gameplay.ts`           | Race state, recovery, shared vehicle/control types and speed conversion                                 |
 | `src/physics/`              | Source motion, contact groups, joints, crush, components, structural splitting and repair |
 | `src/powerups.ts`           | Source power-up definitions, pickup actors, awards, and timed modifiers                   |
 | `src/ai.ts`                 | Road graph navigation and opponent steering                                               |

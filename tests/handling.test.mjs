@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVehicle, updateVehicle } from "../src/legacy-arcade.ts";
 import { Vector3 } from "three";
-import { createVehicle, updateVehicle } from "../src/gameplay.ts";
-import { physicsConfigFromCar } from "../src/handling.ts";
+
+import { physicsConfigFromCar } from "../src/legacy-handling.ts";
 
 const config = (extra) => ({
   wheels: [],

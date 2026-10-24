@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVehicle } from "../src/legacy-arcade.ts";
 import { existsSync, readFileSync } from "node:fs";
 import * as THREE from "three";
 import { AudioSystem } from "../src/audio.ts";
@@ -7,7 +8,7 @@ import {
   parsePowerupPickupSounds,
   raceEventSoundIds,
 } from "../src/event-audio.ts";
-import { createRace, createVehicle } from "../src/gameplay.ts";
+import { createRace } from "../src/gameplay.ts";
 import { PowerupSystem } from "../src/powerups.ts";
 
 function powerupTable(definitions) {

@@ -64,7 +64,7 @@ import {
   awardRaceTime,
   awardRaceCredits,
 } from "./gameplay";
-import type { RaceState, VehicleConfig } from "./gameplay";
+import type { RaceState } from "./gameplay";
 import { WorldCollision, batchStaticWorld } from "./world";
 import { captureWorldSource } from "./world-source";
 import { captureNativeTrackSceneLayout } from "./native-track-scene-layout";
@@ -169,7 +169,6 @@ import {
 } from "./physics/upgrades";
 import { setMotionSuspension } from "./physics/motion";
 import { applyUpgradePickup } from "./physics/upgrade-pickup";
-import { physicsConfigFromCar } from "./handling";
 import { RoadNavigator } from "./ai";
 import { PedestrianSystem } from "./pedestrians";
 import { AudioSystem } from "./audio";
@@ -248,7 +247,6 @@ let content: THREE.Group | undefined,
   race: RaceState | undefined,
   track: TrackConfig | undefined;
 let carConfig: CarConfig | undefined,
-  physicsConfig: Partial<VehicleConfig> = {},
   races: RaceCatalogEntry[] = [],
   opponents: OpponentConfig[] = [],
   paused = true,
@@ -821,7 +819,6 @@ interface Rival {
   animation: CarAnimation;
   textures: TextureAnimation;
   id: number;
-  config: Partial<VehicleConfig>;
 }
 function groupMaterials(group: THREE.Object3D) {
   const map = new Map<string, THREE.Material>();
@@ -1482,7 +1479,6 @@ async function loadRace() {
     collision = newCollision;
     track = newTrack;
     carConfig = newCarConfig;
-    physicsConfig = physicsConfigFromCar(newCarConfig);
     const start = new THREE.Vector3(...(track.start ?? [0, 1, 0]));
     player = createSimulatedCar(
       car,
@@ -2513,7 +2509,6 @@ async function loadRivals(
         model.textures,
         text,
       ),
-      config: physicsConfigFromCar(config),
     });
   }
 }

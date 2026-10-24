@@ -1,7 +1,9 @@
 import type { CarConfig } from "./config";
-import { DEFAULT_VEHICLE_CONFIG, WORLD_METRES_PER_UNIT } from "./gameplay";
-import type { VehicleConfig } from "./gameplay";
+import { DEFAULT_VEHICLE_CONFIG } from "./legacy-arcade";
+import { WORLD_METRES_PER_UNIT } from "./gameplay";
+import type { VehicleConfig } from "./legacy-arcade";
 
+/** Test-only compatibility adapter for the obsolete arcade handler. */
 const positive = (value: number | null | undefined, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
@@ -9,7 +11,7 @@ const positive = (value: number | null | undefined, fallback: number) =>
 const clamp = (n: number, min: number, max: number) =>
   Math.max(min, Math.min(max, n));
 
-/** Convert the original mechanics fields into the independent arcade handler.
+/** Legacy adapter from original mechanics fields to the test-only arcade helper.
  * Acceleration is highest-gear m/s², not a 0–60 time. A constant 1.6 multiplier
  * approximates stronger lower gears while preserving engine-strength ordering.
  * Original mass is already part of specified acceleration; dividing by mass

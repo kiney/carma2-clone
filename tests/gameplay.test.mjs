@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Vector3 } from "three";
 import {
-  WORLD_METRES_PER_UNIT,
   DEFAULT_VEHICLE_CONFIG,
   createVehicle,
   updateVehicle,
+} from "../src/legacy-arcade.ts";
+import { Vector3 } from "three";
+import {
+  WORLD_METRES_PER_UNIT,
   speedMph,
   checkpointCrossing,
   createRace,

@@ -1,14 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVehicle } from "../src/legacy-arcade.ts";
 import * as THREE from "three";
 import { NativeDrinkDriving } from "../src/drink-driving.ts";
 import { PowerupSystem } from "../src/powerups.ts";
-import {
-  createRace,
-  createVehicle,
-  awardRaceCredits,
-  completeRace,
-} from "../src/gameplay.ts";
+import { createRace, awardRaceCredits, completeRace } from "../src/gameplay.ts";
 
 test("native Drink Driving consumes deadline, period and phase in source order and uses the cosine table", () => {
   const draws = [0, 0, 0];

@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createVehicle, updateVehicle } from "../src/legacy-arcade.ts";
 import { Vector3 } from "three";
 import { RoadNavigator } from "../src/ai.ts";
-import { createVehicle, updateVehicle } from "../src/gameplay.ts";
+
 import { createAssetStore } from "../server/assets.mjs";
 import { Assets } from "../src/content.ts";
 import { decodeText } from "../src/formats.ts";
