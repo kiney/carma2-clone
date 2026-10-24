@@ -274,3 +274,16 @@ Ignored evidence: `artifacts/performance-mcp-baseline.json`,
 trace and inspected screenshots remain in `/tmp`. The opt-in probe restores
 methods, ratio, pause state and transient queries on disposal; it is not loaded
 by the application or included in the production bundle.
+
+## Render FPS display validation (QUA-10, 2026-10-24)
+
+The current counter already used uncapped render timestamps; the old capped-dt
+report was stale. Its averaging policy is now isolated in `RenderFpsSampler`,
+independent of `BrowserGameClock` and the 40ms simulation tick. Four deterministic
+tests cover slow, fast, irregular and suspended windows.
+`npm run test:render-fps` additionally controls actual Chromium animation-frame
+timestamps while the initial game remains paused: ten 100ms frames display
+**10 FPS**, four 250ms frames display **4 FPS**, and simulation frame/time counters
+do not advance. WebGL reports no error. This headless SwiftShader test validates
+measurement semantics, not achieved hardware performance. A long suspended
+interval contributes to the next average once; the following window recovers.

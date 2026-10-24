@@ -413,3 +413,5 @@ import "./ownerless-guard-clearance.test.mjs";
 import "./free-world-envelope.test.mjs";
 
 import "./escaped-body-lifecycle.test.mjs";
+
+import "./render-fps.test.mjs";

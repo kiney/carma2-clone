@@ -1,3 +1,4 @@
+import { RenderFpsSampler } from "./render-fps";
 import {
   DistantOpponentPresentation,
   visualDistances,
@@ -261,10 +262,8 @@ let carConfig: CarConfig | undefined,
 let carTargetHeight = 0.18;
 let repairControl = createRepairControl();
 const gameClock = new BrowserGameClock();
-let lastTime = performance.now(),
-  messageUntil = 0,
-  seconds = 0,
-  frames = 0,
+const renderFps = new RenderFpsSampler(performance.now());
+let messageUntil = 0,
   fps = 0,
   currentTrack = "",
   currentCar = "",
@@ -3230,8 +3229,6 @@ function worldGrooveVisible(
 function animate(now: number) {
   requestAnimationFrame(animate);
   let renderAlpha = 1;
-  const frameSeconds = (now - lastTime) / 1000;
-  lastTime = now;
   const gameFrame = gameClock.sample(
     performance.now(),
     stats.ready && !loading && !paused,
@@ -3243,12 +3240,10 @@ function animate(now: number) {
     stats.gameTimeMs = gameFrame.endMs;
   }
   // Render FPS uses real elapsed time, independent of the gameplay dt cap.
-  seconds += frameSeconds;
-  frames++;
-  if (seconds >= 1) {
-    fps = Math.round(frames / seconds);
+  const renderEstimate = renderFps.sample(now);
+  if (renderEstimate !== undefined) {
+    fps = renderEstimate;
     fpsCounter.textContent = `${fps} FPS`;
-    seconds = frames = 0;
   }
   debugPanel.refresh();
   let grooveFrameStarted = false;
