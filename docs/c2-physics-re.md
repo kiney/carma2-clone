@@ -590,3 +590,14 @@ Noncar callback mass/inertia ordering and basic Jacobian signs showed no defect.
 User accepted this remaining gap after the bounded audit; PHY-19 is closed as
 investigated, without a solver change. See the
 [full confidence and closure record](timber-runaway-props.md#phy-19-bounded-causal-investigation-and-accepted-limitation).
+
+## PUP-18: authored powerup overlap (2026-10-24)
+
+Verified installed HW `GotPowerupX 0x4d9017–0x4d9153` removes other active
+definitions with intersecting uint16 group masks before the incoming handler.
+Renewal skips the same definition; timers and reset traversal use catalog order.
+Engine/grip/suspension assignments and resets now follow that lifecycle, including
+Hot rod being removed by either grip or suspension pickups. Numeric Stock/Advanced
+and original Eagle/Buggy tests plus headless Chromium application checks pass.
+No new force equations or render validation are asserted; see
+[the evidence and remaining boundaries](c2-powerup-overlap-re.md).

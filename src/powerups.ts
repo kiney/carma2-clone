@@ -75,6 +75,7 @@ const implementedActions = new Set([
 ]);
 
 const combatAbilityActions = new Set([37, 38, 45, 49]);
+const inventoryActions = new Set([34, 35, 36, 37, 38, 45, 49]);
 
 export function isPowerupImplemented(definition: PowerupDefinition): boolean {
   return implementedActions.has(definition.action);
@@ -475,6 +476,9 @@ export class PowerupSystem {
       ability.charges <= 0
     )
       return false;
+    // GotPowerupX removes group conflicts before calling even a failed command.
+    // Merely collecting its inventory did not enter that handler path.
+    this.cancelConflictingEffects(ability.definition);
     const result = onEvent?.({
       kind: "ability-use",
       name: ability.definition.message,
@@ -593,6 +597,49 @@ export class PowerupSystem {
     this.active.length = 0;
   }
 
+  /** GotPowerupX 0x4d902e scans catalog order, excluding the same record.
+   * The loader stores group inclusion as uint16; action identity is irrelevant.
+   * Reset conflicting fields before the incoming handler assigns its values.
+   */
+  private cancelConflictingEffects(definition: PowerupDefinition): void {
+    this.active = this.active.filter((effect) => {
+      if (
+        effect.index === definition.index ||
+        !(
+          this.definitions[effect.index].groupInclusion &
+          definition.groupInclusion &
+          0xffff
+        )
+      )
+        return true;
+      this.resetEffect(effect.action);
+      return false;
+    });
+  }
+
+  private recordEffect(
+    definition: PowerupDefinition,
+    action: ActiveEffect["action"],
+  ): void {
+    // Renewal owns one deadline for this definition, without invoking its reset.
+    this.active = this.active.filter(
+      (effect) => effect.index !== definition.index,
+    );
+    // Loader 0x4d9851 distinguishes instant (<0), whole-race (0), timed (>0).
+    // An instant setter runs, but has no active record to expire or cancel.
+    if (definition.duration < 0) return;
+    const duration = definition.duration;
+    this.active.push({
+      index: definition.index,
+      remaining: duration,
+      duration,
+      expiresAtMs: this.elapsedMs + duration * 1000,
+      action,
+    });
+    // Native expiry and explicit removal also traverse the definition catalog.
+    this.active.sort((a, b) => a.index - b.index);
+  }
+
   /** Installed IRandomBetween 0x512f00 scales an inclusive range using a
    * 15-bit rand() sample; its signed integer division truncates toward zero. */
   private randomBetween(low: number, high: number): number {
@@ -613,6 +660,7 @@ export class PowerupSystem {
     const def = this.definitions[index];
     if (!def) return;
     this.earnedRace = race;
+    if (!inventoryActions.has(def.action)) this.cancelConflictingEffects(def);
     switch (def.action) {
       case 34:
       case 35:
@@ -725,18 +773,7 @@ export class PowerupSystem {
         if (def.action === 22) this.damageMultiplier = def.floatParams[0] ?? 1;
         if (def.action === 27) this.protection = def.floatParams[0] ?? 1;
         if (def.action === 28) this.instantHandbrake = true;
-        // A renewed effect owns its new timeout; an old timeout cannot undo it.
-        this.active = this.active.filter(
-          (effect) => effect.action !== def.action,
-        );
-        const duration = def.duration > 0 ? def.duration : 0;
-        this.active.push({
-          index,
-          remaining: duration,
-          duration,
-          expiresAtMs: this.elapsedMs + duration * 1000,
-          action: def.action,
-        });
+        this.recordEffect(def, def.action);
         onEvent?.({
           kind: "effect",
           name: def.message,
@@ -812,18 +849,7 @@ export class PowerupSystem {
                 );
         if (suspension) this.suspension = suspension;
         if (def.action === 19) this.bounce = setBouncePowerup(def.floatParams);
-        // Renewal replaces the previous timer, as for the scalar effects above.
-        this.active = this.active.filter(
-          (effect) => effect.action !== def.action,
-        );
-        const duration = def.duration > 0 ? def.duration : 0;
-        this.active.push({
-          index,
-          remaining: duration,
-          duration,
-          expiresAtMs: this.elapsedMs + duration * 1000,
-          action: def.action,
-        });
+        this.recordEffect(def, def.action);
         onEvent?.({
           kind: "engine",
           name: def.message,

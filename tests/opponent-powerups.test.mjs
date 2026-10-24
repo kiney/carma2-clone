@@ -25,7 +25,7 @@ function table(definitions) {
       String(definition.floats.length),
       ...definition.floats.map(String),
       "0",
-      "0",
+      String(definition.group ?? 0),
       "0",
       "0",
     );
@@ -41,9 +41,21 @@ async function systemFor(definitions) {
 }
 
 const definitions = [
-  { action: 14, duration: 4, floats: [0], message: "Frozen opponents" },
-  { action: 15, duration: 3, floats: [2], message: "Turbo cops" },
-  { action: 14, duration: 10, floats: [2], message: "Turbo opponents" },
+  {
+    action: 14,
+    duration: 4,
+    floats: [0],
+    group: 64,
+    message: "Frozen opponents",
+  },
+  { action: 15, duration: 3, floats: [2], group: 128, message: "Turbo cops" },
+  {
+    action: 14,
+    duration: 10,
+    floats: [2],
+    group: 64,
+    message: "Turbo opponents",
+  },
   { action: 51, duration: -1, floats: [], message: "Cancel" },
 ];
 
@@ -87,18 +99,30 @@ test("opponent and cop speed factors start at one and are independently timed", 
   );
 });
 
-test("same-action renewal replaces the old timeout and cancellation resets both factors", async () => {
+test("authored opponent group replacement resets before assignment and removes the old timeout", async () => {
   const system = await systemFor(definitions);
   const car = createVehicle(new Vector3());
   const race = createRace([]);
   system.grant(0, car, race);
   system.update(3, car, race);
-  system.grant(2, car, race);
+  const beforeReplacement = system.opponentSpeedState.revision;
+  system.grant(2, car, race, () => {
+    assert.equal(
+      system.opponentSpeedState.revision,
+      beforeReplacement + 2,
+      "the old reset and new setter both execute before notification",
+    );
+    assert.equal(
+      system.update(0, car, race).opponentSpeedFactor,
+      2,
+      "the new assignment follows the conflicting definition's reset",
+    );
+  });
   assert.equal(system.update(2, car, race).opponentSpeedFactor, 2);
   assert.equal(
     system.update(7.9, car, race).opponentSpeedFactor,
     2,
-    "the replaced four-second timer cannot clear the renewed ten-second effect",
+    "the removed four-second timer cannot clear the replacement ten-second effect",
   );
   assert.equal(system.update(0.1, car, race).opponentSpeedFactor, 1);
 
@@ -144,12 +168,13 @@ test("installed Stock and Advanced powerups define freeze and turbo entries", as
           definition.action,
           definition.duration,
           definition.floatParams,
+          definition.groupInclusion,
         ]),
       [
-        [14, 30, [0]],
-        [15, 30, [0]],
-        [14, 30, [2]],
-        [15, 30, [2]],
+        [14, 30, [0], 64],
+        [15, 30, [0], 128],
+        [14, 30, [2], 64],
+        [15, 30, [2], 128],
       ],
       path,
     );

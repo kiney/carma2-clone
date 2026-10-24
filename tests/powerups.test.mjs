@@ -23,7 +23,7 @@ function table(definitions) {
       ...(d.floats ?? []).map(String),
       String(d.ints?.length ?? 0),
       ...(d.ints ?? []).map(String),
-      "0",
+      String(d.group ?? 0),
       "0",
       "0",
     );
@@ -471,9 +471,13 @@ test("random pickup preserves an unsupported choice and guards cyclic tables", a
   cyclic.dispose();
 });
 
-test("freeze timer renews its duration and cancellation clears it", async () => {
+test("conflicting freeze timers replace deadlines and cancellation clears them", async () => {
   const system = await syntheticEffects(
-    [{ action: 8, duration: 1 }, { action: 8, duration: 2 }, { action: 51 }],
+    [
+      { action: 8, duration: 1, group: 1 },
+      { action: 8, duration: 2, group: 1 },
+      { action: 51 },
+    ],
     [0, 4, 8],
   );
   const car = createVehicle(new THREE.Vector3());
@@ -525,52 +529,50 @@ test("cancellation invokes scalar and motion resets without reverting credits or
   system.dispose();
 });
 
-test("renewing a damage factor replaces its timeout and disposal resets live effects", async () => {
-  const system = await syntheticEffects(
-    [
-      { action: 22, duration: 1, floats: [5] },
-      { action: 22, duration: 2, floats: [7] },
-      { action: 5, duration: 30 },
-    ],
-    [0, 4, 4],
-  );
+test("renewing the same damage definition replaces its timeout and disposal resets live effects", async () => {
+  const system = await new PowerupSystem(
+    {
+      text: async () =>
+        table([
+          { action: 22, duration: 2, floats: [5] },
+          { action: 5, duration: 30 },
+        ]),
+    },
+    new THREE.Group(),
+  ).init();
   const car = createVehicle(new THREE.Vector3());
   const race = createRace([]);
+  system.grant(0, car, race);
   assert.equal(system.update(0, car, race).damageMultiplier, 5);
   system.update(0.75, car, race);
-  car.position.x = 4;
-  let modifiers = system.update(0, car, race);
-  assert.equal(modifiers.damageMultiplier, 7);
+  system.grant(0, car, race);
+  system.grant(1, car, race);
+  let modifiers = system.update(1.25, car, race);
+  assert.equal(modifiers.damageMultiplier, 5);
   assert.equal(modifiers.invulnerable, true);
-  assert.equal(system.update(0.25, car, race).damageMultiplier, 7);
-  modifiers = system.update(1.75, car, race);
+  modifiers = system.update(0.75, car, race);
   assert.equal(modifiers.damageMultiplier, 1);
   assert.equal(modifiers.invulnerable, true);
   system.dispose();
   assert.equal(system.update(0, car, race).invulnerable, false);
 });
 
-test("renewed engine and tyre effects survive the previous pickup's expiry", async () => {
+test("renewed engine and tyre definitions survive their previous deadline", async () => {
   for (const action of [9, 21]) {
     const floats = action === 9 ? [2, 1.5, 1, 1, 0, 0, 1] : [2];
-    const renewed = action === 9 ? [4, 3, 1, 1, 0, 0, 1] : [4];
-    const system = await syntheticEffects(
-      [
-        { action, duration: 1, floats },
-        { action, duration: 2, floats: renewed },
-      ],
-      [0, 4],
-    );
+    const system = await new PowerupSystem(
+      { text: async () => table([{ action, duration: 1, floats }]) },
+      new THREE.Group(),
+    ).init();
     const car = createVehicle(new THREE.Vector3());
     const race = createRace([]);
-    system.update(0, car, race);
+    system.grant(0, car, race);
     system.update(0.75, car, race);
-    car.position.x = 4;
-    system.update(0, car, race);
+    system.grant(0, car, race);
     const active = system.update(0.25, car, race);
-    assert.equal(active.lateralGripMultiplier, action === 9 ? 3 : 4);
-    assert.equal(active.accelerationMultiplier, action === 9 ? 4 : 1);
-    const expired = system.update(1.75, car, race);
+    assert.equal(active.lateralGripMultiplier, action === 9 ? 1.5 : 2);
+    assert.equal(active.accelerationMultiplier, action === 9 ? 2 : 1);
+    const expired = system.update(0.75, car, race);
     assert.equal(expired.lateralGripMultiplier, 1);
     assert.equal(expired.accelerationMultiplier, 1);
     system.dispose();
@@ -842,8 +844,8 @@ test("gravity and Pinball pickups assign independent globals and restore authore
     {
       text: async () =>
         table([
-          { action: 16, duration: 1, floats: [0.2] },
-          { action: 16, duration: 1, floats: [4] },
+          { action: 16, duration: 1, floats: [0.2], group: 512 },
+          { action: 16, duration: 1, floats: [4], group: 512 },
           { action: 17, duration: 3, floats: [2] },
           { action: 51 },
         ]),

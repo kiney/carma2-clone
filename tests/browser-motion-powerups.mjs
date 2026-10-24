@@ -269,6 +269,69 @@ try {
     }
   }
 
+  // Original conflict masks must reach the real player fields through ordinary
+  // debug grants and the application frame, including suspension reset events.
+  const overlapResults = [];
+  for (const carPath of selectedCars) {
+    await selectRace(carPath);
+    const baseline = await sampleSuspension();
+    const definitions = await page.evaluate(() =>
+      [5, 23, 26].map((index) => {
+        const d = window.carma.powerups.definitions[index];
+        return {
+          index,
+          action: d.action,
+          group: d.groupInclusion,
+          params: d.floatParams,
+        };
+      }),
+    );
+    assert.deepEqual(
+      definitions.map((d) => [d.action, d.group]),
+      [
+        [9, 7],
+        [20, 4],
+        [21, 2],
+      ],
+    );
+    const hot = expectedSuspension(baseline, definitions[0].params.slice(2));
+    const soft = expectedSuspension(baseline, definitions[1].params);
+    const applyAndCheck = async (index, suspension, engine, grip, active) => {
+      await grant(index);
+      await applyMainLoopSuspension(suspension);
+      const sample = await page.evaluate(() => {
+        const p = window.carma.player;
+        return {
+          engine: p.state.engineFactor,
+          grip: p.state.tyreGripFactor,
+          active: window.carma.powerups.active.map((e) => e.index),
+        };
+      });
+      assert.equal(sample.engine, engine, `engine after ${index}: ${carPath}`);
+      assert.equal(sample.grip, grip, `grip after ${index}: ${carPath}`);
+      assert.deepEqual(sample.active, active);
+      overlapResults.push({ car: carPath, grant: index, ...sample });
+    };
+    await applyAndCheck(
+      5,
+      hot,
+      definitions[0].params[0],
+      definitions[0].params[1],
+      [5],
+    );
+    await applyAndCheck(26, baseline, 1, definitions[2].params[0], [26]);
+    await applyAndCheck(23, soft, 1, definitions[2].params[0], [23, 26]);
+    await applyAndCheck(
+      5,
+      hot,
+      definitions[0].params[0],
+      definitions[0].params[1],
+      [5],
+    );
+    await applyAndCheck(23, soft, 1, 1, [23]);
+    await expireAndReset(baseline);
+  }
+
   // Use the current Buggy race for a real post-physics bounce and keyboard drive.
   await grant(22);
   const bounceDefinition = await page.evaluate(() => {
@@ -810,11 +873,11 @@ try {
     );
   }
   assert.ok(
-    Math.abs(lunarFall.carAcceleration - (-(10 / 6.9) * 0.35)) < 0.02,
+    Math.abs(lunarFall.carAcceleration - -(10 / 6.9) * 0.35) < 0.02,
     JSON.stringify(lunarFall),
   );
   assert.ok(
-    Math.abs(jupiterFall.carAcceleration - (-(10 / 6.9) * 5)) < 0.05,
+    Math.abs(jupiterFall.carAcceleration - -(10 / 6.9) * 5) < 0.05,
     JSON.stringify(jupiterFall),
   );
   assert.ok(
@@ -1131,6 +1194,7 @@ try {
   console.log(
     JSON.stringify({
       suspensionResults,
+      overlapResults,
       bounceDefinition,
       bounceHits,
       bounceSounds,
