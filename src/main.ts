@@ -1,3 +1,7 @@
+import {
+  assessPopulationAvailability,
+  type PopulationLoad,
+} from "./population-availability";
 import { RenderFpsSampler } from "./render-fps";
 import {
   DistantOpponentPresentation,
@@ -189,7 +193,7 @@ import {
 } from "./race-availability";
 import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><p id="terminal-state" class="terminal-state" role="status" hidden></p><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
+app.innerHTML = `<canvas id="view" tabindex="0" aria-label="Driving view"></canvas><div id="hud"><div class="top"><strong id="race-name">CARMAGEDDON II</strong><span id="timer">00:00</span><span id="laps">LAP 1/4</span></div><p id="population-status" class="population-status" role="status" hidden></p><div class="bottom"><div><span id="speed">0</span> MPH<br><small id="damage">ARMOUR 100%</small></div><div id="message"></div><div><span id="credits">CR 1000</span><br><small id="checkpoint">CHECKPOINT 1</small></div></div></div><canvas id="map" width="220" height="220" aria-label="Track minimap"></canvas><button id="menu-button">MENU · ESC</button><div id="panel"><h1>CARMAGEDDON II</h1><p class="subtitle">Independent browser engine · your local game assets</p><div hidden><label>RACE<select id="track-select"></select></label><label>CAR<select id="car-select"></select></label></div><div id="selection"><p>Preparing race and vehicle previews…</p></div><p id="population-menu-status" class="population-menu-status" role="status" hidden></p><p id="terminal-state" class="terminal-state" role="status" hidden></p><div class="selection-footer"><button id="play">LOAD RACE</button><p id="status">Indexing your installation…</p></div><details class="menu-help"><summary>Controls & engine status</summary><p class="controls">WASD / arrows: drive · Space: handbrake<br>R: recover · E: repair · C: camera · M: map<br>F: use selected ability · Tab: select ability<br>Esc: pause/menu · Enter: skip payout / restart finished race</p><small>Stock race and car data. Reconstructed vehicle physics and opponent AI; independent browser HUD.</small></details></div>`;
 const el = (id: string) => document.getElementById(id)!;
 app.insertAdjacentHTML(
   "beforeend",
@@ -322,8 +326,18 @@ let pedAwards: ReturnType<typeof parsePedAwards> | undefined;
 let pedAwardCounter = new NativePedAwardCounter();
 const cunningStunts = new NativeCunningStuntCounter();
 let cunningStuntCredits: ReturnType<typeof parseCunningStuntBonus> | undefined;
-let rivalsReady = false,
-  pedestriansReady = false;
+let rivalsReady = false;
+let opponentObjectivesReady = false,
+  pedestrianObjectivesReady = false;
+let populationLoads: {
+  opponents: PopulationLoad;
+  pedestrians: PopulationLoad;
+} = {
+  opponents: { state: "loading" },
+  pedestrians: { state: "loading" },
+};
+let populationPracticeReason = "";
+
 let selectedDifficulty: DifficultySkill = 0,
   raceDifficulty: DifficultySkill = 0;
 let opponentFleet: NativeOpponentFleet | undefined;
@@ -410,6 +424,17 @@ const debug = {
   },
   get opponentsReady() {
     return rivalsReady;
+  },
+  get populationLoadState() {
+    return {
+      opponents: { ...populationLoads.opponents },
+      pedestrians: { ...populationLoads.pedestrians },
+      practiceReason: populationPracticeReason,
+      objectives: {
+        opponents: opponentObjectivesReady,
+        pedestrians: pedestrianObjectivesReady,
+      },
+    };
   },
   get rivals() {
     return rivals;
@@ -914,7 +939,16 @@ async function loadRace() {
   loading = true;
   selectionMenu?.setLoading(true);
   const loadGeneration = ++generation;
-  rivalsReady = pedestriansReady = false;
+  rivalsReady = opponentObjectivesReady = pedestrianObjectivesReady = false;
+  populationLoads = {
+    opponents: { state: "loading" },
+    pedestrians: { state: "loading" },
+  };
+  populationPracticeReason = "";
+  for (const id of ["population-status", "population-menu-status"]) {
+    el(id).textContent = "";
+    el(id).hidden = true;
+  }
   setPaused(true);
   el("play").setAttribute("disabled", "");
   stats.ready = false;
@@ -2022,23 +2056,41 @@ async function loadRace() {
         : "RACE START · W / ↑ TO DRIVE",
       5,
     );
-    loadPedestrians(trackText, loadGeneration)
-      .then(() => {
-        if (loadGeneration === generation) pedestriansReady = true;
-      })
-      .catch((error) => console.warn("Pedestrian content:", error));
+    refreshPopulationAvailability();
+    const settlePopulation = (
+      kind: "opponents" | "pedestrians",
+      result: PopulationLoad,
+    ) => {
+      // A late completion/rejection from an earlier race owns no current flags.
+      if (loadGeneration !== generation) return;
+      populationLoads[kind] = result;
+      refreshPopulationAvailability();
+      checkRaceObjective();
+      checkSmashObjective();
+    };
+    loadPedestrians(trackText, loadGeneration).then(
+      () => settlePopulation("pedestrians", { state: "ready" }),
+      (error) => {
+        console.warn("Pedestrian content:", error);
+        settlePopulation("pedestrians", {
+          state: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
     (definition
       ? loadRivals(definition, loadGeneration, generalText)
       : Promise.resolve()
-    )
-      .then(() => {
-        if (loadGeneration === generation) rivalsReady = true;
-      })
-      .catch((error) => {
+    ).then(
+      () => settlePopulation("opponents", { state: "ready" }),
+      (error) => {
         console.warn("Opponent content:", error);
-        if (loadGeneration === generation)
-          message(`OPPONENT LOAD INCOMPLETE · ${String(error)}`, 15);
-      });
+        settlePopulation("opponents", {
+          state: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
   } catch (error) {
     status(`Load failed: ${error instanceof Error ? error.message : error}`);
     console.error(error);
@@ -2438,7 +2490,13 @@ async function loadRivals(
     });
     const rivalDamage = new DamageSystem(assets, model.group, text, configPath);
     rivalDamage.structuralSettings = parseStructuralSettings(generalText);
-    await rivalDamage.init();
+    try {
+      await rivalDamage.init();
+    } catch (error) {
+      model.dispose();
+      disposeGroup(model.group);
+      throw error;
+    }
     if (activeTrack !== currentTrack || loadGeneration !== generation) {
       model.dispose();
       disposeGroup(model.group);
@@ -3117,6 +3175,46 @@ function drawMap() {
   ctx.fill();
   ctx.restore();
 }
+/** Explicit browser degradation policy after asynchronous population loading.
+ * Missing required targets never shrink a mission or grant a completion payout.
+ */
+function refreshPopulationAvailability() {
+  if (!race) return;
+  const availability = assessPopulationAvailability(definition, {
+    ...populationLoads,
+    opponentIds: rivals.map((rival) => rival.id),
+    pedestrianCount: pedestrians?.count ?? 0,
+    groupCounts: pedestrians?.groupCounts ?? new Map(),
+    pedestrianFailures: pedestrians?.populationFailures,
+    checkpointRouteAvailable: race.checkpoints.length > 0,
+  });
+  rivalsReady = populationLoads.opponents.state !== "loading";
+  opponentObjectivesReady = availability.opponentsUsable;
+  pedestrianObjectivesReady = availability.pedestriansUsable;
+  if (
+    !race.practice &&
+    race.status === "racing" &&
+    !race.awardsClosed &&
+    availability.unavailable.length
+  ) {
+    populationPracticeReason = availability.unavailable.join(" ");
+    race.practice = true;
+    race.checkpoints = [];
+    message("MISSION UNAVAILABLE · FREE DRIVE · NO COMPLETION PAYOUT", 8);
+  }
+  const text = populationPracticeReason
+    ? `Mission unavailable · Free drive, no completion payout. ${populationPracticeReason} Reload this race or choose another.`
+    : race.practice
+      ? ""
+      : [...availability.disabledAlternatives, ...availability.pending].join(
+          " ",
+        );
+  for (const id of ["population-status", "population-menu-status"]) {
+    el(id).textContent = text;
+    el(id).hidden = !text;
+  }
+}
+
 /** Native completion checks occur at event dispatch, before another event can
  * wrap or subtract from the same byte. End-frame checks alone miss crossings. */
 function checkRaceObjective() {
@@ -3131,8 +3229,8 @@ function checkRaceObjective() {
       definition?.smashVariable != null
         ? missionVariables.get(definition.smashVariable)
         : undefined,
-    opponentsReady: rivalsReady,
-    pedestriansReady,
+    opponentsReady: opponentObjectivesReady,
+    pedestriansReady: pedestrianObjectivesReady,
     opponentInstances: rivals.map((r) => ({
       id: r.id,
       wasted: r.body.knackered,
@@ -3145,6 +3243,12 @@ function checkRaceObjective() {
 }
 
 function checkSmashObjective() {
+  if (
+    definition?.raceType === "smashAndPed" &&
+    definition.pedGroupsToKill.length &&
+    !pedestrianObjectivesReady
+  )
+    return;
   if (
     !race ||
     !definition ||

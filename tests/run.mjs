@@ -420,3 +420,5 @@ import "./render-fps.test.mjs";
 import "./difficulty.test.mjs";
 
 import "./race-feedback.test.mjs";
+
+import "./population-availability.test.mjs";

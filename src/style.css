@@ -570,3 +570,21 @@ select {
     font-size: 15px;
   }
 }
+
+.population-status,
+.population-menu-status {
+  padding: 8px 10px;
+  color: #ffe090;
+  background: #211a10e6;
+  border: 1px solid #7b6638;
+  font:
+    12px/1.4 Arial,
+    sans-serif;
+  overflow-wrap: anywhere;
+}
+.population-status {
+  position: absolute;
+  bottom: 108px;
+  left: 2%;
+  max-width: min(720px, 96%);
+}

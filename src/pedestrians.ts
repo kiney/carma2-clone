@@ -590,6 +590,8 @@ export class PedestrianSystem {
     2,
   );
   readonly warnings: string[] = [];
+  /** Missing population inputs; optional visual/audio warnings stay separate. */
+  readonly populationFailures: { group?: number; reason: string }[] = [];
   readonly specs: PedSpawnSpec[];
   readonly motionInfo?: { bones: number; frames: number };
   private readonly population = new PedPopulationAccounting<THREE.Object3D>();
@@ -839,6 +841,9 @@ export class PedestrianSystem {
     }
     if (!templates.size) {
       system.warnings.push("No original pedestrian actor packages loaded");
+      system.populationFailures.push({
+        reason: "No original pedestrian actor packages loaded.",
+      });
       return system;
     }
     const limit = Math.min(
@@ -851,6 +856,16 @@ export class PedestrianSystem {
         .map((n) => n.toLowerCase())
         .filter((n) => templates.has(n));
       if (!choices.length) {
+        if (
+          surface.count > 0 &&
+          !system.populationFailures.some(
+            (failure) => failure.group === surface.spec.group,
+          )
+        )
+          system.populationFailures.push({
+            group: surface.spec.group,
+            reason: `Pedestrian group ${surface.spec.group} has no loadable actor personality.`,
+          });
         system.warnings.push(
           `No personality for pedestrian group ${surface.spec.group}`,
         );

@@ -120,7 +120,7 @@ may group differently; individual events remain selectable. Run
 Entries with missing track actors or player starts are shown as **Unavailable**
 and cannot replace the current loaded scene. Drivable maps without supported
 single-player rules, such as network arenas, are labelled **Free drive only**:
-practice has no race countdown, checkpoint victory or completion payout. Missions
+practice has no race countdown, checkpoint victory or completion payout. The same explicit fallback applies if required opponents or pedestrian actors fail during background loading; a persistent HUD/menu diagnostic explains the failure. Classic races keep their other available victory paths. See [population loading policy](docs/population-loading.md). Missions
 whose goals concern opponents, pedestrians or smash targets do not require gates.
 The menu checks required route data, not full mission-script compatibility or
 physical access to every objective. `npm run test:race-availability` checks these
