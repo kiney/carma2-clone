@@ -40,4 +40,13 @@ export class NativeGlobalResources<T extends { name: string }> {
         this.registrations.splice(i, 1);
     return removed;
   }
+  /** A failed asynchronous admission owns only its newly created resources,
+   * even when a successful scene already shares the same native storage. */
+  removeResources(storage: object, resources: ReadonlySet<T>): void {
+    for (let i = this.registrations.length - 1; i >= 0; i--) {
+      const entry = this.registrations[i];
+      if (entry.storage === storage && resources.has(entry.resource))
+        this.registrations.splice(i, 1);
+    }
+  }
 }
