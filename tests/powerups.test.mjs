@@ -255,6 +255,7 @@ test("sweeps supported pickups, applies effects, and preserves pickup world posi
     timerFrozen: false,
     underwaterAbility: false,
     instantHandbrake: false,
+    pedestriansOnMap: false,
     bouncePeriodMs: 0,
     wallClimb: false,
     gravityMultiplier: 1,
@@ -727,8 +728,8 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      17,
-      "New City warns once per unsupported definition after combat powerup lifecycle registration",
+      16,
+      "New City warns once per unsupported definition after combat and pedestrian-map registration",
     );
     assert.equal(system.group.children.length, system.pickups.length);
     system.dispose();

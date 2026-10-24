@@ -116,6 +116,7 @@ import "./smash-missions.test.mjs";
 import "./handling.test.mjs";
 import "./powerups.test.mjs";
 import "./powerup-overlap.test.mjs";
+import "./ped-map.test.mjs";
 import "./command-powerups.test.mjs";
 import "./combat-powerups.test.mjs";
 import "./opponent-repulsion.test.mjs";

@@ -53,6 +53,7 @@ import {
   PED_COUNTED_FLAG,
   PedPopulationAccounting,
 } from "./ped-population-accounting";
+import { pedestrianMapEligible, type PedestrianMapPolicy } from "./ped-map";
 export { PedAction } from "./ped-rules";
 export type { PedThreat } from "./ped-rules";
 
@@ -687,6 +688,17 @@ export class PedestrianSystem {
   }
   get count() {
     return this.peds.length;
+  }
+  /** Borrow live positions without allocating diagnostic state snapshots.
+   * Presentation visibility is not the native processed/alive map gate.
+   */
+  forEachMapPedestrian(
+    policy: PedestrianMapPolicy,
+    visit: (position: Readonly<THREE.Vector3>) => void,
+  ): void {
+    for (const ped of this.peds)
+      if (pedestrianMapEligible(ped.alive, ped.active, ped.spec.group, policy))
+        visit(ped.object.position);
   }
   get hits() {
     return this.population.hits;

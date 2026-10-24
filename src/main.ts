@@ -171,6 +171,11 @@ import { setMotionSuspension } from "./physics/motion";
 import { applyUpgradePickup } from "./physics/upgrade-pickup";
 import { RoadNavigator } from "./ai";
 import { PedestrianSystem } from "./pedestrians";
+import {
+  pedestrianMapEnabled,
+  pedestrianMapColor,
+  drawPedestrianMapPoint,
+} from "./ped-map";
 import { AudioSystem } from "./audio";
 import { WastedFeedback } from "./wasted";
 import { SelectionMenu, type CarChoice } from "./selection-menu";
@@ -3055,6 +3060,21 @@ function drawMap() {
     ctx.fillRect(x - 3, y - 3, 6, 6);
     ctx.font = "bold 12px monospace";
     ctx.fillText(String(i + 1), x + 5, y + 4);
+  }
+  const pedMapPolicy = {
+    effectActive: powerups?.pedestriansOnMap ?? false,
+    raceType: definition?.raceType,
+    targetGroups: definition?.pedGroupsToKill,
+  };
+  if (pedestrians && pedestrianMapEnabled(pedMapPolicy)) {
+    const color = pedestrianMapColor(assets.palette);
+    if (color) {
+      ctx.fillStyle = color;
+      pedestrians.forEachMapPedestrian(pedMapPolicy, (position) => {
+        const [x, y] = project(position.x, position.z);
+        drawPedestrianMapPoint(ctx, x, y);
+      });
+    }
   }
   for (const r of rivals) {
     const [x, y] = project(r.state.position.x, r.state.position.z);
