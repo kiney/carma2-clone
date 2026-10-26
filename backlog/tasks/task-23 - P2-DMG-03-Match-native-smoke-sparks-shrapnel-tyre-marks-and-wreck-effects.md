@@ -3,10 +3,10 @@ id: TASK-23
 title: >-
   [P2] DMG-03: Match native smoke, sparks, shrapnel, tyre marks, and wreck
   effects
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-26 19:43'
 labels:
   - priority-2
   - DMG-03
@@ -21,7 +21,7 @@ references:
   - docs/c2-wreck-smoke-re.md
   - docs/c2-component-smoke-re.md
 priority: high
-ordinal: 2018
+ordinal: 2020
 ---
 
 ## Description
@@ -40,3 +40,10 @@ Original race dust colours, wheel material smoke types, source FinishCars puffs,
 
 [smoke.ts](../../src/smoke.ts), [smoke evidence](../../docs/c2-smoke-columns-re.md), [surface effects](../../docs/c2-surface-effects-re.md), [tyre producer](../../docs/c2-tyre-smoke-re.md), [wreck producer](../../docs/c2-wreck-smoke-re.md), [component producer](../../docs/c2-component-smoke-re.md)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Queue review 2026-10-26 — position 5/5, P2.
+After the selected WAM/world producer integrations, finish remaining effect producers and validate cross-producer chronology, priorities, ownership and visibility against the established callers. This ordering reduces repeated shared-dispatch/pool work; it is not a hard dependency on completing every part of DMG-01/WLD-05. ShardRuntime already shares shards and ghosts, and PERF-16/PERF-17 world admission, hierarchy quiet and reclaim integration are done despite older scope text. Native pedestrian blood/giblet pooling still overlaps the PED-06/PED-09 production-adapter work; coordinate that sub-scope without duplicating the pedestrian owners.
+<!-- SECTION:PLAN:END -->

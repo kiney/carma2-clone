@@ -3,10 +3,10 @@ id: TASK-21
 title: >-
   [P2] DMG-01: Implement native WAM effects, damage queues, shards, and repair
   behavior
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-15 21:23'
+updated_date: '2026-10-26 19:43'
 labels:
   - priority-2
   - DMG-01
@@ -18,7 +18,7 @@ references:
   - docs/c2-shards-re.md
   - tests/browser-wam-effects.mjs
 priority: high
-ordinal: 2016
+ordinal: 2000
 ---
 
 ## Description
@@ -37,6 +37,13 @@ Complete WAM connotation parsing, reached-tier state, final-target repeats, cros
 
 [WAM evidence](../../docs/c2-wam-effects-re.md), [shards](../../docs/c2-shards-re.md), [Chromium](../../tests/browser-wam-effects.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Queue review 2026-10-26 — position 3/5, P2.
+First finish concrete car/WAM producer and repair-ownership gaps, reusing the existing world-side ghost/noncar providers. The current WAM callback handles abstract fragments and shards; world-side ghost/noncar dispatch already exists. ShardRuntime already shares glass priority 3 and ghost priority 4, so a new unified ghost/shard allocator is not a prerequisite. Coordinate shared dispatcher, RNG and lifecycle changes with WLD-05, DMG-02 and DMG-03 rather than duplicating providers. No demonstrated whole-ticket blocker among the three selected P2 tickets.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 

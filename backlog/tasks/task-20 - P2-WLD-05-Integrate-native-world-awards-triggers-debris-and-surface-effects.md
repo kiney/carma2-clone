@@ -3,10 +3,10 @@ id: TASK-20
 title: >-
   [P2] WLD-05: Integrate native world awards, triggers, debris, and surface
   effects
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-12 13:04'
+updated_date: '2026-10-26 19:43'
 labels:
   - priority-2
   - WLD-05
@@ -17,7 +17,7 @@ references:
   - src/main.ts
   - src/world-smash.ts
 priority: high
-ordinal: 2012
+ordinal: 2010
 ---
 
 ## Description
@@ -36,6 +36,14 @@ Authored awards and nearby human-car powerup triggers dispatch through native fi
 
 [main.ts](../../src/main.ts), [world-smash.ts](../../src/world-smash.ts)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Queue review 2026-10-26 — position 4/5, P2.
+Follow DMG-01 so car/world changes to the common connotation dispatcher are reviewed serially. WLD-01, WLD-02 and WLD-03 are already done; do not treat their existing providers as missing prerequisites. DMG-02 overlaps the remaining parallel-followup, prepared-face-order and headup work, but its ordinary shared queues/outlets already exist.
+Scoped external prerequisite: completing the remaining ordinary-population/native-corpse effect integration requires PED-06 (TASK-96) and PED-09 (TASK-99), with the latter retaining its PED-08 and other transitive prerequisites. This does not block independent world awards, materials, triggers, debris or followup work. Keep that acceptance boundary explicit instead of making all world work wait for the whole pedestrian stack.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 

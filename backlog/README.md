@@ -2,6 +2,32 @@
 
 Backlog.md is the task source of truth. The former `TODO.md` entries have been migrated with their complete descriptions, evidence, source references, original issue IDs and numeric priorities. Use the installed `backlog` CLI from the repository root; it stores tasks in `backlog/tasks/` without committing automatically or checking remote branches.
 
+## Next implementation queue (2026-10-26)
+
+| Order | Ticket           | Priority | Ordinal | Reason                                                                                                                              |
+| ----- | ---------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | PHY-11 / TASK-10 | P1       | 1000    | Capture and fix the potentially fatal deformed-hull rebuild before broader crash acceptance.                                        |
+| 2     | AI-05 / TASK-17  | P1       | 1010    | Separate safe initial placement from the reproduced fleet's first active AI collisions.                                             |
+| 3     | DMG-01 / TASK-21 | P2       | 2000    | Complete concrete WAM/car producers and repair ownership, reusing existing world effect providers.                                  |
+| 4     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes.                                 |
+| 5     | DMG-03 / TASK-23 | P2       | 2020    | Complete and validate cross-producer effects, priorities, chronology, ownership and visibility after those callers are established. |
+
+These are implementation preferences, not an artificial hard dependency chain.
+No unfinished whole-ticket prerequisite among these five was demonstrated.
+Shared dispatcher and pool changes should be serialized; independent sub-scopes
+can proceed without waiting for an unrelated reproduction or full subsystem.
+WLD-01/02/03 and the PERF-16/17 admission/quiet providers are already complete.
+The shared shard/ghost allocator also exists; older scope text must not be read
+as a requirement to build it again.
+
+WLD-05's remaining **ordinary-population/native-corpse effect integration** does
+have scoped prerequisites outside `next`: PED-06 / TASK-96 and PED-09 / TASK-99,
+including the latter's existing transitive dependencies. Pedestrian blood/giblet
+allocation also overlaps DMG-03. DMG-02 owns related remaining followup/headup
+details, while its normal shared queues/outlets already exist. Per-ticket plans
+record these boundaries. Priorities and the user's selected statuses are
+unchanged; no engine implementation was started by this queue review.
+
 Current performance status (2026-10-24): PERF-02 and PERF-04 through PERF-23,
 including all 18 direct PERF-01 subtasks, are done. PERF-03 resolution-policy
 implementation and the PERF-01 umbrella are explicitly deferred at P5 at the
@@ -67,11 +93,11 @@ choices remain open. The user then separated upcoming work as follows:
 
 | Backlog ID | Issue   | Priority | Status    | Scope / order                                                                            |
 | ---------- | ------- | -------- | --------- | ---------------------------------------------------------------------------------------- |
-| TASK-100   | PERF-01 | 5        | `backlog` | Profiling umbrella deferred after concrete implementation queue completion              |
+| TASK-100   | PERF-01 | 5        | `backlog` | Profiling umbrella deferred after concrete implementation queue completion               |
 | TASK-101   | PERF-02 | 1        | `done`    | Shared render preparation and dormant pedestrian subtree pruning, measured and validated |
 | TASK-104   | PERF-05 | 1        | `done`    | Lazy SAT and per-invocation guard caches, numerical and Chromium validation              |
 | TASK-103   | PERF-04 | 2        | `done`    | Fourfold visual ranges, native activation preserved; headed hardware before/after checks |
-| TASK-102   | PERF-03 | 5        | `backlog` | Resolution-policy implementation deferred; GPU savings measured, no consistent FPS gain |
+| TASK-102   | PERF-03 | 5        | `backlog` | Resolution-policy implementation deferred; GPU savings measured, no consistent FPS gain  |
 
 At the creation of this queue, the board had 111 tasks: 64 `backlog`, 8 `next`,
 1 `wip` and 38 `done`.

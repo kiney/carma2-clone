@@ -3,10 +3,10 @@ id: TASK-10
 title: >-
   [P1] PHY-11: Make deformed collision-hull rebuilding robust under severe
   impacts
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-24 17:53'
+updated_date: '2026-10-26 19:43'
 labels:
   - priority-1
   - PHY-11
@@ -17,7 +17,7 @@ references:
   - src/physics/geometry.ts
   - tests/browser-crash-matrix.mjs
 priority: high
-ordinal: 1015
+ordinal: 1000
 ---
 
 ## Description
@@ -36,6 +36,13 @@ Severe repeated physical contacts with original Porker2 can abort collision-shap
 
 [geometry.ts](../../src/physics/geometry.ts), [crash matrix](../../tests/browser-crash-matrix.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Queue review 2026-10-26 — position 1/5, P1.
+No unfinished ticket is a demonstrated prerequisite. Capture the exact failing deformed point set and replay it deterministically; the existing Float32-classification fix is partial evidence, not closure. Prioritize this potentially fatal hull-rebuild defect before broader crash/effect acceptance. AI-05 can still be investigated independently if the historical failure cannot be reproduced.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 

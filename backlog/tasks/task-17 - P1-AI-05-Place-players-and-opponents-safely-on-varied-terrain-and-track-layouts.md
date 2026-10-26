@@ -3,10 +3,10 @@ id: TASK-17
 title: >-
   [P1] AI-05: Place players and opponents safely on varied terrain and track
   layouts
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-24 19:40'
+updated_date: '2026-10-26 19:43'
 labels:
   - priority-1
   - AI-05
@@ -18,7 +18,7 @@ references:
   - src/main.ts
   - tests/browser-spawn-pairs.mjs
 priority: high
-ordinal: 1049
+ordinal: 1010
 ---
 
 ## Description
@@ -37,6 +37,13 @@ Shared safe starting placement for player/opponents: four original wheel anchors
 
 [spawn.ts](../../src/physics/spawn.ts), [main.ts](../../src/main.ts), [spawn/pair browser test](../../tests/browser-spawn-pairs.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Queue review 2026-10-26 — position 2/5, P1.
+Follow PHY-11 for a more stable crash-test baseline; this is a recommended order, not a hard dependency. Initial placement already consumes valid original hulls and does not require the unresolved deformed-hull case. Reproduce the exact Bigdump/Newhawk roster with seed and initial poses, separating unsafe spawn from subsequent AI collisions. AI-01/AI-02/AI-04 are related only if the reproduced cause belongs to objectives, navigation or recovery; completing those whole tickets is not a prerequisite.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
