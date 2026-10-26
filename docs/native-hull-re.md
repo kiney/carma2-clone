@@ -1,22 +1,103 @@
-# Stored-coordinate hull repair precision (PHY-11)
+# Collision-hull recovery (PHY-11)
 
 ## Executive Summary
 
-The existing collinear-boundary retry could reject a point set solely because
-its JavaScript coordinates retained sub-Float32 differences. Primary hull
-construction already rounds those coordinates to the original stored Float32
-geometry; the retry instead tested raw doubles for exact collinearity. A
-synthetic input with exactly the same native Float32 coordinates as an accepted
-box therefore threw `Degenerate collision hull horizon`.
+The source-ordered builder can leave an open horizon when native Float32
+side tolerances retain a coplanar branch and a later point removes one of its
+incident planes. This is a valid-volume geometry failure, beyond the earlier
+raw-double collinearity mismatch. A six-point independent fixture now reproduces
+it deterministically.
 
-The retry now classifies that same stored geometry. Authored coordinates and
-IDs, feature ordering, the containing-halfspace validation and the native-order
-primary path remain intact. No epsilon, force, deformation or collision-response
-coefficient changed. This fixes a deterministic precision defect; the historical
-intermittent Porker2 failure remains open because its failing point array has
-not been captured or reproduced.
+Successful native hulls and the existing exact-collinear retry keep their feature
+order. Only a failed horizon or broken face boundary uses the installed Three
+QuickHull addon to reconstruct the actual stored points. The result preserves
+all authored coordinate slots/IDs, merges only machine-coplanar adjacent facets,
+and validates closed topology and containment. It does not substitute a box,
+reset damage or change crash/traction coefficients. This is an explicit browser
+robustness extension for undefined native incidence, not a reconstructed native
+choice of topology on that exceptional input.
 
-## Evidence and native boundary
+The historical Porker2 contact sequence and point array remain unavailable.
+Its exact chronology was not reproduced; closure concerns the demonstrated
+horizon failure class and its recovery, rather than a claim of replaying it.
+
+## Open-horizon reproduction and correction — 2026-10-26
+
+`tests/hull-recovery.test.mjs` contains six independently authored Float32 points.
+Five are on a top plane, including nearly collinear boundary/interior points;
+one is below it. True hull IDs 0, 1, 4, 5 form a tetrahedron with signed six-volume
+128.00001525878906. It is not a collapsed or negligible-volume car.
+
+Tracing the existing builder shows:
+
+- Insertion 3 classifies the current planes as `[0, 1, 0, -1]`, retaining a
+  coplanar branch edge.
+- Insertion 4 classifies `[0, 1, -1, -1]`. Two new radial edges receive only one
+  incident plane, and another receives the same plane twice.
+- The next insertion throws `Degenerate collision hull horizon`. Removing
+  exact interior segment points cannot repair this near-coplanar case; filling
+  missing adjacency locally cannot recover the already damaged face boundary.
+
+`src/physics/hull-recovery.ts` uses QuickHull from the existing MIT-licensed
+Three 0.180.0 dependency; its license is already in `THIRD_PARTY_LICENSES.txt` and
+the production build. No rec2 code is copied. Recovery:
+
+1. Classifies Float32 geometry and coalesces duplicate stored points to the
+   earliest original ID, while retaining every raw authored storage slot.
+2. Checks three-dimensional rank before entering QuickHull.
+3. Reconstructs supporting facets, then merges connected coplanar triangles at
+   a scale-dependent Float64 roundoff bound. The native 1e-6 side tolerance is
+   deliberately **not** a coplanarity/flattening threshold; real tiny ridges stay.
+4. Removes internal triangulation diagonals from physical edges, walks each
+   face cycle and verifies edge incidence, Euler characteristic, positive volume,
+   finite planes and containment. Stored-point validation uses machine roundoff;
+   raw-input containment separately keeps the existing 9.999999974752427e-7 bound.
+5. Marks the local hull `recoveredFrom: "open-horizon"` for runtime captures.
+   Full repair rebuilds the normal original shape through the existing owner.
+
+The primary constructor also checks for an unpaired horizon after the final
+insertion, where previously no subsequent iteration detected it. Nonfinite
+Float32 overflow is rejected alongside ordinary malformed coordinates. Flat or
+collinear inputs remain invalid; recovery does not fabricate thickness.
+
+Tests cover the analytic volume, outward normals, closed incidence, containment,
+original IDs/bounds, sub-Float32 jitter, duplicates, final-insertion failure,
+wall/floor CCD, cube facet merging, a one-Float32-ULP ridge, and invalid input.
+The original 59 stock polyhedra and native bent-Eagle feature assertions still
+pass and explicitly require no recovery marker.
+
+## Integration validation — 2026-10-26
+
+`node --import tsx tools/hull-contact-report.mjs` performs 12 cumulative real
+car-versus-plane impacts per original Porker2, Eagle and Buggy, three ticks per
+impact and a 15-second deadline. It resets pose/velocity between hits but retains
+damage, components and parts. Recovered/failed point arrays are captured only
+under ignored `artifacts/phy11-hull-contacts.json`. It skips absent original data.
+The first run completed 108 ticks in 1.09 seconds: all cars had real impulses,
+maximum crush displacement 0.1460/0.1175/0.1143 model units, zero hull failures,
+and pristine native hulls after normal full repair. No recovery, bend or split
+occurred in that particular physical run; it is a regression, not reproduction.
+
+Chrome DevTools MCP verified the six-point recovery in the actual application,
+then keyboard driving and six three-tick original Porker2/rival impacts on Nice
+Beaver. Damage accumulated, geometry visibly crushed, and no console/WebGL errors
+occurred. Backend: AMD Radeon via ANGLE/radeonsi, buffer 2063×1426. Screenshot
+inspection included the damaged car; this was a correctness check, not an FPS
+benchmark. Captured results are ignored in `artifacts/phy11-mcp-report.json`.
+
+The separate bounded `node tests/browser-phy17-split.mjs` regression also passes:
+grounded/airborne/new-wall original Porker2 cases, physical attachment transfer,
+split mass/moments and repair, with no browser/asset errors. That harness uses
+SwiftShader for correctness, separately from the hardware MCP check above.
+
+Build and focused geometry/recovery/noncar checks pass. The full suite's only
+six failures were sandbox port-binding restrictions in server-startup tests;
+all eight server-startup tests passed separately with localhost access. The
+subsequently strengthened recovery tests pass 9/9.
+
+## Earlier precision correction and native evidence
+
+### Native boundary
 
 The installed native hull entry is `ConvexHull3D 0x420fd0`, seed
 `0x421210`, growth `0x4217b0`. The existing independent implementation retains
@@ -47,7 +128,7 @@ crush writes through a Float64Array in `DamageSystem.crushShapes`, and repair
 updates Vector3 coordinates directly, so raw doubles are valid runtime inputs.
 They must not change whether the retry recognizes the same native point set.
 
-## Deterministic reproduction and correction
+### Stored-coordinate retry precision
 
 The redistributable fixture in `tests/hull-precision.test.mjs` is a box with
 16 authored boundary points, including redundant collinear edge points. It
@@ -77,7 +158,7 @@ indices for both signs of the perturbation. They independently check raw-input
 immutability, preserved authored storage and containing halfspaces, plus
 rejection of a shape that becomes planar after native storage rounding.
 
-## Original Porker2 bounded audit
+### Earlier bounded damage-input audit
 
 `tools/hull-precision-report.mjs` performs four controlled original-data cases:
 human/NPC handling, forces 0.5/5, and constant 0.5/native-seed1 random sources.
@@ -100,28 +181,3 @@ precision, demonstrating the runtime relevance of the stored-input boundary.
 Maximum observed containing-plane excess was about 1.64e-8. All raw/stored
 feature comparisons and repair reconstructions passed. These cases did not
 reproduce the historical horizon abort.
-
-## Validation and remaining acceptance
-
-Focused checks pass: two new precision tests, 36 geometry tests including the
-59 original stock polyhedra and directly measured bent Eagle topology, and eight
-noncar-hull tests including monorails. The original-data audit above passes.
-TypeScript, formatting and changed-file whitespace checks also pass.
-
-The existing bounded `browser-phy17-split.mjs` fixture passes against an isolated
-source copy: original Porker2 grounded, airborne and new-wall cases, at most
-three physics ticks per case, with actual attachment transfer, mass/moments and
-repair checks. The headless Chromium run requests SwiftShader and records zero
-browser/asset errors and GL error0 in all three cases. Its copied ignored report
-is `artifacts/phy11-porker-browser.json`. This is a controlled split mechanism
-regression, not the historical repeated-contact hull failure. An initial pass
-used the repository cwd because the fixture's child server inherits cwd; the
-explicit isolated-workdir replay also passed and is the retained report.
-
-The historical PHY-11 task is **not complete**. Its unavailable severe-contact
-Porker2 point array and native behavior on that exact array remain necessary
-before claiming its reported failure is fixed. The generic crash-matrix failure
-artifact currently records a different PHY-17 split-secondary movement failure;
-it is not evidence of a captured hull horizon. Later crash and split passes
-also do not retrospectively identify that older point set. Keep PHY-11 open
-with this precision fix recorded separately from the historical symptom.

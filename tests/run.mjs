@@ -32,6 +32,7 @@ import "./moving-edge-kernel.test.mjs";
 import "./native-random.test.mjs";
 import "./formats.test.mjs";
 import "./hull-precision.test.mjs";
+import "./hull-recovery.test.mjs";
 import "./pix-legacy.test.mjs";
 import "./native-asset-metadata.test.mjs";
 import "./actor-bounds.test.mjs";

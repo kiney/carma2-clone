@@ -6,14 +6,18 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 | Order | Ticket           | Priority | Ordinal | Reason                                                                                                                              |
 | ----- | ---------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | PHY-11 / TASK-10 | P1       | 1000    | Capture and fix the potentially fatal deformed-hull rebuild before broader crash acceptance.                                        |
-| 2     | AI-05 / TASK-17  | P1       | 1010    | Separate safe initial placement from the reproduced fleet's first active AI collisions.                                             |
-| 3     | DMG-01 / TASK-21 | P2       | 2000    | Complete concrete WAM/car producers and repair ownership, reusing existing world effect providers.                                  |
-| 4     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes.                                 |
-| 5     | DMG-03 / TASK-23 | P2       | 2020    | Complete and validate cross-producer effects, priorities, chronology, ownership and visibility after those callers are established. |
+| 1     | AI-05 / TASK-17  | P1       | 1010    | Separate safe initial placement from the reproduced fleet's first active AI collisions.                                             |
+| 2     | DMG-01 / TASK-21 | P2       | 2000    | Complete concrete WAM/car producers and repair ownership, reusing existing world effect providers.                                  |
+| 3     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes.                                 |
+| 4     | DMG-03 / TASK-23 | P2       | 2020    | Complete and validate cross-producer effects, priorities, chronology, ownership and visibility after those callers are established. |
+
+The preceding PHY-11 / TASK-10 is done: valid-volume open-horizon failures now
+reconstruct the actual deformed points, preserving successful native hulls.
+The historical Porker2 chronology is unavailable and was not claimed replayed;
+see [reproduction and validation](../docs/native-hull-re.md).
 
 These are implementation preferences, not an artificial hard dependency chain.
-No unfinished whole-ticket prerequisite among these five was demonstrated.
+No unfinished whole-ticket prerequisite among the original five was demonstrated.
 Shared dispatcher and pool changes should be serialized; independent sub-scopes
 can proceed without waiting for an unrelated reproduction or full subsystem.
 WLD-01/02/03 and the PERF-16/17 admission/quiet providers are already complete.
@@ -25,8 +29,8 @@ have scoped prerequisites outside `next`: PED-06 / TASK-96 and PED-09 / TASK-99,
 including the latter's existing transitive dependencies. Pedestrian blood/giblet
 allocation also overlaps DMG-03. DMG-02 owns related remaining followup/headup
 details, while its normal shared queues/outlets already exist. Per-ticket plans
-record these boundaries. Priorities and the user's selected statuses are
-unchanged; no engine implementation was started by this queue review.
+record these boundaries. Numeric priorities and the relative order of the
+remaining selected tickets are unchanged.
 
 Current performance status (2026-10-24): PERF-02 and PERF-04 through PERF-23,
 including all 18 direct PERF-01 subtasks, are done. PERF-03 resolution-policy

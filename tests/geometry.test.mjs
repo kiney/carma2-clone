@@ -694,6 +694,7 @@ test("stock polyhedra retain authored indexing and finite closed source topology
       if (shape.kind !== "polyhedron") continue;
       const authored = shape.vertices.map((point) => v(...point));
       const hull = buildHull(authored);
+      assert.equal(hull.recoveredFrom, undefined, `${name}: native primary`);
       if (name.toLowerCase() === "dondump") {
         // Direct original-HW0x420fd0 measurements: the near-coplanar end
         // retains edge2->7, whose presence depends on x87 spill precision.
@@ -801,6 +802,11 @@ test("native bent hull retains coplanar CCD branches while face polygons remain 
   );
   assert.ok(damage.structuralBend);
   const hull = buildHull(car.shapeVertices[0]);
+  assert.equal(
+    hull.recoveredFrom,
+    undefined,
+    "native bent CCD branches retained",
+  );
   // Measured directly from original HW0x420fd0 on this resulting point array.
   assert.deepEqual(
     hull.vertexOrder,

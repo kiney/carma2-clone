@@ -1,5 +1,6 @@
 import { Box3, Quaternion, Triangle, Vector3 } from "three";
 import type { RigidBody } from "./contact";
+import { recoverHull } from "./hull-recovery";
 import {
   createEdgeFeatureIndex,
   getHullEdgeFeatureIndex,
@@ -21,6 +22,8 @@ export interface CollisionHull {
   vertexOrder?: number[];
   faces: HullFace[];
   edges: [number, number][];
+  /** Undefined on successful native-order builds; retained for crash captures. */
+  recoveredFrom?: "open-horizon";
   /** Solver/candidate transforms retain authored local planes for point CCD. */
   localHull?: CollisionHull;
   position?: Vector3;
@@ -757,6 +760,8 @@ function buildHullIncremental(points: readonly Vector3[]): CollisionHull {
     throw new Error("Invalid collision hull vertices");
   const vertices = points.map((point) => point.clone());
   const geometry = vertices.map((point) => storedVector(point.clone()));
+  if (geometry.some((point) => !point.toArray().every(Number.isFinite)))
+    throw new Error("Invalid collision hull vertices");
   let seed = 0;
   while (seed <= geometry.length - 3) {
     const cross = geometry[seed + 1]
@@ -853,6 +858,10 @@ function buildHullIncremental(points: readonly Vector3[]): CollisionHull {
     ];
     order.push(vertex);
   }
+  // An open horizon on the final insertion has no following iteration to
+  // detect it. It must not escape as a silently incomplete collision surface.
+  if (edges.some((edge) => edge.planes.length < 2))
+    throw new Error("Degenerate collision hull horizon");
   const used = new Set(edges.flatMap((edge) => [edge.a, edge.b]));
   const vertexOrder = order.filter((index) => used.has(index));
   const faces = planes.map((plane) => {
@@ -912,60 +921,80 @@ export function buildHull(points: readonly Vector3[]): CollisionHull {
   try {
     return buildHullIncremental(points);
   } catch (error) {
-    if (
-      !(error instanceof Error) ||
-      error.message !== "Degenerate collision hull horizon" ||
-      points.length > 64
-    )
-      throw error;
-    // Original AddPoint4217b0 can leave a horizon's second plane unwritten
-    // after inserting redundant collinear edge vertices. The installed native
-    // hull accepts both stock monorails. Repair this undefined incidence only;
-    // successful native-order car hulls retain their full original path.
-    // Classify the same stored geometry used by the primary builder. Crush
-    // coordinates can retain double precision between source float stores;
-    // raw-double collinearity must not distinguish identical native inputs.
-    const geometry = points.map((point) => storedVector(point.clone()));
-    const retained = geometry.flatMap((point, index) => {
-      for (let a = 0; a < geometry.length; a++) {
-        if (a === index) continue;
-        const offset = point.clone().sub(geometry[a]);
-        for (let b = a + 1; b < geometry.length; b++) {
-          if (b === index) continue;
-          const segment = geometry[b].clone().sub(geometry[a]);
-          const projection = offset.dot(segment);
-          if (
-            projection > 0 &&
-            projection < segment.lengthSq() &&
-            offset.clone().cross(segment).lengthSq() === 0
-          )
-            return [];
-        }
+    if (!recoverableHullError(error)) throw error;
+    // Preserve the existing native-order exact-collinear retry first. A
+    // near-coplanar crush can also break incidence without any collinear
+    // interior point; only that undefined topology uses actual-point recovery.
+    if (points.length <= 64) {
+      try {
+        return buildCollinearHull(points, error);
+      } catch (retryError) {
+        if (!recoverableHullError(retryError)) throw retryError;
       }
-      return [index];
-    });
-    if (retained.length === points.length || retained.length < 4) throw error;
-    const hull = buildHullIncremental(retained.map((index) => points[index]));
-    if (
-      hull.faces.some((face) =>
-        points.some(
-          (point) =>
-            face.normal.dot(point) - face.constant > HULL_PLANE_TOLERANCE,
-        ),
-      )
-    )
-      throw error;
-    // Preserve authored IDs for crush/actor references and exact source bounds.
-    return {
-      vertices: points.map((point) => point.clone()),
-      vertexOrder: hull.vertexOrder!.map((index) => retained[index]),
-      faces: hull.faces.map((face) => ({
-        ...face,
-        indices: face.indices.map((index) => retained[index]),
-      })),
-      edges: hull.edges.map(([a, b]) => [retained[a], retained[b]]),
-    };
+    }
+    return recoverHull(points, HULL_PLANE_TOLERANCE);
   }
+}
+
+function recoverableHullError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    (error.message === "Degenerate collision hull horizon" ||
+      error.message === "Invalid collision hull boundary")
+  );
+}
+
+function buildCollinearHull(
+  points: readonly Vector3[],
+  error: Error,
+): CollisionHull {
+  // Original AddPoint4217b0 can leave a horizon's second plane unwritten
+  // after inserting redundant collinear edge vertices. The installed native
+  // hull accepts both stock monorails. Repair this undefined incidence only;
+  // successful native-order car hulls retain their full original path.
+  // Classify the same stored geometry used by the primary builder. Crush
+  // coordinates can retain double precision between source float stores;
+  // raw-double collinearity must not distinguish identical native inputs.
+  const geometry = points.map((point) => storedVector(point.clone()));
+  const retained = geometry.flatMap((point, index) => {
+    for (let a = 0; a < geometry.length; a++) {
+      if (a === index) continue;
+      const offset = point.clone().sub(geometry[a]);
+      for (let b = a + 1; b < geometry.length; b++) {
+        if (b === index) continue;
+        const segment = geometry[b].clone().sub(geometry[a]);
+        const projection = offset.dot(segment);
+        if (
+          projection > 0 &&
+          projection < segment.lengthSq() &&
+          offset.clone().cross(segment).lengthSq() === 0
+        )
+          return [];
+      }
+    }
+    return [index];
+  });
+  if (retained.length === points.length || retained.length < 4) throw error;
+  const hull = buildHullIncremental(retained.map((index) => points[index]));
+  if (
+    hull.faces.some((face) =>
+      points.some(
+        (point) =>
+          face.normal.dot(point) - face.constant > HULL_PLANE_TOLERANCE,
+      ),
+    )
+  )
+    throw error;
+  // Preserve authored IDs for crush/actor references and exact source bounds.
+  return {
+    vertices: points.map((point) => point.clone()),
+    vertexOrder: hull.vertexOrder!.map((index) => retained[index]),
+    faces: hull.faces.map((face) => ({
+      ...face,
+      indices: face.indices.map((index) => retained[index]),
+    })),
+    edges: hull.edges.map(([a, b]) => [retained[a], retained[b]]),
+  };
 }
 export function transformHull(
   hull: CollisionHull,
