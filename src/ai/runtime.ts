@@ -39,6 +39,8 @@ import {
 } from "./crash-reactions";
 
 export interface NativeOpponentFleetHooks {
+  /** Publication clock after browser asset staging; no UPDATE is consumed. */
+  initialTimeMs?: number;
   skill: number;
   raceIndex: number;
   raceCount: number;
@@ -141,6 +143,15 @@ export class NativeOpponentFleet {
   ) {
     if (!nodes.length || !sections.length)
       throw new Error("Native opponent fleet requires authored roads");
+    const initialTimeMs =
+      hooks.initialTimeMs === undefined ? 0 : hooks.initialTimeMs;
+    if (
+      !Number.isInteger(initialTimeMs) ||
+      initialTimeMs < 0 ||
+      initialTimeMs > 0xffffffff
+    )
+      throw new Error("Invalid native opponent initial timestamp");
+    this.nowMs = initialTimeMs;
     this.random = hooks.random ?? Math.random;
     this.catalogState = catalog.map((entry) => ({
       strength: entry.strengthRating,

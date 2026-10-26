@@ -1124,6 +1124,7 @@ export class VehicleSimulation {
   /** Native BSS state survives car/race loads and advances once per force call. */
   readonly motionContext = sharedMotionContext;
   private detachmentScheduling = createDetachmentSchedulingContext();
+  private admittingInitialCars = false;
   private contactSurfaces = new Map<RigidBody, Surface[]>();
   private bodyBroadphase = new BodyBroadphase();
   private bodyTrajectoryGuard = new BodyTrajectoryGuard();
@@ -1292,10 +1293,81 @@ export class VehicleSimulation {
         this.startWreckSmoke(car);
       }
     };
-    car.damage.configureDetachmentScheduling(this.detachmentScheduling);
+    if (!this.admittingInitialCars)
+      car.damage.configureDetachmentScheduling(this.detachmentScheduling);
     this.crashCars.set(car.group.uuid, car);
     this.cars.push(car);
     this.sync(car);
+  }
+  /** Publish an already validated initial roster without partial admission.
+   * No physics tick or asynchronous work may intervene in this transaction. */
+  addCars(cars: readonly SimulatedCar[]): void {
+    if (this.admittingInitialCars)
+      throw new Error("Initial car admission is already in progress");
+    const bodies = new Set<SimulatedCar>();
+    const identities = new Set<string>();
+    for (const car of cars) {
+      if (
+        bodies.has(car) ||
+        identities.has(car.group.uuid) ||
+        this.cars.includes(car) ||
+        this.crashCars.has(car.group.uuid) ||
+        this.phil.getHeader(car)
+      )
+        throw new Error(
+          "Initial car batch contains an admitted or duplicate car",
+        );
+      // This owner admits fresh staged cars, not a transfer of damaged cars
+      // between simulations and their private detachment queues.
+      if (car.damage.detachQueue?.length)
+        throw new Error("Initial car admission requires no queued detachments");
+      bodies.add(car);
+      identities.add(car.group.uuid);
+    }
+    if (cars.length > this.phil.freeCount)
+      throw new Error("No native PHIL headers available for initial car batch");
+    const callbacks = [
+      "readSmashStartingVelocity",
+      "cancelQueuedSpam",
+      "deferOrdinaryCrush",
+      "onWastageCheck",
+    ] as const;
+    const before = cars.map((car) => ({
+      car,
+      fields: this.philFields.has(car)
+        ? { ...this.philFields.get(car)! }
+        : undefined,
+      callbacks: callbacks.map((key) =>
+        Object.getOwnPropertyDescriptor(car.damage, key),
+      ),
+    }));
+    const previousCars = [...this.cars];
+    this.admittingInitialCars = true;
+    try {
+      for (const car of cars) this.add(car);
+      // Defer scheduler binding until all admission/sync calls have succeeded.
+      // Fresh initial cars transfer no queue reservations, so these source
+      // bindings cannot exhaust the shared sixteen-entry queue.
+      for (const car of cars)
+        car.damage.configureDetachmentScheduling(this.detachmentScheduling);
+    } catch (error) {
+      for (const entry of [...before].reverse()) {
+        const { car } = entry;
+        if (this.phil.getHeader(car)) this.phil.remove(car);
+        this.crashCars.delete(car.group.uuid);
+        if (entry.fields) this.philFields.set(car, entry.fields);
+        else this.philFields.delete(car);
+        callbacks.forEach((key, index) => {
+          const descriptor = entry.callbacks[index];
+          if (descriptor) Object.defineProperty(car.damage, key, descriptor);
+          else delete car.damage[key];
+        });
+      }
+      this.cars.splice(0, this.cars.length, ...previousCars);
+      throw error;
+    } finally {
+      this.admittingInitialCars = false;
+    }
   }
   isCarPhysicsActive(car: SimulatedCar): boolean {
     return !this.inactiveCars.has(car);

@@ -116,12 +116,17 @@ try {
     };
   });
   const grids = [];
-  for (const [track, car] of (process.env.SPAWN_PAIRS_ONLY_CRASHES ? [] : [
-    ["data/RACES/desert2/desert2.txt", "data/CARS/eaglegreen/EAGLEGREEN.TXT"],
-    ["data/RACES/desert2/desert2.txt", "data/CARS/buggy/buggy.txt"],
-    ["data/RACES/desert2/desert2.txt", "data/CARS/bigdump/bigdump.txt"],
-    ["data/RACES/newcity1/newcity1.txt", "data/CARS/EAGLE3/EAGLE3.TXT"],
-  ])) {
+  for (const [track, car] of process.env.SPAWN_PAIRS_ONLY_CRASHES
+    ? []
+    : [
+        [
+          "data/RACES/desert2/desert2.txt",
+          "data/CARS/eaglegreen/EAGLEGREEN.TXT",
+        ],
+        ["data/RACES/desert2/desert2.txt", "data/CARS/buggy/buggy.txt"],
+        ["data/RACES/desert2/desert2.txt", "data/CARS/bigdump/bigdump.txt"],
+        ["data/RACES/newcity1/newcity1.txt", "data/CARS/EAGLE3/EAGLE3.TXT"],
+      ]) {
     console.log(`Checking supported grid: ${track}, ${car}`);
     await page.evaluate(
       async ({ track, car }) => {
@@ -138,6 +143,24 @@ try {
     });
     const initial = await page.evaluate(() => {
       const c = window.carma;
+      if (c.populationLoadState.opponents.state !== "ready")
+        throw new Error(
+          `Incomplete starting fleet: ${JSON.stringify(c.populationLoadState.opponents)}`,
+        );
+      window.__gridDamageContacts = [];
+      const previousImpactPair = c.simulation.onImpactPair;
+      c.simulation.onImpactPair = (a, b) => {
+        for (const body of [a, b])
+          if (body && body.damage.componentLevels.some((level) => level > 0))
+            window.__gridDamageContacts.push({
+              car: body.group.name,
+              other: (body === a ? b : a)?.group.name ?? "world",
+              at: c.simulation.elapsed,
+              wasted: body.knackered,
+              damage: [...body.damage.componentLevels],
+            });
+        previousImpactPair?.(a, b);
+      };
       window.__gridStart = c.simulation.cars.map((p) =>
         p.state.position.clone(),
       );
@@ -200,6 +223,9 @@ try {
         wasted: p.knackered,
         damage: [...p.damage.componentLevels],
         position: p.state.position.toArray(),
+        damageContacts: window.__gridDamageContacts.filter(
+          (row) => row.car === p.group.name,
+        ),
       }));
     });
     // Preserve the complete grid when an early AI crash fails an assertion.
@@ -208,7 +234,14 @@ try {
       JSON.stringify([...grids, { track, car, initial, settled }], null, 2),
     );
     assert.ok(
-      settled.every((p) => !p.wasted),
+      settled.every(
+        (p) =>
+          p.position.every(Number.isFinite) &&
+          (!p.wasted ||
+            p.damageContacts.some((contact) =>
+              contact.damage.some((level) => level > 0),
+            )),
+      ),
       JSON.stringify(settled),
     );
     assert.ok(

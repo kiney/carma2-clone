@@ -6,15 +6,21 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 | Order | Ticket           | Priority | Ordinal | Reason                                                                                                                              |
 | ----- | ---------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | AI-05 / TASK-17  | P1       | 1010    | Separate safe initial placement from the reproduced fleet's first active AI collisions.                                             |
-| 2     | DMG-01 / TASK-21 | P2       | 2000    | Complete concrete WAM/car producers and repair ownership, reusing existing world effect providers.                                  |
-| 3     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes.                                 |
-| 4     | DMG-03 / TASK-23 | P2       | 2020    | Complete and validate cross-producer effects, priorities, chronology, ownership and visibility after those callers are established. |
+| 1     | DMG-01 / TASK-21 | P2       | 2000    | Complete concrete WAM/car producers and repair ownership, reusing existing world effect providers.                                  |
+| 2     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes.                                 |
+| 3     | DMG-03 / TASK-23 | P2       | 2020    | Complete and validate cross-producer effects, priorities, chronology, ownership and visibility after those callers are established. |
 
 The preceding PHY-11 / TASK-10 is done: valid-volume open-horizon failures now
 reconstruct the actual deformed points, preserving successful native hulls.
 The historical Porker2 chronology is unavailable and was not claimed replayed;
 see [reproduction and validation](../docs/native-hull-re.md).
+
+AI-05 / TASK-17 is also done: asynchronous loading stages the whole fleet, then
+validates current reservations and admits all cars together. Failure/cancellation
+cannot publish a partial population. Subsequent genuine AI crashes remain valid;
+see [startup evidence](../docs/opponent-startup.md). The modest initial
+bumpy-road suspension-history discrepancy is separately in the backlog as
+P3 PHY-20 / TASK-123.
 
 These are implementation preferences, not an artificial hard dependency chain.
 No unfinished whole-ticket prerequisite among the original five was demonstrated.

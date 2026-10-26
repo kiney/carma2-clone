@@ -6,7 +6,7 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-26 20:46'
 labels:
   - priority-2
   - AI-01
@@ -37,3 +37,9 @@ The live regular-opponent fleet now uses installed-binary objective selection/li
 
 [runtime.ts](../../src/ai/runtime.ts), [AI lifecycle evidence](../../docs/c2-ai-repair-levitate-re.md), [Chromium](../../tests/browser-native-ai.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AI-05 audit 2026-10-26: main.ts currently omits RNG arguments when calling selectOpponentIds and assignNativePersonalities, so both use global Math.random while NativeOpponentFleet uses sharedNativeRandom. A native seed alone cannot reproduce the complete roster/personality chronology. Dedicated startup tests explicitly seed the two selection consumers and assert actual original IDs. Review original shared-stream ownership/draw order under AI-01; do not silently treat seeded native AI alone as deterministic fleet selection.
+<!-- SECTION:NOTES:END -->

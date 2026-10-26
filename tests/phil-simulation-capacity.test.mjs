@@ -75,7 +75,10 @@ function carFixture() {
     group: new Group(),
     damage: {
       wasted: false,
-      configureDetachmentScheduling() {},
+      schedulingBindings: [],
+      configureDetachmentScheduling(context) {
+        this.schedulingBindings.push(context);
+      },
       configureWamSmashQueue() {},
       repair() {},
     },
@@ -143,6 +146,85 @@ test("failed active-car admission at capacity leaves the simulation car list unc
   assert.deepEqual(sim.cars, before);
   assert.equal(sim.phil.count, 100);
   assert.equal(sim.phil.freeCount, 0);
+  sim.dispose();
+});
+
+test("initial car batch capacity and identity checks precede all mutation", () => {
+  const sim = emptySimulation();
+  const existing = carFixture();
+  sim.add(existing);
+  for (let i = 1; i < 99; i++)
+    assert.equal(sim.phil.addActiveImmediate(dummyBody()), 0);
+  const batch = [carFixture(), carFixture()];
+  const registered = [...sim.phil.registeredBodies];
+  assert.throws(() => sim.addCars(batch), /No native PHIL headers/);
+  assert.deepEqual(sim.cars, [existing]);
+  assert.deepEqual(sim.phil.registeredBodies, registered);
+  assert.equal(sim.phil.freeCount, 1);
+  for (const car of batch) {
+    assert.equal(sim.phil.getHeader(car), null);
+    assert.equal(car.damage.readSmashStartingVelocity, undefined);
+    assert.deepEqual(car.damage.schedulingBindings, []);
+  }
+  assert.throws(() => sim.addCars([batch[0], batch[0]]), /duplicate car/);
+  assert.throws(() => sim.addCars([existing]), /admitted/);
+  const alias = carFixture();
+  alias.group.uuid = existing.group.uuid;
+  assert.throws(() => sim.addCars([alias]), /admitted/);
+  assert.deepEqual(sim.phil.registeredBodies, registered);
+  sim.dispose();
+});
+
+test("initial batch rollback restores registry and callbacks after a sync fault", () => {
+  const sim = emptySimulation();
+  const existing = carFixture();
+  sim.add(existing);
+  const registered = [...sim.phil.registeredBodies];
+  const batch = [carFixture(), carFixture()];
+  const oldCallback = () => new Vector3(1, 2, 3);
+  batch[0].damage.readSmashStartingVelocity = oldCallback;
+  const sync = sim.sync;
+  sim.sync = function (car) {
+    if (car === batch[1]) throw new Error("injected sync failure");
+    return sync.call(this, car);
+  };
+  assert.throws(() => sim.addCars(batch), /injected sync failure/);
+  assert.deepEqual(sim.cars, [existing]);
+  assert.deepEqual(sim.phil.registeredBodies, registered);
+  assert.equal(sim.phil.freeCount, 99);
+  assert.equal(batch[0].damage.readSmashStartingVelocity, oldCallback);
+  assert.equal(batch[1].damage.readSmashStartingVelocity, undefined);
+  for (const car of batch) {
+    assert.equal(sim.phil.getHeader(car), null);
+    assert.equal(sim.crashCars.has(car.group.uuid), false);
+    assert.equal(car.damage.deferOrdinaryCrush, undefined);
+    assert.equal(car.damage.cancelQueuedSpam, undefined);
+    assert.equal(car.damage.onWastageCheck, undefined);
+    assert.deepEqual(car.damage.schedulingBindings, []);
+  }
+  sim.sync = sync;
+  sim.addCars(batch);
+  assert.deepEqual(sim.cars, [existing, ...batch]);
+  assert.equal(sim.phil.count, 3);
+  for (const car of batch) {
+    assert.equal(sim.phil.getState(car), 2);
+    assert.equal(sim.crashCars.get(car.group.uuid), car);
+    assert.equal(typeof car.damage.readSmashStartingVelocity, "function");
+    car.state.velocity.set(1, -2, 3);
+    assert.deepEqual(car.damage.readSmashStartingVelocity().toArray(), [
+      Math.fround(6.9),
+      Math.fround(-13.8),
+      Math.fround(20.7),
+    ]);
+    assert.equal(
+      car.damage.deferOrdinaryCrush([], new Vector3(), false, 0),
+      false,
+    );
+    assert.equal(typeof car.damage.cancelQueuedSpam, "function");
+    car.damage.onWastageCheck();
+    assert.equal(car.damage.schedulingBindings.length, 1);
+    assert.equal(car.group.position.equals(car.state.position), true);
+  }
   sim.dispose();
 });
 

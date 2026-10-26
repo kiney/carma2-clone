@@ -344,6 +344,7 @@ import "./ai-native-follow-dispatch.test.mjs";
 import "./ai-native-levitate.test.mjs";
 import "./ai-native-repair.test.mjs";
 import "./ai-native-runtime.test.mjs";
+import "./opponent-start-time.test.mjs";
 import "./opponent-placement.test.mjs";
 import "./ped-population-accounting.test.mjs";
 import "./wld-native-collector.test.mjs";

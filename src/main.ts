@@ -2187,6 +2187,9 @@ async function loadRace() {
     camera.lookAt(start);
     stats.ready = true;
     gameClock.start(performance.now(), true);
+    // Consumers initialized while paused must use this race's clock, not the
+    // last published frame timestamp from the preceding race.
+    stats.gameTimeMs = 0;
     status(
       `Loaded ${world.stats.models} track models, ${loadedCar.stats.models} car models; ${world.stats.missingTextures} unresolved world textures.`,
     );
@@ -2631,7 +2634,8 @@ async function loadRivals(
   const activeTrack = currentTrack;
   const gridOrigin = vehicle.position.clone();
   const gridHeading = vehicle.heading;
-  const nodes = track.pathNodes;
+  const activeTrackData = track;
+  const nodes = activeTrackData.pathNodes;
   const catalog =
     raceCatalogs.get(currentTrack.split("/")[0].toLowerCase()) ??
     raceCatalogs.get("data");
@@ -2658,182 +2662,218 @@ async function loadRivals(
       );
     return { id, path };
   });
-  const count = candidates.length;
-  const pathNodes = nodes.map((p) => new THREE.Vector3(...p));
-  const nastiness = resolveNativeRaceNastiness(catalog, raceIndex);
-  const personalities = assignNativePersonalities(count, nastiness);
-  const placement = new NativeOpponentPlacement(
-    activeSimulation,
-    activeCollision,
-    pathNodes,
-    track.pathSections,
-    (body) => fleet.teleportToSafeLocation(body),
-  );
-  const fleet = new NativeOpponentFleet(
-    pathNodes,
-    track.pathSections,
-    opponents,
-    nastiness,
-    player,
-    {
-      skill: activeSimulation.skill,
-      random: sharedNativeRandom.random,
-      raceIndex,
-      raceCount: catalog.races.length,
-      viewDistance: nativeOpponentViewDistance(nativeCameraYon),
-      repairLimits: readNativeOpponentRepairLimits(generalText),
-      rayFraction: (origin, direction) => {
-        const length = direction.length();
-        const hit = activeCollision.raycast(origin, direction, length);
-        return hit ? Math.fround(hit.distance / length) : 100;
-      },
-      isPhysicsActive: (body) => activeSimulation.isCarPhysicsActive(body),
-      setPhysicsActive: (body, active) => {
-        distantOpponentPresentation.invalidate(body);
-        activeSimulation.setCarPhysicsActive(body, active);
-        body.group.visible = active;
-      },
-      onCheatyPose: (body) => distantOpponentPresentation.publish(body),
-      rematerialize: (body, view, slot, speed) =>
-        placement.onSection(body, view, slot, speed),
-      rematerializeNearest: (body, speed) => placement.nearest(body, speed),
-      hasFallenOffWorld: (body) =>
-        nativeHasCarFallenOffWorld(
-          {
-            position: body.state.position,
-            actorUp: new THREE.Vector3(0, 1, 0).applyQuaternion(
-              body.state.orientation,
-            ),
-            driver: body.human ? 8 : 6,
-            wheelsOnGround: body.state.groundedWheelCount ?? 0,
-            cachedMaterialNames: activeSimulation.cachedCarMaterialNames(body),
-            carFlying: false,
-            actionReplay: false,
-          },
-          (origin) => activeCollision.nativeYBelow(origin),
-        ),
-      repair: (body) => activeSimulation.repair(body),
-      // Installed empty-route return reads an uninitialized stack slot. The
-      // browser treats only that undefined branch as continue, never throws
-      // or invents a physical path-end transition.
-      emptyRaceRouteStatus: () => 0,
-      diagnostic: (text) => assets.warnings.push(text),
-    },
-  );
-  opponentFleet = fleet;
-  for (let i = 0; i < count && i < candidates.length; i++) {
-    const configPath = candidates[i].path;
-    const text = await assets.text(configPath);
-    const config = parseCarConfig(text);
-    const model = await assets.scene(dirOf(configPath), stemOf(configPath), {
-      shading: 2,
-      storage: "opponents",
-    });
-    const rivalDamage = new DamageSystem(assets, model.group, text, configPath);
-    rivalDamage.structuralSettings = parseStructuralSettings(generalText);
-    try {
-      await rivalDamage.init();
-    } catch (error) {
-      model.dispose();
-      disposeGroup(model.group);
-      throw error;
-    }
-    if (activeTrack !== currentTrack || loadGeneration !== generation) {
-      model.dispose();
-      disposeGroup(model.group);
-      return;
-    }
-    let closest = 0,
-      distance = Infinity;
-    const spawn = gridOrigin
-      .clone()
-      .add(
-        new THREE.Vector3(
-          (i % 2 ? 1 : -1) * 0.8,
-          0,
-          1 + Math.floor(i / 2) * 1,
-        ).applyAxisAngle(new THREE.Vector3(0, 1, 0), gridHeading),
-      );
-    const heading = gridHeading;
-    const body = createSimulatedCar(
-      model.group,
-      text,
-      rivalDamage,
-      spawn,
-      heading,
-      false,
-      { immutableHulls: true },
-    );
-    const reservedStarts = [
-      ...(simulation?.cars ?? []),
-      ...(simulation?.noncars ?? []),
-    ];
-    let placement = placeCarAtStart(body, collision, reservedStarts);
-    // Browser grid safety extension: dense authored populations and large
-    // vehicles can exhaust the immediate grid. Search farther only on failure;
-    // retain all ground, hull and wheel-support checks and never force a pose.
-    if (!placement.placed)
-      placement = placeCarAtStart(body, collision, reservedStarts, {
-        searchRadius: 4,
+  const activePlayer = player;
+  const activeScene = scene;
+  const stagedModels: Awaited<ReturnType<Assets["scene"]>>[] = [];
+  const stagedAnimations: { dispose(): void }[] = [];
+  const staged: { rival: Rival; text: string }[] = [];
+  const isCurrent = () =>
+    activeTrack === currentTrack && loadGeneration === generation;
+  let published = false;
+  try {
+    // Native InitOpponents is synchronous. Browser asset awaits must not expose
+    // a partial physical fleet: parking brakes do not stop cars sliding or
+    // colliding on a sloped grid while later vehicles are still loading.
+    for (let i = 0; i < candidates.length; i++) {
+      const configPath = candidates[i].path;
+      const text = await assets.text(configPath);
+      if (!isCurrent()) return;
+      const model = await assets.scene(dirOf(configPath), stemOf(configPath), {
+        shading: 2,
+        storage: "opponents",
       });
-    if (!placement.placed) {
-      model.dispose();
-      disposeGroup(model.group);
-      throw new Error(
-        `Opponent ${candidates[i].id} has no supported, collision-free start; race population is incomplete`,
+      stagedModels.push(model);
+      if (!isCurrent()) return;
+      const rivalDamage = new DamageSystem(
+        assets,
+        model.group,
+        text,
+        configPath,
       );
-    }
-    const state = body.state;
-    for (let n = 0; n < nodes.length; n++) {
-      const d = new THREE.Vector3(...nodes[n]).distanceToSquared(
-        state.position,
+      rivalDamage.structuralSettings = parseStructuralSettings(generalText);
+      await rivalDamage.init();
+      if (!isCurrent()) return;
+      const spawn = gridOrigin
+        .clone()
+        .add(
+          new THREE.Vector3(
+            (i % 2 ? 1 : -1) * 0.8,
+            0,
+            1 + Math.floor(i / 2),
+          ).applyAxisAngle(new THREE.Vector3(0, 1, 0), gridHeading),
+        );
+      const body = createSimulatedCar(
+        model.group,
+        text,
+        rivalDamage,
+        spawn,
+        gridHeading,
+        false,
+        { immutableHulls: true },
       );
-      if (d < distance) {
-        distance = d;
-        closest = n;
-      }
-    }
-    if (upgradeSettings)
-      state.powerMultiplier =
-        player?.state.powerMultiplier ?? upgradeSettings.factors[1][0];
-    bindWamEffects(body, model.materials);
-    registerCarSmoke(body, text);
-    registerShrapnelMaterials(
-      body.group,
-      parseCarShrapnelMaterials(text),
-      body.state.driver ?? 6,
-    );
-    simulation?.add(body);
-    fleet.add(body, candidates[i].id, personalities[i]);
-    model.group.position.copy(state.position);
-    model.group.quaternion.copy(state.orientation);
-    scene.add(model.group);
-    rivals.push({
-      object: model.group,
-      state,
-      body,
-      node: closest,
-      previousNode: -1,
-      stuck: 0,
-      navigator: new RoadNavigator(
-        nodes.map((p) => new THREE.Vector3(...p)),
-        track!.pathEdges,
-      ),
-      speedController: new NativeOpponentSpeedController(),
-      frozen: false,
-      hotrodRevision: -1,
-      wasted: false,
-      damage: rivalDamage,
-      id: candidates[i].id,
-      animation: new CarAnimation(model.group, text),
-      textures: new TextureAnimation(
+      const animation = new CarAnimation(model.group, text);
+      stagedAnimations.push(animation);
+      const textures = new TextureAnimation(
         groupMaterials(model.group),
         model.textures,
         text,
-      ),
-    });
+      );
+      stagedAnimations.push(textures);
+      staged.push({
+        text,
+        rival: {
+          object: model.group,
+          state: body.state,
+          body,
+          node: 0,
+          previousNode: -1,
+          stuck: 0,
+          navigator: new RoadNavigator(
+            nodes.map((p) => new THREE.Vector3(...p)),
+            activeTrackData.pathEdges,
+          ),
+          speedController: new NativeOpponentSpeedController(),
+          frozen: false,
+          hotrodRevision: -1,
+          wasted: false,
+          damage: rivalDamage,
+          id: candidates[i].id,
+          animation,
+          textures,
+        },
+      });
+    }
+    if (!isCurrent()) return;
+    // The player and movable props may have moved while assets awaited. Fit
+    // every start against their current poses, reserving earlier staged cars.
+    // No await is allowed between this validation and fleet publication.
+    const reservedStarts = [
+      ...activeSimulation.cars,
+      ...activeSimulation.noncars,
+    ];
+    for (const { rival } of staged) {
+      const body = rival.body;
+      let result = placeCarAtStart(body, activeCollision, reservedStarts);
+      if (!result.placed)
+        result = placeCarAtStart(body, activeCollision, reservedStarts, {
+          searchRadius: 4,
+        });
+      if (!result.placed)
+        throw new Error(
+          `Opponent ${rival.id} has no supported, collision-free start; race population is incomplete`,
+        );
+      reservedStarts.push(body);
+      let distance = Infinity;
+      for (let n = 0; n < nodes.length; n++) {
+        const d = new THREE.Vector3(...nodes[n]).distanceToSquared(
+          body.state.position,
+        );
+        if (d < distance) {
+          distance = d;
+          rival.node = n;
+        }
+      }
+      if (upgradeSettings)
+        body.state.powerMultiplier =
+          activePlayer.state.powerMultiplier ?? upgradeSettings.factors[1][0];
+    }
+    const count = staged.length;
+    const pathNodes = nodes.map((p) => new THREE.Vector3(...p));
+    const nastiness = resolveNativeRaceNastiness(catalog, raceIndex);
+    const personalities = assignNativePersonalities(count, nastiness);
+    const placement = new NativeOpponentPlacement(
+      activeSimulation,
+      activeCollision,
+      pathNodes,
+      activeTrackData.pathSections,
+      (body) => fleet.teleportToSafeLocation(body),
+    );
+    const fleet = new NativeOpponentFleet(
+      pathNodes,
+      activeTrackData.pathSections,
+      opponents,
+      nastiness,
+      activePlayer,
+      {
+        skill: activeSimulation.skill,
+        initialTimeMs: stats.gameTimeMs,
+        random: sharedNativeRandom.random,
+        raceIndex,
+        raceCount: catalog.races.length,
+        viewDistance: nativeOpponentViewDistance(nativeCameraYon),
+        repairLimits: readNativeOpponentRepairLimits(generalText),
+        rayFraction: (origin, direction) => {
+          const length = direction.length();
+          const hit = activeCollision.raycast(origin, direction, length);
+          return hit ? Math.fround(hit.distance / length) : 100;
+        },
+        isPhysicsActive: (body) => activeSimulation.isCarPhysicsActive(body),
+        setPhysicsActive: (body, active) => {
+          distantOpponentPresentation.invalidate(body);
+          activeSimulation.setCarPhysicsActive(body, active);
+          body.group.visible = active;
+        },
+        onCheatyPose: (body) => distantOpponentPresentation.publish(body),
+        rematerialize: (body, view, slot, speed) =>
+          placement.onSection(body, view, slot, speed),
+        rematerializeNearest: (body, speed) => placement.nearest(body, speed),
+        hasFallenOffWorld: (body) =>
+          nativeHasCarFallenOffWorld(
+            {
+              position: body.state.position,
+              actorUp: new THREE.Vector3(0, 1, 0).applyQuaternion(
+                body.state.orientation,
+              ),
+              driver: body.human ? 8 : 6,
+              wheelsOnGround: body.state.groundedWheelCount ?? 0,
+              cachedMaterialNames:
+                activeSimulation.cachedCarMaterialNames(body),
+              carFlying: false,
+              actionReplay: false,
+            },
+            (origin) => activeCollision.nativeYBelow(origin),
+          ),
+        repair: (body) => activeSimulation.repair(body),
+        // Installed empty-route return reads an uninitialized stack slot. The
+        // browser treats only that undefined branch as continue, never throws
+        // or invents a physical path-end transition.
+        emptyRaceRouteStatus: () => 0,
+        diagnostic: (text) => assets.warnings.push(text),
+      },
+    );
+
+    // Prepare all potentially throwing car consumers before admitting any body.
+    for (let i = 0; i < staged.length; i++) {
+      const { rival, text } = staged[i];
+      fleet.add(rival.body, rival.id, personalities[i]);
+      bindWamEffects(rival.body, stagedModels[i].materials);
+      registerCarSmoke(rival.body, text);
+      registerShrapnelMaterials(
+        rival.object,
+        parseCarShrapnelMaterials(text),
+        rival.state.driver ?? 6,
+      );
+    }
+    activeSimulation.addCars(staged.map(({ rival }) => rival.body));
+    for (const { rival } of staged) {
+      rival.object.position.copy(rival.state.position);
+      rival.object.quaternion.copy(rival.state.orientation);
+      activeScene.add(rival.object);
+      rivals.push(rival);
+    }
+    opponentFleet = fleet;
+    published = true;
+  } finally {
+    if (!published) {
+      for (const animation of stagedAnimations) animation.dispose();
+      for (const model of stagedModels) {
+        model.dispose();
+        disposeGroup(model.group);
+      }
+    }
   }
 }
+
 async function loadPedestrians(text: string, loadGeneration: number) {
   if (!content || !collision || !vehicle) return;
   const active = currentTrack;

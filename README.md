@@ -74,6 +74,12 @@ physical resting debris. Grounded cars still run their original wheel-force
 path. Short-session evidence and the explicit split startup correction are documented;
 PERF-01 remains open.
 
+[Atomic opponent startup](docs/opponent-startup.md) keeps partial fleets out of
+physics while assets load, then validates and activates the complete grid together.
+Failures and race switches dispose staged resources; genuine later crash damage
+remains enabled. `npm run test:opponent-startup` checks this lifecycle with original
+DUNE/Bigdump/Newhawk content.
+
 ## Run it
 
 GitHub Actions is configured to build and run the asset-free test suite using

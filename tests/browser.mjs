@@ -169,7 +169,10 @@ try {
   const smoothing = await page.evaluate(async () => {
     const c = window.carma;
     const samples = [];
-    for (let i = 0; i < 60; i++) {
+    const start = c.simulation.elapsed;
+    // Keep software-rendered sampling bounded: 60 slow RAFs must not turn
+    // this render test into many seconds of uncontrolled driving/crashes.
+    for (let i = 0; i < 60 && c.simulation.elapsed - start < 1; i++) {
       await new Promise(requestAnimationFrame);
       samples.push({
         tick: c.simulation.elapsed,
@@ -200,6 +203,30 @@ try {
     );
   await page.keyboard.up("w");
   await page.screenshot({ path: "artifacts/browser-beaver-city.png" });
+  // Gate progression is a separate case. Start a fresh normal race after the
+  // driving/crash sample instead of carrying a potentially wasted body into it.
+  await page.evaluate(async () => {
+    await window.carma.loadRace();
+    window.carma.paused = true;
+  });
+  await page.waitForFunction(
+    () =>
+      window.carma.populationLoadState.opponents.state === "ready" &&
+      window.carma.populationLoadState.pedestrians.state === "ready",
+    null,
+    { timeout: 90000 },
+  );
+  await page.evaluate(() => {
+    if (
+      window.carma.race.status !== "racing" ||
+      window.carma.player.knackered ||
+      window.carma.player.damage.componentLevels.some((level) => level !== 0)
+    )
+      throw new Error(
+        "Fresh checkpoint fixture must start racing and undamaged",
+      );
+    window.carma.paused = false;
+  });
   // Cross every actual gate through the runtime update loop, including four laps.
   const progression = await page.evaluate(async () => {
     const race = window.carma.race;
