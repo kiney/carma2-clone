@@ -6,7 +6,7 @@ title: >-
 status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-26 19:43'
+updated_date: '2026-10-27 02:52'
 labels:
   - priority-2
   - WLD-05
@@ -50,3 +50,12 @@ Scoped external prerequisite: completing the remaining ordinary-population/nativ
 <!-- SECTION:NOTES:BEGIN -->
 PERF-08 validation (2026-10-12): the additional production browser-smash-followup harness reaches the Carrier core contact but fails its fixed actor-name assertion at tests/browser-smash-followup.mjs:558. Actual &coR0|03.ACT versus expected &coR0122.ACT. The unchanged c89adfa source/build reproduces exactly the same failure, so this is not a bounds-cache regression. Investigate whether the assertion assumes an outdated renderer/native ACT identifier or native smashable-name binding is incomplete; preserve the native identifier semantics rather than weakening the assertion without evidence. Final Carrier completion is not validated by this particular run. Current MODEL bounds and Stock/Advanced collector rows/callbacks compare exactly with caching disabled. Logs: /tmp/perf-08-browser-smash.log and /tmp/perf-08-baseline-browser-smash.log.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-27 02:52
+---
+DMG-01 completion now supplies shared WAM/world debris dispatch, pre-RNG visual gates, ACT-owned explosion/slick frames and source-scoped explosion textures. Reuse these completed outlets rather than reimplementing them; remaining world-specific cases remain in this task.
+---
+<!-- COMMENTS:END -->

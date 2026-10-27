@@ -2,13 +2,12 @@
 
 Backlog.md is the task source of truth. The former `TODO.md` entries have been migrated with their complete descriptions, evidence, source references, original issue IDs and numeric priorities. Use the installed `backlog` CLI from the repository root; it stores tasks in `backlog/tasks/` without committing automatically or checking remote branches.
 
-## Next implementation queue (2026-10-26)
+## Next implementation queue (updated 2026-10-27)
 
-| Order | Ticket           | Priority | Ordinal | Reason                                                                                                                              |
-| ----- | ---------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | DMG-01 / TASK-21 | P2       | 2000    | Complete concrete WAM/car producers and repair ownership, reusing existing world effect providers.                                  |
-| 2     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes.                                 |
-| 3     | DMG-03 / TASK-23 | P2       | 2020    | Complete and validate cross-producer effects, priorities, chronology, ownership and visibility after those callers are established. |
+| Order | Ticket           | Priority | Ordinal | Reason                                                                                              |
+| ----- | ---------------- | -------- | ------- | --------------------------------------------------------------------------------------------------- |
+| 1     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes. |
+| 2     | DMG-03 / TASK-23 | P2       | 2020    | Complete cross-producer effects, priorities, chronology, ownership and visibility.                  |
 
 The preceding PHY-11 / TASK-10 is done: valid-volume open-horizon failures now
 reconstruct the actual deformed points, preserving successful native hulls.
@@ -21,6 +20,15 @@ cannot publish a partial population. Subsequent genuine AI crashes remain valid;
 see [startup evidence](../docs/opponent-startup.md). The modest initial
 bumpy-road suspension-history discrepancy is separately in the backlog as
 P3 PHY-20 / TASK-123.
+
+DMG-01 / TASK-21 is done: fixed principal-MODEL source links and centroids,
+native default crush for eligible omitted MODEL actors, shared WAM/world debris dispatch, native visual gates, ACT-owned explosion/slick
+frames, race-scoped ACT dependencies and car-scoped MAT/PIX outlets. Held glass
+repair now uses the native shared 25-record/150ms animation; fresh damage cancels
+it, while full repair resets tiers immediately. Original Stock/Advanced inventory,
+numerical tests and Chromium crash/repair checks pass. Whole-engine CRT chronology,
+prepared positive-material order and unresolved native split topology remain
+explicitly in DMG-03 / PUP-04; see [WAM evidence](../docs/c2-wam-effects-re.md).
 
 These are implementation preferences, not an artificial hard dependency chain.
 No unfinished whole-ticket prerequisite among the original five was demonstrated.

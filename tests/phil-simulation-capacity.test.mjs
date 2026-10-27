@@ -80,6 +80,7 @@ function carFixture() {
         this.schedulingBindings.push(context);
       },
       configureWamSmashQueue() {},
+      configureWamRepairQueue() {},
       repair() {},
     },
     human: false,

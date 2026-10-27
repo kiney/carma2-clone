@@ -121,6 +121,7 @@ interface ExplosionSprite {
   position: Vector3;
   orientation?: Quaternion;
   readTransform?: () => Matrix4;
+  textures?: ReadonlyMap<string, Texture>;
 }
 
 /** Visual effects only. Native Explode 0x4eaa70 / MungeExplosions 0x4ea860.
@@ -184,6 +185,7 @@ export class ExplosionRuntime {
     offset?: Vector3,
     orientation?: Quaternion,
     readTransform?: () => Matrix4,
+    textures?: ReadonlyMap<string, Texture>,
   ): number {
     if (
       !Number.isFinite(timeMs) ||
@@ -293,6 +295,14 @@ export class ExplosionRuntime {
           position,
           orientation,
           readTransform,
+          textures: textures
+            ? new Map(
+                [...textures].map(([name, texture]) => [
+                  this.key(name),
+                  texture,
+                ]),
+              )
+            : undefined,
           localOffset,
         };
         spawned++;
@@ -315,7 +325,9 @@ export class ExplosionRuntime {
       const texture =
         frame < 0
           ? undefined
-          : this.textures.get(this.key(entry.frames[frame].pixelmap));
+          : (entry.textures ?? this.textures).get(
+              this.key(entry.frames[frame].pixelmap),
+            );
       entry.sprite.visible = !!texture;
       if (!texture) continue;
       const material = entry.sprite.material;

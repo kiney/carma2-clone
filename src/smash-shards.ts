@@ -23,6 +23,8 @@ export interface ShardSpawnSource {
   geometry: BufferGeometry;
   matrixWorld: Matrix4;
   materialSlots?: readonly number[];
+  /** Fixed MODEL/material links captured during WAM setup. */
+  sourceLink?: ShardSourceLink;
   /** C2 car material names are scoped to their loaded asset context. */
   materials?: ReadonlyMap<string, Material>;
   /** Maximum unique linked source vertices and faces copied before refinement. */
@@ -92,6 +94,128 @@ interface Fragment {
 const CAPACITY = 200;
 const EPSILON = 2 ** -22;
 const ROTATION_EPSILON = 0.0001;
+
+/** Immutable source MODEL indices and compact triangle tuples. The retained
+ * geometry supplies live deformed coordinates/UVs, independent of render groups,
+ * material renames, LOD visibility and later draw-range changes. A browser
+ * structural split replaces render geometry; the retained MODEL remains the
+ * linked source and can therefore still contain its pre-split polygons. */
+export interface ShardSourceLink {
+  readonly geometry: BufferGeometry;
+  readonly renderVertices: readonly number[];
+  readonly faces: readonly (readonly [number, number, number])[];
+  readonly truncated: boolean;
+}
+
+/** Native WAM LinkSmashies/MungeMaterial admits a bounded material-local MODEL
+ * vertex list and face tuples once during setup. Render-corner duplicates are
+ * collapsed through their original MODEL indices, retaining first occurrence. */
+export function captureShardSourceLink(
+  source: Pick<
+    ShardSpawnSource,
+    "geometry" | "materialSlots" | "sourceVertexLimit" | "sourceFaceLimit"
+  >,
+): ShardSourceLink {
+  for (const limit of [source.sourceVertexLimit, source.sourceFaceLimit])
+    if (
+      limit !== undefined &&
+      (!Number.isInteger(limit) || limit < 1 || limit > CAPACITY)
+    )
+      throw new Error("Invalid shard source link capacity");
+  const geometry = source.geometry;
+  const positions = geometry.getAttribute("position");
+  const vertexLimit = source.sourceVertexLimit ?? CAPACITY;
+  const faceLimit = source.sourceFaceLimit ?? CAPACITY;
+  const renderVertices: number[] = [];
+  const faces: Face[] = [];
+  let truncated = false;
+  if (!positions)
+    return Object.freeze({
+      geometry,
+      renderVertices: Object.freeze(renderVertices),
+      faces: Object.freeze(faces),
+      truncated,
+    });
+  const sourceIndices = geometry.userData.sourceVertexIndices as
+    | ArrayLike<number>
+    | undefined;
+  if (sourceIndices !== undefined) {
+    if (
+      sourceIndices === null ||
+      typeof sourceIndices !== "object" ||
+      !Number.isInteger(sourceIndices.length) ||
+      sourceIndices.length !== positions.count
+    )
+      throw new Error(
+        "Invalid shard sourceVertexIndices mapping; expected one model index per render vertex",
+      );
+    for (let i = 0; i < sourceIndices.length; i++) {
+      if (!Number.isSafeInteger(sourceIndices[i]) || sourceIndices[i] < 0)
+        throw new Error(
+          `Invalid shard sourceVertexIndices mapping at render vertex ${i}`,
+        );
+    }
+  }
+  const count = geometry.index?.count ?? positions.count;
+  const slots = source.materialSlots
+    ? new Set(source.materialSlots)
+    : undefined;
+  const map = new Map<number, number>();
+  const start = Math.max(0, Math.ceil(geometry.drawRange.start / 3) * 3);
+  const end = Math.min(
+    count,
+    geometry.drawRange.start + geometry.drawRange.count,
+  );
+  for (let offset = start; offset + 2 < end; offset += 3) {
+    if (
+      slots &&
+      geometry.groups.length &&
+      !geometry.groups.some(
+        (group) =>
+          offset >= group.start &&
+          offset + 2 < group.start + group.count &&
+          slots.has(group.materialIndex ?? 0),
+      )
+    )
+      continue;
+    if (slots && !geometry.groups.length && !slots.has(0)) continue;
+    const indices = [0, 1, 2].map((i) =>
+      geometry.index ? geometry.index.getX(offset + i) : offset + i,
+    );
+    if (
+      !indices.every(
+        (i) => Number.isInteger(i) && i >= 0 && i < positions.count,
+      )
+    )
+      throw new Error("Invalid shard source vertex index");
+    const keys = indices.map((index) => sourceIndices?.[index] ?? index);
+    const additional = new Set(keys.filter((index) => !map.has(index))).size;
+    if (
+      faces.length >= faceLimit ||
+      renderVertices.length + additional > vertexLimit
+    ) {
+      truncated = true;
+      break;
+    }
+    const face = indices.map((index, corner) => {
+      const key = keys[corner];
+      let local = map.get(key);
+      if (local === undefined) {
+        local = renderVertices.length;
+        map.set(key, local);
+        renderVertices.push(index);
+      }
+      return local;
+    }) as Face;
+    faces.push(face);
+  }
+  return Object.freeze({
+    geometry,
+    renderVertices: Object.freeze(renderVertices),
+    faces: Object.freeze(faces.map((face) => Object.freeze(face))),
+    truncated,
+  });
+}
 
 /** Independent reconstruction of HW 0x4ec0e0, 0x4eaef0 and 0x4efcb0.
  * Fragments are single textured triangles; their material and texture source
@@ -425,100 +549,26 @@ export class ShardRuntime {
     faces: Face[];
     truncated: boolean;
   } {
-    const geometry = source.geometry;
-    const positions = geometry.getAttribute("position");
-    const uv = geometry.getAttribute("uv");
-    const vertexLimit = source.sourceVertexLimit ?? CAPACITY;
-    const faceLimit = source.sourceFaceLimit ?? CAPACITY;
-    const vertices: Vertex[] = [];
-    const faces: Face[] = [];
-    let truncated = false;
-    if (!positions) return { vertices, faces, truncated };
-    const sourceIndices = geometry.userData.sourceVertexIndices as
-      | ArrayLike<number>
-      | undefined;
-    if (sourceIndices !== undefined) {
-      if (
-        sourceIndices === null ||
-        typeof sourceIndices !== "object" ||
-        !Number.isInteger(sourceIndices.length) ||
-        sourceIndices.length !== positions.count
-      )
-        throw new Error(
-          "Invalid shard sourceVertexIndices mapping; expected one model index per render vertex",
-        );
-      for (let i = 0; i < sourceIndices.length; i++) {
-        if (!Number.isSafeInteger(sourceIndices[i]) || sourceIndices[i] < 0)
-          throw new Error(
-            `Invalid shard sourceVertexIndices mapping at render vertex ${i}`,
-          );
-      }
-    }
-    const count = geometry.index?.count ?? positions.count;
-    const slots = source.materialSlots
-      ? new Set(source.materialSlots)
-      : undefined;
-    const map = new Map<number, number>();
-    const start = Math.max(0, Math.ceil(geometry.drawRange.start / 3) * 3);
-    const end = Math.min(
-      count,
-      geometry.drawRange.start + geometry.drawRange.count,
-    );
-    for (let offset = start; offset + 2 < end; offset += 3) {
-      if (
-        slots &&
-        geometry.groups.length &&
-        !geometry.groups.some(
-          (group) =>
-            offset >= group.start &&
-            offset + 2 < group.start + group.count &&
-            slots.has(group.materialIndex ?? 0),
-        )
-      )
-        continue;
-      if (slots && !geometry.groups.length && !slots.has(0)) continue;
-      const indices = [0, 1, 2].map((i) =>
-        geometry.index ? geometry.index.getX(offset + i) : offset + i,
-      );
-      if (
-        !indices.every(
-          (i) => Number.isInteger(i) && i >= 0 && i < positions.count,
-        )
-      )
-        throw new Error("Invalid shard source vertex index");
-      const keys = indices.map((index) => sourceIndices?.[index] ?? index);
-      const additional = new Set(keys.filter((index) => !map.has(index))).size;
-      if (
-        faces.length >= faceLimit ||
-        vertices.length + additional > vertexLimit
-      ) {
-        truncated = true;
-        break;
-      }
-      const face = indices.map((index, corner) => {
-        const key = keys[corner];
-        let local = map.get(key);
-        if (local === undefined) {
-          const position = new Vector3().fromBufferAttribute(positions, index);
-          const mapping =
-            uv && index < uv.count
-              ? new Vector2(uv.getX(index), uv.getY(index))
-              : new Vector2();
-          if (
-            ![...position.toArray(), ...mapping.toArray()].every(
-              Number.isFinite,
-            )
-          )
-            throw new Error("Invalid shard source vertex");
-          local = vertices.length;
-          map.set(key, local);
-          vertices.push({ position, uv: mapping });
-        }
-        return local;
-      }) as Face;
-      faces.push(face);
-    }
-    return { vertices, faces, truncated };
+    const link = source.sourceLink ?? captureShardSourceLink(source);
+    const positions = link.geometry.getAttribute("position");
+    const uv = link.geometry.getAttribute("uv");
+    const vertices = link.renderVertices.map((index) => {
+      if (!positions || index >= positions.count)
+        throw new Error("Linked shard source vertex is unavailable");
+      const position = new Vector3().fromBufferAttribute(positions, index);
+      const mapping =
+        uv && index < uv.count
+          ? new Vector2(uv.getX(index), uv.getY(index))
+          : new Vector2();
+      if (![...position.toArray(), ...mapping.toArray()].every(Number.isFinite))
+        throw new Error("Invalid shard source vertex");
+      return { position, uv: mapping };
+    });
+    return {
+      vertices,
+      faces: link.faces.map((face) => [...face] as Face),
+      truncated: link.truncated,
+    };
   }
 
   private subdivide(

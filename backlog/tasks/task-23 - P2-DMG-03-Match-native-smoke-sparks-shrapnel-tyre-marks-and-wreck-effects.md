@@ -6,7 +6,7 @@ title: >-
 status: next
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-26 19:43'
+updated_date: '2026-10-27 02:52'
 labels:
   - priority-2
   - DMG-03
@@ -47,3 +47,12 @@ Original race dust colours, wheel material smoke types, source FinishCars puffs,
 Queue review 2026-10-26 — position 5/5, P2.
 After the selected WAM/world producer integrations, finish remaining effect producers and validate cross-producer chronology, priorities, ownership and visibility against the established callers. This ordering reduces repeated shared-dispatch/pool work; it is not a hard dependency on completing every part of DMG-01/WLD-05. ShardRuntime already shares shards and ghosts, and PERF-16/PERF-17 world admission, hierarchy quiet and reclaim integration are done despite older scope text. Native pedestrian blood/giblet pooling still overlaps the PED-06/PED-09 production-adapter work; coordinate that sub-scope without duplicating the pedestrian owners.
 <!-- SECTION:PLAN:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-27 02:52
+---
+DMG-01 now completes WAM producer integration, captured principal-MODEL links/centroids, shared25-slot/150ms glass repair and eligible omitted-MODEL default crush. Whole-engine CRT chronology, positional sound attenuation and prepared positive-material order remain here. The scripted original Newcity WAM noncar outlet works but still emits its known prepared-order diagnostic.
+---
+<!-- COMMENTS:END -->

@@ -134,6 +134,13 @@ import { WorldDestruction, type WorldSmashContact } from "./world-destruction";
 import { chooseSmashAudio, nativeSmashStartingVelocity } from "./smash-effects";
 import { ShardRuntime } from "./smash-shards";
 import { loadGhostAssets, type GhostAssetSet } from "./ghost-assets";
+import { loadWamEffectAssets, type WamEffectAssets } from "./wam-effect-assets";
+import {
+  dispatchSmashDebris,
+  type SmashDebrisAssets,
+} from "./smash-debris-dispatch";
+import { wamEffectFrame } from "./wam-effect-frame";
+import { spawnSmashExplosions } from "./smash-explosion";
 import {
   loadNonCarDebrisAssets,
   type NonCarDebrisAssetSet,
@@ -145,7 +152,6 @@ import {
 } from "./noncar-debris";
 import type { NonCarBody } from "./physics/noncar-body";
 import type { SmashShrapnel } from "./world-smash";
-import { nativeDirectSmashSeed, prepareNativeGhostFrame } from "./ghost-frame";
 import { MissionVariables } from "./mission-variables";
 import { RacePayout } from "./race-payout";
 import { RaceFeedback, terminalRaceMessage } from "./race-feedback";
@@ -1331,6 +1337,11 @@ async function loadRace() {
       currentCar,
     );
     await loadedDamage.init();
+    const loadedWamEffects = await prepareCarWamEffects(
+      loadedCar,
+      loadedDamage,
+      currentTrack,
+    );
     loadedDamage.structuralSettings = parseStructuralSettings(generalText);
     status("Building collision geometry…");
     const noncarDefinitions = new Map<
@@ -1381,6 +1392,7 @@ async function loadRace() {
       ].flatMap((connotations) => connotations?.shrapnel ?? []),
     );
     const newGhostLibrary = new THREE.Group();
+    newGhostLibrary.add(loadedWamEffects.library);
     const loadedGhostAssets = await loadGhostAssets(
       worldShrapnelSpecs,
       async (name) => {
@@ -1436,89 +1448,20 @@ async function loadRace() {
         random: sharedNativeRandom.random,
         onConnotations: (data, contact, suppressed) =>
           dispatchSmashConnotations(data, contact, suppressed, () => {
-            for (const spec of data.shrapnel)
-              if (spec.kind === "abstract")
-                spawnAbstractShrapnel(spec, contact, world.materials);
-              else if (spec.kind === "ghostparts") {
-                const templates = ghostAssets.get(spec);
-                if (!templates?.templates.length || !shards) continue;
-                if (!contact.point) {
-                  assets.warnings.push(
-                    "Ghost debris requires the native smash point",
-                  );
-                  continue;
-                }
-                camera.updateWorldMatrix(true, false);
-                const cameraMatrix = camera.matrixWorld.elements;
-                const visible = nativePointVisible(
-                  contact.point,
-                  Math.fround(nativeCameraYon * nativeCameraYon),
-                  {
-                    camera: {
-                      position: new THREE.Vector3(
-                        cameraMatrix[12],
-                        cameraMatrix[13],
-                        cameraMatrix[14],
-                      ),
-                      backwards: new THREE.Vector3(
-                        cameraMatrix[8],
-                        cameraMatrix[9],
-                        cameraMatrix[10],
-                      ),
-                      yon: nativeCameraYon,
-                    },
-                  },
-                );
+            emitSmashDebris(
+              data.shrapnel,
+              contact,
+              {
+                ghosts: ghostAssets,
+                nonCars: noncarDebrisAssets,
+              },
+              world.materials,
+              () => {
                 contact.actor.updateWorldMatrix(true, false);
-                const { frame, tinyFace } = prepareNativeGhostFrame(
-                  contact.ghostQuad ?? null,
-                  contact.actor.matrixWorld,
-                  [templates.boundsDX, templates.boundsDY, 0],
-                );
-                shards.spawnGhosts(spec, {
-                  templates: templates.templates.map((template) => ({
-                    name: template.name,
-                    matrix: template.matrix,
-                    geometry: template.model.geometry,
-                    material: template.model.material,
-                  })),
-                  frame,
-                  tinyFace,
-                  point: contact.point.clone(),
-                  impacteeVelocity:
-                    contact.smashStartingVelocity?.clone() ??
-                    new THREE.Vector3(0, 1, 0),
-                  timeMs: Math.round(contact.timeMs ?? stats.gameTimeMs) >>> 0,
-                  seed:
-                    contact.shrapnelSeed ??
-                    nativeDirectSmashSeed(
-                      contact.effectForce ?? new THREE.Vector3(),
-                    ),
-                  visible,
-                });
-              } else if (spec.kind === "noncars") {
-                const templates = noncarDebrisAssets.get(spec);
-                if (!templates?.templates.length || !loadedDebrisRuntime)
-                  continue;
-                if (!contact.point) {
-                  assets.warnings.push(
-                    "Noncar debris requires the native smash point",
-                  );
-                  continue;
-                }
-                contact.actor.updateWorldMatrix(true, false);
-                const { frame } = prepareNativeGhostFrame(
-                  contact.ghostQuad ?? null,
-                  contact.actor.matrixWorld,
-                );
-                loadedDebrisRuntime.spawn(spec, templates, {
-                  frame,
-                  point: contact.point.clone(),
-                  impacteeVelocity:
-                    contact.smashStartingVelocity?.clone() ??
-                    new THREE.Vector3(0, 1, 0),
-                });
-              }
+                return contact.actor.matrixWorld;
+              },
+              loadedDebrisRuntime,
+            );
           }),
       },
     );
@@ -1912,7 +1855,12 @@ async function loadRace() {
       awardRaceTime(race, seconds);
       message(`${multiplier > 1 ? "CRASH BONUS" : "DAMAGE"} · +${credits} CR`);
     };
-    bindWamEffects(player, loadedCar.materials);
+    bindWamEffects(
+      player,
+      loadedCar.materials,
+      loadedWamEffects,
+      loadedCar.textures,
+    );
     registerCarSmoke(player, carText);
     registerShrapnelMaterials(
       player.group,
@@ -2322,6 +2270,7 @@ function dispatchSmashConnotations(
   suppressed = false,
   shrapnel?: () => void,
   slickMaterials = worldSlickMaterials,
+  effectTextures?: ReadonlyMap<string, THREE.Texture>,
 ) {
   const sound = chooseSmashAudio(data.sounds, sharedNativeRandom.random);
   if (sound !== undefined)
@@ -2406,28 +2355,20 @@ function dispatchSmashConnotations(
     if (award.textIndex && miscStrings[award.textIndex])
       message(miscStrings[award.textIndex], 3);
   }
-  if (data.explosions.length) {
-    const source = contact.bodyActor ?? contact.actor;
-    source.updateWorldMatrix(true, true);
-    const bounds = new THREE.Box3()
-      .setFromObject(source)
-      .applyMatrix4(source.matrixWorld.clone().invert());
-    const transform = contact.impacteeTransform ?? source.matrixWorld;
-    const orientation = new THREE.Quaternion();
-    transform.decompose(new THREE.Vector3(), orientation, new THREE.Vector3());
-    explosions?.spawn(
-      data.explosions,
-      contact.point ?? new THREE.Vector3().setFromMatrixPosition(transform),
-      bounds,
-      contact.timeMs ?? 0,
-      undefined,
-      orientation,
-    );
+  if (data.explosions.length && explosions) {
+    // DoConnotations4ed4e2 tests the queued ACT's origin, not the smash point
+    // or the retained car. The same ACT/MODEL owns the live animation frame.
+    spawnSmashExplosions(explosions, data.explosions, contact.actor, {
+      readMatrix: contact.readActorMatrix,
+      isVisible: smashPointVisible,
+      timeMs: contact.timeMs ?? 0,
+      textures: effectTextures,
+    });
   }
   if (data.slick && simulation?.oil) {
     try {
       const actor = contact.actor;
-      const source = nativeOilActorFollower(actor);
+      const source = nativeOilActorFollower(actor, contact.readActorMatrix);
       const spill = queueWorldSlick(
         simulation.oil,
         data.slick,
@@ -2543,10 +2484,90 @@ function applyPlayerPowerupModifiers(modifiers: PowerupModifiers | undefined) {
   }
 }
 
+/** ReadShrapnelSpec keeps the current race resource path even when its caller
+ * parses a WAM. ACTs resolve through registered native resources; the car's
+ * local MAT/PIX maps remain distinct for glass, abstract pieces and explosions. */
+async function prepareCarWamEffects(
+  model: Awaited<ReturnType<Assets["scene"]>>,
+  damage: DamageSystem,
+  racePath: string,
+): Promise<WamEffectAssets> {
+  const dataRoot = racePath.split("/")[0];
+  const effects = await loadWamEffectAssets(
+    damage.wam,
+    async (name) => {
+      const path = assets.resolve(`${dirOf(racePath)}/${name}`);
+      if (!path)
+        throw new Error(
+          `Missing WAM effect ACT '${name}' in ${dirOf(racePath)}`,
+        );
+      return model.loadActorFile(path);
+    },
+    async (name) => {
+      const path =
+        assets.resolve(`${dataRoot}/NONCARS/${name}`) ??
+        assets.resolve(`data/NONCARS/${name}`);
+      if (!path) throw new Error(`Missing WAM noncar mechanics '${name}'`);
+      return parseNonCarMechanics(await assets.text(path), path);
+    },
+  );
+  assets.warnings.push(...effects.diagnostics);
+  return effects;
+}
+
+function smashPointVisible(point: THREE.Vector3): boolean {
+  camera.updateWorldMatrix(true, false);
+  const matrix = camera.matrixWorld.elements;
+  return nativePointVisible(
+    point,
+    Math.fround(nativeCameraYon * nativeCameraYon),
+    {
+      camera: {
+        position: new THREE.Vector3(matrix[12], matrix[13], matrix[14]),
+        backwards: new THREE.Vector3(matrix[8], matrix[9], matrix[10]),
+        yon: nativeCameraYon,
+      },
+    },
+  );
+}
+
+function emitSmashDebris(
+  specs: readonly SmashShrapnel[],
+  contact: WorldSmashContact,
+  effectAssets: SmashDebrisAssets,
+  materials: ReadonlyMap<string, THREE.Material>,
+  readActorMatrix: () => THREE.Matrix4,
+  debrisRuntime = noncarDebris,
+  emitShards?: (spec: SmashShrapnel) => void,
+) {
+  dispatchSmashDebris(specs, contact, effectAssets, {
+    fragments: shards,
+    nonCars: debrisRuntime,
+    abstract: (spec) => spawnAbstractShrapnel(spec, contact, materials),
+    shards: emitShards,
+    isVisible: smashPointVisible,
+    readActorMatrix,
+    timeMs: stats.gameTimeMs,
+    diagnose: (warning) => {
+      if (!assets.warnings.includes(warning)) assets.warnings.push(warning);
+    },
+  });
+}
+
 function bindWamEffects(
   body: SimulatedCar,
   materials: ReadonlyMap<string, THREE.Material>,
+  effectAssets: WamEffectAssets,
+  textures: ReadonlyMap<string, THREE.Texture>,
 ) {
+  if (simulation)
+    body.damage.configureWamRepairQueue(
+      simulation.wamRepairs,
+      simulation.smashClock,
+    );
+  body.damage.onWamRepairSound = () => {
+    if (body.human && race?.status === "racing") void audio.playSound(4550);
+  };
   body.damage.onBeforeStructuralBend = () => {
     if (body !== player) return;
     const modifiers = powerups?.removeForStructuralBend(body.state);
@@ -2573,23 +2594,24 @@ function bindWamEffects(
       smashStartingVelocity: event.startingVelocity,
       effectMagnitude: Math.fround(event.startingVelocity.length()),
       effectIdentity: body.damage,
+      shrapnelSeed: event.shrapnelSeed,
+      readActorMatrix: () =>
+        wamEffectFrame(
+          body.group,
+          event.actor,
+          body.state.position,
+          body.state.orientation,
+        ),
     };
     // Preserve model/ACT transforms, replacing only the stale render root pose.
-    body.group.updateWorldMatrix(true, true);
-    let ancestor: THREE.Object3D | null = event.mesh;
-    while (ancestor && ancestor !== body.group) ancestor = ancestor.parent;
     // Detachment can reparent the live queued actor before this final flush.
     // Independent physical pieces already have their own world-space pose.
-    const meshTransform = ancestor
-      ? transform
-          .clone()
-          .multiply(
-            body.group.matrixWorld
-              .clone()
-              .invert()
-              .multiply(event.mesh.matrixWorld),
-          )
-      : event.mesh.matrixWorld.clone();
+    const meshTransform = wamEffectFrame(
+      body.group,
+      event.mesh,
+      body.state.position,
+      body.state.orientation,
+    );
     const meshMaterials = Array.isArray(event.mesh.material)
       ? event.mesh.material
       : [event.mesh.material];
@@ -2603,12 +2625,17 @@ function bindWamEffects(
       contact,
       false,
       () => {
-        for (const spec of event.connotations.shrapnel)
-          if (spec.kind === "abstract")
-            spawnAbstractShrapnel(spec, contact, materials);
-          else if (spec.kind === "shards")
+        emitSmashDebris(
+          event.connotations.shrapnel,
+          contact,
+          effectAssets,
+          materials,
+          contact.readActorMatrix!,
+          noncarDebris,
+          (spec) =>
             shards?.spawn(spec, {
               geometry: event.mesh.geometry,
+              sourceLink: event.shardSourceLink,
               matrixWorld: meshTransform,
               materialSlots: slots,
               sourceVertexLimit: 50,
@@ -2616,9 +2643,11 @@ function bindWamEffects(
               materials,
               impacteeVelocity: event.startingVelocity,
               timeMs: event.timeMs,
-            });
+            }),
+        );
       },
       materials,
+      textures,
     );
   };
 }
@@ -2666,7 +2695,8 @@ async function loadRivals(
   const activeScene = scene;
   const stagedModels: Awaited<ReturnType<Assets["scene"]>>[] = [];
   const stagedAnimations: { dispose(): void }[] = [];
-  const staged: { rival: Rival; text: string }[] = [];
+  const staged: { rival: Rival; text: string; effects: WamEffectAssets }[] = [];
+  const stagedEffects: WamEffectAssets[] = [];
   const isCurrent = () =>
     activeTrack === currentTrack && loadGeneration === generation;
   let published = false;
@@ -2692,6 +2722,13 @@ async function loadRivals(
       );
       rivalDamage.structuralSettings = parseStructuralSettings(generalText);
       await rivalDamage.init();
+      if (!isCurrent()) return;
+      const effects = await prepareCarWamEffects(
+        model,
+        rivalDamage,
+        activeTrack,
+      );
+      stagedEffects.push(effects);
       if (!isCurrent()) return;
       const spawn = gridOrigin
         .clone()
@@ -2721,6 +2758,7 @@ async function loadRivals(
       stagedAnimations.push(textures);
       staged.push({
         text,
+        effects,
         rival: {
           object: model.group,
           state: body.state,
@@ -2846,7 +2884,12 @@ async function loadRivals(
     for (let i = 0; i < staged.length; i++) {
       const { rival, text } = staged[i];
       fleet.add(rival.body, rival.id, personalities[i]);
-      bindWamEffects(rival.body, stagedModels[i].materials);
+      bindWamEffects(
+        rival.body,
+        stagedModels[i].materials,
+        staged[i].effects,
+        stagedModels[i].textures,
+      );
       registerCarSmoke(rival.body, text);
       registerShrapnelMaterials(
         rival.object,
@@ -2861,11 +2904,14 @@ async function loadRivals(
       activeScene.add(rival.object);
       rivals.push(rival);
     }
+    for (const effects of stagedEffects)
+      ghostTemplateLibrary?.add(effects.library);
     opponentFleet = fleet;
     published = true;
   } finally {
     if (!published) {
       for (const animation of stagedAnimations) animation.dispose();
+      for (const effects of stagedEffects) disposeGroup(effects.library);
       for (const model of stagedModels) {
         model.dispose();
         disposeGroup(model.group);
@@ -4036,6 +4082,7 @@ function animate(now: number) {
       );
       explosions?.update(simulation.elapsed * 1000);
       shards?.update(stats.gameTimeMs);
+      simulation.wamRepairs.update(stats.gameTimeMs >>> 0);
       skidmarks?.update();
       // Native world render invokes sparks before smoke. Both advance once per
       // graphical game frame after physics and the final authored effects flush.

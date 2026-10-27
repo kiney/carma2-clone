@@ -750,16 +750,22 @@ try {
       Math.max(8000, expiryUntil - expiryStart.gameTimeMs + 8000),
     );
     let expiryDeadlineReached = false;
+    let expiryObservedGameTimeMs = null;
     await page.evaluate(() => {
       window.carma.paused = false;
     });
     try {
-      await page.waitForFunction(
-        (until) => window.carma.stats.gameTimeMs >= until,
+      const expiryObservation = await page.waitForFunction(
+        (until) => {
+          const gameTimeMs = window.carma.stats.gameTimeMs;
+          return gameTimeMs >= until ? gameTimeMs : false;
+        },
         expiryUntil,
         { timeout: expiryWaitMs },
       );
       expiryDeadlineReached = true;
+      expiryObservedGameTimeMs = await expiryObservation.jsonValue();
+      await expiryObservation.dispose();
     } catch {}
     const expiryElapsedMs = performance.now() - expiryStartedAt;
     await page.evaluate(() => {
@@ -794,13 +800,20 @@ try {
       waitBoundMs: expiryWaitMs,
       elapsedPerformanceMs: expiryElapsedMs,
       deadlineReached: expiryDeadlineReached,
+      observedGameTimeMs: expiryObservedGameTimeMs,
       timeoutKind: expiryDeadlineReached
         ? null
         : result.afterExpiry.gameTimeMs < expiryUntil
           ? "clock-not-reached"
           : "deadline-observer-timeout",
     };
-    if (result.afterExpiry.gameTimeMs < expiryUntil)
+    // BrowserGameClock's predicted endMs may regress after a scheduling stall.
+    // Keep the observed crossing as evidence; the final snapshot still checks
+    // that the fragment was actually retired after that native time boundary.
+    const expiryClockReached =
+      (expiryObservedGameTimeMs ?? 0) >= expiryUntil ||
+      result.afterExpiry.gameTimeMs >= expiryUntil;
+    if (!expiryClockReached)
       report.unmet.push(
         `${target.label}: expiry clock not reached (game time ${result.afterExpiry.gameTimeMs} < ${expiryUntil}; ${result.expiryCheck.timeoutKind})`,
       );

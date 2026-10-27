@@ -7,11 +7,13 @@ import {
   Group,
   Mesh,
   MeshLambertMaterial,
+  Texture,
   Vector3,
 } from "three";
 import { createAssetStore } from "../server/assets.mjs";
 import { parseWam, DamageSystem, flushWamSmashQueue } from "../src/damage.ts";
 import { NativeSmashQueue } from "../src/smash-queue.ts";
+import { NativeWamRepairQueue } from "../src/wam-repair.ts";
 import { parseSmashableEnvironment } from "../src/world-smash.ts";
 
 // Independently authored fixtures; proprietary assets remain external.
@@ -86,11 +88,11 @@ function mesh(name = "BODY.DAT", materialName = "GLASS.MAT") {
   model.name = name;
   return model;
 }
-async function system(text = wam(), models = [mesh()]) {
+async function system(text = wam(), models = [mesh()], textures = new Map()) {
   const path = "data/CARS/TEST/TEST.WAM";
   const assets = {
     manifest: [{ path }],
-    textures: new Map(),
+    textures,
     warnings: [],
     resolve: (name) =>
       name.toLowerCase() === path.toLowerCase() ? path : undefined,
@@ -393,13 +395,31 @@ test("LOD meshes sharing one authored smashable emit one repetition set", async 
 test("the per-impact queue admits 20 authored smashables and leaves overflow eligible", async () => {
   const actor = new Group();
   actor.name = "BODY.ACT";
-  const records = Array.from({ length: 21 }, (_, index) => {
-    const material = `MAT${index}`;
-    actor.add(mesh(`MODEL${index}.DAT`, material));
-    return smash(material, [
-      { threshold: 0.00001, flags: 0, sound: index + 1 },
-    ]);
+  // All authored materials belong to the principal MODEL. Separate direct
+  // MODEL children would be LODs, which native LinkSmashies does not scan.
+  const source = mesh();
+  const geometry = new BufferGeometry();
+  const triangle = Array.from(
+    source.geometry.getAttribute("position").array,
+  ).slice(0, 9);
+  geometry.setAttribute(
+    "position",
+    new BufferAttribute(
+      Float32Array.from(Array.from({ length: 21 }, () => triangle).flat()),
+      3,
+    ),
+  );
+  const materials = Array.from({ length: 21 }, (_, index) => {
+    const material = new MeshLambertMaterial();
+    material.name = `MAT${index}`;
+    geometry.addGroup(index * 3, 3, index);
+    return material;
   });
+  geometry.computeVertexNormals();
+  actor.add(new Mesh(geometry, materials));
+  const records = materials.map((material, index) =>
+    smash(material.name, [{ threshold: 0.00001, flags: 0, sound: index + 1 }]),
+  );
   const { damage, events } = await system(wam(records, "BODY.ACT"), [actor]);
   impact(damage);
   assert.equal(events.length, 20);
@@ -412,6 +432,113 @@ test("the per-impact queue admits 20 authored smashables and leaves overflow eli
   assert.deepEqual(events[20].connotations.sounds, [21]);
 });
 
+test("held WAM repair animates tiers across LODs, damage cancels it and full repair clears immediately", async () => {
+  const textures = new Map(
+    ["INTACT.PIX", "TIER101.PIX", "TIER202.PIX", "TIER303.PIX"].map((name) => {
+      const texture = new Texture();
+      texture.name = name;
+      return [name, texture];
+    }),
+  );
+  const actor = new Group();
+  actor.name = "BODY.ACT";
+  const lods = [mesh("BODY0.DAT"), mesh("BODY1.DAT")];
+  for (const lod of lods) {
+    lod.material.map = textures.get("INTACT.PIX");
+    actor.add(lod);
+  }
+  const levels = [101, 202, 303].map((sound, index) => ({
+    threshold: 0.00001 * (index + 1),
+    flags: 0,
+    sound,
+  }));
+  const { damage, events } = await system(
+    wam([smash("GLASS.MAT", levels)], "BODY.ACT"),
+    [actor],
+    textures,
+  );
+  let timeMs = 1000;
+  const queue = new NativeWamRepairQueue();
+  damage.configureWamRepairQueue(queue, () => timeMs);
+  damage.damageContext.random = () => 0.5;
+  let repairSounds = 0;
+  damage.onWamRepairSound = () => repairSounds++;
+  damage.repair();
+  const cleanTargets = lods.map((lod) =>
+    lod.geometry.getAttribute("position").array.slice(),
+  );
+  const cleanBody = () =>
+    lods.forEach((lod, index) =>
+      lod.geometry.getAttribute("position").array.set(cleanTargets[index]),
+    );
+  const maps = () => lods.map((lod) => lod.material.map?.name);
+  const expectMaps = (name) => assert.deepEqual(maps(), [name, name]);
+
+  impact(damage);
+  assert.equal(events.length, 3);
+  expectMaps("TIER303.PIX");
+  cleanBody();
+  damage.repairStep(40);
+  expectMaps("TIER202.PIX");
+  assert.equal(queue.size, 1);
+  assert.equal(repairSounds, 1);
+  assert.equal(
+    events.length,
+    3,
+    "held repair does not execute smash connotations",
+  );
+  assert.equal(damage.updateWamRepairs(1149), 0);
+  expectMaps("TIER202.PIX");
+  assert.equal(damage.updateWamRepairs(1150), 1);
+  expectMaps("TIER101.PIX");
+  assert.equal(repairSounds, 2);
+  assert.equal(
+    events.length,
+    3,
+    "animated repair does not execute smash connotations",
+  );
+
+  impact(damage);
+  assert.equal(events.length, 5);
+  expectMaps("TIER303.PIX");
+  assert.equal(queue.size, 0, "committed damage cancels the prior animation");
+  assert.equal(damage.updateWamRepairs(1300), 0);
+  expectMaps("TIER303.PIX");
+  assert.equal(repairSounds, 2);
+
+  timeMs = 2000;
+  cleanBody();
+  damage.repairStep(40);
+  expectMaps("TIER202.PIX");
+  assert.equal(queue.size, 1);
+  assert.equal(repairSounds, 3);
+  damage.repair();
+  expectMaps("INTACT.PIX");
+  assert.equal(
+    events.length,
+    5,
+    "full repair does not execute smash connotations",
+  );
+  assert.equal(repairSounds, 4);
+  assert.equal(
+    queue.size,
+    1,
+    "full repair retains the animation slot until due",
+  );
+  assert.equal(damage.updateWamRepairs(2149), 0);
+  assert.equal(queue.size, 1);
+  assert.equal(damage.updateWamRepairs(2150), 0);
+  assert.equal(queue.size, 0);
+  assert.equal(
+    repairSounds,
+    4,
+    "clearing an already repaired slot plays no sound",
+  );
+  impact(damage);
+  assert.equal(events.length, 8);
+  assert.equal(events[5].oldLevel, 0, "full repair rearms all tiers");
+});
+
 test("installed stock WAMs preserve connotations; Eagle3, Copcar and VLAD3 supply sounds and glass", async (t) => {
   const root = process.env.CARMA2_ROOT ?? "carma2_orig";
   try {
@@ -422,13 +549,14 @@ test("installed stock WAMs preserve connotations; Eagle3, Copcar and VLAD3 suppl
   }
   const assets = await createAssetStore(root);
   const paths = assets.manifest.filter(({ path }) =>
-    /^data\/cars\/.*\.wam$/i.test(path),
+    /^(?:data|adv_data)\/cars\/[^/]+\/[^/]+\.wam$/i.test(path),
   );
   if (!paths.length) {
     t.skip("Installation has no stock WAMs");
     return;
   }
   const inventory = new Map();
+  const totals = new Map();
   for (const { path } of paths) {
     const text = (await assets.read(path)).toString("latin1");
     const data = parseWam(text);
@@ -444,7 +572,22 @@ test("installed stock WAMs preserve connotations; Eagle3, Copcar and VLAD3 suppl
         0,
       ),
     };
-    inventory.set(path.split("/")[2].toLowerCase(), count);
+    const edition = path.toLowerCase().startsWith("adv_data/")
+      ? "Advanced"
+      : "Stock";
+    if (edition === "Stock")
+      inventory.set(path.split("/")[2].toLowerCase(), count);
+    const total = totals.get(edition) ?? {
+      files: 0,
+      levels: 0,
+      sounds: 0,
+      shards: 0,
+    };
+    total.files++;
+    total.levels += count.levels;
+    total.sounds += count.sounds;
+    total.shards += count.shards;
+    totals.set(edition, total);
     for (const { connotations: c } of levels) {
       assert.ok(
         c.shrapnel.every((s) => s.kind === "shards"),
@@ -467,6 +610,11 @@ test("installed stock WAMs preserve connotations; Eagle3, Copcar and VLAD3 suppl
     if (inventory.has(name))
       assert.deepEqual(inventory.get(name), expected, name);
   t.diagnostic(
-    `Read ${paths.length} external stock WAMs; observed installation contains 52.`,
+    `Read external WAM inventory: ${[...totals]
+      .map(
+        ([edition, count]) =>
+          `${edition} ${count.files} files/${count.levels} levels/${count.shards} shards`,
+      )
+      .join(", ")}.`,
   );
 });

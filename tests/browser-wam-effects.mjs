@@ -650,6 +650,106 @@ try {
     );
   }
 
+  // Verify production's outer-frame repair updater, not just a direct queue
+  // call. Body coordinates are made clean to isolate the native principal-
+  // MODEL branch; earlier cases already exercise real driving and crush.
+  await loadCar("copcar");
+  const repairStart = await page.evaluate(() => {
+    const c = window.carma;
+    const damage = c.player.damage;
+    damage.repair();
+    const sourceEntry = [...damage.smashSources].find(
+      ([smash, source]) => smash.levels.length >= 2 && source.link.faces.length,
+    );
+    if (!sourceEntry) throw new Error("Copcar has no multi-tier linked glass");
+    const [smash, source] = sourceEntry;
+    const model = damage.meshes.find((data) => data.mesh === source.mesh);
+    const point = source.centroid.clone().applyMatrix4(model.originalToCar);
+    const direction = point.clone().set(0, 0, 1);
+    const events = [];
+    const emit = damage.onWamSmash;
+    damage.onWamSmash = (event) => {
+      events.push(event.targetLevel);
+      emit(event);
+    };
+    damage.applyModelCrush([point], point, direction, 10, c.stats.gameTimeMs);
+    const before = damage.smashLevels.get(smash) ?? 0;
+    if (before < 2)
+      throw new Error(`Copcar glass reached only ${before} tiers`);
+    for (const data of damage.meshes)
+      if (data.runtime)
+        data.mesh.geometry
+          .getAttribute("position")
+          .array.set(data.repairTarget);
+    const soundStart = window.__wamSoundEvents.length;
+    damage.repairStep(40);
+    const immediate = damage.smashLevels.get(smash) ?? 0;
+    const queue = c.simulation.wamRepairs;
+    const updates = [];
+    const update = queue.update.bind(queue);
+    queue.update = (now) => {
+      const prior = damage.smashLevels.get(smash) ?? 0;
+      const result = update(now);
+      updates.push({ now, prior, tier: damage.smashLevels.get(smash) ?? 0 });
+      return result;
+    };
+    // Keep collision-driven new damage out of this clock/repair fixture.
+    c.opponentFleet.update = () => {};
+    for (const car of c.simulation.cars)
+      c.simulation.setCarPhysicsActive(car, false);
+    window.__wamAnimatedRepair = {
+      damage,
+      smash,
+      updates,
+      events,
+      eventCount: events.length,
+      soundStart,
+      startMs: c.stats.gameTimeMs,
+      before,
+      immediate,
+    };
+    return { before, immediate, queued: queue.size };
+  });
+  assert.equal(repairStart.immediate, repairStart.before - 1);
+  assert.ok(repairStart.queued > 0);
+  await page.evaluate(() => {
+    window.carma.paused = false;
+  });
+  await page.waitForFunction(
+    () => {
+      const p = window.__wamAnimatedRepair;
+      return (p.damage.smashLevels.get(p.smash) ?? 0) === 0;
+    },
+    null,
+    { timeout: 15000 },
+  );
+  report.animatedRepair = await page.evaluate(() => {
+    const c = window.carma;
+    c.paused = true;
+    const p = window.__wamAnimatedRepair;
+    return {
+      startMs: p.startMs,
+      before: p.before,
+      immediate: p.immediate,
+      updates: p.updates,
+      newSmashEvents: p.events.length - p.eventCount,
+      sounds: window.__wamSoundEvents.slice(p.soundStart),
+    };
+  });
+  const repairChanges = report.animatedRepair.updates.filter(
+    (s) => s.tier !== s.prior,
+  );
+  assert.equal(repairChanges.length, repairStart.immediate);
+  assert.equal(report.animatedRepair.newSmashEvents, 0);
+  assert.ok(
+    report.animatedRepair.sounds.includes(4550),
+    "native glass repair sound missing",
+  );
+  for (const [i, sample] of repairChanges.entries()) {
+    assert.equal(sample.prior - sample.tier, 1);
+    assert.ok(sample.now - report.animatedRepair.startMs >= 150 * (i + 1));
+  }
+
   report.glError = await page.evaluate(() =>
     document.querySelector("#view").getContext("webgl2").getError(),
   );

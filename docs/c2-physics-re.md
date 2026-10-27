@@ -614,3 +614,7 @@ and immediately updates live engine, grip, suspension and protection fields.
 Ordinary repair and vehicle splitting are separate operations. Stock/Advanced
 and original-car numerical cases cover the predicates and ordering. See the
 [exact evidence and remaining icon boundary](c2-powerup-overlap-re.md#structural-bending-removes-flag-sensitive-effects-pup-20).
+
+### DMG-01 WAM effect and repair completion (2026-10-27)
+
+Installed source evidence corrected native default crush for eligible omitted MODEL actors, principal-MODEL links/centroids, visual shrapnel visibility, queued ACT versus retained car ownership and the held/full glass repair distinction. The shared 25-slot animation advances at most one tier per due 150 ms outer-frame update after glass movement; redamage cancels it. Race-scoped ghost/noncar preparation and explosion texture/frame ownership reuse the existing providers. [WAM evidence](c2-wam-effects-re.md) records exact addresses, tests and the separately tracked whole-engine RNG / unresolved split-topology boundaries. Original assets remain external and read-only.

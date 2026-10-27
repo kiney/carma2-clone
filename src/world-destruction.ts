@@ -63,6 +63,8 @@ export interface WorldSmashContact {
   /** Runtime decal/texture identity scopes its per-level award latch. */
   effectIdentity?: object;
   impacteeTransform?: Matrix4;
+  /** Queued visual ACT stays live; its car/physics owner is retained separately. */
+  readActorMatrix?: () => Matrix4;
   /** Source UV-ordered MODEL-space quad/normal retained before patch rewrite. */
   ghostQuad?: NativeGhostQuad;
   /** Queued native identity XOR sampled game time; direct events use force XOR. */

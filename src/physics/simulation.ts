@@ -126,6 +126,8 @@ import {
   type DamageSystem,
   type WamSmashQueueContext,
 } from "../damage";
+import { NativeWamRepairQueue } from "../wam-repair";
+import type { WamSmash } from "../damage";
 import { NativeSmashQueue } from "../smash-queue";
 import type { WorldDestruction } from "../world-destruction";
 import type {
@@ -1085,6 +1087,7 @@ export class VehicleSimulation {
   private readonly lastCrashStepVelocity = new WeakMap<SimulatedCar, Vector3>();
   private collectingOrdinaryCrush = false;
   readonly smashQueue = new NativeSmashQueue<WamSmashQueueContext>();
+  readonly wamRepairs = new NativeWamRepairQueue<WamSmash, DamageSystem>();
   readonly spamCrushQueue = new NativeSpamQueue<SimulatedCar>();
   /** Production's final barrier follows ordinary effects, before glass update. */
   deferFinalSmashFlush = false;
@@ -6320,11 +6323,13 @@ export class VehicleSimulation {
     this.spamCrushQueue.initialize();
     this.smashQueue.initialize();
     for (const car of this.cars) {
+      car.damage.configureWamRepairQueue();
       car.damage.deferOrdinaryCrush = undefined;
       car.damage.cancelQueuedSpam = undefined;
       car.damage.readSmashStartingVelocity = undefined;
       car.damage.configureWamSmashQueue();
     }
+    this.wamRepairs.clear();
     this.oil?.dispose();
     this.destruction?.dispose();
     this.mines.clear();
