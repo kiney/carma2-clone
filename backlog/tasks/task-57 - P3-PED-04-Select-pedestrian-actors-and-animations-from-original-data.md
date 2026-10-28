@@ -4,7 +4,7 @@ title: '[P3] PED-04: Select pedestrian actors and animations from original data'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-28 22:45'
 labels:
   - priority-3
   - PED-04
@@ -39,3 +39,12 @@ Scope extracted from the former broad PED-03: retain native FORM/ACT/MODEL/pivot
 
 Related tasks: [TASK-96](task-96%20-%20P2-PED-06-Integrate-ordinary-population-identities-with-native-physical-lifecycle.md), [TASK-98](task-98%20-%20P2-PED-08-Integrate-visible-severing-and-articulated-pedestrian-body-contacts.md).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-28 22:45
+---
+Related concrete renderer evidence recorded under ANI-01/TASK-62: CitySwat FLIGHTMEC1.act / MANBWC.ACT keeps an authored46.63-degree whole-body lean in the ordinary living population. Confirm ACT/FORM model selection and hand the actual selected root/bone pose to production playback; avoid a package-specific upright hack. Original archived ACT parsed read only; browser outer/visual transforms themselves remain upright.
+---
+<!-- COMMENTS:END -->
