@@ -11,6 +11,10 @@ export interface CarPreparedOptions {
   /** Actual resolved native material addresses, keyed by DAT face material ID.
    * Zero is the native NULL face material, even with an inherited actor MAT. */
   materialPointers?: ReadonlyMap<number, number>;
+  /** Distinguish live port allocations from an optional original-process capture. */
+  materialPointerProvenance?:
+    | "host-resource-addresses"
+    | "native-process-capture";
   /** Only supply when BR_MODF_CREASE and its source angle are known. */
   creaseCos?: number;
 }
@@ -320,6 +324,9 @@ function prepareVertexOrder(
     welding: dontWeld ? ("dont-weld" as const) : ("weld" as const),
     groups,
     materialOrder,
+    ...(options.materialPointerProvenance
+      ? { materialPointerProvenance: options.materialPointerProvenance }
+      : {}),
     materialIndices: selected,
     remainingMaterialOrder:
       options.materialPointers ||
@@ -410,6 +417,9 @@ export function prepareCarSmokeSampler(
     materialOrder,
     firstGroupCount,
     remainingMaterialOrder,
+    ...(options.materialPointerProvenance
+      ? { materialPointerProvenance: options.materialPointerProvenance }
+      : {}),
     sample(index: number, out: Vector3) {
       if (!Number.isInteger(index) || index < 0 || index >= indices.length)
         return false;

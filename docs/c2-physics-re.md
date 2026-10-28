@@ -618,3 +618,18 @@ and original-car numerical cases cover the predicates and ordering. See the
 ### DMG-01 WAM effect and repair completion (2026-10-27)
 
 Installed source evidence corrected native default crush for eligible omitted MODEL actors, principal-MODEL links/centroids, visual shrapnel visibility, queued ACT versus retained car ownership and the held/full glass repair distinction. The shared 25-slot animation advances at most one tier per due 150 ms outer-frame update after glass movement; redamage cancels it. Race-scoped ghost/noncar preparation and explosion texture/frame ownership reuse the existing providers. [WAM evidence](c2-wam-effects-re.md) records exact addresses, tests and the separately tracked whole-engine RNG / unresolved split-topology boundaries. Original assets remain external and read-only.
+
+### WLD-05 / DMG-03 world and effect integration (2026-10-28)
+
+Native source-edge masks now publish coherently to collision and prepared MODEL
+readers before deferred texture tiers. Followups retain the native finite face
+prefix and distinct generated ACT identities, while real pickup ACTs use shared
+deferred grants, once-only hide/audio and original-ACT respawns. Rejected mine
+pickups use core4d9ad0 impulses rather than action30 damage/crush. Replacement
+MODEL changes start authored mode-zero fire from current prepared vertices;
+unrelated car repair cannot expire them. Actual retained MAT objects supply live
+host-resource addresses, not guessed ranks or historical Windows heap claims.
+Original SCROLLERS fonts, HUD slots and shared fancy/WASTED priority are integrated.
+See [collector/edge evidence](c2-world-smash-source-edges-re.md),
+[pickup equations](c2-pickup-act-re.md), [replacement fire](c2-replacement-fire-re.md)
+and the [producer census and remaining scopes](c2-effect-producer-audit.md).

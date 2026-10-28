@@ -160,6 +160,7 @@ import {
   MineRuntime,
   MINE_FLAGS,
   hitMineReaction,
+  nativePickupMineKick,
   mineComponentDamage,
   type MineCar,
   type MineContact,
@@ -2266,6 +2267,44 @@ export class VehicleSimulation {
       car.damage.damageContext.random ?? Math.random,
       (event) => this.handleMineEvent(event),
     );
+  }
+  /** HitPowerup14 fallback uses core4d9ad0: three impulses/wake only. The
+   * successfully queued action30 grant still uses hitMine and authored floats. */
+  hitPickupMine(actor: Object3D): boolean {
+    const car = this.cars.find((body) => body.group === actor);
+    if (car && !this.isCarPhysicsActive(car)) return false;
+    const body: RigidBody | undefined =
+      car ??
+      this.noncars.find(
+        (candidate) =>
+          candidate.actor === actor && this.phil.getHeader(candidate),
+      ) ??
+      this.debris.find(
+        (candidate) =>
+          candidate.actor === actor && this.phil.getHeader(candidate),
+      ) ??
+      this.movingWorld.find((candidate) => candidate.actor === actor);
+    if (!body) return false;
+    const orientation = body.state.orientation;
+    const result = nativePickupMineKick({
+      // Registered cars own the car-class branch. Current scenery/detached
+      // bodies use the ordinary non-type16 branch; spheres have a separate owner.
+      flags: car ? 0x10000 : 0,
+      physicsType: car ? 1 : 0,
+      mass: body.properties.mass,
+      velocity: body.state.velocity,
+      omega: body.state.angularVelocity
+        .clone()
+        .applyQuaternion(orientation.clone().invert()),
+      random: sharedNativeRandom.random,
+    });
+    if (!result) return false;
+    body.state.velocity.copy(result.velocity);
+    body.state.angularVelocity.copy(result.omega.applyQuaternion(orientation));
+    if ("kind" in body && body.kind === "noncar")
+      this.wakeNonCarPhysics(body as NonCarBody);
+    else this.wakeQuietPhysics(body, true);
+    return true;
   }
   spamCar(car: SimulatedCar, strength: number) {
     if (this.collectingOrdinaryCrush) {

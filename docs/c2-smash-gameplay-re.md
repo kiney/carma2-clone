@@ -4,7 +4,7 @@ Evidence below is verified from the read-only installed HW executable (SHA-256 `
 
 ## Native order and suppression
 
-Installed `DoConnotations` is `0x4ed200`. Its order is sound, noncar activation (`0x4ed27b` calling `0x4ed5d0`), followup smash (`0x4ed299` calling `0x4ed950`), optional powerup, shrapnel, awards, explosions, slick, variable changes, immediate mission-completion check. The world texturechange caller's suppression flag skips activations, followups, powerups and awards; decal permits them. Sound, debris, explosions and variable changes remain eligible. Main preserves this order for implemented outlets: sound, activation, powerup enqueue, WAM glass, awards, explosion and variables/completion. Follow-up world smashes, world debris and slick dispatch remain absent.
+Installed `DoConnotations` is `0x4ed200`. Its order is sound, noncar activation (`0x4ed27b` calling `0x4ed5d0`), followup smash (`0x4ed299` calling `0x4ed950`), optional powerup, shrapnel, awards, explosions, slick, variable changes, immediate mission-completion check. The world texturechange caller's suppression flag skips activations, followups, powerups and awards; decal permits them. Sound, debris, explosions and variable changes remain eligible. Main now preserves that order through the shared world/WAM dispatcher, including followup enqueue, authored debris, slicks and fancy headups. Ordinary pedestrian production remains with its PED adapters.
 
 ## Powerup queue
 
@@ -12,7 +12,7 @@ The parser retains the compatible name `roomCode`. Despite rec2's `room_turn_on_
 
 The queue has50 records of12 bytes at `0x6a2ac0`, count `0x6a3c4c`, containing car/index/actor. `FlushSmashQueue(0)` (`0x4ecd20`, branch `0x4ecfd4`) drains after smash effects and model updates: `GotPowerup` (`0x4d8b00`) at `0x4ecfed`, then `MayQueuePowerupRespawn` (`0x4e0590`) at `0x4ecff7`. The count is reread after each pair, so appended records execute during that drain. Consumed records retain capacity until the count clears at `0x4ed009`. The20-smash count clears afterward at `0x4ed011`. Argument1 skips this entire powerup drain and retains its count. `VehicleSimulation.flushSmashEffects()` drains powerups before the20-smash queue clears; intermediate barriers retain them. Initialization belongs to runtime/race creation, not every physics barrier.
 
-`NativeSmashPowerupQueue` implements the bounded storage/drain. `enqueueConnotationPowerup` implements the verified connotation eligibility path. The native generic helper additionally handles special index14 for drivers greater than5 and a network fallback; those separate pickup/network paths are outside this connotation adapter. Powerup respawn with non-null actors is also an integration outlet, rather than invented by the pure queue.
+`NativeSmashPowerupQueue` implements the bounded storage/drain. `enqueueConnotationPowerup` implements the verified connotation eligibility path. The direct pickup ACT adapter now handles the separate index14 driver gate, rejected-grant mine impulse and original-ACT hide/respawn paths; see [pickup evidence](c2-pickup-act-re.md). Network fallback remains outside this local single-player adapter.
 
 ## Awards
 
@@ -32,7 +32,7 @@ Each Stock and Advanced track table set contains662 connotation payloads:81 sing
 
 `data/RACES/Carrier_mission/CARRIER_mission.txt` and its `adv_data` counterpart author core removal with3000 credits,20 seconds, misc-text132, powerup14 and a two-second `*.DAT` followup. Desert mission numbered nochange actors `&92` onward author single-shot3000/20, powerup14 and delayed area smashes, making persistent latch behavior observable. Silo mission `&20` authors the sole regardless award (zero credits/time, text133), powerup14 and an immediate area followup. Ski track icebear removal authors repeated3000/30 and text129 without a powerup. Powerup table index14 is action30 (mine reaction), with float parameters8,15,4,4; it is not a random item grant.
 
-Followup parsing already retains delay, target, coordinate mode, bounds, direction and strength, but main has no execution outlet. Installed `0x4ed950` snapshots selected world candidates/context into the shared20 delayed-side-effect slots (200-byte stride); due execution re-enters normal world smash handling, with numbered actors first pulled and marked released. This module does not approximate candidate selection, delayed release or that scheduling policy. Connecting awards/powerups therefore does not complete followup-smash fidelity.
+Followup parsing retains delay, target, coordinate mode, bounds, direction and strength, and main dispatches due events through the original target ACT and shared smash queue. Installed `0x4ed950` snapshots selected world candidates/context into the shared20 delayed-side-effect slots (200-byte stride); due execution re-enters normal world smash handling, with numbered actors first pulled and marked released. Production selection now adapts the native finite collector before eligibility filtering, including generated ACTs and direct pickup targets. [Source-edge and collector evidence](c2-world-smash-source-edges-re.md) records current ownership and bounds. The installed parallel branch reads uninitialized scratch; no catalogued Stock/Advanced side effect uses it, and the port explicitly reports it unsupported.
 
 ## Live browser checks
 
@@ -63,3 +63,16 @@ Float32. For the checked Desert X position `-108.43269348144531`, adding
 `sqrt(2)` yields raw JavaScript squared distance just below2 but native-rounded
 squared distance `2.000004314817488`; no powerup is therefore correct. The
 numerical fixture uses exactly representable coordinates to check equality.
+
+## World/effect integration, October 28, 2026
+
+The focused browser followup regression now preserves eight real Core-area pickup
+ACTs, consumes them through the shared final-flush powerup queue, and verifies
+all eighteen ACT objectives followed by the actual ADMIRAL death completing19.
+It uses existing opt-in debug invulnerability to keep the test vehicle alive while
+waiting for due events; it does not bypass mission counters or award gates.
+Fancy awards use original SCROLLERS glyphs/slot6 and the shared priority latch,
+including financial-rejection cases. The original catalog has no nonzero fancy
+award, so that outlet uses labelled synthetic connotations with original fonts.
+The later [catalog-scoped census](c2-effect-producer-audit.md) states its exact
+78-file selection and current totals, separately from the earlier table scan above.

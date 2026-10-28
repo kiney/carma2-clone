@@ -4,6 +4,7 @@ title: '[P2] QUA-04: Validate crashes, damage, destruction, and repair in Chromi
 status: done
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-28 22:34'
 labels:
   - priority-2
   - QUA-04
@@ -33,3 +34,12 @@ Added a production Chromium crash matrix for original Eagle3/Buggy/Bigdump/Advan
 
 [Crash matrix](../../tests/browser-crash-matrix.mjs), [Priority browser checks](../../tests/browser-priority.mjs)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-28 22:34
+---
+2026-10-28 broader crash-effect regression found a separate arbitrary loaded-noncar approach fixture failing identically on unchangedHEAD3b89d2d and the WLD-05/DMG-03 candidate. Its expected driver4 spark packet is not reached; no console errors and other effect subcases pass. QUA-12/TASK-124 owns reproducible contact coverage; this does not reopen the completed original crash-matrix scope.
+---
+<!-- COMMENTS:END -->

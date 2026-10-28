@@ -107,13 +107,7 @@ export function prepareNativeNonCarSmokeSampler(
   options: ModelPreparedOptions = {},
   diagnose: (message: string) => void = () => {},
 ) {
-  const mesh =
-    actor instanceof Mesh
-      ? actor
-      : (actor.children.find((child) => child instanceof Mesh) as
-          | Mesh
-          | undefined);
-  if (!mesh) throw new Error("Noncar fire requires the source actor's model");
+  const mesh = nativeNonCarSmokeMesh(actor);
   const geometry = mesh.geometry;
   const positions = geometry.getAttribute("position");
   const original = geometry.userData.sourcePositions as
@@ -175,6 +169,17 @@ export function prepareNativeNonCarSmokeSampler(
       return true;
     },
   };
+}
+
+/** ACT model lives on the actor itself or its direct browser mesh child.
+ * Descendant ACT models are different native resources and cannot substitute. */
+export function nativeNonCarSmokeMesh(actor: Object3D): Mesh {
+  const mesh =
+    actor instanceof Mesh
+      ? actor
+      : actor.children.find((child): child is Mesh => child instanceof Mesh);
+  if (!mesh) throw new Error("Noncar fire requires the source actor's model");
+  return mesh;
 }
 
 /** Installed noncar branch4eba86–4ebde5, actor-based placement only. Native

@@ -43,7 +43,7 @@ export interface SmokeCar {
   isOnDetachedHalf?: (local: THREE.Vector3) => boolean;
 }
 export interface SmokeColumnSource {
-  mode: 1 | 2;
+  mode: 0 | 1 | 2;
   actor: THREE.Object3D;
   car?: SmokeCar;
   rigid?: SmokeRigid;
@@ -449,7 +449,7 @@ export class SmokeSystem {
     uint(source.lifetimeMs, "column lifetime");
     uint(source.vertex, "source vertex");
     if (
-      (source.mode !== 1 && source.mode !== 2) ||
+      (source.mode !== 0 && source.mode !== 1 && source.mode !== 2) ||
       !Number.isInteger(source.colour) ||
       source.colour < 0 ||
       source.colour > 15 ||

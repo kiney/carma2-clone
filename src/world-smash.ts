@@ -37,7 +37,7 @@ export interface SmashFire {
 }
 export interface SmashReplacementFire {
   chance: number;
-  /** ReadSmokeFireChance's three integers; keep unknown model semantics raw. */
+  /** ReadSmokeFireChance: column count, minimum colour, maximum colour. */
   parameters?: [number, number, number];
 }
 export interface SmashShrapnel {

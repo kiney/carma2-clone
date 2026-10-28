@@ -12,6 +12,7 @@ import * as THREE from "three";
 import { parseDat, parseAct, parseMat, parsePix, decodeText } from "./formats";
 import { parseTiff } from "./tiff";
 import type { DatModel, ActNode, MatMaterial, PixMap } from "./formats";
+import type { ModelPreparedOptions } from "./car-smoke";
 export interface AssetEntry {
   path: string;
   size: number;
@@ -37,6 +38,9 @@ export class Assets {
     DatModel,
     readonly (MatMaterial | null)[]
   >();
+  /** BufferGeometry.clone preserves this metadata object's identity. Keep the
+   * resource crosswalk outside serializable ACT userData and render MAT copies. */
+  private readonly nativePreparedModelSources = new WeakMap<object, DatModel>();
   private readonly startupStorage = {};
   private commonLoaded = false;
   private readonly renderedNativeMaterials = new Map<
@@ -136,6 +140,108 @@ export class Assets {
     for (const data of this.nativeGeometries.values())
       if (data.geometry === geometry) return true;
     return false;
+  }
+  /** Resolve this MODEL-load episode's raw face MAT bindings to live owned byte
+   * addresses. These are our host allocator's pointers, not a Windows capture.
+   * Geometry clones borrow the source MODEL; later registry registrations and
+   * actor/render material overrides cannot rebind its raw faces. Explicit host
+   * runtime-mutation metadata instead supplies the current raw MAT identities
+   * and current MODEL inputs after clipping/migration; names never rebind them. */
+  getNativeModelPreparedOptions(
+    geometry: THREE.BufferGeometry,
+  ): ModelPreparedOptions {
+    const model = this.nativePreparedModelSources.get(geometry.userData);
+    let bindings = model && this.nativeModelMaterialBindings.get(model);
+    const faces = geometry.userData.sourceFaces as
+      | DatModel["faces"]
+      | undefined;
+    let label = model?.name;
+    if (geometry.userData.c2PreparedSourceKind === "runtime-mutation") {
+      // Host clipping/migration creates a new current MODEL. Its explicit raw
+      // MAT table owns identities directly; it has no DAT name-lookup episode.
+      const source = geometry.userData.sourcePositions;
+      const uvs = geometry.userData.sourceUVs;
+      const flags = geometry.userData.modelFlags;
+      const position = geometry.getAttribute("position");
+      const uv = geometry.getAttribute("uv");
+      const materials = geometry.userData.c2RawFaceMaterials;
+      if (
+        !(source instanceof Float32Array) ||
+        source.length % 3 !== 0 ||
+        source.length / 3 > 0xffff ||
+        !Array.from(source).every(Number.isFinite) ||
+        !(uvs instanceof Float32Array) ||
+        uvs.length !== (source.length / 3) * 2 ||
+        !Array.from(uvs).every(Number.isFinite) ||
+        !Number.isInteger(flags) ||
+        flags < 0 ||
+        flags > 0xffff ||
+        !Array.isArray(faces) ||
+        faces.length > 0xffff ||
+        !position ||
+        position.itemSize !== 3 ||
+        source.length !== position.count * 3 ||
+        position.count !== faces.length * 3 ||
+        !uv ||
+        uv.itemSize !== 2 ||
+        uv.count !== position.count ||
+        !Array.isArray(materials)
+      )
+        throw new Error(
+          "Native prepared runtime-mutation source is incomplete",
+        );
+      for (const face of faces)
+        if (
+          !face ||
+          !Array.isArray(face.indices) ||
+          face.indices.length !== 3 ||
+          face.indices.some(
+            (index) =>
+              !Number.isInteger(index) ||
+              index < 0 ||
+              index >= source.length / 3,
+          ) ||
+          !Number.isInteger(face.smoothing) ||
+          face.smoothing < 0 ||
+          face.smoothing > 0xffff ||
+          !Number.isInteger(face.flags) ||
+          face.flags < 0 ||
+          face.flags > 0xff
+        )
+          throw new Error("Native prepared runtime-mutation face is invalid");
+      bindings = materials;
+      label = "runtime-mutation";
+    } else if (!model || !bindings || !this.nativeGeometries.has(model)) {
+      throw new Error(
+        "Native prepared MODEL resource is unavailable or released",
+      );
+    }
+    if (!faces)
+      throw new Error(`Native prepared MODEL faces missing: ${label}`);
+    const materialPointers = new Map<number, number>([[0, 0]]);
+    for (const face of faces) {
+      const slot = face.material;
+      if (materialPointers.has(slot)) continue;
+      if (!Number.isInteger(slot) || slot < 1 || slot > bindings!.length)
+        throw new Error(
+          `Native prepared MODEL material slot out of bounds: ${label}:${slot}`,
+        );
+      const source = bindings![slot - 1];
+      if (source === undefined)
+        throw new Error(
+          `Native prepared MODEL material binding missing: ${label}:${slot}`,
+        );
+      const allocation = this.materialArena.materialAddress(source);
+      if (!allocation.resolved)
+        throw new Error(
+          `Native prepared MODEL material unavailable: ${label}:${slot}: ${allocation.requiredProvider}`,
+        );
+      materialPointers.set(slot, allocation.address);
+    }
+    return {
+      materialPointers,
+      materialPointerProvenance: "host-resource-addresses",
+    };
   }
   ownsNativeTexture(texture: THREE.Texture): boolean {
     for (const render of this.renderedNativeMaterials.values())
@@ -412,6 +518,13 @@ export class Assets {
   }
   private bindModelGeometry(model: DatModel, defaultMaterial: THREE.Material) {
     const geometry = createModelGeometry(model);
+    // Pointer identity belongs to this load episode. Keep it off serialized
+    // render metadata while allowing cloned geometry to borrow the same MODEL.
+    Object.defineProperty(geometry.userData, "c2NativeModelIdentity", {
+      value: model,
+      configurable: true,
+      writable: true,
+    });
     try {
       const slots = [...new Set(model.faces.map((face) => face.material))];
       const bindings = this.nativeModelMaterialBindings.get(model);
@@ -422,6 +535,13 @@ export class Assets {
       const resolvedMaterials = slots.map((index) =>
         index === 0 ? null : bindings[index - 1],
       );
+      Object.defineProperty(geometry.userData, "c2RawFaceMaterials", {
+        value: model.faces.map((face) =>
+          face.material === 0 ? null : bindings[face.material - 1],
+        ),
+        writable: true,
+        configurable: true,
+      });
       const materials = resolvedMaterials.map((source) => {
         if (source === null) return defaultMaterial;
         if (!source)
@@ -440,6 +560,7 @@ export class Assets {
         nullMaterialSlots: resolvedMaterials.map((source) => source === null),
       };
       this.nativeGeometries.set(model, data);
+      this.nativePreparedModelSources.set(geometry.userData, model);
       return data;
     } catch (error) {
       geometry.dispose();
@@ -846,6 +967,22 @@ export class Assets {
           DatModel,
           THREE.BufferGeometry
         >,
+        /** Native replacement keeps the already loaded MODEL/MAT identities;
+         * named registry lookups must not rebind raw face slots at smash time. */
+        createModelInstance: (model: DatModel, inherited: THREE.Material) => {
+          const data = nativeGeometries.get(model);
+          if (!data)
+            throw new Error(
+              `Native replacement MODEL unavailable: ${model.name}`,
+            );
+          return {
+            identity: model,
+            geometry: data.geometry.clone(),
+            materials: data.materials.map((material, slot) =>
+              data.nullMaterialSlots[slot] ? inherited : material,
+            ),
+          };
+        },
         defaultMaterial,
         /** Separate original ACT identities and live object bindings for an extra
          * resource; never append them to the initial track's identity crosswalk. */

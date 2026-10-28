@@ -14,6 +14,15 @@ import {
 import type { VehicleState, RaceState } from "./gameplay";
 import { awardRaceTime, awardRaceCredits } from "./gameplay";
 import {
+  enqueueNativePickupPowerup,
+  nativePickupPowerupIndex,
+  type NativePickupPowerupResult,
+} from "./pickup-hit";
+import type {
+  NativeSmashPowerupPhysics,
+  NativeSmashPowerupQueue,
+} from "./smash-gameplay";
+import {
   setTemporaryMotionPowerup,
   resetTemporaryMotionPowerup,
   type SuspensionPowerupValues,
@@ -202,6 +211,13 @@ interface Pickup {
   position: THREE.Vector3;
   collected: boolean;
 }
+export type PickupActorHitResult =
+  | { handled: false }
+  | ({
+      handled: true;
+      firstHit: boolean;
+      index: number;
+    } & NativePickupPowerupResult);
 interface ActiveEffect {
   index: number;
   remaining: number;
@@ -306,6 +322,7 @@ export class PowerupSystem {
   readonly definitions: PowerupDefinition[] = [];
   readonly warnings: string[] = [];
   readonly pickups: Pickup[] = [];
+  private readonly pendingPickupGrants = new WeakSet<THREE.Object3D>();
   readonly abilities = new Map<number, PowerupAbility>();
   selectedAbility: number | null = null;
   /** Actual world collection is distinct from applying/granting an effect. */
@@ -409,6 +426,89 @@ export class PowerupSystem {
     return this;
   }
 
+  /** Actor/face admission belongs to native collision or delayed followups.
+   * Preserve actual registered ACT identity and hide it once, even if the
+   * recipient or shared queue rejects the grant. Effects/respawn wait for the
+   * final queue flush; onPickup remains the ordinary world-collection outlet. */
+  hitPickupActor<Car>(
+    actor: THREE.Object3D,
+    input: {
+      queue: NativeSmashPowerupQueue<Car, THREE.Object3D>;
+      physics?: NativeSmashPowerupPhysics<Car>;
+      /** HitMine on the incoming physics, before pickup connotations/audio. */
+      onMineReaction?: () => void;
+    },
+  ): PickupActorHitResult {
+    const pickup = this.pickups.find((entry) => entry.object === actor);
+    if (!pickup || nativePickupPowerupIndex(actor.name) !== pickup.index)
+      return { handled: false };
+    if (!this.pickupAvailable(pickup))
+      return {
+        handled: true,
+        firstHit: false,
+        index: pickup.index,
+        queued: false,
+        mineReaction: false,
+      };
+    const result = enqueueNativePickupPowerup({
+      ...input,
+      actor,
+      index: pickup.index,
+    });
+    if (result.mineReaction) {
+      if (!input.onMineReaction)
+        throw new Error(
+          "Native pickup index14 requires an incoming-physics mine reaction",
+        );
+      input.onMineReaction();
+    }
+    if (result.queued) this.pendingPickupGrants.add(actor);
+    this.consumePickupActor(pickup);
+    return { handled: true, firstHit: true, index: pickup.index, ...result };
+  }
+
+  /** FlushSmashQueue0 grants the recorded car before scheduling this same ACT's
+   * respawn. A consumed reservation cannot grant twice or replay pickup audio.
+   * Null-ACT connotation entries continue to use grant directly. */
+  completeQueuedPickup(
+    index: number,
+    actor: THREE.Object3D,
+    vehicle: VehicleState,
+    race: RaceState,
+    onEvent?: (event: PowerupEvent) => void,
+    nowMs = this.elapsedMs,
+  ): boolean {
+    const pickup = this.pickups.find((entry) => entry.object === actor);
+    if (
+      !pickup ||
+      pickup.index !== index ||
+      !this.pendingPickupGrants.has(actor)
+    )
+      return false;
+    if (!Number.isFinite(nowMs) || nowMs < 0)
+      throw new Error("Invalid pickup grant timestamp");
+    this.pendingPickupGrants.delete(actor);
+    this.elapsedMs = nowMs;
+    this.grant(index, vehicle, race, onEvent);
+    this.respawns?.queue(index, pickup, nowMs);
+    return true;
+  }
+
+  private pickupAvailable(pickup: Pickup): boolean {
+    return (
+      !pickup.collected &&
+      pickup.object.visible &&
+      pickup.object.userData.c2ActorRenderStyle !== 1
+    );
+  }
+
+  private consumePickupActor(pickup: Pickup): void {
+    pickup.collected = true;
+    pickup.object.visible = false;
+    pickup.object.userData.c2ActorRenderStyle = 1;
+    this.onPickup?.(this.definitions[pickup.index]);
+  }
+
   /** Combined compatibility API for direct tools/tests. */
   update(
     dt: number,
@@ -447,7 +547,7 @@ export class PowerupSystem {
     const lengthSq = segment.lengthSq();
     const hits: Array<{ pickup: Pickup; t: number }> = [];
     for (const pickup of this.pickups) {
-      if (pickup.collected) continue;
+      if (!this.pickupAvailable(pickup)) continue;
       const t =
         lengthSq > 1e-12
           ? THREE.MathUtils.clamp(
@@ -463,10 +563,7 @@ export class PowerupSystem {
     // Actor traversal order is unrelated to the order encountered while driving.
     hits.sort((a, b) => a.t - b.t);
     for (const { pickup } of hits) {
-      pickup.collected = true;
-      pickup.object.visible = false;
-      pickup.object.userData.c2ActorRenderStyle = 1;
-      this.onPickup?.(this.definitions[pickup.index]);
+      this.consumePickupActor(pickup);
       this.apply(pickup.index, vehicle, race, onEvent);
       this.respawns?.queue(pickup.index, pickup, this.elapsedMs);
     }
@@ -646,8 +743,10 @@ export class PowerupSystem {
   }
 
   dispose(): void {
-    for (const pickup of this.pickups)
+    for (const pickup of this.pickups) {
+      this.pendingPickupGrants.delete(pickup.object);
       pickup.object.parent?.remove(pickup.object);
+    }
     this.pickups.length = 0;
     this.abilities.clear();
     this.selectedAbility = null;

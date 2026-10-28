@@ -141,6 +141,7 @@ import {
 } from "./smash-debris-dispatch";
 import { wamEffectFrame } from "./wam-effect-frame";
 import { spawnSmashExplosions } from "./smash-explosion";
+import { createNativeReplacementColumns } from "./replacement-fire";
 import {
   loadNonCarDebrisAssets,
   type NonCarDebrisAssetSet,
@@ -148,6 +149,8 @@ import {
 import {
   NativeNonCarDebrisRuntime,
   initializeNativeNonCarDebrisBody,
+  nativeNonCarSmokeMesh,
+  prepareNativeNonCarSmokeSampler,
   type NativeNonCarBodySlot,
 } from "./noncar-debris";
 import type { NonCarBody } from "./physics/noncar-body";
@@ -871,6 +874,7 @@ function registerCarSmoke(body: SimulatedCar, carText: string) {
       `Original smoke cockpit head offset missing: ${body.group.name}`,
     );
   const sampler = prepareCarSmokeSampler(mesh, body.group, {
+    ...assets.getNativeModelPreparedOptions(mesh.geometry),
     cockpit:
       driverZOffset === undefined
         ? undefined
@@ -1437,6 +1441,13 @@ async function loadRace() {
       assets.warnings.push(...entry.diagnostics);
     }
     let loadedDebrisRuntime: NativeNonCarDebrisRuntime | undefined;
+    const replacementSamplers = new WeakMap<
+      THREE.Mesh,
+      {
+        geometry: THREE.BufferGeometry;
+        sampler: ReturnType<typeof prepareNativeNonCarSmokeSampler>;
+      }
+    >();
     const loadedDestruction = new WorldDestruction(
       world.group,
       worldSmashSpecs,
@@ -1444,6 +1455,62 @@ async function loadRace() {
         models: world.models,
         textures: world.textures,
         materials: world.materials,
+        resolveReplacementModel: (asset, inherited) => {
+          if ("positions" in asset)
+            return world.createModelInstance(asset, inherited);
+          return {
+            geometry: asset.geometry.clone(),
+            materials:
+              asset instanceof THREE.Mesh
+                ? asset.material
+                : (asset.materials ?? inherited),
+            identity:
+              asset instanceof THREE.Mesh ? asset.geometry : asset.identity,
+          };
+        },
+        onReplacementFire: (actor, fire) =>
+          createNativeReplacementColumns({
+            modelChanged: true,
+            actor,
+            fire,
+            random: sharedNativeRandom.random,
+            readPreparedSource: () => {
+              const mesh = nativeNonCarSmokeMesh(actor);
+              let entry = replacementSamplers.get(mesh);
+              if (!entry || entry.geometry !== mesh.geometry) {
+                entry = {
+                  geometry: mesh.geometry,
+                  sampler: prepareNativeNonCarSmokeSampler(
+                    mesh,
+                    assets.getNativeModelPreparedOptions(mesh.geometry),
+                    (warning) => {
+                      if (!assets.warnings.includes(warning))
+                        assets.warnings.push(warning);
+                    },
+                  ),
+                };
+                replacementSamplers.set(mesh, entry);
+              }
+              return entry.sampler;
+            },
+            spawn: (source) => {
+              smoke?.spawnColumn(source);
+            },
+          }),
+        collectNativeFollowupFaces: (query, capacity) => ({
+          surfaces: newCollision.collectFaces(
+            {
+              bounds: new THREE.Box3(
+                new THREE.Vector3(...query.min),
+                new THREE.Vector3(...query.max),
+              ),
+              matrix: new THREE.Matrix4().fromArray([...query.trackMatrix]),
+            },
+            capacity,
+            true,
+          ),
+          actorObjects: nativeWorld.actorObjects,
+        }),
         cloneMaterial: (material) => assets.cloneNativeMaterial(material),
         random: sharedNativeRandom.random,
         onConnotations: (data, contact, suppressed) =>
@@ -1761,9 +1828,30 @@ async function loadRace() {
     };
     simulation.deferFinalSmashFlush = true;
     simulation.smashClock = () => stats.gameTimeMs >>> 0;
-    simulation.onSmashPowerup = ({ car: recipient, index }) => {
-      if (recipient === player && race)
-        powerups?.grant(index, recipient.state, race, onPowerupEvent);
+    simulation.onSmashPowerup = ({ car: recipient, index, actor }) => {
+      if (!race || !powerups) return;
+      if (actor) {
+        powerups.completeQueuedPickup(
+          index,
+          actor,
+          recipient.state,
+          race,
+          recipient === player
+            ? onPowerupEvent
+            : (event) => {
+                // HitPowerup admits AI only for the mine entry. Do not route
+                // that recipient's physical reaction through the local player.
+                if (event.kind === "crash" && event.definition.action === 30)
+                  activeSimulation.hitMine(
+                    recipient,
+                    event.definition.floatParams,
+                  );
+              },
+          stats.gameTimeMs,
+        );
+      } else if (recipient === player) {
+        powerups.grant(index, recipient.state, race, onPowerupEvent);
+      }
     };
     simulation.gravityMultiplier = defaultGravityMultiplier;
     simulation.flapGravity = loadedDamage.structuralSettings.battyGravity;
@@ -1924,6 +2012,10 @@ async function loadRace() {
         debrisSimulation.addNonCar(body);
       },
       addSmokeColumn: (source) => void smoke?.spawnColumn(source),
+      preparedOptions: (template) =>
+        assets.getNativeModelPreparedOptions(
+          nativeNonCarSmokeMesh(template.actor).geometry,
+        ),
       diagnose: (text) => assets.warnings.push(text),
     });
     noncarDebris = loadedDebrisRuntime;
@@ -2029,7 +2121,7 @@ async function loadRace() {
         body.human ? "player" : "rival",
         body.human ? "player" : (rival?.id ?? body.group.uuid),
         rival ? (opponents[rival.id]?.driverShortName ?? body.group.name) : "",
-        simulation!.elapsed * 1000,
+        stats.gameTimeMs,
         explosionSettings.soundId,
         !!body.wastedByPlayer,
       );
@@ -2354,6 +2446,11 @@ function dispatchSmashConnotations(
     }
     if (award.textIndex && miscStrings[award.textIndex])
       message(miscStrings[award.textIndex], 3);
+    // Native financial rejection does not suppress the authored HUD outlets.
+    if (award.fancyIndex)
+      wastedFeedback.fancy(award.fancyIndex, stats.gameTimeMs, {
+        internal: cameraMode === 1,
+      });
   }
   if (data.explosions.length && explosions) {
     // DoConnotations4ed4e2 tests the queued ACT's origin, not the smash point
@@ -2422,20 +2519,47 @@ function dispatchFollowupSmash(
   const actor = context.face.actor.identity as THREE.Object3D;
   if (context.route === "numbered") {
     const body = activeSimulation.noncars.find((body) => body.actor === actor);
-    if (body) {
-      if (!activeSimulation.admitNonCar(body, { wake: true })) return;
+    if (body && activeSimulation.admitNonCar(body, { wake: true })) {
       body.motor.sleeping = false;
     }
+    // Native DoPullActorFromWorld returning NULL does not suppress BashObject.
     actor.name = actor.name.slice(0, 3) + "!" + actor.name.slice(4);
     if (!context.eligibleAfterRelease) return;
   }
   const source = context.face.source as
     | { actor: THREE.Object3D; faceIndex: number; material: string }
     | undefined;
+  const dispatchActor = source?.actor ?? actor;
+  if (!(dispatchActor instanceof THREE.Object3D))
+    throw new Error(
+      "Native followup target has no renderer MODEL mutation provider",
+    );
   const bodyActor = context.sourcePhysics.actor as THREE.Object3D;
+  const owner = activeSimulation.cars.find((car) => car.group === bodyActor);
+  // The collector's native ACT owns pickup state. A source render mesh can
+  // belong to a generated material-group ACT and is not that registered ACT.
+  const pickupHit =
+    actor instanceof THREE.Object3D
+      ? powerups?.hitPickupActor(actor, {
+          queue: activeSimulation.smashPowerupQueue,
+          physics: owner
+            ? {
+                type: 1,
+                owner: { car: owner, driver: owner.human ? 8 : 6 },
+                position: owner.state.position.toArray() as [
+                  number,
+                  number,
+                  number,
+                ],
+              }
+            : undefined,
+          onMineReaction: () => activeSimulation.hitPickupMine(bodyActor),
+        })
+      : undefined;
+  if (pickupHit?.handled) return;
   destruction.handleFollowup(
     {
-      actor: source?.actor ?? actor,
+      actor: dispatchActor,
       faceIndex: source?.faceIndex,
       material: source?.material,
       normalImpulse: context.magnitude,
@@ -4176,7 +4300,8 @@ function animate(now: number) {
   if (simulation)
     wastedFeedback.draw(
       feedbackContext,
-      (simulation.elapsed + simulation.accumulator) * 1000,
+      stats.gameTimeMs,
+      gameFrame?.periodMs ?? 0,
     );
   try {
     if (nativeCameraYon > 0 && stats.ready && !loading) {

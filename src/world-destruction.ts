@@ -7,12 +7,22 @@ import {
   Matrix4,
   Mesh,
   Object3D,
+  Plane,
   Texture,
   Triangle,
   Vector2,
   Vector3,
 } from "three";
-import type { DatModel } from "./formats";
+import type { DatModel, MatMaterial } from "./formats";
+import type { Surface } from "./world";
+import type { NativeOrderedActor } from "./native-actor-order";
+import {
+  createNativeSmashEdgeState,
+  NATIVE_SMASH_EDGE_SELECTORS,
+  prepareNativeSmashEdge,
+  restoreNativeSmashEdgeMasks,
+  type NativeSmashEdgeState,
+} from "./world-smash-edge-flags";
 import { copyNativeTextureSampling } from "./native-material-render";
 import {
   resolveFollowupActorSpec,
@@ -40,6 +50,7 @@ import type {
   SmashActivation,
   SmashCollisionMode,
   SmashConnotations,
+  SmashReplacementFire,
   WorldSmashSpec,
 } from "./world-smash";
 
@@ -73,11 +84,30 @@ export interface WorldSmashContact {
   timeMs?: number;
 }
 export interface DestructionModel {
+  identity?: object;
   geometry: BufferGeometry;
   materials?: Material | Material[];
 }
 export type DestructionModelAsset = DatModel | DestructionModel | Mesh;
+export interface NativeFollowupCollection {
+  /** The already clipped/capped WorldCollision.collectFaces prefix, before filtering. */
+  surfaces: readonly Surface[];
+  actorObjects: ReadonlyMap<NativeOrderedActor, Object3D>;
+}
 export interface WorldDestructionAssets {
+  /** Production uses the existing native world collector. Omitted only by standalone
+   * renderer fixtures; never sort/filter its prefix before returning it. */
+  collectNativeFollowupFaces?: (
+    query: FollowupQuery,
+    capacity: number,
+  ) => NativeFollowupCollection;
+  /** Return an owned geometry clone with its actual registered MODEL identity
+   * and captured MAT slots. Same-identity rejection disposes the unused clone. */
+  resolveReplacementModel?: (
+    asset: DestructionModelAsset,
+    inherited: Material,
+  ) => DestructionModel;
+  onReplacementFire?: (actor: Object3D, fire: SmashReplacementFire) => void;
   textures?: ReadonlyMap<string, Texture>;
   models?: ReadonlyMap<string, DestructionModelAsset>;
   materials?: ReadonlyMap<string, Material>;
@@ -131,8 +161,11 @@ interface Vertex {
 interface Face {
   vertices: [Vertex, Vertex, Vertex];
   material: Material;
+  /** Raw MODEL face MAT, distinct from the renderer's resolved ACT inheritance. */
+  rawMaterial: MatMaterial | null | undefined;
   originalMaterial: string;
   sourceFace: number;
+  smoothing: number;
   flags: number;
   collisionMode: SmashCollisionMode;
   patch?: string;
@@ -149,6 +182,7 @@ interface Patch {
   faces: Face[];
   decal?: Mesh;
   bounds: [number, number, number, number];
+  edgeState: NativeSmashEdgeState<Face>;
 }
 const key = (name: string) =>
   name.replace(/\.(act|dat|mat|pix|tiff?)$/i, "").toLowerCase();
@@ -218,11 +252,24 @@ function facesOf(mesh: Mesh): Face[] {
       geometry.userData.sourceFaceFlags?.[i / 3] ??
       geometry.userData.sourceFaces?.[Math.floor(sourceVertex / 3)]?.flags ??
       0;
+    const rawFaceIndex =
+      geometry.userData.c2PreparedSourceKind === "runtime-mutation"
+        ? i / 3
+        : Math.floor(sourceVertex / 3);
+    const rawTable = geometry.userData.c2RawFaceMaterials as
+      | (MatMaterial | null | undefined)[]
+      | undefined;
+    const rawMaterial =
+      rawTable?.[rawFaceIndex] === null
+        ? null
+        : (rawTable?.[rawFaceIndex] ?? material.userData.c2SourceMaterial);
     faces.push({
       vertices: corners,
       material,
+      rawMaterial,
       originalMaterial: material.name,
       sourceFace: i / 3,
+      smoothing: geometry.userData.sourceFaces?.[rawFaceIndex]?.smoothing ?? 0,
       flags,
       collisionMode: geometry.userData.worldSmashFaceModes?.[i / 3] ?? "solid",
     });
@@ -355,7 +402,71 @@ function clipTile(
   }
   return { inside: triangulate(polygon, face, patch), outside };
 }
+/** Map source edge bits onto host clipping triangles. Created interior diagonals
+ * are suppressed; a source edge bit never migrates to an unrelated tile edge. */
+function refreshSourceEdgeFlags(data: MeshData): boolean {
+  const edges = new Map<string, { face: Face; edge: number }[]>();
+  const positionKey = (point: Vector3) =>
+    point.toArray().map(Math.fround).join(",");
+  const onSegment = (point: Vector3, a: Vector3, b: Vector3) => {
+    const ab = b.clone().sub(a),
+      length = ab.lengthSq();
+    if (!length) return point.distanceToSquared(a) <= 1e-12;
+    const t = point.clone().sub(a).dot(ab) / length;
+    return (
+      t >= -1e-7 &&
+      t <= 1 + 1e-7 &&
+      point.distanceToSquared(a.clone().addScaledVector(ab, t)) <=
+        1e-12 * Math.max(1, length)
+    );
+  };
+  const previous = data.faces.map((face) => face.flags);
+  for (const face of data.faces) {
+    const original = data.original[face.sourceFace];
+    face.flags = (original?.flags ?? face.flags) & ~7;
+    for (let edge = 0; edge < 3; edge++) {
+      const a = face.vertices[edge].position,
+        b = face.vertices[(edge + 1) % 3].position;
+      if (original)
+        for (let sourceEdge = 0; sourceEdge < 3; sourceEdge++) {
+          if (!(original.flags & (1 << sourceEdge))) continue;
+          const sa = original.vertices[sourceEdge].position,
+            sb = original.vertices[(sourceEdge + 1) % 3].position;
+          if (onSegment(a, sa, sb) && onSegment(b, sa, sb))
+            face.flags |= 1 << edge;
+        }
+      const key = [positionKey(a), positionKey(b)].sort().join("|");
+      const shared = edges.get(key) ?? [];
+      for (const other of shared)
+        if (
+          other.face.sourceFace === face.sourceFace ||
+          (face.patch !== undefined && face.patch === other.face.patch)
+        ) {
+          other.face.flags |= 1 << other.edge;
+          face.flags |= 1 << edge;
+        }
+      shared.push({ face, edge });
+      edges.set(key, shared);
+    }
+  }
+  return data.faces.some((face, index) => face.flags !== previous[index]);
+}
+function publishSourceEdgeFlags(data: MeshData): void {
+  data.geometry.userData.sourceFaceFlags = Uint8Array.from(
+    data.faces.map((face) => face.flags),
+  );
+  // Both collision and live prepared-model sampling read this current MODEL.
+  // Updating only the collision byte array leaves its prepared source stale
+  // until the deferred texture tier eventually rewrites the geometry.
+  if (data.geometry.userData.c2PreparedSourceKind === "runtime-mutation") {
+    const sources = data.geometry.userData.sourceFaces as DatModel["faces"];
+    data.faces.forEach((face, index) => {
+      sources[index].flags = face.flags;
+    });
+  }
+}
 function writeFaces(mesh: Mesh, data: MeshData): void {
+  refreshSourceEdgeFlags(data);
   const geometry = new BufferGeometry(),
     positions: number[] = [],
     normals: number[] = [],
@@ -385,6 +496,28 @@ function writeFaces(mesh: Mesh, data: MeshData): void {
   geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
   geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
   geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
+  // This is a new host MODEL topology, not the old DAT load episode. Retain
+  // its actual raw MAT bindings and current vertices for live smoke consumers.
+  geometry.userData.c2PreparedSourceKind = "runtime-mutation";
+  geometry.userData.modelFlags = data.geometry.userData.modelFlags ?? 0;
+  if (data.geometry.userData.c2NativeModelIdentity)
+    Object.defineProperty(geometry.userData, "c2NativeModelIdentity", {
+      value: data.geometry.userData.c2NativeModelIdentity,
+      configurable: true,
+      writable: true,
+    });
+  geometry.userData.sourcePositions = geometry.getAttribute("position").array;
+  geometry.userData.sourceUVs = geometry.getAttribute("uv").array;
+  geometry.userData.sourceVertexIndices = Uint32Array.from(
+    { length: positions.length / 3 },
+    (_, index) => index,
+  );
+  geometry.userData.sourceFaces = data.faces.map((face, index) => ({
+    indices: [index * 3, index * 3 + 1, index * 3 + 2],
+    material: index + 1,
+    flags: face.flags,
+    smoothing: face.smoothing,
+  }));
   geometry.userData.sourceFaceFlags = Uint8Array.from(
     data.faces.map((f) => f.flags),
   );
@@ -393,7 +526,7 @@ function writeFaces(mesh: Mesh, data: MeshData): void {
   );
   geometry.userData.worldSmashSourceFaces = data.faces.map((f) => f.sourceFace);
   geometry.userData.c2RawFaceMaterials = data.faces.map(
-    (face) => face.material.userData.c2SourceMaterial ?? null,
+    (face) => face.rawMaterial,
   );
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
@@ -543,7 +676,7 @@ export class WorldDestruction {
       const faces = facesOf(mesh);
       data = {
         original: faces,
-        faces: [...faces],
+        faces: faces.map((face) => ({ ...face })),
         geometry: mesh.geometry,
         patches: new Map(),
       };
@@ -639,6 +772,8 @@ export class WorldDestruction {
     asset: DestructionModelAsset,
     inherited: Material,
   ): DestructionModel {
+    if (this.assets.resolveReplacementModel)
+      return this.assets.resolveReplacementModel(asset, inherited);
     if (asset instanceof Mesh)
       return { geometry: asset.geometry.clone(), materials: materials(asset) };
     if ("geometry" in asset)
@@ -667,6 +802,89 @@ export class WorldDestruction {
     } = {},
   ): FollowupFace[] {
     const result: FollowupFace[] = [];
+    if (this.assets.collectNativeFollowupFaces) {
+      const collected = this.assets.collectNativeFollowupFaces(query, capacity);
+      // Every collected face consumes capacity, even if no browser gameplay ACT
+      // adapter exists. Missing adapters must not admit later native candidates.
+      for (const surface of collected.surfaces.slice(0, capacity)) {
+        const native = surface.native;
+        if (!native)
+          throw new Error(
+            "Native followup collector omitted native face identity",
+          );
+        const actor = collected.actorObjects.get(native.actor);
+        // MungeFaces allocates new native ACTs without authored Object3D wrappers.
+        // Their native identity/name is distinct from the source render owner in
+        // surface.actor/source; borrowing that owner's registration would admit
+        // an unrelated ordinary target and merge pending material-face tasks.
+        const indices = actor
+          ? (this.actorSpecs.get(actor) ??
+            actor.userData.worldSmashSpecIndices ??
+            [])
+          : [];
+        const ordinarySpec = resolveFollowupActorSpec(this.specs, indices, [
+          native.model.source?.name ?? "",
+          surface.source?.modelName ?? "",
+          actor?.userData.worldSmashOriginalIdentifier ??
+            actor?.name ??
+            native.actor.name,
+        ]);
+        const numberedSpec = indices
+          .map((i: number) => this.specs[i])
+          .filter((spec: WorldSmashSpec) => spec.trigger.kind === "number")
+          .at(-1);
+        const materialName =
+          surface.source?.materialName ??
+          native.material?.name ??
+          surface.material;
+        const materialIndex = this.bindings.get(
+          `material:${key(materialName)}`,
+        );
+        const materialSpec =
+          materialIndex === undefined ? undefined : this.specs[materialIndex];
+        result.push({
+          actor: {
+            identity: actor ?? native.actor,
+            readIdentifier: () => actor?.name ?? native.actor.name,
+            // Source uses ACT local translation, even for inherited/reparented ACTs.
+            readTranslation: () =>
+              native.actor.matrix.slice(9, 12) as [number, number, number],
+            ordinarySpec,
+            ordinarySpecProxy: !!ordinarySpec,
+            numbered: {
+              registered: actor
+                ? (options.isRegisteredNoncar?.(actor) ?? !!numberedSpec)
+                : false,
+              argument:
+                numberedSpec?.trigger.kind === "number"
+                  ? numberedSpec.trigger.argument
+                  : 0,
+            },
+          },
+          groupIndex: native.nativeGroup,
+          faceIndex: native.nativeFace,
+          vertices: [
+            surface.a.toArray(),
+            surface.b.toArray(),
+            surface.c.toArray(),
+          ],
+          normal: surface.normal.toArray(),
+          material: {
+            identifier: native.material?.name ?? surface.material,
+            spec: materialSpec,
+            specProxy: !!materialSpec,
+          },
+          source: {
+            actor: surface.actor,
+            faceIndex: surface.faceIndex,
+            material: materialName,
+            native,
+          },
+        });
+      }
+      return result;
+    }
+    // Standalone/synthetic renderer fallback; production supplies the native owner.
     const box = new Box3(new Vector3(...query.min), new Vector3(...query.max));
     const trackInverse = new Matrix4()
       .fromArray([...query.trackMatrix])
@@ -904,7 +1122,8 @@ export class WorldDestruction {
         this.record(change, contact, out);
         continue;
       }
-      if (this.done.get(owner)?.has(i)) continue;
+      if (spec.mode !== "replacemodel" && this.done.get(owner)?.has(i))
+        continue;
       let change: WorldDestructionChange;
       if (spec.mode === "remove") {
         if (spec.trigger.kind === "material" && mesh) {
@@ -944,6 +1163,21 @@ export class WorldDestruction {
           continue;
         }
         const converted = this.convertedModel(replacement, materials(mesh)[0]);
+        const identity =
+          converted.identity ??
+          (replacement instanceof Mesh
+            ? replacement.geometry
+            : "geometry" in replacement
+              ? replacement.geometry
+              : replacement);
+        if (
+          identity ===
+          (mesh.geometry.userData.c2NativeModelIdentity ?? mesh.geometry)
+        ) {
+          converted.geometry.dispose();
+          continue;
+        }
+        converted.geometry.userData.c2NativeModelIdentity = identity;
         if (this.ownedGeometry.delete(mesh.geometry)) mesh.geometry.dispose();
         mesh.geometry = converted.geometry;
         this.ownedGeometry.add(converted.geometry);
@@ -959,6 +1193,7 @@ export class WorldDestruction {
               child.visible = false;
             }
         this.meshes.delete(mesh);
+        this.assets.onReplacementFire?.(owner, spec.replacement!.fire);
         change = {
           actor: owner,
           spec,
@@ -969,9 +1204,11 @@ export class WorldDestruction {
           connotations: spec.connotations,
         };
       } else continue;
-      let done = this.done.get(owner);
-      if (!done) this.done.set(owner, (done = new Set()));
-      done.add(i);
+      if (spec.mode !== "replacemodel") {
+        let done = this.done.get(owner);
+        if (!done) this.done.set(owner, (done = new Set()));
+        done.add(i);
+      }
       out.threshold ??= spec.removalThreshold;
       this.record(change, contact, out);
     }
@@ -986,7 +1223,14 @@ export class WorldDestruction {
     specIndex: number,
     contact: WorldSmashContact,
     out: WorldDestructionResult,
+    traversal = {
+      visited: new Set<string>(),
+      state: { calls: 0 },
+      selector: -1,
+    },
   ): void {
+    // Installed6a6920 bounds the entire source recursion episode to16 calls.
+    if (traversal.state.calls++ >= 16) return;
     const data = this.meshData(mesh),
       currentFace = data.faces[contact.faceIndex!];
     if (!currentFace) {
@@ -1012,6 +1256,8 @@ export class WorldDestruction {
       Math.max(...uv.map((v) => v.x)),
       Math.max(...uv.map((v) => v.y)),
     ];
+    let requestedBounds: Patch["bounds"] | undefined;
+    const sourceBounds = [...bounds] as Patch["bounds"];
     // Native first damaged level bit2 expands from one integer UV tile to quad.
     if (!(spec.levels[0]?.flags & 2)) {
       if (!contact.point) {
@@ -1026,6 +1272,12 @@ export class WorldDestruction {
         out.diagnostics.push("Smash UV mapping is degenerate");
         return;
       }
+      requestedBounds = [
+        Math.floor(hit.x),
+        Math.floor(hit.y),
+        Math.ceil(hit.x),
+        Math.ceil(hit.y),
+      ];
       bounds = [
         Math.max(bounds[0], Math.floor(hit.x)),
         Math.max(bounds[1], Math.floor(hit.y)),
@@ -1041,6 +1293,8 @@ export class WorldDestruction {
       .map((f) => f.sourceFace)
       .sort((a, b) => a - b)
       .join(",")}:${bounds.join(",")}`;
+    if (traversal.visited.has(patchId)) return;
+    traversal.visited.add(patchId);
     const old = data.patches.get(patchId);
     if (old && old.level >= spec.levels.length) return;
     const level = selectSmashLevel(
@@ -1094,13 +1348,20 @@ export class WorldDestruction {
       }
       for (const face of inside) {
         face.material = material;
+        face.rawMaterial = material.userData.c2SourceMaterial;
         for (const v of face.vertices)
           v.uv.set(
             (v.uv.x - bounds[0]) / (bounds[2] - bounds[0]),
             (v.uv.y - bounds[1]) / (bounds[3] - bounds[1]),
           );
       }
-      patch = { level: 0, material, faces: inside, bounds };
+      patch = {
+        level: 0,
+        material,
+        faces: inside,
+        bounds,
+        edgeState: createNativeSmashEdgeState<Face>(),
+      };
       if (spec.mode === "decal") {
         const overlay = new Mesh();
         overlay.name = `smash decal ${spec.trigger.name}`;
@@ -1216,6 +1477,28 @@ export class WorldDestruction {
         authored?.collisionMode === "edges")
     )
       out.threshold ??= authored.threshold;
+    const acceptedEdges =
+      status !== "ignored" && authored?.collisionMode === "edges";
+    // Installed4f14c4..df passes !spec.field_2dc: original source specs retain
+    // pointers; a later contact against its existing tile spec does not add them.
+    const rememberSourceFaces = !old;
+    let edgeChanged =
+      acceptedEdges && restoreNativeSmashEdgeMasks(patch.edgeState);
+    if (traversal.selector >= 0) {
+      const selection = NATIVE_SMASH_EDGE_SELECTORS[traversal.selector];
+      edgeChanged =
+        prepareNativeSmashEdge(
+          patch.edgeState,
+          pair[selection.face],
+          selection.mask,
+          acceptedEdges,
+          rememberSourceFaces,
+        ) || edgeChanged;
+    }
+    if (edgeChanged) {
+      refreshSourceEdgeFlags(data);
+      publishSourceEdgeFlags(data);
+    }
     // Geometry preparation is immediate even when the shared queue rejects
     // the request. No tier, map selection or connotation is committed here.
     if (this.sharedSmashQueue || status === "ignored")
@@ -1228,13 +1511,93 @@ export class WorldDestruction {
           affectedFaceIndices: data.faces.flatMap((f, i) =>
             f.patch === patchId ? [i] : [],
           ),
-          geometryChanged: !old && spec.mode !== "decal",
+          geometryChanged: (!old || edgeChanged) && spec.mode !== "decal",
           requiresRebuild: spec.mode !== "decal",
           decal: patch.decal,
         },
         contact,
         out,
       );
+    // Source recursion crosses only clipped unit-tile boundaries which extend
+    // past the original paired quad. An ordinary neighbouring UV tile inside
+    // that quad is independent. The probe is edge midpoint +.001*(edge-opposite).
+    if (requestedBounds && spec.mode !== "decal") {
+      const quad = captured.ghostQuad!.points;
+      const edgeCorners = [
+        [0, 2, 1, 3],
+        [0, 1, 2, 3],
+        [1, 3, 0, 2],
+        [2, 3, 0, 1],
+      ];
+      for (let selector = 0; selector < 4; selector++) {
+        if (selector === traversal.selector) continue;
+        const overhang =
+          selector < 2
+            ? sourceBounds[selector] - requestedBounds[selector]
+            : requestedBounds[selector] - sourceBounds[selector];
+        if (overhang < 0.01) continue;
+        const [a, b, c, d] = edgeCorners[selector];
+        const midpoint = quad[a].clone().add(quad[b]).multiplyScalar(0.5);
+        const opposite = quad[c].clone().add(quad[d]).multiplyScalar(0.5);
+        const probe = midpoint
+          .clone()
+          .addScaledVector(midpoint.clone().sub(opposite), 0.001);
+        const adjacent = data.original.find((face) => {
+          if (pair.includes(face)) return false;
+          const triangle = new Triangle(
+            ...(face.vertices.map((vertex) => vertex.position) as [
+              Vector3,
+              Vector3,
+              Vector3,
+            ]),
+          );
+          const bary = triangle.getBarycoord(probe, new Vector3());
+          return (
+            bary &&
+            Math.min(bary.x, bary.y, bary.z) >= -0.0001 &&
+            Math.abs(triangle.getPlane(new Plane()).distanceToPoint(probe)) <
+              0.5
+          );
+        });
+        if (!adjacent) continue;
+        const nextIndex = this.bindings.get(
+          `material:${key(adjacent.originalMaterial)}`,
+        );
+        const nextSpec =
+          nextIndex === undefined ? undefined : this.specs[nextIndex];
+        if (!nextSpec || nextSpec.mode !== "texturechange") continue;
+        const selection = NATIVE_SMASH_EDGE_SELECTORS[selector];
+        const changed = prepareNativeSmashEdge(
+          patch.edgeState,
+          pair[selection.face],
+          selection.mask,
+          acceptedEdges,
+          rememberSourceFaces,
+        );
+        if (changed) {
+          refreshSourceEdgeFlags(data);
+          publishSourceEdgeFlags(data);
+          // This targeted publication invalidates this MODEL once; it does not
+          // introduce another solver iteration or a global world rebuild.
+          this.geometryRevision++;
+          this.collisionChanges.add(mesh);
+        }
+        this.texture(
+          mesh,
+          nextSpec,
+          nextIndex!,
+          {
+            ...contact,
+            faceIndex: data.faces.findIndex(
+              (face) => face.sourceFace === adjacent.sourceFace,
+            ),
+            point: probe.clone().applyMatrix4(mesh.matrixWorld),
+          },
+          out,
+          { ...traversal, selector: (selector + 2) % 4 },
+        );
+      }
+    }
     if (!this.sharedSmashQueue)
       queue.flush(
         () => Math.round(contact.timeMs ?? this.timeMs) >>> 0,
@@ -1276,6 +1639,7 @@ export class WorldDestruction {
     patch.level = level;
     for (const face of patch.faces) {
       face.material = material;
+      face.rawMaterial = material.userData.c2SourceMaterial;
       face.collisionMode = authored.collisionMode ?? "solid";
     }
     // The native flush resolves the actor's live model. An intervening model

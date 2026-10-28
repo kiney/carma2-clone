@@ -131,7 +131,30 @@ occurrence, JavaScript identity counters and reversed resource lists remain
 unsupported ranking substitutes. Owned byte addresses close the portable
 comparator's key-provider requirement; they do not establish Windows-process
 prefix parity. Production collector topology, current prepared MODEL resources
-and mutation callback ownership still require separate integration.
+and mutation callback ownership need separate adapters; the integration below
+supplies them for the audited world/car effect paths.
+
+## Production integration, October 28, 2026
+
+`Assets.getNativeModelPreparedOptions` now borrows each actual MODEL load
+episode's MAT objects and resolves their current owned arena addresses. It
+preserves raw NULL faces, duplicate-name registry outcomes and alias identity;
+later name registration cannot rebind an older MODEL. Cloned geometries keep
+their resource crosswalk, while released or freed/reused MAT episodes fail
+explicitly. Returned provenance is `host-resource-addresses`.
+
+Car smoke, authored noncar debris and replacement-model fire use this adapter.
+World clipping publishes an explicit current MODEL source with its actual
+raw MAT objects, face flags, smoothing and vertex/UV arrays. Immediate edge-mask
+changes update both collision bytes and prepared source faces. Render-only ACT
+material inheritance never substitutes for a raw NULL pointer. Tile-material
+clones instead have their own allocated positive resource identity.
+
+Followup queries use the existing native finite collector, preserving its
+400-face prefix and generated ACT identities before gameplay eligibility.
+This combines the established host comparator with current live resources;
+it still does not claim the same prefix as an uncaptured Windows heap episode.
+See [source-edge and collector evidence](c2-world-smash-source-edges-re.md).
 
 ## Validation
 

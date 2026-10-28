@@ -2,49 +2,44 @@
 
 Backlog.md is the task source of truth. The former `TODO.md` entries have been migrated with their complete descriptions, evidence, source references, original issue IDs and numeric priorities. Use the installed `backlog` CLI from the repository root; it stores tasks in `backlog/tasks/` without committing automatically or checking remote branches.
 
-## Next implementation queue (updated 2026-10-27)
+## Selected world/effect work (updated 2026-10-28)
 
-| Order | Ticket           | Priority | Ordinal | Reason                                                                                              |
-| ----- | ---------------- | -------- | ------- | --------------------------------------------------------------------------------------------------- |
-| 1     | WLD-05 / TASK-20 | P2       | 2010    | Integrate remaining world cases through the same dispatcher without concurrent conflicting changes. |
-| 2     | DMG-03 / TASK-23 | P2       | 2020    | Complete cross-producer effects, priorities, chronology, ownership and visibility.                  |
+WLD-05 / TASK-20 and DMG-03 / TASK-23 complete the selected independent
+single-player world/car effect scope. No task is currently selected in `next`.
 
-The preceding PHY-11 / TASK-10 is done: valid-volume open-horizon failures now
-reconstruct the actual deformed points, preserving successful native hulls.
-The historical Porker2 chronology is unavailable and was not claimed replayed;
-see [reproduction and validation](../docs/native-hull-re.md).
+- World followups retain the actual native 400-face prefix, generated ACT
+  identities and source face/material ownership. Immediate edge masks publish
+  coherently before deferred tiers. Native pickup ACTs share final-flush grants,
+  once-only hide/audio and original-ACT respawns. Rejected mine pickup hits use
+  the separate native impulse core, without action30 damage/crush.
+- Original replacement MODEL changes start ownerless mode-zero fire from current
+  prepared vertices. Car/noncar/replacement preparation borrows actual MAT
+  identities and owned host-resource addresses, preserving NULL and aliases.
+  Fancy awards use original fonts, HUD slots and shared WASTED priority.
+- Carrier's full18 ACT objectives plus the actual ADMIRAL death, four
+  Stock/Advanced replacement-fire cases and existing crash/debris regressions
+  have focused browser coverage. Original assets stay external and read only.
 
-AI-05 / TASK-17 is also done: asynchronous loading stages the whole fleet, then
-validates current reservations and admits all cars together. Failure/cancellation
-cannot publish a partial population. Subsequent genuine AI crashes remain valid;
-see [startup evidence](../docs/opponent-startup.md). The modest initial
-bumpy-road suspension-history discrepancy is separately in the backlog as
-P3 PHY-20 / TASK-123.
+The earlier PHY-11 / TASK-10, AI-05 / TASK-17 and DMG-01 / TASK-21 remain done.
+P3 PHY-20 / TASK-123 separately owns the modest bumpy-road suspension-history
+startup discrepancy.
 
-DMG-01 / TASK-21 is done: fixed principal-MODEL source links and centroids,
-native default crush for eligible omitted MODEL actors, shared WAM/world debris dispatch, native visual gates, ACT-owned explosion/slick
-frames, race-scoped ACT dependencies and car-scoped MAT/PIX outlets. Held glass
-repair now uses the native shared 25-record/150ms animation; fresh damage cancels
-it, while full repair resets tiers immediately. Original Stock/Advanced inventory,
-numerical tests and Chromium crash/repair checks pass. Whole-engine CRT chronology,
-prepared positive-material order and unresolved native split topology remain
-explicitly in DMG-03 / PUP-04; see [WAM evidence](../docs/c2-wam-effects-re.md).
+The completion boundary remains explicit: ordinary native pedestrian population,
+blood/giblet production and actual cause/physical adapters belong to PED-06 /
+TASK-96 and PED-09 / TASK-99, with their existing transitive prerequisites.
+Positional event audio remains AUD-03 / TASK-71. DMG-02 / TASK-22 retains the
+unresolved, uncatalogued native `parallel` branch; this work also supplies its
+previously duplicated finite-prefix, source-edge and fancy outlets. The original
+78 catalogued track files contain only `away` followups, so no substitute formula
+is invented for the installed parallel branch's uninitialized scratch reads.
 
-These are implementation preferences, not an artificial hard dependency chain.
-No unfinished whole-ticket prerequisite among the original five was demonstrated.
-Shared dispatcher and pool changes should be serialized; independent sub-scopes
-can proceed without waiting for an unrelated reproduction or full subsystem.
-WLD-01/02/03 and the PERF-16/17 admission/quiet providers are already complete.
-The shared shard/ghost allocator also exists; older scope text must not be read
-as a requirement to build it again.
-
-WLD-05's remaining **ordinary-population/native-corpse effect integration** does
-have scoped prerequisites outside `next`: PED-06 / TASK-96 and PED-09 / TASK-99,
-including the latter's existing transitive dependencies. Pedestrian blood/giblet
-allocation also overlaps DMG-03. DMG-02 owns related remaining followup/headup
-details, while its normal shared queues/outlets already exist. Per-ticket plans
-record these boundaries. Numeric priorities and the relative order of the
-remaining selected tickets are unchanged.
+Whole-engine CRT chronology and a historical Windows heap episode are not
+claimed. Connected effect producers share the CRT stream and native phase order;
+positive-material comparison uses real host addresses rather than guessed ranks.
+See [producer coverage and boundaries](../docs/c2-effect-producer-audit.md),
+[world edges/collector](../docs/c2-world-smash-source-edges-re.md),
+[replacement fire](../docs/c2-replacement-fire-re.md) and
+[WAM evidence](../docs/c2-wam-effects-re.md).
 
 Current performance status (2026-10-24): PERF-02 and PERF-04 through PERF-23,
 including all 18 direct PERF-01 subtasks, are done. PERF-03 resolution-policy

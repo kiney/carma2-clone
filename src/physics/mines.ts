@@ -69,6 +69,68 @@ export function mineRandomFloat(
   return low + ((high - low) * randomSample(random)) / 0x8000;
 }
 
+/** Pickup14 rejection calls the core at4d9ad0, not action30 at4de850.
+ * The core adds three hard-coded impulses and clears sleep; it performs no
+ * component-damage draws or crush. Inputs/output use raw physics velocity and
+ * body-axis omega. Caller owns class-specific wake/feedback operations. */
+export function nativePickupMineKick(input: {
+  flags: number;
+  physicsType: number;
+  mass: number;
+  velocity: Vector3;
+  omega: Vector3;
+  /** Installed4d6dc0 returns global65c340, initially1, on the car-class branch. */
+  carImpulseEnabled?: boolean;
+  random?: () => number;
+}): { velocity: Vector3; omega: Vector3 } | null {
+  if (
+    !Number.isInteger(input.flags) ||
+    input.flags < 0 ||
+    input.flags > 0xffffffff ||
+    !Number.isInteger(input.physicsType) ||
+    input.physicsType < 0 ||
+    input.physicsType > 0xff ||
+    !(Math.fround(input.mass) > 0) ||
+    !Number.isFinite(Math.fround(input.mass)) ||
+    [...input.velocity.toArray(), ...input.omega.toArray()].some(
+      (value) => !Number.isFinite(Math.fround(value)),
+    )
+  )
+    throw new Error("Invalid native pickup mine physics");
+  const carClass = !!(input.flags & 0xf0000);
+  if (carClass && input.carImpulseEnabled === false) return null;
+  const random = input.random ?? Math.random;
+  const sample = () => {
+    const value = random();
+    if (!Number.isFinite(value) || value < 0 || value >= 1)
+      throw new Error("Invalid native pickup mine random sample");
+    return Math.floor(value * 32768) / 32768;
+  };
+  const mass = Math.fround(input.mass);
+  const special = !carClass && input.physicsType === 0x10;
+  const low = carClass ? Math.fround(0.7) : special ? 3 : 1;
+  const high = carClass ? 1 : special ? 4 : 2;
+  const angular = special ? 1.75 : 0.5;
+  const velocity = input.velocity.clone();
+  const omega = input.omega.clone();
+  velocity.y = Math.fround(
+    Math.fround(velocity.y) + (low + (high - low) * sample()) / (mass * 6.9),
+  );
+  // Installed stores omegaZ before drawing/storing omegaX.
+  omega.z = Math.fround(
+    Math.fround(omega.z) +
+      ((-angular + 2 * angular * sample()) * 6.283185307179586) / mass,
+  );
+  omega.x = Math.fround(
+    Math.fround(omega.x) +
+      ((-angular + 2 * angular * sample()) * 6.283185307179586) / mass,
+  );
+  velocity.x = Math.fround(velocity.x);
+  velocity.z = Math.fround(velocity.z);
+  omega.y = Math.fround(omega.y);
+  return { velocity, omega };
+}
+
 export interface MineLaunchBody {
   /** All positions, bounds and velocities are in original model/physics units. */
   position: Vector3;

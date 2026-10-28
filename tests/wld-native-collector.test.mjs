@@ -7,6 +7,7 @@ import { captureNativeTrackSceneLayout } from "../src/native-track-scene-layout.
 import { prepareNativeWorldScene } from "../src/native-world-scene.ts";
 import { captureWorldSource } from "../src/world-source.ts";
 import { WorldCollision } from "../src/world.ts";
+import { WorldDestruction } from "../src/world-destruction.ts";
 import { parseTrackSmashables } from "../src/world-smash.ts";
 import { NativeResourceArena } from "../src/native-resource-arena.ts";
 import {
@@ -260,6 +261,56 @@ for (const root of ["data", "adv_data"])
       faces.every(
         (s) => s.native.model.prepared.revision === s.native.model.revision,
       ),
+    );
+    const destruction = new WorldDestruction(scene.group, specs, {
+      collectNativeFollowupFaces: (followup, capacity) => ({
+        surfaces: world.collectFaces(
+          {
+            bounds: new THREE.Box3(
+              new THREE.Vector3(...followup.min),
+              new THREE.Vector3(...followup.max),
+            ),
+            matrix: new THREE.Matrix4().fromArray(followup.trackMatrix),
+          },
+          capacity,
+          true,
+        ),
+        actorObjects: native.actorObjects,
+      }),
+    });
+    const prefix = world.collectFaces(
+      { bounds: all, matrix: new THREE.Matrix4() },
+      400,
+      true,
+    );
+    const followup = destruction.collectFollowupFaces(
+      {
+        min: all.min.toArray(),
+        max: all.max.toArray(),
+        trackMatrix: new THREE.Matrix4().elements,
+      },
+      400,
+    );
+    assert.equal(followup.length, 400);
+    assert.deepEqual(
+      followup.map((face) => [
+        face.actor.identity,
+        face.groupIndex,
+        face.faceIndex,
+      ]),
+      prefix.map((surface) => [
+        native.actorObjects.get(surface.native.actor),
+        surface.native.nativeGroup,
+        surface.native.nativeFace,
+      ]),
+    );
+    assert.deepEqual(
+      followup.map((face) => face.vertices),
+      prefix.map((surface) => [
+        surface.a.toArray(),
+        surface.b.toArray(),
+        surface.c.toArray(),
+      ]),
     );
   });
 
@@ -791,3 +842,193 @@ test("common MODEL registration supplies cold Junknet and global copies retain M
   next.scene.dispose();
   assets.releaseRaceResources();
 });
+
+test("followups retain native prefix and local ACT translation despite renderer hierarchy", () => {
+  const { world, state, objects } = fixture();
+  const root = new THREE.Group();
+  root.add(...[...objects.values()].reverse());
+  state.actors[1].name = "&01live.ACT";
+  objects.get(state.actors[1]).name = "&01live.ACT";
+  objects.get(state.actors[1]).position.set(3, 0, 0);
+  objects.get(state.roots[0]).position.set(2, 0, 0);
+  objects.get(state.roots[0]).add(objects.get(state.actors[1]));
+  root.updateMatrixWorld(true);
+  root.attach(objects.get(state.actors[1]));
+  const destruction = new WorldDestruction(root, [], {
+    collectNativeFollowupFaces: (followup, capacity) => ({
+      surfaces: world.collectFaces(
+        {
+          bounds: query.bounds,
+          matrix: new THREE.Matrix4().fromArray(followup.trackMatrix),
+        },
+        capacity,
+        true,
+      ),
+      actorObjects: objects,
+    }),
+  });
+  const collected = destruction.collectFollowupFaces(
+    {
+      min: [-10, -10, -10],
+      max: [10, 10, 10],
+      trackMatrix: new THREE.Matrix4().elements,
+    },
+    2,
+  );
+  assert.deepEqual(
+    collected.map((face) => face.actor.identity),
+    state.actors.map((actor) => objects.get(actor)),
+  );
+  assert.equal(collected[1].actor.readIdentifier(), "&01live.ACT");
+  objects.get(state.actors[1]).name = "&01!ive.ACT";
+  assert.equal(collected[1].actor.readIdentifier(), "&01!ive.ACT");
+  assert.deepEqual(collected[1].actor.readTranslation(), [3, 0, 0]);
+  assert.equal(
+    destruction.collectFollowupFaces(
+      {
+        min: [-10, -10, -10],
+        max: [10, 10, 10],
+        trackMatrix: new THREE.Matrix4().elements,
+      },
+      1,
+    ).length,
+    1,
+  );
+});
+
+for (const root of ["data", "adv_data"])
+  test(`original ${root} Carrier followup prefix preserves generated ACT identity without renderer registration`, async (t) => {
+    let store;
+    try {
+      store = await createAssetStore(process.env.CARMA2_ROOT || "carma2_orig");
+    } catch (error) {
+      if (/ENOENT|Original installation/.test(String(error))) {
+        t.skip("original installation unavailable");
+        return;
+      }
+      throw error;
+    }
+    const assets = new Assets();
+    assets.manifest = store.manifest;
+    assets.lookup = new Map(
+      store.manifest.map((entry) => [entry.path.toLowerCase(), entry.path]),
+    );
+    assets.bytes = async (path) => {
+      const data = await store.read(path);
+      if (!data) throw new Error(`missing:${path}`);
+      return new Uint8Array(data);
+    };
+    const scene = await assets.scene(`${root}/RACES/Carrier1`, "Carrier1"),
+      layout = captureNativeTrackSceneLayout(scene);
+    assert.equal(layout.resolved, true);
+    const black = material("M14.MAT"),
+      defaultTrack = material("gDefault_track_material");
+    scene.materialArena.allocateMaterial(black);
+    scene.materialArena.allocateMaterial(defaultTrack);
+    const specs = parseTrackSmashables(
+      new TextDecoder().decode(
+        await store.read(`${root}/RACES/Carrier1/Carrier1.TXT`),
+      ),
+    );
+    const modes = [
+      "nochange",
+      "decal",
+      "texturechange",
+      "remove",
+      "replacemodel",
+      "crush",
+    ];
+    const native = prepareNativeWorldScene(scene, {
+      initialLayout: layout,
+      blackMaterial: black,
+      defaultTrackMaterial: defaultTrack,
+      smashSpecs: specs.map((spec) => ({
+        material:
+          spec.trigger.kind === "material"
+            ? (scene.findSourceMaterial(spec.trigger.name) ?? null)
+            : null,
+        triggerType:
+          spec.trigger.kind === "material"
+            ? 0
+            : spec.trigger.kind === "model"
+              ? 1
+              : 2,
+        mode: modes.indexOf(spec.mode),
+        levelCount: spec.levels.length,
+      })),
+      actorSpecs: [],
+      race: null,
+      pixelBits: 16,
+      spawnPedsOnFace: () => {},
+    });
+    const snapshot = captureWorldSource(scene.group, {
+        modelPreparation: "track",
+        initialNativeLayout: layout,
+      }),
+      world = new WorldCollision(scene.group, undefined, snapshot, native);
+    const query = {
+      min: [53, -50, -2.5],
+      max: [58, -42, 2.5],
+      trackMatrix: new THREE.Matrix4().elements,
+    };
+    const collect = (followup, capacity) => ({
+      surfaces: world.collectFaces(
+        {
+          bounds: new THREE.Box3(
+            new THREE.Vector3(...followup.min),
+            new THREE.Vector3(...followup.max),
+          ),
+          matrix: new THREE.Matrix4().fromArray(followup.trackMatrix),
+        },
+        capacity,
+        true,
+      ),
+      actorObjects: native.actorObjects,
+    });
+    const prefix = collect(query, 400).surfaces;
+    const destruction = new WorldDestruction(scene.group, specs, {
+      collectNativeFollowupFaces: collect,
+    });
+    const faces = destruction.collectFollowupFaces(query, 400);
+    assert.equal(faces.length, prefix.length);
+    const generated = prefix
+      .map((surface, index) => ({ surface, face: faces[index] }))
+      .filter(({ surface }) => !native.actorObjects.has(surface.native.actor));
+    assert.ok(
+      generated.length > 0,
+      "the real Carrier core cuboid includes migrated native ACT rows",
+    );
+    for (const { surface, face } of generated) {
+      assert.match(surface.native.actor.provenance, /native MungeFaces/);
+      assert.equal(face.actor.identity, surface.native.actor);
+      assert.equal(face.actor.readIdentifier(), surface.native.actor.name);
+      assert.equal(face.actor.ordinarySpec, undefined);
+      assert.equal(face.actor.numbered.registered, false);
+      assert.ok(
+        surface.actor,
+        "the original source MODEL supplies due-dispatch geometry",
+      );
+      assert.equal(face.source.actor, surface.actor);
+      assert.ok(
+        Number.isInteger(surface.faceIndex),
+        "generated ACT face retains the actual renderer triangle needed by due world mutation",
+      );
+      assert.equal(face.source.faceIndex, surface.faceIndex);
+      assert.notEqual(
+        face.actor.identity,
+        native.faceActors.get(surface.native.actor),
+      );
+    }
+    assert.deepEqual(
+      faces.map((face) => [
+        face.actor.identity,
+        face.groupIndex,
+        face.faceIndex,
+      ]),
+      prefix.map((surface) => [
+        native.actorObjects.get(surface.native.actor) ?? surface.native.actor,
+        surface.native.nativeGroup,
+        surface.native.nativeFace,
+      ]),
+    );
+  });

@@ -434,8 +434,14 @@ try {
 
   const advanceUntilDrained = async (timeoutMs = 15000) => {
     await page.evaluate(() => {
-      window.carma.debugMode.timerFrozen = true;
-      window.carma.paused = false;
+      const c = window.carma;
+      // Contacts teleport the fixture car into objective geometry. Restore its
+      // ordinary recovery position before advancing the real outer-frame clock.
+      c.simulation.recover(c.player);
+      c.pedestrians?.resetCar(c.player.state.position);
+      c.powerups?.resetPath(c.player.state.position);
+      c.debugMode.timerFrozen = true;
+      c.paused = false;
     });
     try {
       await page.waitForFunction(
@@ -467,6 +473,16 @@ try {
       { timeout: 90000 },
     );
     assert.equal(loaded.name, "MISSION: HARD CORE");
+    await page.evaluate(() => {
+      // This regression measures authored world/objective effects. Use the
+      // normal opt-in debug controls so unrelated crash damage during the
+      // required two-second delayed scan cannot close the race's awards.
+      for (const id of ["debug-menu-toggle", "debug-immune"]) {
+        const box = document.getElementById(id);
+        box.checked = true;
+        box.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
     const inventory = await enumerateCarrierTargets();
     assert.equal(inventory.variable, 1);
     assert.equal(inventory.target, 19);
@@ -556,6 +572,17 @@ try {
         missionAfter: c.missionVariables.get(c.raceDefinition.smashVariable),
         pendingBefore,
         pendingAfter: c.simulation.delayedSmashes.count,
+        pendingTargets: c.simulation.delayedSmashes.slots
+          .filter(Boolean)
+          .map((entry) => ({
+            kind: entry.kind,
+            target: entry.context.payload?.face.actor.readIdentifier(),
+            targetSpec: entry.context.payload?.targetSpec?.trigger ?? null,
+            sourceModel: entry.context.payload?.face.source?.actor?.name,
+            dueMs: entry.context.payload?.dueMs,
+          })),
+        dueRecordsBefore:
+          c.worldFollowups.options.testCapture.dueRecords.length,
         status: c.race.status,
       };
     });
@@ -569,10 +596,68 @@ try {
     assert.equal(core.changed, true);
     assert.equal(core.missionBefore, 17);
     assert.equal(core.missionAfter, 18);
+    assert.equal(core.pendingBefore, 0);
     assert.equal(
       core.pendingAfter,
-      core.pendingBefore,
-      "the Core is the eighteenth authored ACT increment; it does not create a nineteenth WIGGLYBIT increment",
+      8,
+      "the native Core cuboid includes eight actual pickup ACTs",
+    );
+    assert.ok(
+      core.pendingTargets.every(
+        (entry) =>
+          entry.kind === "smash" &&
+          /^&£00\d{4}\.ACT$/.test(entry.target) &&
+          entry.targetSpec === null &&
+          entry.sourceModel === "&74POWERUPB.ACT",
+      ),
+      `the pending targets are native pickup ACTs, never an extra WIGGLYBIT objective: ${JSON.stringify(core.pendingTargets)}`,
+    );
+    await advanceUntilDrained();
+    const coreDue = await page.evaluate(
+      (before) => ({
+        records:
+          window.carma.worldFollowups.options.testCapture.dueRecords.slice(
+            before,
+          ),
+        playerKnackered: window.carma.player.knackered,
+        awardsClosed: !!window.carma.race.awardsClosed,
+        pickupStates: window.carma.powerups.pickups
+          .filter((entry) =>
+            /^&£00(?:010[7-9]|011[0-4])\.ACT$/.test(entry.object.name),
+          )
+          .map((entry) => ({
+            name: entry.object.name,
+            collected: entry.collected,
+            visible: entry.object.visible,
+          })),
+        queuedPowerups: window.carma.simulation.smashPowerupQueue.count,
+      }),
+      core.dueRecordsBefore,
+    );
+    assert.equal(coreDue.records.length, 8);
+    assert.deepEqual(
+      coreDue.records.map((record) => record.target).sort(),
+      core.pendingTargets.map((entry) => entry.target).sort(),
+    );
+    assert.ok(
+      coreDue.records.every(
+        (record) =>
+          record.route === "world" &&
+          record.missionBefore === 18 &&
+          record.missionAfter === 18,
+      ),
+    );
+    assert.equal(coreDue.playerKnackered, false);
+    assert.equal(coreDue.awardsClosed, false);
+    assert.equal(coreDue.pickupStates.length, 8);
+    assert.ok(
+      coreDue.pickupStates.every((entry) => entry.collected && !entry.visible),
+      `native followup pickup ACTs must be consumed: ${JSON.stringify(coreDue.pickupStates)}`,
+    );
+    assert.equal(
+      coreDue.queuedPowerups,
+      0,
+      "normal final flush delivers the pickup grants",
     );
     const afterCore = await page.evaluate(() => {
       const c = window.carma;
@@ -618,7 +703,11 @@ try {
       };
       const frame = {
         cameraPosition: position,
-        gameTimeMs: Math.max(1000, c.simulation.destruction.timeMs + 1),
+        gameTimeMs: Math.max(
+          1000,
+          c.stats.gameTimeMs + 1,
+          c.simulation.destruction.timeMs + 1,
+        ),
         combatOwner: c.player,
         threats: [],
       };
@@ -662,6 +751,7 @@ try {
       inventory,
       sourceContacts,
       core,
+      coreDue,
       afterCore,
       admiralDeath,
     };

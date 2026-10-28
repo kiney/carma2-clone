@@ -59,9 +59,12 @@ Float32 smoothing accumulation order among coincident corners.
 
 DAT material zero resolves to the native null face material. An inherited ACT
 material does not replace that pointer in model preparation. Thus its group is
-first regardless of native allocation addresses. When positive materials are
-resolved, their relative address order remains unavailable to the browser.
-A provided native pointer map supports the full ordering and same-pointer aliases.
+first regardless of native allocation addresses. Production now supplies actual
+retained MAT identities and their live owned arena addresses through
+`Assets.getNativeModelPreparedOptions`, preserving aliases and NULL. This
+implements the native comparator under the declared host allocator; it does not
+claim historical Windows heap order.
+A provided pointer map supports the full ordering and same-pointer aliases.
 Otherwise, positive groups retain browser first-occurrence order and the result
 explicitly reports `browser-positive-material-approximation`. A model without
 null faces also reports `browser-first-approximation` for its first group.
@@ -90,9 +93,10 @@ The sampler therefore captures **all contiguous prepared groups**, with
 | Copcar | MEDIA.DAT     |         10 |                            26 |
 
 All three browser first-face groups originally use a positive material. Null-first
-selection corrects that prefix. Raw wreck indices beyond the exact prefix still
-need native positive-material pointer order for full native correspondence;
-no allocation order is guessed from material names or loading chronology.
+selection corrects that prefix. Raw wreck indices beyond that prefix now use the live host-resource pointer
+map. Comparing a particular original Windows episode would still require its
+material-address capture; no allocation order is guessed from material names or
+loading chronology.
 
 ## Mode-1 attachment and cockpit adjustment
 
@@ -139,8 +143,9 @@ each sample reads the current render buffer.
 
 Geometry with sourceFaces/sourcePositions/sourceVertexIndices uses preparation
 reconstruction. Geometry lacking those data retains an explicitly diagnosed
-render-only approximation. Missing native positive-material addresses remain
-an ordering limitation. The current DAT reader does not retain source model
+render-only approximation. Standalone callers without positive-material pointers
+retain the diagnosed ordering fallback; production car/noncar/replacement sources
+use the resource adapter described above. The current DAT reader does not retain source model
 pivot/crease metadata; explicit sampler pivot/cosine providers are supported.
 APC/austerity welding is outside this DONT_WELD path. Exact x87 intermediate
 rounding and initial resource allocator addresses have not been reproduced.

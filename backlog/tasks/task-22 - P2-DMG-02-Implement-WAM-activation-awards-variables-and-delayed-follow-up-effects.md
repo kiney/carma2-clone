@@ -6,7 +6,7 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-28 22:34'
 labels:
   - priority-2
   - DMG-02
@@ -37,3 +37,12 @@ WAM activation boxes, follow-up side effects, room/script fields, awards and var
 
 [WAM evidence](../../docs/c2-wam-effects-re.md), [damage.ts](../../src/damage.ts), [main.ts](../../src/main.ts)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-28 22:34
+---
+WLD-05/DMG-03 (2026-10-28) now supply this task's previously duplicated finite native prefix, generated ACT/source identities, immediate source-edge flags, direct pickup followups and original-font fancy outlet. Retain the installed parallel-direction uncertainty explicitly: that branch divides uninitialized scratch, and all111 catalogued Stock/Advanced entries are away. Do not invent normalized force semantics or duplicate completed providers. See docs/c2-world-smash-source-edges-re.md and docs/c2-effect-producer-audit.md.
+---
+<!-- COMMENTS:END -->
