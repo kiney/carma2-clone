@@ -1,5 +1,11 @@
 # PERF-01: frame-time investigation
 
+2026-10-29 subsequent Screwie report: [runaway wreck CPU capture](screwie-runaway-car-stall.md)
+establishes a separate genuine physics stall: up to 1.45s per tick and 5.84s per
+five-tick update, concentrated in FAIR/bumper world contact collection and
+angular world guards. PERF-24 / TASK-129 is P1 in `next`; the original energy
+injection remains unknown. This does not reinterpret the earlier RAF-only case.
+
 2026-10-29 live update: [browser frame-delivery evidence](live-browser-cadence.md)
 separates a reproduced approximately 1FPS RAF cadence from engine CPU work.
 Paused 100ms timer callbacks remained timely; activating the browser restored
