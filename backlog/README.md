@@ -4,19 +4,18 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-29)
 
-The user selected the following implementation order. ANI-01/PED-04 form the first
-integration stage; PED-04 is done and ANI-01 remains active. The four P2
-pedestrian tickets follow in `next`.
+The user selected the following implementation order. ANI-01/PED-04 complete the
+first animation/resource stage. The four P2 pedestrian tickets follow in `next`.
 Existing numeric priorities remain unchanged: selection order is explicit and
-must not be inferred from priority alone. WIP is one ticket, below the limit3.
+must not be inferred from priority alone. WIP is empty, below the limit3.
 
-| Stage | Ticket                                | Status                  | Priority | Purpose                                                                                                 |
-| ----- | ------------------------------------- | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | ANI-01 wip; PED-04 done | P3       | Original FORM/MODEL selection and BON/SKL root/bone presentation; resolve the systematic CitySwat lean. |
-| 2     | PED-06 / TASK-96                      | next                    | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                   |
-| 3     | PED-07 / TASK-97                      | next                    | P2       | Grounding, living falls and recovery ownership.                                                         |
-| 4     | PED-08 / TASK-98                      | next                    | P2       | Visible severing and articulated body contacts.                                                         |
-| 5     | PED-09 / TASK-99                      | next                    | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                          |
+| Stage | Ticket                                | Status | Priority | Purpose                                                                                                     |
+| ----- | ------------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------- |
+| 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices. |
+| 2     | PED-06 / TASK-96                      | next   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                       |
+| 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                             |
+| 4     | PED-08 / TASK-98                      | next   | P2       | Visible severing and articulated body contacts.                                                             |
+| 5     | PED-09 / TASK-99                      | next   | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                              |
 
 P1 PED-10 / TASK-125 was inserted and completed during this stage: already
 visible retained pedestrians inside the native process box now resume movement
@@ -31,10 +30,12 @@ and tipping after capacity release. The query that caused the earlier 549 failed
 actors is still unknown; see [evidence and adaptation](../docs/noncar-capacity-recovery.md).
 QUA-12 / TASK-124 retains its separate contact/effect-fixture scope.
 
-ANI-01 living presentation is integrated and browser-validated, including the
-CitySwat correction. It remains open for native death/morph and specialized
-head/model/angle/prepared-vertex rendering; see
-[the exact milestone and remaining scope](../docs/c2-ped-presentation-re.md).
+ANI-01 is complete for its animation/render scope, including native death and
+morph playback, head/blood model changes, body/head powerup geometry, shared-CRT
+mutant angles and exact prepared fire vertices. Stock/Advanced populations and
+hardware Chromium are validated. Native physical population, recovery, severing
+and contact-cause owners remain in the selected next tickets; see
+[implemented behavior and ownership](../docs/c2-ped-presentation-re.md).
 
 The animation stage preserves current gameplay transport until the corresponding
 native physical owner is integrated. It must not duplicate population identities,

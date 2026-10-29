@@ -728,8 +728,8 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      16,
-      "New City warns once per unsupported definition after combat and pedestrian-map registration",
+      11,
+      "New City no longer warns for supported body/head/mutant animation effects",
     );
     assert.equal(system.group.children.length, system.pickups.length);
     system.dispose();

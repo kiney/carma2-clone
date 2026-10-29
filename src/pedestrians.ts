@@ -6,6 +6,17 @@ import * as THREE from "three";
 import { Assets } from "./content";
 import { loadNativePedAssets, type NativePedAssets } from "./ped-native-assets";
 import { NativePedPresentation } from "./ped-presentation";
+import { NativePedRenderEffects } from "./ped-render-effects";
+import {
+  NativePedDeadMaterialRegistry,
+  prepareNativePedDeadModels,
+  type NativePedDeadModels,
+} from "./ped-dead-models";
+import {
+  readNativePedMoveFSM,
+  planNativePedMove,
+  type NativePedMoveFSM,
+} from "./ped-move-fsm";
 import { WorldCollision } from "./world";
 import {
   DEFAULT_PED_SETTINGS,
@@ -107,6 +118,13 @@ export interface PedCombatSource {
   velocity: THREE.Vector3;
   /** Raw special-volume multiplier, not global low-gravity powerup state. */
   gravityMultiplier?: number;
+  pedestrianAnimation?: {
+    bodyScale: readonly [number, number, number];
+    headScale: number;
+    mutantSpeed: number;
+    revision: number;
+  };
+  goreLevel?: number;
   owner?: object;
   /** Repulse links retain native pointers to live world COM positions. */
   readPosition?: () => THREE.Vector3;
@@ -266,6 +284,7 @@ interface Ped {
   burningUntilMs: number;
   napalmSlot: number;
   settled: boolean;
+  deadModelSet?: 0 | 1;
   profile: PedProfile;
   proximity: PedProximity;
   faceCache?: {
@@ -298,6 +317,13 @@ export interface PedFrameOptions {
   cameraOrientation?: THREE.Quaternion;
   immortalPedestrians?: boolean;
   gravityMultiplier?: number;
+  pedestrianAnimation?: {
+    bodyScale: readonly [number, number, number];
+    headScale: number;
+    mutantSpeed: number;
+    revision: number;
+  };
+  goreLevel?: number;
   readGravityMultiplier?: (position: THREE.Vector3) => number | undefined;
 }
 interface PedCombatRay {
@@ -615,6 +641,17 @@ export class PedestrianSystem {
   >();
   private peds: Ped[] = [];
   private readonly nativeTemplates = new Map<string, NativePedAssets>();
+  private readonly nativeVisuals = new Map<string, NativePedRenderEffects>();
+  private readonly nativeDeadModels = new Map<string, NativePedDeadModels>();
+  private readonly nativeDeadMaterials = new NativePedDeadMaterialRegistry();
+  private moveFSM?: NativePedMoveFSM;
+  private visualRevision = -1;
+  private visualBodyX = 1;
+  private lastAnimationTime?: number;
+
+  nativePresentation(actor: THREE.Object3D): NativePedPresentation | undefined {
+    return this.peds.find((ped) => ped.object === actor)?.presentation;
+  }
   private previousCar: THREE.Vector3;
   private random = randomGenerator(0x43a2c9);
   private elapsed = 0;
@@ -837,11 +874,23 @@ export class PedestrianSystem {
     const names = requested.length
       ? requested
       : ["Blokebl", "Bandsman", "Attend2", "Bismanbm"];
+    if (assets instanceof Assets) {
+      const executable =
+        assets.resolve("carma2_HW.exe") ?? assets.resolve("carma2_SW.exe");
+      if (executable)
+        system.moveFSM = readNativePedMoveFSM(await assets.bytes(executable));
+      else
+        system.warnings.push(
+          "Original pedestrian move fallback table unavailable: missing C2 executable",
+        );
+    }
     const templates = new Map<string, THREE.Group>();
     const profiles = new Map<string, PedProfile>();
     for (const name of names) {
       if (assets instanceof Assets) {
         let template: NativePedAssets | undefined;
+        let deadModels: NativePedDeadModels | undefined;
+        let effects: NativePedRenderEffects | undefined;
         try {
           template = await loadNativePedAssets(
             assets,
@@ -851,15 +900,25 @@ export class PedestrianSystem {
           );
           // Reject unsupported FORM render prerequisites once, before any
           // ordinary population identity can borrow this template.
-          const probe = new NativePedPresentation(template);
+          deadModels = prepareNativePedDeadModels(name, template, {
+            materialRegistry: system.nativeDeadMaterials,
+            nullFaceMaterial: () => template!.inheritedActorMaterial,
+          });
+          effects = new NativePedRenderEffects(template, deadModels);
+          const probe = new NativePedPresentation(template, { effects });
           probe.dispose();
           system.nativeTemplates.set(name.toLowerCase(), template);
+          system.nativeVisuals.set(name.toLowerCase(), effects);
+          system.nativeDeadModels.set(name.toLowerCase(), deadModels);
+          system.warnings.push(...deadModels.diagnostics);
           templates.set(name.toLowerCase(), template.group);
           profiles.set(
             name.toLowerCase(),
             await loadPedProfile(assets, name, dataRoot, template),
           );
         } catch (error) {
+          effects?.dispose();
+          deadModels?.dispose();
           template?.dispose();
           const reason = `Pedestrian ${name}: ${String(error)}`;
           system.warnings.push(reason);
@@ -945,7 +1004,31 @@ export class PedestrianSystem {
           choices[pedRandomInteger(system.random, 0, choices.length - 1)];
         const native = system.nativeTemplates.get(name);
         const presentation = native
-          ? new NativePedPresentation(native)
+          ? new NativePedPresentation(native, {
+              effects: system.nativeVisuals.get(name),
+              nextCrtInteger: () =>
+                Math.floor(
+                  (options.combatRandom ?? sharedNativeRandom.random)() * 32768,
+                ),
+              resolveMove: (id) => {
+                if (!system.moveFSM) return id;
+                const plan = planNativePedMove(system.moveFSM, {
+                  requestedId: id,
+                  previousAction: 6,
+                  requestedAction: -1,
+                  walkSpeed: -1,
+                  pedestrianSpeedFactor: 1,
+                  removedBoneMask: 0,
+                  drunk: false,
+                  dancing: false,
+                  panicking: false,
+                  availableMoves: new Set(native.moves.keys()),
+                });
+                if (plan.status !== "complete")
+                  throw new Error(plan.requiredProviders.join(", "));
+                return plan.moveId;
+              },
+            })
           : undefined;
         const visual = presentation?.group ?? templates.get(name)!.clone(true);
         const position = pedTrianglePoint(
@@ -1397,7 +1480,11 @@ export class PedestrianSystem {
     const physicalDeath =
       !inactiveBurnScore && (gravity === undefined || gravity >= 1);
     ped.alive = false;
-    ped.action = moveId === 113 ? PedAction.Dead : PedAction.Impacting;
+    ped.deadModelSet =
+      physicalDeath && (this.combatFrame.goreLevel ?? 1) > 0 ? 1 : 0;
+    // Installed KillPedestrian commits action6 independently of the requested
+    // death BON. Rigid transport continues through its separate corpse owner.
+    ped.action = PedAction.Dead;
     ped.moveId = moveId;
     ped.actionSinceMs = timeMs;
     ped.fallTime = physicalDeath ? 0 : 2;
@@ -1804,6 +1891,27 @@ export class PedestrianSystem {
     dt = THREE.MathUtils.clamp(dt, 0, 0.1);
     this.elapsed += dt;
     this.combatFrame = frame;
+    const visual = frame.pedestrianAnimation;
+    if (visual && visual.revision !== this.visualRevision) {
+      for (const effects of this.nativeVisuals.values()) {
+        effects.setBodyScale(visual.bodyScale);
+        effects.setHeadScale(visual.headScale);
+      }
+      const ratioX = Math.fround(visual.bodyScale[0] / this.visualBodyX);
+      for (const ped of this.peds)
+        ped.presentation?.refreshScaledPose(ratioX, (p) => {
+          for (let attempt = 0; attempt <= 10; attempt++) {
+            const y = this.groundAt(p.x, p.z, p.y);
+            if (y !== null && y >= -100) return y;
+            p.y = Math.fround(p.y + Math.fround(0.2));
+          }
+          return null;
+        });
+      this.visualBodyX = visual.bodyScale[0];
+      this.visualRevision = visual.revision;
+      this.dormantRenderActors.clear();
+      this.presentationRevision++;
+    }
     const timeMs = frame.gameTimeMs ?? this.elapsed * 1000,
       from = this.previousCar,
       to = car.position,
@@ -2304,6 +2412,7 @@ export class PedestrianSystem {
     this.burnExplosion?.update(timeMs);
     this.blood?.update(dt, timeMs);
     this.nearReset = false;
+    this.lastAnimationTime = Math.trunc(timeMs) >>> 0;
     this.previousCar.copy(car.position);
   }
 
@@ -2325,6 +2434,18 @@ export class PedestrianSystem {
       periodMs: period,
       timeMs: Math.trunc(timeMs) >>> 0,
       alive: ped.alive,
+      action: ped.action,
+      deadModelSet: ped.deadModelSet,
+      still: !ped.alive && ped.settled,
+      mutantSpeed: this.combatFrame.pedestrianAnimation?.mutantSpeed ?? 0,
+      sameTimeGuard: this.lastAnimationTime === Math.trunc(timeMs) >>> 0,
+      headSequence: ped.alive
+        ? ped.action === PedAction.Walking
+          ? ("calm" as const)
+          : ped.lastScareMs
+            ? ("scare" as const)
+            : undefined
+        : undefined,
       legacyRigid: ped.corporeal,
       legacyFall: !ped.alive
         ? {
@@ -2340,6 +2461,11 @@ export class PedestrianSystem {
       ? presentation.reset(input)
       : presentation.update(input);
     if (ped.alive) ped.footOffset = presentation.groundingOffset;
+    else if (
+      result.status === "complete" &&
+      presentation.instance.moveId !== null
+    )
+      ped.moveId = presentation.instance.moveId;
     for (const required of result.requiredProviders) {
       const warning = `${ped.object.name}: animation provider required: ${required}`;
       if (!this.warnings.includes(warning)) this.warnings.push(warning);
@@ -2442,6 +2568,7 @@ export class PedestrianSystem {
       ped.runPeriod = 100;
       ped.nextTurnMs = this.nextTurn(ped.movement, 0);
       ped.fallTime = 0;
+      ped.deadModelSet = 0;
       ped.heading = ped.initialYaw;
       ped.object.position.copy(ped.home);
       ped.object.rotation.set(0, ped.heading, 0);
@@ -2468,9 +2595,13 @@ export class PedestrianSystem {
   }
   dispose() {
     this.previousCamera = undefined;
+    this.lastAnimationTime = undefined;
     this.dormantRenderActors.clear();
     this.presentationRevision++;
     this.clearCombatRays();
+    for (const ped of this.peds)
+      if (ped.burningUntilMs > 0)
+        this.options.onNapalmExtinguished?.(ped.object);
     this.blood?.dispose();
     for (let slot = 0; slot < NAPALM_CAPACITY; slot++) this.releaseNapalm(slot);
     this.burnExplosion?.dispose();
@@ -2494,6 +2625,11 @@ export class PedestrianSystem {
         materials.add(m),
       );
     });
+    for (const effects of this.nativeVisuals.values()) effects.dispose();
+    this.nativeVisuals.clear();
+    for (const models of this.nativeDeadModels.values()) models.dispose();
+    this.nativeDeadModels.clear();
+    this.nativeDeadMaterials.dispose();
     for (const template of this.nativeTemplates.values()) template.dispose();
     this.nativeTemplates.clear();
     geometries.forEach((g) => g.dispose());

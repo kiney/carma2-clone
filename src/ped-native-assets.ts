@@ -5,6 +5,7 @@ import * as THREE from "three";
 import type { Assets } from "./content";
 import { createModelGeometry } from "./render-geometry";
 import type { DatModel } from "./formats";
+import type { ModelPreparedOptions } from "./car-smoke";
 import {
   parsePedForm,
   parsePedPersonalitySimpleBody,
@@ -14,6 +15,7 @@ import {
   type PedForm,
   type PedPersonalityMove,
   type PedSimpleBodyProfile,
+  type PedVector,
 } from "./ped-form";
 import { parsePedMotion, type PedMotion } from "./ped-motion";
 
@@ -26,11 +28,15 @@ export interface NativePedModelVariant {
   modelBounds: ReadonlyMap<string, THREE.Box3>;
   /** Exact resolved source MODEL identity; a flat actor has one MODEL. */
   sourceModels: readonly string[];
+  /** Actual MODEL-load material addresses, independent of render MAT slots. */
+  preparedOptions?: ModelPreparedOptions;
 }
 export interface NativePedBoneAsset {
   index: number;
   name: string;
   parent: number | null;
+  /** FORM remap's second triplet; NULL means the source identity mapping. */
+  powerupRemap?: PedVector | null;
   massKg: number;
   mass: number;
   collisionType: string | null;
@@ -287,6 +293,10 @@ export async function loadNativePedAssets(
       let geometry = geometryCache.get(cacheKey);
       if (!geometry) {
         geometry = createModelGeometry(remapped);
+        const sourceGeometry = scene.sourceModelGeometries?.get(model);
+        if (sourceGeometry)
+          geometry.userData.nativePedPreparedOptions =
+            assets.getNativeModelPreparedOptions(sourceGeometry);
         geometryCache.set(cacheKey, geometry);
       }
       const materials = scene.modelMaterials
@@ -339,6 +349,9 @@ export async function loadNativePedAssets(
           actor,
           modelBounds: new Map([[model.name, bounds]]),
           sourceModels: [model.name],
+          preparedOptions: geometry.userData.nativePedPreparedOptions as
+            | ModelPreparedOptions
+            | undefined,
         };
         variants.push({ identifier, ...built });
         group.add(built.actor);
@@ -350,6 +363,7 @@ export async function loadNativePedAssets(
         index,
         name: bone.name,
         parent: bone.parent,
+        powerupRemap: remap?.get(bone.name)?.powerup ?? null,
         massKg: bone.massKg,
         mass: bone.mass,
         collisionType: bone.collisionType,

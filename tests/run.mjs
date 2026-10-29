@@ -1,3 +1,7 @@
+import "./ped-animation-special.test.mjs";
+import "./ped-render-effects.test.mjs";
+import "./ped-animation-powerups.test.mjs";
+import "./ped-presentation-complete.test.mjs";
 import "./hierarchy-quiet-integration.test.mjs";
 import "./hierarchy-quiet.test.mjs";
 import "./native-noncar-clone.test.mjs";

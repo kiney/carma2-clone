@@ -1,3 +1,4 @@
+import { prepareNativePedVertexSampler } from "./ped-render-effects";
 import {
   assessPopulationAvailability,
   type PopulationLoad,
@@ -3067,63 +3068,32 @@ async function loadPedestrians(text: string, loadGeneration: number) {
         if (rigid) smoke?.stopObject(rigid);
       },
       onNapalmIgnited: (actor, velocity, omega) => {
-        let mesh: THREE.Mesh<THREE.BufferGeometry> | undefined;
-        actor.traverse((child) => {
-          if (
-            !mesh &&
-            child instanceof THREE.Mesh &&
-            child.geometry.getAttribute("position")
-          )
-            mesh = child;
-        });
-        if (!mesh || !smoke) return;
-        const geometry = mesh.geometry,
-          positions = geometry.getAttribute("position");
-        const group = geometry.groups[0];
-        const sourceIndices = geometry.userData.sourceVertexIndices as
-          | Uint32Array
-          | undefined;
-        // Adapter maps the first render group to unique original vertices.
-        // Exact BRender prepared-vertex ordering remains an animation gap.
-        const candidates = Array.from(
-          { length: group?.count ?? geometry.index?.count ?? positions.count },
-          (_, i) =>
-            geometry.index?.getX((group?.start ?? 0) + i) ??
-            (group?.start ?? 0) + i,
-        );
-        const seen = new Set<number>();
-        const indices = candidates.filter((index) => {
-          const id = sourceIndices?.[index] ?? index;
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return true;
-        });
-        if (!indices.length) return;
-        // Preserve the native inclusive draw; protect its one-past-end result
-        // instead of reading invalid BRender memory or silently losing the fire.
-        const vertex = Math.min(
-          indices.length - 1,
-          Math.floor(sharedNativeRandom.random() * (indices.length + 1)),
-        );
-        const rigid = { velocity, omega, actor };
+        const presentation = system.nativePresentation(actor);
+        const root = presentation?.instance.bones[0];
+        if (!root?.model || !smoke) return;
+        let model = root.model;
+        let sampler = prepareNativePedVertexSampler(model);
+        // Installed4ceaa0 samples the first prepared group's uint16 count
+        // inclusively. A one-past-allocation index fails safely, never clamps.
+        const count = sampler.groups[0]?.count ?? 0;
+        const vertex = Math.floor(sharedNativeRandom.random() * (count + 1));
+        const rigid = { velocity, omega, actor: root.actor };
         napalmSmoke.set(actor, rigid);
         smoke.spawnColumn({
           mode: 2,
-          actor,
+          actor: root.actor,
           rigid,
           colour: 0,
           vertex,
           lifetimeMs: 25000,
           sampleVertex: (index, out) => {
-            const selected = indices[index];
-            if (selected === undefined) return false;
-            mesh!.updateWorldMatrix(true, false);
-            actor.updateWorldMatrix(true, false);
-            out
-              .fromBufferAttribute(positions, selected)
-              .applyMatrix4(mesh!.matrixWorld)
-              .applyMatrix4(actor.matrixWorld.clone().invert());
-            return true;
+            const current = root.model;
+            if (!current) return false;
+            if (current !== model) {
+              model = current;
+              sampler = prepareNativePedVertexSampler(current);
+            }
+            return sampler.sampleVertex(index, out);
           },
         });
       },
@@ -3945,6 +3915,7 @@ function animate(now: number) {
         },
         {
           cameraPosition: camera.position,
+          pedestrianAnimation: powerups?.pedestrianAnimationState,
           gameTimeMs: stats.gameTimeMs,
           physicsTickMs: Math.round((simulation?.elapsed ?? 0) * 1000) >>> 0,
           framePeriodMs: gameFrame.periodMs,

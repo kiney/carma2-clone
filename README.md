@@ -196,18 +196,17 @@ pause/resume in Chromium.
 
 Production world queries now use the native finite collector, prepared MODEL-group order, interleaved ACT callbacks and a separate PHIL-ordered drivable wheel phase. Live smashed/grooved geometry retains original DAT provenance. Original MAT coefficients drive Gouraud/specular shading, per-material fog and texture sampling, with shared resource registries released between races. Native `OneLessPed` counts bind to existing population identities and update group/mission counters once before scoring; full native population movement remains a separate task. See [world collector evidence](docs/c2-wld-production-collector-re.md), [material rendering](docs/c2-native-material-render-re.md) and [pedestrian count integration](docs/c2-ped-native-gameplay-re.md).
 
-Ordinary pedestrians now use their original FORM/MODEL definitions and BON/SKL
-root/bone poses for living animation. The renderer retains exact named model
-variants, remapped attachments, authored frame periods and Stock/Advanced resource
-trees; it no longer keeps the CitySwat package ACT's tilted default pose.
-Existing gameplay movement still owns displacement, and legacy corpse/repulsion
-transport stays explicit until native population physics is integrated. ANI-01
-remains open for death-animation, morph, altered head/model and prepared-vertex
-rendering cases; this is not a claim of complete pedestrian parity. See
-[asset selection](docs/c2-ped-asset-selection-re.md) and
-[presentation evidence](docs/c2-ped-presentation-re.md).
+Ordinary pedestrians use original FORM/MODEL definitions and BON/SKL root/bone
+poses for living and death animation. ANI-01 includes source morph transitions,
+head/blood model changes, shared-CRT mutant corpses, body/head visual powerups and
+exact prepared-vertex fire sampling. Original arrays remain unchanged; mutable
+resources are shared privately per personality. Full native population physics,
+recovery and articulated/severed contacts remain PED-06/07/08/09. See
+[animation evidence and ownership](docs/c2-ped-presentation-re.md).
+
 `npm run test:ped-animation` checks original Stock/Advanced populations,
-animation advance, parent transforms, ordinary sweep/count/reset and race cleanup
+animation advance, death/Stillify, body/head/mutant powerups, parent transforms,
+ordinary sweep/count/reset and race cleanup
 in Chromium.
 
 ## Camera

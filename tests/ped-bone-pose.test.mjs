@@ -483,3 +483,48 @@ for (const [person, formName, frameCapture, mass, bounds] of [
     );
     assert.notDeepEqual(meshMin, profile.bounds.min);
   });
+
+test("mutant dispatch respects ascending immediate-parent gates and samples no root or authored bytes", () => {
+  const samples = [0, 32767, 16384, 0, 32767, 16384];
+  let draws = 0;
+  const p = input({
+    removedBoneMask: 2,
+    mutantSpeed: 2,
+    mutantHealth: -1,
+    mutantAction: 6,
+    mutantSameTimeGuard: false,
+    nextCrtInteger: () => samples[draws++],
+  });
+  const original = [...p.angles],
+    r = poseNativePedBones(p);
+  assert.equal(r.status, "posed");
+  assert.deepEqual(
+    r.updatedBoneIndices,
+    [3, 4],
+    "native gate checks immediate parent only",
+  );
+  assert.equal(r.randomDrawCalls, 6);
+  assert.equal(draws, 6);
+  assert.deepEqual(
+    [...r.sampledAngles],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 226, 30, 0, 226, 30, 0],
+  );
+  assert.deepEqual([...p.angles], original);
+  for (const index of [1, 2]) close([...r.poses[index]], p.currentPoses[index]);
+  for (const override of [
+    { mode: 2 },
+    { mutantHealth: 1 },
+    { mutantAction: 5 },
+    { mutantSameTimeGuard: true },
+  ]) {
+    const gated = poseNativePedBones({
+      ...p,
+      ...override,
+      nextCrtInteger: () => {
+        throw new Error("unexpected CRT draw");
+      },
+    });
+    assert.equal(gated.randomDrawCalls, 0);
+    assert.deepEqual(gated.requiredProviders, []);
+  }
+});

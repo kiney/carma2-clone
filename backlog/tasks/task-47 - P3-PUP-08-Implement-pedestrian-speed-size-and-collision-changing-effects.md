@@ -4,11 +4,12 @@ title: '[P3] PUP-08: Implement pedestrian speed, size, and collision-changing ef
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-29 10:30'
 labels:
   - priority-3
   - PUP-08
   - powerups
-  - legacy-missing
+  - legacy-partial
 dependencies: []
 references:
   - src/powerups.ts
@@ -33,3 +34,9 @@ Change pedestrian speed and size, along with their collision effects. Actions `1
 
 [powerups.ts](../../src/powerups.ts), [pedestrians.ts](../../src/pedestrians.ts)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+ANI-01 now supplies normal action2 grants/cancellation/expiry, private living/dead MODEL scaling with original per-bone remaps, attachment scaling and source ScaleForm render-origin refresh. This completes its rendering consumer, not this whole task: action1 speed behavior and native PHIL body/joint/collision resizing and propagation remain here/PED-06. See docs/c2-ped-render-effects-re.md and docs/c2-ped-presentation-re.md.
+<!-- SECTION:NOTES:END -->

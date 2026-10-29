@@ -85,8 +85,8 @@ export interface PowerupEvent {
 }
 
 const implementedActions = new Set([
-  0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27,
-  28, 29, 30, 31, 34, 35, 36, 37, 38, 45, 46, 47, 48, 49, 51,
+  0, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26,
+  27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 45, 46, 47, 48, 49, 51,
 ]);
 
 const combatAbilityActions = new Set([37, 38, 45, 49]);
@@ -243,7 +243,16 @@ interface ActiveEffect {
     | 28
     | 29
     | 31
+    | 2
+    | 32
+    | 33
     | 48;
+}
+export interface PedestrianAnimationState {
+  readonly bodyScale: readonly [number, number, number];
+  readonly headScale: number;
+  readonly mutantSpeed: number;
+  readonly revision: number;
 }
 export interface PowerupAbility {
   definition: PowerupDefinition;
@@ -278,6 +287,23 @@ export class PowerupSystem {
   private underwaterAbility = false;
   private instantHandbrake = false;
   private mapPedestrians = false;
+  private pedBodyScale: [number, number, number] = [1, 1, 1];
+  private pedHeadScale = 1;
+  private pedMutantSpeed = 0;
+  private pedAnimationRevision = 0;
+  /** Current global pedestrian visual-animation modifiers, copied on read. */
+  get pedestrianAnimationState(): PedestrianAnimationState {
+    return Object.freeze({
+      bodyScale: Object.freeze([...this.pedBodyScale]) as unknown as readonly [
+        number,
+        number,
+        number,
+      ],
+      headScale: this.pedHeadScale,
+      mutantSpeed: this.pedMutantSpeed,
+      revision: this.pedAnimationRevision,
+    });
+  }
   get pedestriansOnMap(): boolean {
     return this.mapPedestrians;
   }
@@ -800,6 +826,18 @@ export class PowerupSystem {
       case 31:
         this.proxyRayDistanceSquared = 0;
         break;
+      case 2:
+        this.pedBodyScale = [1, 1, 1];
+        this.pedAnimationRevision++;
+        break;
+      case 32:
+        this.pedHeadScale = 1;
+        this.pedAnimationRevision++;
+        break;
+      case 33:
+        this.pedMutantSpeed = 0;
+        this.pedAnimationRevision++;
+        break;
       case 16:
         this.gravity.reset();
         break;
@@ -958,6 +996,9 @@ export class PowerupSystem {
       case 8:
       case 10:
       case 14:
+      case 2:
+      case 32:
+      case 33:
       case 15:
       case 16:
       case 17:
@@ -988,6 +1029,40 @@ export class PowerupSystem {
               "Missing or invalid electric ray powerup parameter",
             );
           this.proxyRayDistanceSquared = squared;
+        }
+        if (def.action === 2) {
+          const scale = def.floatParams.map((value) => Math.fround(value));
+          if (
+            scale.length !== 3 ||
+            scale.some((value) => !Number.isFinite(value) || value <= 0)
+          )
+            throw new Error(
+              "Pedestrian body scale requires three positive finite parameters",
+            );
+          this.pedBodyScale = scale as [number, number, number];
+          this.pedAnimationRevision++;
+        }
+        if (def.action === 32) {
+          const scale = Math.fround(def.floatParams[0]);
+          if (
+            def.floatParams.length !== 1 ||
+            !Number.isFinite(scale) ||
+            scale <= 0
+          )
+            throw new Error(
+              "Pedestrian head scale requires a positive finite parameter",
+            );
+          this.pedHeadScale = scale;
+          this.pedAnimationRevision++;
+        }
+        if (def.action === 33) {
+          const speed = Math.fround(def.floatParams[0]);
+          if (def.floatParams.length !== 1 || !Number.isFinite(speed))
+            throw new Error(
+              "Pedestrian mutant speed requires a finite parameter",
+            );
+          this.pedMutantSpeed = speed;
+          this.pedAnimationRevision++;
         }
         if (def.action === 14 || def.action === 15) {
           const value = def.floatParams[0];

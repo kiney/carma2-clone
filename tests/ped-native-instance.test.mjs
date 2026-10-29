@@ -13,6 +13,7 @@ import {
   selectNativePedBoneModel,
   currentNativePedModel,
   releaseNativePedActorSet,
+  stopNativePedMorph,
 } from "../src/ped-native-instance.ts";
 import { transformPedPoint, stepPedRootPose } from "../src/ped-form.ts";
 import { nativePedAnglesToMatrix } from "../src/ped-bone-pose.ts";
@@ -120,6 +121,21 @@ function initialized(template = fixture(), options = {}) {
     "complete",
   );
   return ped;
+}
+function addMorphMove(template, id, childX = 64) {
+  const base = template.moves.get(30),
+    motion = {
+      ...base.motion,
+      matrices: new Float32Array(base.motion.matrices),
+    };
+  for (let frame = 0; frame < motion.frameCount; frame++)
+    motion.matrices.set(
+      nativePedAnglesToMatrix([childX, 0, 0]),
+      (frame * 3 + 1) * 12,
+    );
+  const move = { ...base, id, form: { ...base.form, id }, motion };
+  template.moves.set(id, move);
+  template.form.moves.push(move.form);
 }
 function actorSet(template) {
   const group = new THREE.Group();
@@ -494,7 +510,7 @@ test("changing a detached model retains the registered ACT pose and physical own
   assert.equal(actor.parent, bodyOwner);
   assert.deepEqual(actor.matrix.elements, physical);
 });
-test("missing authored moves, modelset1 and transitions remain explicit", () => {
+test("missing authored moves and modelset1 remain explicit; same-move options retain clock", () => {
   const ped = initialized(),
     before = [...ped.rootPose];
   assert.equal(
@@ -505,13 +521,13 @@ test("missing authored moves, modelset1 and transitions remain explicit", () => 
     selectNativePedMove(ped, 30, [1, 0, 0], [0, 1, 0], 100, {
       retainRoot: true,
     }).status,
-    "provider-required",
+    "complete",
   );
   assert.equal(
     selectNativePedMove(ped, 30, [1, 0, 0], [0, 1, 0], 100, {
       morphDurationMs: 10,
     }).status,
-    "provider-required",
+    "complete",
   );
   assert.deepEqual(selectNativePedBoneModel(ped, 0, 0, 1).requiredProviders, [
     "native-model-set1-provider",
@@ -693,3 +709,189 @@ for (const stem of ["Blokebl", "Bandsman", "twolf"]) {
     close(projected, transformPedPoint(ped.bones[2].pose, [0.03, 0.04, 0.05]));
   });
 }
+
+test("source morph owns frame clock, signed child angles, and same-call completion handoff", () => {
+  const template = fixture();
+  addMorphMove(template, 31);
+  const ped = initialized(template);
+  assert.equal(
+    selectNativePedMove(ped, 31, [1, 0, 0], [0, 1, 0], 200, {
+      morphArgument: 9216,
+    }).status,
+    "complete",
+  );
+  assert.equal(ped.morphActive, true);
+  assert.equal(
+    ped.clock.lastTimeMs,
+    0,
+    "native selection resets morph timestamp to0",
+  );
+  assert.equal(ped.morph.rate, 2 ** -10);
+  assert.equal(ped.lastPoseAngles[3], 0);
+  const origin = [...ped.rootPose.subarray(9)];
+  assert.equal(advanceNativePedPose(ped, 256).status, "complete");
+  assert.equal(ped.morph.progress, 0.25);
+  assert.equal(ped.lastPoseAngles[3], 16);
+  assert.equal(ped.clock.frame, 0);
+  assert.equal(ped.clock.lastTimeMs, 256);
+  assert.ok(
+    ped.rootPose[9] > origin[0],
+    "source velocity blend moves root during morph",
+  );
+  anchors(ped);
+  const completed = advanceNativePedPose(ped, 1024);
+  assert.equal(completed.status, "complete");
+  assert.equal(completed.processedFrames, 1);
+  assert.equal(ped.morph, null);
+  assert.equal(ped.morphActive, false);
+  assert.equal(
+    ped.clock.frame,
+    1,
+    "completion hands one signed period to ordinary clock",
+  );
+  assert.equal(ped.clock.lastTimeMs, 1024);
+  assert.equal(ped.lastPoseAngles[3], 64);
+  anchors(ped);
+});
+test("interruption snapshots authored selected-frame angles; legacy option aliases angular argument", () => {
+  const template = fixture();
+  addMorphMove(template, 31);
+  addMorphMove(template, 32, 128);
+  const ped = initialized(template);
+  selectNativePedMove(ped, 31, [1, 0, 0], [0, 1, 0], 200, {
+    morphDurationMs: 9216,
+  });
+  advanceNativePedPose(ped, 256);
+  assert.equal(ped.lastPoseAngles[3], 16);
+  const old = ped.morph;
+  selectNativePedMove(ped, 32, [1, 0, 0], [0, 1, 0], 300, {
+    morphArgument: 9216,
+  });
+  assert.equal(old.rate, 0, "old morph pool slot released");
+  assert.equal(
+    ped.morph.startAngles[3],
+    64,
+    "uses authored previous target, not current interpolation16",
+  );
+  assert.equal(ped.lastPoseAngles[3], 64);
+  assert.equal(ped.clock.lastTimeMs, 0);
+  stopNativePedMorph(ped);
+  assert.equal(ped.lastPoseAngles[3], 128);
+  assert.equal(ped.morph, null);
+});
+test("global retained-root selection preserves a corpse root; morph retained-root bit preserves and releases basis", () => {
+  const template = fixture();
+  addMorphMove(template, 31);
+  const ped = initialized(template),
+    physical = nativePedAnglesToMatrix([64, 23, 7]);
+  physical.set([7, 11, 13], 9);
+  ped.rootPose.set(physical);
+  assert.equal(
+    selectNativePedMove(ped, 31, [1, 0, 0], [0, 1, 0], 200, {
+      retainRoot: true,
+      groundHeight: 999,
+    }).status,
+    "complete",
+  );
+  close([...ped.rootPose], [...physical]);
+  anchors(ped);
+  selectNativePedMove(ped, 30, [1, 0, 0], [0, 1, 0], 220, {
+    retainRoot: true,
+    morphArgument: 0x40002400,
+  });
+  const before = [...ped.rootPose];
+  assert.equal(ped.morph.retainRoot, true);
+  advanceNativePedPose(ped, 256);
+  close([...ped.rootPose], before);
+  stopNativePedMorph(ped);
+  close([...ped.rootPose], before);
+  assert.equal(ped.morph, null);
+  anchors(ped);
+});
+test("mutant angles consume eligible-child CRT once and cached reanchor consumes none", () => {
+  let draws = 0;
+  const template = fixture(),
+    ped = initialized(template, {
+      nextCrtInteger: () => {
+        draws++;
+        return 32767;
+      },
+    }),
+    authored = ped.move.bones.frames.map((a) => [...a]);
+  ped.mutantSpeed = 1;
+  ped.mutantHealth = 0;
+  ped.mutantAction = 6;
+  assert.equal(poseNativePedFrame(ped, 0).status, "complete");
+  assert.equal(draws, 6, "two eligible children, three draws each");
+  assert.deepEqual([...ped.lastPoseAngles], [0, 0, 0, 30, 30, 30, 30, 30, 30]);
+  const before = ped.bones.map((b) => [...b.pose]);
+  assert.equal(
+    poseNativePedFrame(ped, 0, { reuseLastAngles: true }).status,
+    "complete",
+  );
+  assert.equal(draws, 6);
+  ped.bones.forEach((b, i) => close([...b.pose], before[i]));
+  ped.rootPose[9] += 3;
+  poseNativePedFrame(ped, 0, { reuseLastAngles: true });
+  assert.equal(draws, 6);
+  anchors(ped);
+  assert.deepEqual(
+    ped.move.bones.frames.map((a) => [...a]),
+    authored,
+  );
+  ped.removedBoneMask = 2;
+  poseNativePedFrame(ped, 0);
+  assert.equal(
+    draws,
+    6,
+    "missing child and missing immediate parent suppress both children",
+  );
+  ped.removedBoneMask = 0;
+  ped.mutantSameTimeGuard = true;
+  poseNativePedFrame(ped, 0);
+  assert.equal(draws, 6);
+  ped.mutantSameTimeGuard = false;
+  ped.mutantHealth = 1;
+  poseNativePedFrame(ped, 0);
+  assert.equal(draws, 6);
+});
+
+test("native twenty-slot morph pool falls back to ordinary selection and reuses released slots", () => {
+  const template = fixture();
+  addMorphMove(template, 31);
+  const peds = Array.from({ length: 21 }, () => initialized(template));
+  for (const ped of peds)
+    assert.equal(
+      selectNativePedMove(ped, 31, [1, 0, 0], [0, 1, 0], 200, {
+        morphArgument: 9216,
+      }).status,
+      "complete",
+    );
+  assert.equal(peds.filter((ped) => ped.morph).length, 20);
+  assert.equal(peds[20].morph, null);
+  assert.equal(peds[20].lastPoseAngles[3], 64);
+  stopNativePedMorph(peds[0]);
+  selectNativePedMove(peds[20], 30, [1, 0, 0], [0, 1, 0], 201, {
+    morphArgument: 9216,
+  });
+  assert.ok(peds[20].morph);
+  peds.forEach(stopNativePedMorph);
+});
+
+test("degenerate zero-angle selection exposes native Infinity*0 without changing the selected move", () => {
+  const template = fixture();
+  addMorphMove(template, 31, 0);
+  const ped = initialized(template),
+    before = [...ped.rootPose],
+    clock = { ...ped.clock };
+  const selected = selectNativePedMove(ped, 31, [1, 0, 0], [0, 1, 0], 200, {
+    morphArgument: 32,
+  });
+  assert.deepEqual(selected.requiredProviders, [
+    "native-ped-degenerate-morph-numerics-provider",
+  ]);
+  assert.equal(ped.moveId, 30);
+  assert.equal(ped.morph, null);
+  assert.deepEqual([...ped.rootPose], before);
+  assert.deepEqual(ped.clock, clock);
+});

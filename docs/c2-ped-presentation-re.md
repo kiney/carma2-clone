@@ -1,147 +1,126 @@
-# Ordinary population native animation presentation
+# Native pedestrian animation presentation (ANI-01)
 
-`src/ped-presentation.ts` connects existing FORM/BON/SKL asset and pose kernels
-to the ordinary `PedestrianSystem` visual actor. It is a rendering adapter over
-the existing gameplay movement and corpse transport. It does not enroll a
-pedestrian in native PHIL, claim a native physical root, or replace the process,
-grounding, contact, severing and recovery owners tracked by PED-06/07/08.
+`NativePedPresentation` connects original FORM/MODEL and BON/SKL data to the
+ordinary displayed population. ANI-01's animation/render scope is implemented.
+Population PHIL admission, articulated contacts, severing and native recovery
+remain PED-06/07/08/09; animation completion does not complete those owners.
 
-## Source evidence and resource ownership
+## Evidence and source data
 
-The verified equations and installed addresses remain in
-[root pose](c2-ped-root-pose-re.md), [bone pose](c2-ped-bone-pose-re.md), and
-[active move](c2-ped-active-move-re.md). The installed HW executable SHA256 is
+The installed HW SHA256 is
 `698c2b11865578b6ea2a77324fbc1840080841a8ae4041e9ca14ca5ff027bd6c`.
-The read-only `madebr/rec2` source map is MPL-2.0; no reference implementation
-was copied. `ReadPersonality` maps personality identifiers to MODEL resources
-and remaps their vertices/attachments. An identifier ending in `.ACT` does not
-instruct the renderer to append an ACT hierarchy's saved default transform.
+The read-only rec2 MPL-2.0 checkout supplies symbols; binary inspection resolves
+its incomplete or conflicting branches. No reference implementation was copied.
 
-`loadNativePedAssets` supplies immutable remapped DAT geometry, material/model
-pose identities and all FORM moves. The presenter creates private indexed ACT
-groups and private mutable world matrices through `createNativePedInstance`.
-It never mutates the original asset library, geometry or materials. Disposal
-releases only this adapter's actors: by construction it never lends them to
-PHIL or a detached-body owner. A later native physical integration must replace
-this ownership contract explicitly rather than borrowing these actors silently.
+- [Root clock/pose](c2-ped-root-pose-re.md) and
+  [flat bone pose](c2-ped-bone-pose-re.md).
+- [Morph and mutant equations](c2-ped-special-animation-re.md): installed
+  SetCharacterMove, MorphCharacterBonePositions, StopCharacterMorphing and
+  guarded byte-angle CRT perturbation. rec2's morph-rate expression and root
+  deltas differ from the installed implementation.
+- [MODEL scaling and prepared vertices](c2-ped-render-effects-re.md): installed
+  body/head scale setters, per-bone powerup remaps, attachment scaling, private
+  living/dead MODEL ownership and actual prepared allocation order.
+- [Dead models](c2-ped-dead-model-re.md),
+  [passive Stillify](c2-ped-passive-stillify-re.md), and
+  [move FSM/completion](c2-ped-native-gameplay-re.md).
 
-Read-only original measurements with direction world +Z:
+`loadNativePedAssets` loads exact named MODEL resources, remaps DAT vertices and
+attachments, and retains actual material-pointer preparation options. A token
+ending in ACT does not append that ACT package's saved transform. CitySwat's
+MANBWC walking root consequently has local-X world-up approximately .99994,
+instead of the package's 46.63-degree default lean. DOG1 uses its distinct authored
+root basis and multi-frame stationary idle, without a humanoid axis correction.
 
-| Personality | FORM   | Walking ID / slot | Frame0 root row0                      | Ground offset |
-| ----------- | ------ | ----------------- | ------------------------------------- | ------------- |
-| CitySwat    | BIPED1 | 30 / 15           | (.0142869912,.999859214,-.0087992903) | .1539999992   |
-| Blokebl     | BIPED1 | 30 / 15           | same authored motion                  | .1539999992   |
-| Twolf       | DOG1   | 30 / 3            | approximately (1,0,0)                 | .1140000001   |
+## Pose and transport ownership
 
-CitySwat selects MODEL `MANBWC.ACT`. Its native walking sequence has30 frames
-at33ms and move scale .3499999940. The full authored root basis places remapped
-local X upright. This removes the observed46.63-degree default ACT lean without
-a CitySwat correction. The dog's approximately identity root demonstrates why
-a shared humanoid upright-axis rotation would be incorrect.
+Full native world matrices live under an inverse-parent group. Gameplay
+translation/yaw therefore applies once, including nested parents with scale.
+Existing gameplay owns ordinary X/Z displacement. The renderer advances the
+native clock but reanchors X/Z once and retains authored vertical phase; its
+second child reanchor uses cached sampled angles, without another CRT draw.
 
-## Runtime contract and deliberate bridges
+Only processed ordinary actors advance clocks. Distant presented actors retain
+poses. PED-10 admits already visible near actors before movement/contact checks;
+its correction and strict source camera-jump threshold remain in place.
 
-`NativePedPresentation.update` receives the actual gameplay parent, world
-position, heading, raw ground Y, move ID, period, unsigned game time and alive
-state. FORM move slot remains independently observable through `moveSlot`.
-The presenter uses full root matrices and quantized flat-bone poses; children
-are positioned through personality attachments, with orientation `E*O`, not
-parent-relative rotations. Its group is attached below the gameplay actor for
-existing visibility/render preparation. The group matrix is explicitly the
-inverse of the parent's complete world matrix. Native actor matrices remain
-world matrices; parent translation/yaw/scale are consequently not applied twice.
-Do not write procedural group position/rotation, foot offsets or sinusoidal
-limb motion on this path.
+Alive legacy corporeal/repulsed actors retain their current BON pose and follow
+their existing full rigid transform. That is a transport bridge, not a PHIL claim.
+Dead actors now select the gameplay caller's actual death BON and advance child
+angles around the legacy body's root. No new impact-direction classifier is
+invented. Source positive completion moves 90–92 to 97 and 96/97 to 94 when dead;
+actual FORM availability uses the original executable's 118-row fallback table.
+For example DOG1's missing 97 falls back to 72, not a guessed humanoid pose.
 
-Gameplay displacement remains authoritative. The adapter advances the native
-clock/root delta kernel, then anchors root X/Z at actual gameplay X/Z and poses
-children around the corrected root. It retains authored vertical root delta
-phase and shifts its baseline with actual gameplay vertical displacement.
-Grounded move selection adds the authored clearance to raw ground Y once.
-There is no mesh-derived foot correction or per-fraction ground reprojection.
-This deliberately preserves legacy movement/avoidance instead of introducing a
-second root transport. Native animation velocity is diagnostic within this
-render-only instance and must not be interpreted as the gameplay or PHIL V.
+The existing two-second ordinary corpse settling/root transport remains a
+physics approximation. Animation does not replace it with another body solver.
+Its settled move94 invokes source Stillify after BON: period is changed only
+when the mutant-speed/period zero status mismatches. Move113 is exempt. Cached
+reanchoring still follows a moving root at period zero, retaining attachments.
 
-On a move change the adapter initializes via existing source-informed helpers,
-then sets the animation timestamp to0, matching installed SetCharacterMove's
-reset sentinel. The next clock visit initializes without applying new-move
-translation. A period-only update preserves frame/fraction/timestamp. Heading
-changes use the existing root reorientation helper, preserving the authored
-current frame basis. The generic instance helper combines direction and move
-selection; this adapter's ordering is a presentation bridge rather than a full
-replacement for native SetCharacterMove/SetCharacterDirection dispatch.
+## Models, head sequences and powerups
 
-For `legacyRigid:true`, alive corporeal movement retains the last native pose
-and clock, following the gameplay actor's full rigid transform from its previous
-parent matrix. Ordinary animation resumes with a zero timestamp so offscreen or
-rigid transport time is not consumed as a catch-up burst. Death likewise freezes
-the native bone pose/clock; `legacyFall` supplies the existing corpse pitch and
-root height. One rigid transform moves all frozen bones coherently, retaining
-attachment coincidence. This is explicitly the legacy corpse approximation,
-not BON death playback, articulated contacts or a native physical root. Revival
-requires `reset`, which is also the race reset entry point.
+On an eligible physical/gore death, the displayed instance selects actual blood
+MODEL set1, all pose0 then head pose2, and clears its head sequence. Known NULL
+head poses preserve the source model-selection return behavior. Scare/calm
+sequences use the verified source tables and strict 125 ms gate; model swaps do
+not advance BON. Reset restores MODEL set0/pose0 as well as the clock and root.
 
-Unsupported requested moves report named providers and retain an existing
-supported pose. With no supported initial pose the group remains hidden rather
-than displaying an invented upright rig. The presenter does not choose a generic
-move fallback. Morph interpolation, active-body ownership, removed/severed bones,
-mutant RNG, altered scale/head rendering and prepared powerup vertex playback
-remain their existing explicit providers and follow-up integration scopes.
+Powerup actions 2, 32 and 33 use normal grants, shared group cancellation, timed
+expiry and reset. `PowerupSystem.pedestrianAnimationState` provides body XYZ,
+head factor and mutant speed. Authored giants, dwarfs, huge heads and mutant
+corpses reach the renderer; debug grants reuse the same paths. Positive finite
+sizes are explicit host input bounds; installed callbacks themselves do not
+validate those parameters. Native physical resize remains PUP-08/PED-06.
+
+A private personality resource copy is shared by all its presenters, rather than
+cloning vertex buffers per person or mutating source assets. Body/head changes
+update living/dead vertices, remapped child/parent anchors and personality data.
+Whole-body ACT-origin correction follows ScaleForm: for supplied supportY>-100,
+`actorY=f32((oldY-supportY)*ratioX+supportY)`, with up to eleven support attempts
+raised by Float32 .2. Head scaling has no origin correction. Retained distant
+poses are reposed once from cached angles so extended visibility stays coherent.
+BON phase and shared RNG do not advance during this refresh.
+
+Mutant jitter uses the shared CRT integer stream only for eligible children of
+signed-HP<=0/action6 corpses on a new clock visit. Authored BON angle arrays stay
+immutable; cached reanchors do not consume extra random samples. Morph playback
+has source signed-byte interpolation, its twenty-slot ownership, interruption,
+retained-root controls and ordinary-clock handoff. The zero-angle/zero-elapsed
+native Infinity\*0 case is explicitly diagnosed instead of publishing NaN poses.
+
+## Prepared effect consumers and lifetime
+
+Napalm now selects a vertex from the actual root ACT's current MODEL prepared
+allocation. It preserves the inclusive first-group upper bound, which may reach
+the next group's first vertex. Invalid final one-past-allocation reads fail
+safely; there is no clamp or render-corner deduplication. Sampling follows model
+switches and scale changes without a second world transform.
+
+Presenters release before shared effect geometry, dead MODEL geometry, the
+race's cloned MAT registry and original templates. Active burning outlets are
+stopped before their geometry is disposed. Original resources remain read-only;
+all generated screenshots/reports stay ignored.
 
 ## Validation
 
-`tests/ped-presentation.test.mjs` loads original CitySwat, Blokebl and Twolf
-resources read-only and skips cleanly without an installation. It verifies
-source model/resource identity, full frame0 bases, distinct ID/slot mapping,
-attachment coincidence, native clock initialization, parent inverse compensation
-under nested translation/rotation/nonuniform scale, single gameplay transport,
-reset, unsupported-move diagnostics and coherent frozen rigid/corpse movement.
-No original model or motion fixtures are committed.
+Numerical tests cover signed-angle morphs, clock handoff/interruption/pool reuse,
+mutant guard/draw order, original human and DOG death sequences, frozen-time root
+transport, head variants, reset, native prepared order/welding/material identity,
+source-preserving body/head scaling and shared resource release.
 
-## Integrated ordinary population and remaining ANI-01 scope
+`npm run test:ped-animation` runs the original living-population checks and the
+completion integration checks. Stock and Advanced Newcity1 retain all 791 native
+presentations. The latter uses actual source powerup grants/expiry plus a labelled
+controlled death call followed by ordinary population updates. It verifies
+set1/head2, advancing death frames, Stillify, moving corpse roots, shared mutant
+RNG, body/head changes across shared personalities, immutable source arrays,
+set0 reset and clean console/request/WebGL results. Headless SwiftShader
+1280x800 is correctness evidence, not hardware performance evidence.
 
-The production population now creates this presenter for actual Assets-backed
-personalities and retains its existing gameplay/count identity as the parent.
-The minimal procedural path exists only for isolated synthetic hosts without an
-Assets resource library. All 791 Newcity1 pedestrians use native presentation in
-both Stock and Advanced. The selected race's resource root reaches settings,
-personality, FORM, REMAP and motion loading. Exact unsupported resources produce
-structured loader errors; mixed populated groups also report missing personalities
-rather than claiming complete availability after filtering them.
-
-Only processed ordinary actors advance their animation. Distant retained actors
-keep their current pose, and native-counting/body owners are excluded from this
-render bridge. Walking and running use their current gameplay frame periods;
-stationary move0 uses its authored period rather than freezing a multi-frame idle.
-Original DOG1 idle has32 frames at33ms and is a regression case. Reset reselects
-the source initial pose; presenter actors release before template resources.
-
-ANI-01 remains **wip**. The normal living root/bone bridge does not complete
-native death-animation selection/playback, morph interpolation, mutant-angle RNG,
-altered head/model-set rendering or exact prepared pedestrian vertex consumers.
-Those animation/render obligations remain with ANI-01 or their existing powerup
-owner; they are not silently reassigned to physics. Legacy death currently freezes
-the supported BON pose and applies its existing rigid fall/transport coherently.
-Actual population PHIL, recovery, sever and contact-cause ownership remains
-PED-06/07/08/09, in the selected queue order.
-
-## Browser and regression evidence (2026-10-29)
-
-The full numerical/original-installation suite passes3,359 tests, zero failures,
-with five optional saved-capture skips. Subsequent focused integration tests also
-cover the stationary dog idle correction and explicit mixed-group unavailability.
-Production build passes. `browser-ped-animation.mjs` passes Stock/Advanced Newcity1:
-791/791 native presentations, source move30/slot15, changing frame/bone matrices,
-no doubled gameplay translation, original model geometry under identity resource
-groups, ordinary sweep death counted once, visible retained corpse, reset and
-old-template disposal on race reload. These are labelled controlled presentation
-checks, not native PHIL contact proof. Headless backend is SwiftShader at1280x800;
-console errors, failed requests and WebGL errors are empty.
-
-Separate Chrome DevTools hardware inspection uses the isolated production build
-without reloading the user's paused game. Actual processed CitySwat advances to
-frame16 of move30, remains alive, and has local-X world-up0.99994 instead of the
-prior46.63-degree package-ACT lean. GL error0, no animation diagnostics. Original
-assets, screenshots and generated reports stay outside Git; the original game
-installation is read only.
+Hardware DevTools inspection uses ANGLE AMD/Radeon gfx1150 at 2070x1435. A real
+processed CitySwat actor displays the source walking pose, action32 head factor4,
+death91 frames0–4, blood set1/head2 and move94 mutant period132 with changing
+joint matrices. No animation diagnostics, console errors or WebGL errors occurred.
+The isolated diagnostic camera/controlled kill do not claim native contact proof;
+the user's original paused game remains untouched.

@@ -156,7 +156,7 @@ test("presenter compensates transformed parents, avoids double transport, and re
   presentation.dispose();
 });
 
-test("legacy rigid/corpse transport freezes native bones and preserves joint coherence", async (t) => {
+test("legacy alive rigid transport freezes while corpse BON advances around its rigid root", async (t) => {
   const source = await assets(t);
   if (!source) return;
   const template = await loadNativePedAssets(
@@ -188,11 +188,23 @@ test("legacy rigid/corpse transport freezes native bones and preserves joint coh
   presentation.update(
     input(parent, {
       alive: false,
+      moveId: 91,
       timeMs: 1500,
       legacyFall: { pitchRadians: Math.PI / 2, rootHeight: 0.055 },
     }),
   );
-  assert.deepEqual(presentation.instance.clock, clock);
+  assert.equal(presentation.instance.moveId, 91);
+  assert.equal(presentation.instance.clock.lastTimeMs, 1500);
+  assert.equal(presentation.instance.clock.frame, 0);
+  presentation.update(
+    input(parent, {
+      alive: false,
+      moveId: 91,
+      timeMs: 1533,
+      legacyFall: { pitchRadians: Math.PI / 2, rootHeight: 0.055 },
+    }),
+  );
+  assert.equal(presentation.instance.clock.frame, 1);
   const rootLocal = presentation.instance.bones[0].actor
     .getWorldPosition(new THREE.Vector3())
     .applyMatrix4(parent.matrixWorld.clone().invert());

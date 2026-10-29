@@ -18,9 +18,20 @@ import {
 import {
   buildNativePedBoneMotion,
   poseNativePedBones,
+  nativePedAnglesToMatrix,
   type NativePedBoneMotion,
   type NativePedPoseBone,
 } from "./ped-bone-pose";
+
+import {
+  prepareNativePedMorph,
+  advanceNativePedMorph,
+  sampleNativePedMorphAngles,
+  nativePedMorphVelocity,
+  sampleNativePedMorphRootDelta,
+  sampleNativePedMorphSourceDirection,
+  type NativePedMorph,
+} from "./ped-animation-special";
 
 export interface NativePedInstanceMove {
   asset: NativePedMoveAsset;
@@ -66,7 +77,13 @@ export interface NativePedInstance {
   boned: boolean;
   temporaryMatricesAvailable: boolean;
   morphActive: boolean;
+  morph: NativePedMorph | null;
   mutantSpeed: number;
+  mutantHealth: number;
+  mutantAction: number;
+  mutantSameTimeGuard: boolean;
+  nextCrtInteger?: () => number;
+  readonly lastPoseAngles: Uint8Array;
   movementDisabled: boolean;
   completionRequested: boolean;
   onMoveCompleted:
@@ -76,6 +93,7 @@ export interface NativePedInstance {
   detachedBoneMask: number;
 }
 export interface NativePedInstanceCreateOptions {
+  nextCrtInteger?: () => number;
   rootPose: ArrayLike<number>;
   /** Preallocated shared FORM render slot: bare, unowned flat ACTs in FORM order.
    * Reuse requires releaseNativePedActorSet after the host releases all PHIL
@@ -102,8 +120,11 @@ export interface NativePedMoveSelectionOptions {
   onMoveCompleted?: (instance: NativePedInstance, timeMs: number) => void;
   /** Explicit source ground point during grounded move selection. */
   groundHeight?: number;
-  /** Retained-root/morph transitions require a separate source provider. */
+  /** Source global retained-root selection mode: preserve current world root. */
   retainRoot?: boolean;
+  /** Native angular-speed scale arg4, optionally carrying bit0x40000000. */
+  morphArgument?: number;
+  /** Legacy alias for morphArgument; it has never represented fixed duration. */
   morphDurationMs?: number;
 }
 export interface NativePedAdvanceOptions {
@@ -127,6 +148,7 @@ export interface NativePedInstanceResult {
   nativeModelReturn?: 0 | 1;
 }
 const f = Math.fround;
+const morphOwners = new Set<NativePedInstance>();
 const identity = () => new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
 const moveCache = new WeakMap<
   NativePedAssets,
@@ -297,29 +319,60 @@ function render(instance: NativePedInstance): void {
 function applyBonePose(
   instance: NativePedInstance,
   mode: 0 | 1 | 2 | 3,
+  options: { reuseLastAngles?: boolean } = {},
 ): NativePedInstanceResult {
   if (!ownsActors(instance)) return result(["native-render-actor-set-owner"]);
   if (!instance.move) {
     render(instance);
     return result(["native-selected-move-provider"]);
   }
+  const angles = options.reuseLastAngles
+    ? instance.lastPoseAngles
+    : instance.morph
+      ? sampleNativePedMorphAngles(instance.morph)
+      : instance.move.bones.frames[instance.clock.frame];
+  if (
+    instance.morph &&
+    !options.reuseLastAngles &&
+    !instance.physicsActive &&
+    !instance.morph.retainRoot
+  )
+    instance.rootPose.set(
+      composePedRootPose(
+        nativePedAnglesToMatrix([angles[0], angles[1], angles[2]]),
+        instance.characterOrientation,
+        [instance.rootPose[9], instance.rootPose[10], instance.rootPose[11]],
+      ),
+    );
   const posed = poseNativePedBones({
     bones: instance.poseBones,
-    angles: instance.move.bones.frames[instance.clock.frame],
+    angles,
     rootPose: instance.rootPose,
     characterOrientation: instance.characterOrientation,
     currentPoses: instance.bones.map((b) => b.pose),
     removedBoneMask: instance.removedBoneMask,
-    mode,
+    mode: instance.morph ? 0 : mode,
     selectedMoveValid: true,
     renderAvailable: true,
     physicsActive: instance.physicsActive,
     boned: instance.boned,
     temporaryMatricesAvailable: instance.temporaryMatricesAvailable,
-    morphActive: instance.morphActive,
-    mutantSpeed: instance.mutantSpeed,
+    morphActive: instance.morphActive && !instance.morph,
+    mutantSpeed: options.reuseLastAngles ? 0 : instance.mutantSpeed,
+    mutantHealth: instance.mutantHealth,
+    mutantAction: instance.mutantAction,
+    mutantSameTimeGuard: instance.mutantSameTimeGuard,
+    nextCrtInteger: instance.nextCrtInteger,
   });
   if (posed.requiredProviders.length) return result(posed.requiredProviders);
+  if (!options.reuseLastAngles) {
+    instance.lastPoseAngles.set(angles.subarray(0, 3));
+    for (const index of posed.updatedBoneIndices)
+      instance.lastPoseAngles.set(
+        posed.sampledAngles.subarray(index * 3, index * 3 + 3),
+        index * 3,
+      );
+  }
   for (let i = 0; i < instance.bones.length; i++)
     instance.bones[i].pose.set(posed.poses[i]);
   render(instance);
@@ -459,7 +512,13 @@ export function createNativePedInstance(
     boned: false,
     temporaryMatricesAvailable: false,
     morphActive: false,
+    morph: null,
     mutantSpeed: 0,
+    mutantHealth: 1,
+    mutantAction: 0,
+    mutantSameTimeGuard: false,
+    nextCrtInteger: options.nextCrtInteger,
+    lastPoseAngles: new Uint8Array(bones.length * 3),
     movementDisabled: false,
     completionRequested: false,
     onMoveCompleted: null,
@@ -506,13 +565,16 @@ export function releaseNativePedActorSet(
     actorOwners.delete(bone.actor);
   }
   instance.group.visible = false;
+  morphOwners.delete(instance);
+  instance.morph = null;
+  instance.morphActive = false;
   groupOwners.delete(instance.group);
   return {
     group: instance.group,
     actors: instance.bones.map((bone) => bone.actor),
   };
 }
-/** Select ordinary non-morph move and heading. Re-selecting the same move turns
+/** Select an authored move and optional source morph/retained-root transition. Re-selecting the same move turns
  * its current full root basis without resetting its frame/fraction. */
 export function selectNativePedMove(
   instance: NativePedInstance,
@@ -526,10 +588,13 @@ export function selectNativePedMove(
   time(timeMs);
   if (!Number.isInteger(id) || id < 0 || id > 0x7fffffff)
     throw new Error("Invalid native move ID");
-  if (options.retainRoot)
-    return result(["native-retained-root-transition-provider"]);
-  if (options.morphDurationMs)
-    return result(["native-ped-morph-pose-provider"]);
+  const morphArgument = options.morphArgument ?? options.morphDurationMs ?? 0;
+  if (
+    !Number.isInteger(morphArgument) ||
+    morphArgument < 0 ||
+    morphArgument > 0x7fffffff
+  )
+    throw new Error("Invalid native morph argument");
   let move: NativePedInstanceMove | null;
   try {
     move = cachedMove(instance.template, id);
@@ -543,10 +608,63 @@ export function selectNativePedMove(
   const p = period(options.periodMs ?? move.asset.form.periodMs),
     d = vector(direction),
     u = vector(groundNormal),
-    built = buildPedOrientation(d, u, move.sourceDirection);
+    built = buildPedOrientation(
+      d,
+      u,
+      instance.moveId === id && instance.morph
+        ? sampleNativePedMorphSourceDirection(
+            instance.morph,
+            move.sourceDirection,
+          )
+        : move.sourceDirection,
+    );
   const same = instance.moveId === id && !options.restart;
   if (instance.physicsActive)
     return result(["native-active-direction-and-move-transition-provider"]);
+  const oldMove = instance.move,
+    oldFrame = instance.clock.frame,
+    oldPeriod = instance.clock.periodMs;
+  let morph: NativePedMorph | null = null;
+  if (
+    !same &&
+    oldMove &&
+    morphArgument &&
+    timeMs &&
+    (morphOwners.has(instance) || morphOwners.size < 20)
+  ) {
+    const oldData = pedRootMotionDirection(
+        oldMove.roots,
+        oldMove.asset.form.direction,
+        oldMove.asset.form.resetAxes,
+      ),
+      newData = pedRootMotionDirection(
+        move.roots,
+        move.asset.form.direction,
+        move.asset.form.resetAxes,
+      );
+    morph = prepareNativePedMorph({
+      startAngles: oldMove.bones.frames[oldFrame],
+      targetAngles: move.bones.frames[0],
+      morphArgument,
+      oldVelocity: nativePedMorphVelocity(
+        oldMove.sourceDirection,
+        oldMove.roots.length,
+        oldPeriod,
+        oldData.stationary,
+      ),
+      newVelocity: nativePedMorphVelocity(
+        newData.movementDirection,
+        move.roots.length,
+        p,
+        newData.stationary,
+      ),
+      oldSourceDirection: oldMove.sourceDirection,
+    });
+    // Native selection immediately invokes the morph routine with elapsed0.
+    // A zero child-angle sum would multiply Infinity*0 and poison world poses.
+    if (!Number.isFinite(morph.rate))
+      return result(["native-ped-degenerate-morph-numerics-provider"]);
+  }
   const next = same
     ? reorientPedRootPose(
         instance.rootPose,
@@ -570,21 +688,41 @@ export function selectNativePedMove(
       ),
       9,
     );
+  if (!same) {
+    morphOwners.delete(instance);
+    if (instance.morph) instance.morph.rate = 0;
+    instance.morph = morph;
+    instance.morphActive = !!morph;
+    if (morph) morphOwners.add(instance);
+  }
   instance.move = move;
   instance.moveId = id;
-  instance.characterOrientation = built.orientation;
-  instance.movement = built.movement;
-  instance.direction = built.direction;
-  instance.groundNormal = built.up;
+  if (!options.retainRoot || same) {
+    instance.characterOrientation = built.orientation;
+    instance.movement = built.movement;
+    instance.direction = built.direction;
+    instance.groundNormal = built.up;
+  }
   if (!same)
-    instance.clock = { frame: 0, fraction: 0, lastTimeMs: timeMs, periodMs: p };
+    instance.clock = {
+      frame: 0,
+      fraction: 0,
+      lastTimeMs: morph ? 0 : timeMs,
+      periodMs: p,
+    };
   else instance.clock.periodMs = p;
   if (options.completionRequested !== undefined)
     instance.completionRequested = options.completionRequested;
   if (options.onMoveCompleted)
     instance.onMoveCompleted = options.onMoveCompleted;
-  instance.rootPose.set(next);
-  return applyBonePose(instance, 0);
+  if (options.retainRoot && !same) {
+    instance.characterOrientation = orientationForRoot(
+      move.roots[0],
+      instance.rootPose,
+    );
+  } else if (morph?.retainRoot) instance.rootPose.set(next.subarray(9), 9);
+  else instance.rootPose.set(next);
+  return applyBonePose(instance, options.retainRoot ? 3 : 0);
 }
 /** Source model selection is a pointer/visibility change, not a new sibling
  * clone or a collision-hull resize. Set1 must be supplied by the actual owner. */
@@ -626,10 +764,51 @@ export function selectNativePedBoneModel(
 export function poseNativePedFrame(
   instance: NativePedInstance,
   mode: 0 | 1 | 2 | 3,
+  options: { reuseLastAngles?: boolean } = {},
 ): NativePedInstanceResult {
   if (!Number.isInteger(mode) || mode < 0 || mode > 3)
     throw new Error("Invalid native pose mode");
-  return applyBonePose(instance, mode);
+  return applyBonePose(instance, mode, options);
+}
+/** Source LPInverse(frame)*world root, translation zero. */
+function orientationForRoot(
+  frame: ArrayLike<number>,
+  root: ArrayLike<number>,
+): Float32Array {
+  const inverse = identity();
+  for (let row = 0; row < 3; row++)
+    for (let col = 0; col < 3; col++)
+      inverse[row * 3 + col] = frame[col * 3 + row];
+  return composePedRootPose(inverse, root, [0, 0, 0]);
+}
+/** Installed4096f0: release morphology and pose target without advancing clock. */
+export function stopNativePedMorph(
+  instance: NativePedInstance,
+): NativePedInstanceResult {
+  if (!ownsActors(instance)) return result(["native-render-actor-set-owner"]);
+  if (!instance.morph)
+    return instance.morphActive
+      ? result(["native-ped-morph-pose-provider"])
+      : result();
+  if (!instance.move) return result(["native-selected-move-provider"]);
+  if (instance.morph.retainRoot)
+    instance.characterOrientation = orientationForRoot(
+      instance.move.roots[instance.clock.frame],
+      instance.rootPose,
+    );
+  instance.morph.rate = 0;
+  morphOwners.delete(instance);
+  instance.morph = null;
+  instance.morphActive = false;
+  if (!instance.physicsActive)
+    instance.rootPose.set(
+      composePedRootPose(
+        instance.move.roots[instance.clock.frame],
+        instance.characterOrientation,
+        [instance.rootPose[9], instance.rootPose[10], instance.rootPose[11]],
+      ),
+    );
+  return applyBonePose(instance, 0);
 }
 /** Installed40b770/409400 shared physical-pose prefix. This never consumes the
  * animation clock; moved and accepted halt own the separate character-V copy. */
@@ -692,9 +871,8 @@ export function advanceNativePedPose(
     throw new Error("Invalid native pose mode");
   if (options.groundHeight !== undefined) scalar(options.groundHeight);
   if (!instance.move) return result(["native-selected-move-provider"]);
-  if (instance.morphActive) return result(["native-ped-morph-pose-provider"]);
-  if (instance.mutantSpeed !== 0)
-    return result(["native-mutant-angle-rng-provider"]);
+  if (instance.morphActive && !instance.morph)
+    return result(["native-ped-morph-pose-provider"]);
   const active = instance.physicsActive || !!physicalRoot;
   // Installed409ccb returns before clock changes for active articulated bodies.
   if (active && instance.boned && !instance.temporaryMatricesAvailable)
@@ -707,6 +885,33 @@ export function advanceNativePedPose(
   if (replay && options.replayRate === undefined)
     return result(["native-replay-rate-provider"]);
   if (options.replayRate !== undefined) scalar(options.replayRate);
+  if (instance.morph) {
+    const elapsed = (timeMs - instance.clock.lastTimeMs) >>> 0;
+    const advanced = advanceNativePedMorph(instance.morph, elapsed);
+    if (advanced.requiredProviders.length)
+      return result(advanced.requiredProviders);
+    if (physicalRoot) instance.rootPose.set(physicalRoot);
+    instance.physicsActive = active;
+    if (advanced.active) {
+      if (!active && !instance.morph.retainRoot) {
+        const delta = sampleNativePedMorphRootDelta(
+          instance.morph,
+          elapsed,
+          instance.movement,
+        );
+        for (let axis = 0; axis < 3; axis++)
+          instance.rootPose[9 + axis] = scalar(
+            instance.rootPose[9 + axis] + delta[axis],
+          );
+      }
+      const posed = applyBonePose(instance, 0);
+      instance.clock.lastTimeMs = timeMs;
+      return posed;
+    }
+    const stopped = stopNativePedMorph(instance);
+    if (stopped.requiredProviders.length) return stopped;
+    instance.clock.lastTimeMs = (timeMs - instance.clock.periodMs) >>> 0;
+  }
   const move = instance.move,
     clock = advancePedAnimationClock(instance.clock, timeMs);
   if (

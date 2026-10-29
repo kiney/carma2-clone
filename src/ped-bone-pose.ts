@@ -1,6 +1,7 @@
 /** Independent installed407b20/407e60 bone pose math. Evidence:
  * docs/c2-ped-bone-pose-re.md. Matrices are native BRender basis rows followed
  * by a translation row; all vectors/model vertices have already been remapped. */
+import { perturbNativePedMutantAngles } from "./ped-animation-special";
 import {
   composePedRootPose,
   flipPedExportMatrix,
@@ -42,6 +43,10 @@ export interface NativePedBonePoseInput {
   temporaryMatricesAvailable: boolean;
   morphActive: boolean;
   mutantSpeed: number;
+  mutantHealth?: number;
+  mutantAction?: number;
+  mutantSameTimeGuard?: boolean;
+  nextCrtInteger?: () => number;
 }
 export interface NativePedBonePoseResult {
   status: "posed" | "retained" | "provider-required";
@@ -49,6 +54,8 @@ export interface NativePedBonePoseResult {
   updatedBoneIndices: number[];
   retainedBoneIndices: number[];
   requiredProviders: string[];
+  sampledAngles: Uint8Array;
+  randomDrawCalls: number;
 }
 const f = Math.fround;
 const angleUnitsPerRadian = 10430.378350470453;
@@ -286,13 +293,32 @@ export function poseNativePedBones(
         !(input.removedBoneMask & ((2 ** index) >>> 0)) &&
         !(input.removedBoneMask & ((2 ** bone.parent) >>> 0)),
     );
+  const sampledAngles = Uint8Array.from(input.angles);
+  let randomDrawCalls = 0;
   if (
     !earlyReturn &&
     !input.morphActive &&
     eligibleChildren &&
-    input.mutantSpeed !== 0
-  )
-    requiredProviders.push("native-mutant-angle-rng-provider");
+    Math.fround(input.mutantSpeed) !== 0
+  ) {
+    if (
+      input.mutantHealth === undefined ||
+      input.mutantAction === undefined ||
+      input.mutantSameTimeGuard === undefined
+    )
+      requiredProviders.push("native-mutant-angle-rng-provider");
+    else {
+      const preflight = perturbNativePedMutantAngles({
+        angles: [0, 0, 0],
+        mutantSpeed: input.mutantSpeed,
+        health: input.mutantHealth,
+        action: input.mutantAction,
+        sameTimeGuard: input.mutantSameTimeGuard,
+      });
+      if (preflight.requiredProviders.length && !input.nextCrtInteger)
+        requiredProviders.push(...preflight.requiredProviders);
+    }
+  }
   const retained =
     requiredProviders.length > 0 ||
     earlyReturn ||
@@ -310,12 +336,26 @@ export function poseNativePedBones(
       retainedBoneIndices.push(index);
       continue;
     }
+    let angles: NativePedAngleBytes = [
+      input.angles[index * 3],
+      input.angles[index * 3 + 1],
+      input.angles[index * 3 + 2],
+    ];
+    if (Math.fround(input.mutantSpeed) !== 0) {
+      const perturbed = perturbNativePedMutantAngles({
+        angles,
+        mutantSpeed: input.mutantSpeed,
+        health: input.mutantHealth!,
+        action: input.mutantAction!,
+        sameTimeGuard: input.mutantSameTimeGuard!,
+        nextCrtInteger: input.nextCrtInteger,
+      });
+      angles = perturbed.angles;
+      randomDrawCalls += perturbed.randomDrawCalls;
+    }
+    sampledAngles.set(angles, index * 3);
     poses[index] = composeNativePedBonePose(
-      [
-        input.angles[index * 3],
-        input.angles[index * 3 + 1],
-        input.angles[index * 3 + 2],
-      ],
+      angles,
       orientation,
       poses[bone.parent],
       bone.childAttachment!,
@@ -333,5 +373,7 @@ export function poseNativePedBones(
     updatedBoneIndices,
     retainedBoneIndices,
     requiredProviders,
+    sampledAngles,
+    randomDrawCalls,
   };
 }

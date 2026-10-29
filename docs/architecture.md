@@ -37,7 +37,7 @@ After collision impulses change a trajectory, a bounded integration guard checks
 
 At startup, the browser discovers race and car configurations. Loading a race creates its scene and collision queries from rendered triangles, then initializes the car using the selected config. Track nodes drive up to four simplified graph-following opponents. Race logic reads available gates, laps, timer values, and rewards. Victory can follow the configured lap goal, eliminating all opponents, or eliminating pedestrians, where the selected objective supports it. Mission behavior is approximated and unsupported objectives use a free-driving label.
 
-Vehicle damage applies original WAM eligibility planes, per-part softness, cumulative localized crush, structural bending and splitting, twelve component programs, and persistent detachable parts. Render normals retain DAT smoothing masks; collision shape changes follow their separate source rules. Incremental and full repair restore the appropriate geometry, component and attachment state. Pedestrians use original textured models and simple generated limb motion and flee/hit behavior; parsed BON/SKL motion is not played back. Audio covers engine, impact, checkpoint, and gesture-unlock cues. Placed original power-up actors provide credit, repair, time, engine/grip, invulnerability, damage/protection, free-repair and permanent APO effects from their source definitions. Funk/groove support is partial, including rolling, steering, brake-light atlas changes, water, and fan effects. Source suspension lengths, wheel RPM and damage tilt feed animation; damage tilt feeds back into tyre contact.
+Vehicle damage applies original WAM eligibility planes, per-part softness, cumulative localized crush, structural bending and splitting, twelve component programs, and persistent detachable parts. Render normals retain DAT smoothing masks; collision shape changes follow their separate source rules. Incremental and full repair restore the appropriate geometry, component and attachment state. Pedestrians use original FORM/MODEL and BON/SKL living/death poses, source morph/head/model effects, private personality geometry for size powerups, and shared-CRT mutant animation. Existing gameplay still owns ordinary movement and corpse transport until native population physics is integrated. Audio covers engine, impact, checkpoint, and gesture-unlock cues. Placed original power-up actors provide credit, repair, time, engine/grip, invulnerability, damage/protection, free-repair and permanent APO effects from their source definitions. Funk/groove support is partial, including rolling, steering, brake-light atlas changes, water, and fan effects. Source suspension lengths, wheel RPM and damage tilt feed animation; damage tilt feeds back into tyre contact.
 
 ## Main modules
 
@@ -52,12 +52,12 @@ Vehicle damage applies original WAM eligibility planes, per-part softness, cumul
 | `src/content.ts`            | Texture, material, geometry, and actor scene assembly                                     |
 | `src/render-pose.ts`        | Physics-pose interpolation for rendering and camera targets                               |
 | `src/world.ts`              | Ground, wall, and world-space queries                                                     |
-| `src/gameplay.ts`           | Race state, recovery, shared vehicle/control types and speed conversion                                 |
+| `src/gameplay.ts`           | Race state, recovery, shared vehicle/control types and speed conversion                   |
 | `src/physics/`              | Source motion, contact groups, joints, crush, components, structural splitting and repair |
 | `src/powerups.ts`           | Source power-up definitions, pickup actors, awards, and timed modifiers                   |
 | `src/ai.ts`                 | Road graph navigation and opponent steering                                               |
 | `src/damage.ts`             | WAM-guided vehicle deformation and repair                                                 |
-| `src/pedestrians.ts`        | Original pedestrian models, simple motion, fleeing, and hits                              |
+| `src/pedestrians.ts`        | Original FORM/BON/SKL presentation, fleeing, hits, and effect owners                      |
 | `src/animation.ts`          | Supported FUNK/GROOVE model and texture animation                                         |
 | `src/audio.ts`              | Original WAV engine loops and event sounds                                                |
 | `src/main.ts`               | Startup, input, menus, cameras, HUD, opponents, pedestrians, and audio                    |
