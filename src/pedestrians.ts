@@ -2,6 +2,11 @@ import { NativePedSlickMaterialRegistry } from "./ped-slick-materials";
 import { createNativeRenderMaterial } from "./native-material-render";
 import { OrdinaryPedRuntime } from "./ped-ordinary-runtime";
 import { parseNativePedGoreOption } from "./ped-gore-options";
+import { loadNativePedSmearMaterial } from "./ped-smear-material";
+import type { ShardRuntime } from "./smash-shards";
+import type { SkidMarkSystem } from "./skidmarks";
+import type { NativePedRuntimeCallback } from "./ped-native-runtime";
+import type { NativePedBloodPacket } from "./ped-native-blood-phases";
 import {
   parsePedContactSettings,
   type PedContactSettings,
@@ -148,6 +153,8 @@ export interface PedCombatSource {
 }
 export type PedGround = (x: number, z: number, nearY: number) => number | null;
 export interface PedOptions {
+  shards?: ShardRuntime;
+  skidmarks?: SkidMarkSystem;
   /** Match the selected Stock/Advanced race resource tree. */
   dataRoot?: "data" | "adv_data";
   nativePopulation?: readonly NativePedPopulationEntry[];
@@ -163,7 +170,8 @@ export interface PedOptions {
   collision?: Pick<WorldCollision, "raycast"> &
     Partial<Pick<WorldCollision, "querySurfaces">>;
   onHit?: (event: PedHitEvent) => void;
-  /** Counters are committed before this objective outlet and any score outlet. */
+  /** Normal Kill counts before scoring; the original inactive-burning score
+   * caller precedes its later vanish/count. This outlet always sees committed counts. */
   onCount?: (event: PedCountEvent) => void;
   onNapalmIgnited?: (
     actor: THREE.Object3D,
@@ -672,6 +680,7 @@ export class PedestrianSystem {
   private nativeContactSettings?: PedContactSettings;
   private nativeSpurtingPeriod = 0;
   private nativeGoreLevel = 1;
+  private nativeSmear?: Awaited<ReturnType<typeof loadNativePedSmearMaterial>>;
   private readonly nativeNoises = new Map<string, NativePedNoiseGroups>();
   get nativeRuntime() {
     return this.nativeBridge?.runtime;
@@ -738,6 +747,17 @@ export class PedestrianSystem {
   }
   get bloodStats() {
     return this.blood?.stats ?? { clouds: 0, giblets: 0, slicks: 0, smears: 0 };
+  }
+  get bloodNativeStats() {
+    return (
+      this.blood?.nativeStats ?? {
+        created: 0,
+        impacts: 0,
+        spurts: 0,
+        poolFull: 0,
+        active: 0,
+      }
+    );
   }
   get nativeProcessDistance() {
     return this.settings.processDistance;
@@ -1283,6 +1303,7 @@ export class PedestrianSystem {
             ),
           };
         },
+        dataRoot,
       );
       system.group.add(system.blood.group);
     } catch (e) {
@@ -1319,6 +1340,13 @@ export class PedestrianSystem {
         system.warnings.push(`Pedestrian slick: ${missing}`);
     }
     await system.loadCombatVisuals(assets, settingsText);
+    try {
+      system.nativeSmear = await loadNativePedSmearMaterial(assets, dataRoot);
+      for (const missing of system.nativeSmear.requiredProviders)
+        system.warnings.push(`Native pedestrian smear: ${missing}`);
+    } catch (error) {
+      system.warnings.push(`Native pedestrian smear: ${error}`);
+    }
     return system;
   }
 
@@ -1339,7 +1367,11 @@ export class PedestrianSystem {
       position: this.combatPosition(ped),
       alive: ped.alive,
       inSight: ped.active,
-      burningOrReserved: ped.burningUntilMs > 0 || ped.napalmSlot >= 0,
+      burningOrReserved:
+        ped.burningUntilMs > 0 ||
+        ped.napalmSlot >= 0 ||
+        (!!this.nativeBridge?.owns(ped) &&
+          !this.nativeBridge.canReserveNapalm(ped)),
       specialVolumeGravityMultiplier: this.targetGravity(ped.object.position),
     }));
   }
@@ -1389,6 +1421,11 @@ export class PedestrianSystem {
         (origin, target) => this.firstFaceFraction(origin, target),
       );
       if (!chosen) return false;
+      if (
+        this.nativeBridge?.owns(chosen.target.ped) &&
+        !this.nativeBridge.reserveNapalm(chosen.target.ped, chosen.slot)
+      )
+        return false;
       chosen.target.ped.napalmSlot = chosen.slot;
       const bolt: PedNapalmBolt = {
         target: chosen.target.ped,
@@ -1729,6 +1766,8 @@ export class PedestrianSystem {
   }
   private releaseNapalm(slot: number): void {
     const bolt = this.napalm[slot];
+    if (bolt && this.nativeBridge?.owns(bolt.target))
+      this.nativeBridge.releaseNapalm(bolt.target, slot);
     if (bolt?.target.napalmSlot === slot) bolt.target.napalmSlot = -1;
     this.napalm[slot] = undefined;
     for (const sprite of this.flameSprites[slot] ?? []) sprite.visible = false;
@@ -2005,24 +2044,61 @@ export class PedestrianSystem {
           this.presentationRevision++;
       },
       groundAt: this.groundAt,
+      readScopeFloor:
+        typeof simulation.world.nativePedFloorBelow === "function"
+          ? (position) =>
+              simulation.world.nativePedFloorBelow(
+                new THREE.Vector3(...position),
+                simulation.cars.find((car) => car.human)?.group,
+              )
+          : undefined,
       warn,
       resolveMaterial: (name) =>
         this.options.nativeMaterials?.get(name.toLowerCase()),
       readSlick: () => this.blood?.settings.slick ?? null,
       readSlickMaterials: () => this.nativeSlickMaterials?.materials ?? null,
+      readBloodSettings: () =>
+        this.blood?.settings.impact && this.blood.settings.spurt
+          ? {
+              scrapeStart: this.blood.settings.impact.scrapeStart,
+              lumpsPerEmission: this.blood.settings.spurt.lumpsPerEmission,
+            }
+          : null,
+      emitBlood: (ctx, packet) => {
+        if (!this.blood || !this.options.shards)
+          return ["source-shared-native-ped-blood-owner"];
+        const enriched = this.nativeBloodPacket(ctx, packet);
+        return (
+          enriched.kind === "impact"
+            ? this.blood.nativeHit(enriched, this.options.shards)
+            : this.blood.nativeSpurt(enriched, this.options.shards)
+        ).requiredProviders;
+      },
+      preflightBlood: (ctx, packet) => {
+        if (!this.blood || !this.options.shards)
+          return ["source-shared-native-ped-blood-owner"];
+        return this.blood.nativeRequirements(
+          this.nativeBloodPacket(ctx, packet),
+          this.options.shards,
+        );
+      },
+      skidSection:
+        this.options.skidmarks && this.nativeSmear?.material
+          ? (section) =>
+              this.options.skidmarks!.nativeSection(
+                section,
+                this.nativeSmear!.material!,
+              )
+          : undefined,
       bind: (ped, character) =>
         this.bindNativeCountingOwner(ped.object, ped.object, character),
       onVanish: (ctx) => {
         this.oneLessNativePed(ctx.owner, ctx.character, ctx.timeMs, "vanished");
       },
-      clearBurning: (ped, signedIndex) => {
-        if (signedIndex < 0 && ped.burningUntilMs === 0 && ped.napalmSlot < 0)
-          return ["source-negative-napalm-resource-owner"];
-        if (ped.napalmSlot >= 0) this.releaseNapalm(ped.napalmSlot);
-        if (ped.burningUntilMs > 0)
-          this.options.onNapalmExtinguished?.(ped.object);
-        ped.burningUntilMs = 0;
-      },
+      clearBurning: (ped, signedIndex) =>
+        this.clearNativeBurning(ped, signedIndex),
+      burningRequirements: (ped, signedIndex) =>
+        this.nativeBurningRequirements(ped, signedIndex),
       oneLess: (ctx) => {
         this.oneLessNativePed(ctx.owner, ctx.character, ctx.timeMs);
       },
@@ -2038,50 +2114,31 @@ export class PedestrianSystem {
           "electric",
         ),
       playNoise: (id, position) => this.options.onNoiseSound?.(id, position),
-      killGiblets: (ctx, _dispatch, packet) => {
+      // The ordinary bridge owns native packets and delegates to the shared emitter above.
+      killGiblets: () => ["source-native-impact-packet-owner"],
+      contactEffects: () => {},
+      scoreDeath: (ctx, state, packet) => {
         const ped = this.peds.find((p) => p.object === ctx.owner)!;
-        this.blood?.hit(
-          new THREE.Vector3(...packet.position),
-          ped.profile.bounds,
-          ctx.body.state.velocity,
-          packet.force,
-          ctx.timeMs,
-        );
-      },
-      contactEffects: (ctx, dispatch, result) => {
-        if (
-          "applied" in result &&
-          result.applied &&
-          ctx.character.hitPoints > 0 &&
-          ("damage" in result ? (result.damage ?? 0) : 0) > 0
-        )
-          this.blood?.hit(
-            new THREE.Vector3(...ctx.character.position),
-            this.peds.find((p) => p.object === ctx.owner)!.profile.bounds,
-            ctx.body.state.velocity,
-            dispatch.force?.length() ?? 0,
-            ctx.timeMs,
-          );
-      },
-      scoreDeath: (ctx, state) => {
-        const ped = this.peds.find((p) => p.object === ctx.owner)!;
-        // Ordinary Kill passes literal height0 (HW4ccd8f). Nonordinary falling
-        // and detailed retained award/cause outlets remain PED-09.
+        if (!packet || !Number.isFinite(Math.fround(packet.height)))
+          return ["source-pedestrian-score-height-provider"];
         this.options.onHit?.({
           timeMs: ctx.timeMs,
           group: ped.spec.group,
-          count: 1,
+          count: ctx.character.flags & 0x100 ? 1 : 0,
           total: this.hits,
           speed: ctx.body.state.velocity.length(),
-          position: new THREE.Vector3(...ctx.character.position),
+          position: new THREE.Vector3(
+            ...(packet.position ?? ctx.character.position),
+          ),
           owner: state.cache?.killer ?? undefined,
           cause: state.deathCause ?? "vehicle",
           awardContext: {
             cachePresent: state.cache !== null,
             cacheFlags: state.cache?.flags ?? 0,
-            height: 0,
+            height: packet.height,
             napalmDeadlineMs: state.cache?.napalmDeadlineMs ?? 0,
             pedVelocity: ctx.body.state.velocity.clone(),
+            pedStartingVelocity: ctx.body.beforeWorldVelocity.clone(),
           },
         });
       },
@@ -2089,6 +2146,69 @@ export class PedestrianSystem {
   }
   finishPhysics(): void {
     this.nativeBridge?.sync();
+  }
+  private nativeBurningRequirements(
+    ped: Ped,
+    signedValue: number,
+  ): readonly string[] {
+    if (signedValue >= 0) return [];
+    const slot = -signedValue - 1;
+    return Number.isInteger(slot) &&
+      slot >= 0 &&
+      slot < NAPALM_CAPACITY &&
+      ped.napalmSlot === slot &&
+      this.napalm[slot]?.target === ped
+      ? []
+      : ["source-negative-napalm-resource-owner"];
+  }
+  private clearNativeBurning(ped: Ped, signedValue: number): readonly string[] {
+    const requirements = this.nativeBurningRequirements(ped, signedValue);
+    if (requirements.length) return requirements;
+    if (ped.napalmSlot >= 0) this.releaseNapalm(ped.napalmSlot);
+    if (ped.burningUntilMs > 0) this.options.onNapalmExtinguished?.(ped.object);
+    ped.burningUntilMs = 0;
+    return [];
+  }
+  finishEffects(): void {
+    this.nativeBridge?.finishEffects();
+  }
+  private nativeBloodPacket(
+    ctx: NativePedRuntimeCallback<THREE.Object3D>,
+    packet: NativePedBloodPacket,
+  ) {
+    const goreLevel = this.combatFrame.goreLevel ?? this.nativeGoreLevel;
+    if (packet.kind === "spurt") return { ...packet, goreLevel };
+    const actor = ctx.instance.bones[0].actor;
+    const readBodyPose = () => {
+      actor.updateWorldMatrix(true, false);
+      const e = actor.matrixWorld.elements;
+      return Float32Array.from([
+        e[0],
+        e[1],
+        e[2],
+        e[4],
+        e[5],
+        e[6],
+        e[8],
+        e[9],
+        e[10],
+        e[12],
+        e[13],
+        e[14],
+      ]);
+    };
+    return {
+      ...packet,
+      goreLevel,
+      bodyPose: readBodyPose(),
+      readBodyPose,
+      localBounds: ctx.instance.template.profile.bounds,
+      localCentreOfMass: ctx.body.properties.centerOfMass.toArray() as [
+        number,
+        number,
+        number,
+      ],
+    };
   }
   disposeNativePhysics(): void {
     this.nativeBridge?.dispose();
@@ -2992,6 +3112,8 @@ export class PedestrianSystem {
     for (const models of this.nativeDeadModels.values()) models.dispose();
     this.nativeDeadModels.clear();
     this.nativeSlickMaterials?.dispose(() => !this.nativeBridge);
+    this.nativeSmear?.dispose();
+    this.nativeSmear = undefined;
     this.nativeDeadMaterials.dispose();
     for (const template of this.nativeTemplates.values()) template.dispose();
     this.nativeTemplates.clear();

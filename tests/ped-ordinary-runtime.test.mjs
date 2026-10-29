@@ -9,11 +9,13 @@ import {
   Vector3,
 } from "three";
 import { OrdinaryPedRuntime } from "../src/ped-ordinary-runtime.ts";
+import { PedestrianSystem } from "../src/pedestrians.ts";
 import { NativePedPresentation } from "../src/ped-presentation.ts";
 import { VehicleSimulation } from "../src/physics/simulation.ts";
 import { PedAction } from "../src/ped-rules.ts";
 import { nativePedBoxInertia } from "../src/ped-form.ts";
 import { acceptNativePedHalt } from "../src/physics/ped-body.ts";
+import { nativePedCalmHeadSequence } from "../src/ped-head-sequence.ts";
 
 const f = Math.fround,
   identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
@@ -408,6 +410,191 @@ test("ordinary bridge enrolls original population owners and admits one canonica
       false,
       "visible fallback is suppressed again for this frame's capacity denial",
     );
+  } finally {
+    h.bridge.dispose();
+  }
+});
+
+test("ordinary post-pose composition advances the real head sequence before native bleeding", () => {
+  const h = harness(1),
+    camera = new Vector3();
+  try {
+    h.bridge.prepare(camera, 40, true);
+    const owner = h.peds[0].object,
+      state = h.bridge.gameplay.state(owner);
+    assert.equal(
+      h.bridge.gameplay.startHeadSequence(owner, nativePedCalmHeadSequence, 40)
+        .status,
+      "complete",
+    );
+    assert.equal(state.cache.headSequence.address, 0x65d054);
+    h.bridge.prepare(camera, 166, true);
+    assert.equal(
+      state.cache.headSequence.address,
+      null,
+      "the source terminating calm entry runs through ordinary afterPose",
+    );
+    assert.equal(h.bridge.runtime.character(owner).body.owner, owner);
+  } finally {
+    h.bridge.dispose();
+  }
+});
+
+test("late smear consumer runs once per actual outer visit, including repeated source timestamps", () => {
+  const h = harness(1),
+    camera = new Vector3();
+  let sections = 0;
+  try {
+    h.bridge.options.skidSection = (section) => {
+      sections++;
+      return {
+        stop: false,
+        id: 0,
+        start: section.start,
+        end: section.position,
+      };
+    };
+    const batch = () => {
+      const process = h.bridge.gameplay.state(h.peds[0].object).cache;
+      const view = new DataView(
+        process.storage.buffer,
+        process.storage.byteOffset,
+        process.storage.byteLength,
+      );
+      view.setUint32(0xc4, 3, true);
+      view.setUint8(0xca, 2);
+      view.setFloat32(0xf4, 1, true);
+      view.setFloat32(0x10c, 1, true);
+      view.setFloat32(0x124, 0.2, true);
+      view.setFloat32(0x128, 0, true);
+    };
+    h.bridge.prepare(camera, 40, true);
+    batch();
+    h.bridge.finishEffects();
+    h.bridge.finishEffects();
+    assert.equal(sections, 1);
+    h.bridge.prepare(camera, 40, true);
+    batch();
+    h.bridge.finishEffects();
+    assert.equal(
+      sections,
+      2,
+      "a new visit with the same millisecond is a new native effects phase",
+    );
+  } finally {
+    h.bridge.dispose();
+  }
+});
+
+test("unknown negative burning resources preflight before scope flags, release or cache consumption", () => {
+  const h = harness(1),
+    camera = new Vector3();
+  try {
+    h.bridge.prepare(camera, 40, true);
+    const owner = h.peds[0].object,
+      ctx = h.bridge.runtime.callbackContext(owner),
+      cache = h.bridge.gameplay.state(owner).cache,
+      view = new DataView(
+        cache.storage.buffer,
+        cache.storage.byteOffset,
+        cache.storage.byteLength,
+      );
+    view.setInt32(0x98, -2, true);
+    h.bridge.options.clearBurning = () =>
+      assert.fail("unknown resource must not be cleared");
+    h.bridge.options.burningRequirements = () => [
+      "source-negative-napalm-resource-owner",
+    ];
+    const flags = ctx.character.flags,
+      body = ctx.character.body;
+    assert.deepEqual(h.bridge.beforeScopeRelease(ctx), [
+      "source-negative-napalm-resource-owner",
+    ]);
+    assert.equal(ctx.character.flags, flags);
+    assert.equal(view.getInt32(0x98, true), -2);
+    assert.equal(ctx.character.body, body);
+    assert.equal(h.bridge.pendingScope.size, 0);
+    assert.equal(h.simulation.phil.getState(body), 1);
+  } finally {
+    h.bridge.dispose();
+  }
+});
+
+test("real napalm reservations publish signed native ownership and scope release frees only their actual bolt", () => {
+  const h = harness(1),
+    system = new PedestrianSystem(() => 0, { spawn: new Vector3() }, []),
+    ped = h.peds[0];
+  system.peds = h.peds;
+  system.nativeBridge = h.bridge;
+  h.bridge.options.burningRequirements = (p, value) =>
+    system.nativeBurningRequirements(p, value);
+  h.bridge.options.clearBurning = (p, value) =>
+    system.clearNativeBurning(p, value);
+  try {
+    h.bridge.prepare(new Vector3(), 40, true);
+    const cache = h.bridge.gameplay.state(ped.object).cache;
+    const launch = () =>
+      system.useCombatPowerup(
+        49,
+        [],
+        { position: new Vector3(2, 0, 0), velocity: new Vector3(), owner: {} },
+        40,
+        40,
+      );
+    assert.equal(launch(), true);
+    assert.equal(ped.napalmSlot, 0);
+    assert.equal(cache.napalmDeadlineMs, -1);
+    assert.deepEqual(system.nativeBurningRequirements(ped, -1), []);
+    const actualTarget = system.napalm[0].target;
+    system.napalm[0].target = { ...ped };
+    assert.deepEqual(system.clearNativeBurning(ped, -1), [
+      "source-negative-napalm-resource-owner",
+    ]);
+    assert.equal(cache.napalmDeadlineMs, -1);
+    system.napalm[0].target = actualTarget;
+    assert.deepEqual(system.nativeBurningRequirements(ped, -2), [
+      "source-negative-napalm-resource-owner",
+    ]);
+    assert.deepEqual(system.clearNativeBurning(ped, -2), [
+      "source-negative-napalm-resource-owner",
+    ]);
+    assert.equal(system.combatStats.reserved, 1);
+    h.bridge.prepare(new Vector3(100, 0, 0), 80, false);
+    assert.equal(system.combatStats.reserved, 0);
+    assert.equal(system.combatStats.bolts.length, 0);
+    assert.equal(cache.napalmDeadlineMs, 0);
+    assert.equal(ped.alive, true, "pending-bolt cleanup is not a death");
+    assert.equal(h.bridge.runtime.character(ped.object).flags & 0x80, 0);
+    h.bridge.prepare(new Vector3(), 120, true);
+    assert.equal(launch(), true);
+    const currentCache = h.bridge.gameplay.state(ped.object).cache;
+    h.bridge.ignite(ped, 120, 15120, {});
+    system.releaseNapalm(0);
+    assert.equal(currentCache.napalmDeadlineMs, 15120);
+    assert.equal(ped.napalmSlot, -1);
+    assert.equal(
+      launch(),
+      false,
+      "nonzero native deadline prevents reservation",
+    );
+  } finally {
+    h.bridge.dispose();
+  }
+});
+
+test("native napalm reservation requires an admitted process cache", () => {
+  const h = harness(1),
+    ped = h.peds[0];
+  try {
+    assert.equal(h.bridge.reserveNapalm(ped, 0), false);
+    h.bridge.prepare(new Vector3(), 40, true);
+    assert.equal(h.bridge.reserveNapalm(ped, 4), true);
+    const cache = h.bridge.gameplay.state(ped.object).cache;
+    assert.equal(cache.napalmDeadlineMs, -5);
+    h.bridge.releaseNapalm(ped, 3);
+    assert.equal(cache.napalmDeadlineMs, -5);
+    h.bridge.releaseNapalm(ped, 4);
+    assert.equal(cache.napalmDeadlineMs, 0);
   } finally {
     h.bridge.dispose();
   }

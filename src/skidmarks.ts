@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import type {
+  NativePedSmearSection,
+  NativePedSmearSectionResult,
+} from "./ped-native-blood-phases";
 
 const f32 = Math.fround;
 const STEP = f32(0.05);
@@ -228,8 +232,9 @@ export class SkidMarkSystem {
     from: THREE.Vector3,
     to: THREE.Vector3,
     start: number,
+    width = STEP,
   ) {
-    const result = skidMarkTransform(from, to, mark.normal, start);
+    const result = skidMarkTransform(from, to, mark.normal, start, width);
     mark.mesh.matrix.copy(result.matrix);
     mark.mesh.matrixWorldNeedsUpdate = true;
     if (result.uv) {
@@ -242,6 +247,7 @@ export class SkidMarkSystem {
   private section(
     wheel: Wheel,
     material: THREE.Material,
+    width = STEP,
   ): SkidSampleResult["status"] {
     const n = wheel.normal,
       p = wheel.source,
@@ -259,7 +265,7 @@ export class SkidMarkSystem {
       const matrix = mark.mesh.matrix.elements;
       const widthSq = matrix[8] ** 2 + matrix[9] ** 2 + matrix[10] ** 2;
       const length = Math.hypot(matrix[0], matrix[1], matrix[2]);
-      const stepSq = STEP * STEP;
+      const stepSq = width * width;
       if (widthSq < 2 * stepSq && stepSq <= 2 * widthSq && length <= f32(0.5)) {
         const baseline = wheel.end.clone().sub(wheel.start).setY(0);
         const advance = p.clone().sub(wheel.end).setY(0);
@@ -270,7 +276,7 @@ export class SkidMarkSystem {
             STEP * baseline.length() &&
           displacement.dot(history) >= 0
         ) {
-          this.stretch(mark, wheel.start, p, wheel.total);
+          this.stretch(mark, wheel.start, p, wheel.total, width);
           this.extended++;
           return "extended";
         }
@@ -284,11 +290,54 @@ export class SkidMarkSystem {
     target.mesh.material = material;
     target.mesh.visible = true;
     target.normal.copy(n);
-    this.stretch(target, previous, p, wheel.total);
+    this.stretch(target, previous, p, wheel.total, width);
     wheel.id = this.cursor;
     this.cursor = (this.cursor + 1) % 100;
     this.created++;
     return "created";
+  }
+  /** Installed SkidSection4e9c90 entry for process-owned pedestrian state.
+   * This shares the existing100 slots/cursor with wheels, without retaining
+   * another per-ped state map or applying the wheel caller's spacing gate. */
+  nativeSection(
+    source: NativePedSmearSection,
+    material: THREE.Material,
+  ): NativePedSmearSectionResult {
+    if (this.disposed) throw new Error("Native skid pool is disposed");
+    if (!(material instanceof THREE.Material))
+      throw new Error("Native skid section requires the actual material");
+    if (
+      !Number.isInteger(source.id) ||
+      source.id < -32768 ||
+      source.id > 32767 ||
+      !Number.isFinite(f32(source.width)) ||
+      f32(source.width) <= 0 ||
+      !Number.isFinite(f32(source.totalDistance))
+    )
+      throw new Error("Invalid native skid section state");
+    const tuple = (value: readonly [number, number, number]) => {
+      if (!value || value.length !== 3)
+        throw new Error("Invalid native skid section vector");
+      return vector(new THREE.Vector3(...value));
+    };
+    const state: Wheel = {
+      active: true,
+      id: source.id,
+      total: f32(source.totalDistance),
+      source: tuple(source.position),
+      normal: tuple(source.normal),
+      previous: tuple(source.previousPosition),
+      previousNormal: tuple(source.previousNormal),
+      start: tuple(source.start),
+      end: tuple(source.end),
+    };
+    const status = this.section(state, material, f32(source.width));
+    return {
+      stop: status === "discontinuity",
+      id: state.id,
+      start: state.start.toArray() as [number, number, number],
+      end: state.end.toArray() as [number, number, number],
+    };
   }
   singlePhysicsWheelSample(sample: SkidWheelSample): SkidSampleResult {
     if (!Number.isInteger(sample.wheel) || sample.wheel < 0 || sample.wheel > 3)

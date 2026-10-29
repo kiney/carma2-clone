@@ -16,6 +16,7 @@ import {
   type EdgeFeatureDiagnostics,
 } from "./edge-feature-index";
 import { NativeHierarchyQuiet } from "./hierarchy-quiet";
+import { NativePhysicsObjectRecords } from "./native-object-records";
 import type { WorldContactProfile } from "./world-contact-profile";
 import {
   runLocalResponses,
@@ -740,6 +741,7 @@ export class VehicleSimulation {
     },
     writeBinding: (body, header, indicator) => {
       Object.assign(this.philFieldsFor(body), { header, indicator });
+      if (header === null) this.nativeObjectRecords.release(body);
       if (isNativePedBody(body) || isNativePedBoneBody(body))
         body.headerState = header?.state ?? 0;
     },
@@ -845,6 +847,31 @@ export class VehicleSimulation {
   private quietGravity = new Map<RigidBody, Vector3>();
   private quietCollisionFlags?: ReadonlyMap<RigidState, number>;
   private quietSolverLocalV?: ReadonlyMap<RigidState, Vector3>;
+  readonly nativeObjectRecords = new NativePhysicsObjectRecords<RigidBody>();
+  /** Actual Object+1a8 owner: solver spill first, otherwise the current native
+   * preparation cache. A fresh world-V rotation is not this retained field. */
+  pedestrianAwardLocalVelocity(body: RigidBody): Vector3 | null {
+    const solver = this.quietSolverLocalV?.get(body.state);
+    if (solver) return solver.clone();
+    const state = this.hierarchyQuiet.get(body as SimulationBody);
+    return state && (state.prepared || state.lastResult)
+      ? state.localVelocity.clone()
+      : null;
+  }
+  /** Pointer-based effects use real bounded Wasm records under the documented
+   * browser allocator policy, without claiming Windows heap address parity. */
+  nativeObjectAddress(body: RigidBody): number {
+    const local = this.pedestrianAwardLocalVelocity(body);
+    this.nativeObjectRecords.update(body, {
+      worldVelocity: body.state.velocity.toArray() as [number, number, number],
+      ...(local
+        ? { localVelocity: local.toArray() as [number, number, number] }
+        : {}),
+      mass: body.properties.mass,
+      typeByte: classifyNativePedOther(body)?.type ?? 0,
+    });
+    return this.nativeObjectRecords.address(body);
+  }
   private quietFlag(
     body: RigidBody,
     fallback: Map<RigidBody, number> | null,
@@ -5602,6 +5629,7 @@ export class VehicleSimulation {
    * Pedestrian/bone owners and mine objects are not car-spec wrappers. */
   pedestrianAttributionDriver(owner: object): number | undefined {
     if (!("properties" in owner) || !("state" in owner)) return undefined;
+    if ("damage" in owner) return (owner as SimulatedCar).state.driver;
     return this.nativeCrashDriver(owner as RigidBody);
   }
   /** Source car-spec+c8. Initial free-part ownership is copied once; later
@@ -6634,6 +6662,7 @@ export class VehicleSimulation {
     this.movingWorld = [];
     this.cars = [];
     for (const body of this.phil.registeredBodies) this.phil.remove(body);
+    this.nativeObjectRecords.dispose();
     this.inactiveCars = new WeakSet();
   }
 }

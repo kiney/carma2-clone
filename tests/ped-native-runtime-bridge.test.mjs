@@ -20,6 +20,41 @@ const f = Math.fround,
 const world = { raycast: () => null, querySurfaces: () => [] };
 const frame = (timeMs = 0) => ({ cameraOrigin: [0, 0, -10], timeMs, settings });
 const sim = () => new VehicleSimulation(world, new Group());
+
+test("common release prerequisites reject before a mutating scope outlet can vanish an owned actor", () => {
+  const simulation = sim();
+  let calls = 0;
+  const runtime = new NativePedRuntime(simulation, {
+    levelOut: 0,
+    hooks: {
+      beforeRelease: (ctx) => {
+        calls++;
+        ctx.character.flags |= 0x80;
+        return [];
+      },
+    },
+  });
+  runtime.registerPersonality("first", assetsFixture());
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame());
+  runtime.activate(c.owner);
+  const body = c.body;
+  const visits = runtime.prepareFrame({
+    ...frame(100),
+    cameraOrigin: [1000, 1000, 1000],
+  });
+  assert.equal(visits[0].pool.status, "provider-required");
+  assert.ok(
+    visits[0].pool.requiredProviders.includes(
+      "native-active-halt-continuation",
+    ),
+  );
+  assert.equal(calls, 0);
+  assert.equal(c.flags & 0x80, 0);
+  assert.equal(c.body, body);
+  assert.equal(simulation.phil.getState(body), 2);
+  runtime.dispose();
+});
 function assetsFixture(name = "first", capacities = {}) {
   const material = new MeshBasicMaterial(),
     geometry = new BoxGeometry(0.1, 0.1, 0.1),
@@ -676,4 +711,265 @@ test("releaseCurrent keeps ACT/current part owner until deferred detached PHIL r
   assert.equal(simulation.phil.count, 0);
   simulation.removePedBoneBody = remove;
   runtime.dispose();
+});
+
+test("release phases bracket actual ownership and run once for scope and current release", () => {
+  for (const reason of ["scope", "current"]) {
+    const events = [];
+    let c, body, instance;
+    const { runtime, simulation } = setup({
+      beforeRelease(ctx, actualReason) {
+        assert.equal(actualReason, reason);
+        assert.equal(ctx.character, c);
+        assert.equal(ctx.body, body);
+        assert.equal(ctx.instance, instance);
+        assert.equal(runtime.allocation(c.owner).body, body);
+        assert.equal(body.owner, c.owner);
+        assert.equal(simulation.phil.getState(body), 2);
+        assert.equal(instance.group.parent, simulation.scene);
+        assert.ok(instance.bones[0].model);
+        assert.equal(runtime.bodyPool.counts(c.formKey).renderOwned, 1);
+        assert.equal(runtime.bodyPool.counts(c.formKey).simpleOwned, 1);
+        events.push("before");
+        return [];
+      },
+      onHalt() {
+        assert.equal(reason, "scope");
+        events.push("halt");
+        return { returnValue: 1 };
+      },
+      afterRelease(character, actualReason) {
+        assert.equal(actualReason, reason);
+        assert.equal(character, c);
+        assert.equal(runtime.character(c.owner), c);
+        assert.equal(c.body, null);
+        assert.equal(c.instance, null);
+        assert.equal(c.physicsFlags, 0);
+        assert.equal(runtime.allocation(c.owner), null);
+        assert.equal(simulation.phil.getState(body), 0);
+        assert.equal(simulation.phil.count, 0);
+        assert.equal(simulation.pedBodies.length, 0);
+        assert.equal(body.owner, null);
+        assert.equal(body.onMoved, undefined);
+        assert.equal(instance.group.parent, null);
+        assert.equal(instance.bones[0].model, null);
+        assert.equal(runtime.bodyPool.counts(c.formKey).renderOwned, 0);
+        assert.equal(runtime.bodyPool.counts(c.formKey).simpleOwned, 0);
+        events.push("after");
+      },
+    });
+    c = enroll(runtime, {});
+    runtime.prepareFrame(frame(100));
+    body = c.body;
+    instance = c.instance;
+    runtime.activate(c.owner);
+    if (reason === "scope") {
+      body.state.position.set(200, 1, 0);
+      runtime.updateState(c.owner, { position: [200, 1, 0] });
+      assert.equal(
+        runtime.prepareFrame(frame(20000))[0].pool.status,
+        "out-of-scope",
+      );
+      assert.deepEqual(events, ["before", "halt", "after"]);
+      runtime.prepareFrame(frame(20001));
+    } else {
+      assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+      assert.deepEqual(events, ["before", "after"]);
+    }
+    const afterFirst = [...events];
+    runtime.releaseCurrent(c.owner);
+    assert.deepEqual(
+      events,
+      afterFirst,
+      "already released resources have no second release phase",
+    );
+    runtime.dispose();
+    assert.deepEqual(events, afterFirst);
+  }
+});
+
+test("deferred root and part releases retain original scope/current reason until one final callback", () => {
+  for (const reason of ["scope", "current"])
+    for (const deferred of ["root", "part"]) {
+      const events = [];
+      let c, root, part, instance;
+      const { runtime, simulation } = setup({
+        beforeRelease(ctx, actualReason) {
+          assert.equal(actualReason, reason);
+          assert.equal(ctx.body, root);
+          assert.equal(ctx.instance, instance);
+          assert.ok(runtime.allocation(c.owner));
+          assert.equal(root.owner, c.owner);
+          assert.equal(instance.group.parent, simulation.scene);
+          if (part) {
+            assert.equal(part.owner, c.owner);
+            assert.equal(simulation.phil.getState(part), 2);
+            assert.equal(runtime.bonePool.allocation(c).bodies[1], part);
+          }
+          events.push("before");
+          return [];
+        },
+        afterRelease(character, actualReason) {
+          assert.equal(
+            actualReason,
+            reason,
+            "pending release keeps its initial reason even when retried through releaseCurrent",
+          );
+          assert.equal(character, c);
+          assert.equal(runtime.allocation(c.owner), null);
+          assert.equal(c.body, null);
+          assert.equal(c.instance, null);
+          assert.equal(root.owner, null);
+          assert.equal(simulation.phil.getState(root), 0);
+          assert.equal(simulation.phil.count, 0);
+          assert.equal(simulation.pedBodies.length, 0);
+          assert.equal(instance.group.parent, null);
+          assert.ok(instance.bones.every((bone) => bone.model === null));
+          assert.equal(runtime.bodyPool.counts(c.formKey).renderOwned, 0);
+          assert.equal(runtime.bodyPool.counts(c.formKey).simpleOwned, 0);
+          if (part) {
+            assert.equal(simulation.phil.getState(part), 0);
+            assert.equal(part.owner, null);
+            assert.equal(runtime.bonePool.allocation(c), null);
+            assert.equal(c.bonedSlot, -1);
+            assert.equal(simulation.pedBoneBodies.length, 0);
+          }
+          events.push("after");
+        },
+      });
+      c = enroll(runtime, {});
+      runtime.prepareFrame(frame(100));
+      root = c.body;
+      instance = c.instance;
+      if (deferred === "part") part = severHead(runtime, c);
+      const method =
+        deferred === "root" ? "removePedBody" : "removePedBoneBody";
+      const remove = simulation[method].bind(simulation);
+      let requests = 0;
+      simulation[method] = () => {
+        requests++;
+      };
+      if (reason === "scope") {
+        runtime.updateState(c.owner, { position: [200, 1, 0] });
+        assert.equal(
+          runtime.prepareFrame(frame(20000))[0].pool.status,
+          "release-pending",
+        );
+      } else
+        assert.equal(
+          runtime.releaseCurrent(c.owner).status,
+          "provider-required",
+        );
+      assert.deepEqual(events, ["before"]);
+      assert.equal(runtime.allocation(c.owner).phase, "release-pending");
+      assert.equal(c.body, root);
+      assert.equal(c.instance, instance);
+      assert.equal(instance.group.parent, simulation.scene);
+      runtime.releaseCurrent(c.owner);
+      assert.equal(requests, 1, "pending actual header is not removed twice");
+      assert.deepEqual(events, ["before"]);
+      remove(part ?? root);
+      assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+      assert.deepEqual(events, ["before", "after"]);
+      runtime.releaseCurrent(c.owner);
+      assert.deepEqual(events, ["before", "after"]);
+      simulation[method] = remove;
+      runtime.dispose();
+      assert.deepEqual(events, ["before", "after"]);
+    }
+});
+
+test("release preflight refusal keeps ownership and never invokes afterRelease", () => {
+  for (const reason of ["scope", "current"]) {
+    const events = [];
+    let allow = false;
+    const { runtime, simulation } = setup({
+      beforeRelease(ctx, actualReason) {
+        assert.equal(actualReason, reason);
+        assert.equal(runtime.allocation(ctx.owner).body, ctx.body);
+        assert.equal(simulation.phil.getState(ctx.body), 1);
+        events.push("before");
+        return allow ? [] : ["test-release-resource-owner"];
+      },
+      afterRelease() {
+        events.push("after");
+      },
+    });
+    const c = enroll(runtime, {});
+    runtime.prepareFrame(frame(100));
+    const body = c.body,
+      instance = c.instance;
+    const release = () => {
+      if (reason === "current") return runtime.releaseCurrent(c.owner);
+      runtime.updateState(c.owner, { position: [200, 1, 0] });
+      return runtime.prepareFrame(frame(20000))[0].pool;
+    };
+    const refused = release();
+    assert.equal(refused.status, "provider-required");
+    assert.deepEqual(refused.requiredProviders, [
+      "test-release-resource-owner",
+    ]);
+    assert.deepEqual(events, ["before"]);
+    assert.equal(c.body, body);
+    assert.equal(c.instance, instance);
+    assert.equal(body.owner, c.owner);
+    assert.equal(simulation.phil.getState(body), 1);
+    assert.equal(runtime.allocation(c.owner).phase, "owned");
+    allow = true;
+    assert.notEqual(release().status, "provider-required");
+    assert.deepEqual(events, ["before", "before", "after"]);
+    runtime.dispose();
+    assert.deepEqual(events, ["before", "before", "after"]);
+  }
+});
+
+test("release gameplay phases are absent during whole-race teardown and failed initial admission", () => {
+  for (const failedAdmission of [false, true]) {
+    const { runtime, simulation } = setup({
+      beforeRelease() {
+        assert.fail("teardown/admission failure has no gameplay beforeRelease");
+      },
+      afterRelease() {
+        assert.fail("teardown/admission failure has no gameplay afterRelease");
+      },
+    });
+    const register = simulation.phil.registerImmediate.bind(simulation.phil);
+    if (failedAdmission) simulation.phil.registerImmediate = () => 1;
+    const c = enroll(runtime, {});
+    const visit = runtime.prepareFrame(frame(100))[0];
+    if (failedAdmission) {
+      assert.equal(visit.pool.status, "exhausted");
+      assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+    } else {
+      runtime.activate(c.owner);
+      severHead(runtime, c);
+    }
+    simulation.phil.registerImmediate = register;
+    runtime.dispose();
+    runtime.dispose();
+    assert.equal(simulation.phil.count, 0);
+  }
+});
+
+test("teardown cancels the final gameplay release phase of an already pending release", () => {
+  const events = [];
+  const { runtime, simulation } = setup({
+    beforeRelease(_ctx, reason) {
+      events.push(["before", reason]);
+      return [];
+    },
+    afterRelease(_character, reason) {
+      events.push(["after", reason]);
+    },
+  });
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  const remove = simulation.removePedBody.bind(simulation);
+  simulation.removePedBody = () => {};
+  assert.equal(runtime.releaseCurrent(c.owner).status, "provider-required");
+  assert.deepEqual(events, [["before", "current"]]);
+  simulation.removePedBody = remove;
+  runtime.dispose();
+  assert.equal(simulation.phil.count, 0);
+  assert.deepEqual(events, [["before", "current"]]);
 });

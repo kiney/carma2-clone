@@ -48,6 +48,7 @@ import {
   type NativeTrackModelResource,
 } from "./native-track-resources";
 import type { MatMaterial } from "./formats";
+import { findNativePedFloorBelow } from "./ped-native-floor";
 import type { NativeWorldFaceQuery } from "./physics/world-face-cache";
 import { cameraTriangleInBox } from "./camera/triangle-box";
 import { cameraShapeRay } from "./camera/own-shape";
@@ -2045,6 +2046,39 @@ export class WorldCollision {
    * overrides are per body, never a mutation of shared triangle state. */
   modifier(index: number): SurfaceModifier {
     return this.modifiers[index] ?? DEFAULT_SURFACE;
+  }
+  /** Exact source ACT/MODEL floor picker for pedestrian falling awards. */
+  nativePedFloorBelow(
+    origin: THREE.Vector3,
+    excludedPlayerActor?: THREE.Object3D,
+  ) {
+    if (!this.nativeScene)
+      return {
+        height: -3.4028234663852886e38,
+        requiredProviders: ["source-native-ped-floor-scene"],
+      };
+    return findNativePedFloorBelow(
+      this.nativeScene,
+      origin.toArray() as [number, number, number],
+      excludedPlayerActor,
+      {
+        prepareActors: (roots) => {
+          const seen = new Set<NativeOrderedActor>();
+          const prepare = (actor: NativeOrderedActor) => {
+            if (seen.has(actor)) return;
+            seen.add(actor);
+            this.syncNativeActor(actor);
+            if (actor.renderStyle === 1) return;
+            this.syncNativeGeometry(actor);
+            enumerateNativeActorChildren(actor, (child) => {
+              prepare(child);
+              return 0;
+            });
+          };
+          for (const root of roots) prepare(root);
+        },
+      },
+    );
   }
   /** Installed FindYBelow's nearest downward triangle traversal. Height below
    * -100 is rejected by every fallen-world consumer, so bound the finite query

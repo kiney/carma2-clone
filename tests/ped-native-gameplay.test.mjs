@@ -608,6 +608,38 @@ test("moved and halted period-only core calls bypass gameplay FSM and preserve a
   assert.equal(h.draws(), 1);
 });
 
+test("scope scoring owns source HP/action/time without FullKill, count, model change or immortality gate", () => {
+  const h = create(fixture(), {}, globals({ immortal: true, goreLevel: 2 }));
+  const beforeModels = h.c.instance.bones.map((b) => b.model),
+    cache = h.state.cache;
+  const ctx = { ...h.runtime.callbackContext(h.c.owner), timeMs: 1234 };
+  const result = h.gameplay.scoreFromScope(ctx, 12.5, "environment", cache);
+  assert.equal(result.status, "complete");
+  assert.equal(h.c.hitPoints, 0);
+  assert.equal(h.state.action, 6);
+  assert.equal(h.state.deathTimeMs, 1234);
+  assert.equal(
+    h.c.flags & 0x100,
+    0,
+    "this source caller does not call OneLess",
+  );
+  assert.deepEqual(
+    h.c.instance.bones.map((b) => b.model),
+    beforeModels,
+  );
+  assert.deepEqual(
+    h.events
+      .filter((e) => ["count", "giblets", "score"].includes(e[0]))
+      .map((e) => e[0]),
+    ["score"],
+  );
+  assert.equal(
+    h.gameplay.scoreFromScope(ctx, 0, "napalm", cache).status,
+    "ineligible",
+  );
+  assert.equal(h.draws(), 0);
+});
+
 test("halt absent source providers refuses acceptance rather than synthesizing recovery", () => {
   const h = create();
   h.runtime.activate(h.c.owner);

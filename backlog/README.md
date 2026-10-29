@@ -12,6 +12,16 @@ hits, release/reacquisition, reload, retained-visible admission, powerups and
 hardware Chromium are validated. Full integrated suite:3551 passed. See
 [implementation and explicit remaining boundaries](../docs/ped06-production-integration.md).
 
+P2 PED-07 / TASK-97, PED-08 / TASK-98 and PED-09 / TASK-99 are `done`:
+ordinary falls/get-up, independent severed parts and native effect/award outlets
+now use actual population/FORM/PHIL owners. Stock and Advanced contacts,
+release/reset, original gore selection, blood/shared marks, score chronology
+and actual falling height are validated. Full suite:3670 passed,6 optional
+cases skipped. Full articulated/nonhumanoid/exploding providers remain
+PED-11 / TASK-134. See [recovery](../docs/ped07-production-integration.md),
+[severed parts](../docs/ped08-production-integration.md) and
+[awards/effects](../docs/ped09-production-integration.md).
+
 P2 QUA-13 / TASK-132 is `done`: every playtest now keeps an automatic rolling
 three-minute bug history with a512MiB recorder budget, including download
 headroom. **Save bug capture** exports a local `.c2bug` file without MCP.
@@ -44,18 +54,19 @@ does not reproduce the failure. The bounded impact/component recorder remains
 available for another capture; see [evidence and boundaries](../docs/c2-ignore-world-reclaim-re.md).
 
 The user selected the following implementation order. ANI-01/PED-04 complete the
-first animation/resource stage. PED-06 is complete; the remaining three P2 pedestrian tickets follow in `next`.
+first animation/resource stage. PED-06 through PED-09 are complete; the exceptional articulated-body follow-up
+remains separately tracked in PED-11 / TASK-134.
 Existing numeric priorities remain unchanged: selection order is explicit and
-must not be inferred from priority alone. No ticket currently occupies a WIP slot.
+must not be inferred from priority alone. No pedestrian ticket currently occupies a WIP slot.
 
 | Stage | Ticket                                | Status | Priority | Purpose                                                                                                      |
 | ----- | ------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------ |
 | 0b    | PERF-25 / TASK-130                    | done   | P1       | Resolve recurring anchored-scenery contact retries in Fridge Racer without hiding them through forced sleep. |
 | 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices.  |
 | 2     | PED-06 / TASK-96                      | done   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                        |
-| 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                              |
-| 4     | PED-08 / TASK-98                      | next   | P2       | Visible severing and articulated body contacts.                                                              |
-| 5     | PED-09 / TASK-99                      | next   | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                               |
+| 3     | PED-07 / TASK-97                      | done   | P2       | Grounding, living falls and recovery ownership.                                                              |
+| 4     | PED-08 / TASK-98                      | done   | P2       | Visible severing and articulated body contacts.                                                              |
+| 5     | PED-09 / TASK-99                      | done   | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                               |
 
 P1 PED-10 / TASK-125 was inserted and completed during this stage: already
 visible retained pedestrians inside the native process box now resume movement

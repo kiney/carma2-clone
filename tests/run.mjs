@@ -1,6 +1,14 @@
 import "./ped-ordinary-volume.test.mjs";
 import "./ped-stored-poses.test.mjs";
 import "./ped-gore-options.test.mjs";
+import "./native-object-records.test.mjs";
+import "./ped-award-geometry.test.mjs";
+import "./ped-scope-effects.test.mjs";
+import "./ped-native-floor.test.mjs";
+import "./ped-native-blood-phases.test.mjs";
+import "./ped-native-smear-pool.test.mjs";
+import "./ped-smear-material.test.mjs";
+import "./ped-giblet-source.test.mjs";
 import "./ped-ordinary-runtime.test.mjs";
 import "./ped-ordinary-steering.test.mjs";
 import "./ped-ordinary-object-scan.test.mjs";

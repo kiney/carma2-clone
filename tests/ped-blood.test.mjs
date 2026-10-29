@@ -122,6 +122,20 @@ function syntheticPedSettings(
     "5",
     "100",
     "100",
+    "sphereclumped",
+    "0.01",
+    "impact",
+    "0,0",
+    "1",
+    "1",
+    "0",
+    "1",
+    "10",
+    "0.1,0.2",
+    "1",
+    "4",
+    "255,0,0",
+    "safechunk",
   ].join("\n");
 }
 function runtime() {

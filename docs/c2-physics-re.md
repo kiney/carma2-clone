@@ -702,3 +702,19 @@ second generic provider. Real Stock/Advanced falling bodies land, dispatch one
 halt, play their authored get-up and release selected ground on one completion.
 See [integration, validation and explicit boundaries](ped07-production-integration.md)
 and [volume addresses/formulas](c2-ped-ordinary-volume-re.md).
+
+## Ordinary severed parts and effects integration (PED-08/PED-09)
+
+Ordinary authored populations now use original gore options, bounded FORM
+removed-pose stores and actual independent BOX/SPHERE PHIL parts. Scope,
+repair/reset and resource disposal retain distinct canonical owners. Full
+articulated/nonhumanoid/exploding providers remain explicitly tracked in PED-11.
+See [severing integration](ped08-production-integration.md).
+
+Native physical causes now reach existing award and blood consumers with actual
+driver/geometry, retained motion and source count/score chronology. Impact,
+stump bleeding and late world smears share original resource pools; off-scope
+falls use the installed ACT/MODEL floor picker. Pending napalm carries its real
+signed reservation and validated cleanup owner. See [integration and validation](ped09-production-integration.md),
+[blood phases](ped09-blood-phases-re.md), [fragment consumers](ped09-giblet-source-re.md)
+and [native floor picker](ped09-native-floor-re.md).

@@ -57,7 +57,27 @@ import {
   nativePedCalmHeadSequence,
 } from "./ped-head-sequence";
 import { selectNativePedNoise } from "./ped-noise";
+import { NAPALM_CAPACITY } from "./combat-powerups";
 import type { MatMaterial } from "./formats";
+import {
+  planNativePedScopeExit,
+  nativePedFallingHeight,
+  type NativePedScopePlan,
+} from "./ped-scope-effects";
+import {
+  activeNativePedBloodPacket,
+  createNativePedImpactBloodPacket,
+  accumulateNativePedWorldSmear,
+  consumeNativePedWorldSmear,
+  processNativePedBleeding,
+  type NativePedBloodPacket,
+  type NativePedSmearSection,
+  type NativePedSmearSectionResult,
+} from "./ped-native-blood-phases";
+import type {
+  NativePedContactDispatch,
+  NativePedContactResult,
+} from "./physics/ped-body";
 import type {
   NativePedGameplay,
   NativePedGameplayCache,
@@ -84,12 +104,30 @@ export interface OrdinaryPedRuntimeOptions {
   readSlickMaterials: () => ReadonlyMap<string, Material> | null;
   resolveMaterial?: (name: string) => MatMaterial | null | undefined;
   groundAt: (x: number, z: number, nearY: number) => number | null;
+  readScopeFloor?: (position: PedVector) => {
+    height: number;
+    requiredProviders: readonly string[];
+  };
   bind: (
     ped: Ped,
     character: ReturnType<NativePedRuntime<Object3D>["enroll"]>,
   ) => void;
   onVanish?: (context: NativePedRuntimeCallback<Object3D>) => void;
   clearBurning?: (ped: Ped, signedIndex: number) => void | readonly string[];
+  burningRequirements?: (ped: Ped, signedValue: number) => readonly string[];
+  readBloodSettings?: () => {
+    scrapeStart: number;
+    lumpsPerEmission: number;
+  } | null;
+  emitBlood?: (
+    context: NativePedRuntimeCallback<Object3D>,
+    packet: NativePedBloodPacket,
+  ) => void | readonly string[];
+  preflightBlood?: (
+    context: NativePedRuntimeCallback<Object3D>,
+    packet: NativePedBloodPacket,
+  ) => readonly string[];
+  skidSection?: (section: NativePedSmearSection) => NativePedSmearSectionResult;
   oneLess: OrdinaryNativePedGameplayOptions<Object3D>["oneLess"];
   scoreDeath: OrdinaryNativePedGameplayOptions<Object3D>["scoreDeath"];
   killGiblets: OrdinaryNativePedGameplayOptions<Object3D>["killGiblets"];
@@ -121,6 +159,21 @@ export class OrdinaryPedRuntime {
     NativePedRuntimeCallback<Object3D>
   >();
   private disposed = false;
+  private bleedGlobals = { lastMutantBleedTimeMs: 0 };
+  private outerVisitSerial = 0;
+  private lastSmearSerial = -1;
+  private processedEffectsOwners = new Set<Object3D>();
+  private pendingScope = new Map<
+    Object3D,
+    {
+      ctx: NativePedRuntimeCallback<Object3D>;
+      plan: NativePedScopePlan;
+      cache: NativePedGameplayCache | null;
+      burning: number;
+      height: number;
+      position: PedVector;
+    }
+  >();
   private lastFrame?: { camera: PedVector; time: number };
   private visits = {
     processed: 0,
@@ -160,8 +213,28 @@ export class OrdinaryPedRuntime {
       readAllocation: (owner) => this.runtime.allocation(owner),
       oneLess: options.oneLess,
       scoreDeath: options.scoreDeath,
-      killGiblets: options.killGiblets,
-      contactEffects: options.contactEffects,
+      killGiblets: (ctx, dispatch, packet) =>
+        options.emitBlood
+          ? this.emitBlood(
+              ctx,
+              createNativePedImpactBloodPacket({
+                point: packet.position,
+                pedestrianPosition: ctx.character.position,
+                velocity: ctx.body.state.velocity.toArray() as [
+                  number,
+                  number,
+                  number,
+                ],
+                other: null,
+                pedAddress: this.nativeAddress(ctx.owner),
+                timeMs: ctx.timeMs,
+                force: packet.force,
+                startSize: 1,
+              }),
+            )
+          : options.killGiblets(ctx, dispatch, packet),
+      contactEffects: (ctx, dispatch, result) =>
+        this.contactBlood(ctx, dispatch, result),
       onMovedVolume: (ctx) =>
         moveOrdinaryPedInVolume(ctx.body, ctx.character.hitPoints, () =>
           sharedNativeRandom.nextInteger(),
@@ -193,6 +266,15 @@ export class OrdinaryPedRuntime {
       hooks: {
         ...this.gameplay.hooks,
         beforePose: (context) => this.beforePose(context),
+        afterPose: (context) => {
+          const head = this.gameplay.hooks.afterPose?.(context);
+          return head && head.status !== "complete"
+            ? head
+            : this.bleed(context);
+        },
+        beforeRelease: (context, reason) =>
+          reason === "scope" ? this.beforeScopeRelease(context) : [],
+        afterRelease: (character) => this.afterScopeRelease(character.owner),
         onRenderPrepared: (character, instance) => {
           const effect = options.effects.get(character.personality);
           if (effect) this.unbind.set(character.owner, effect.bind(instance));
@@ -427,6 +509,290 @@ export class OrdinaryPedRuntime {
     this.pendingVanish.delete(ctx.owner);
     return {};
   }
+  nativeAddress(owner: Object3D): number {
+    const index = this.recordIndices.get(owner);
+    if (index === undefined)
+      throw new Error("Unknown native pedestrian record owner");
+    return this.records.address(index);
+  }
+  private emitBlood(
+    ctx: NativePedRuntimeCallback<Object3D>,
+    packet: NativePedBloodPacket,
+  ): readonly string[] {
+    if (!this.options.emitBlood) return ["source-native-blood-consumer-owner"];
+    const missing = this.options.preflightBlood?.(ctx, packet) ?? [];
+    return missing.length
+      ? missing
+      : (this.options.emitBlood(ctx, packet) ?? []);
+  }
+  private contactBlood(
+    ctx: NativePedRuntimeCallback<Object3D>,
+    dispatch: NativePedContactDispatch,
+    result: NativePedContactResult,
+  ): readonly string[] {
+    if (!this.options.emitBlood)
+      return this.options.contactEffects(ctx, dispatch, result) ?? [];
+    if (
+      dispatch.phase !== "active" ||
+      !("applied" in result) ||
+      !result.applied
+    )
+      return [];
+    const settings = this.options.readBloodSettings?.();
+    const point = dispatch.firstRow?.point;
+    const goreLevel = this.options.frame().goreLevel ?? 1;
+    const volumeGravity =
+      ctx.body.specialVolume?.volume?.gravityMultiplier ?? null;
+    if (
+      goreLevel <= 0 ||
+      (volumeGravity !== null && Math.fround(volumeGravity) < 1)
+    )
+      return [];
+    if (!settings) return ["source-native-blood-settings-owner"];
+    if (!point) return ["source-native-blood-contact-point-owner"];
+    const packet = activeNativePedBloodPacket({
+      goreLevel,
+      volumeGravity,
+      effectiveLambda: result.effectiveLambda,
+      simpleMass: ctx.body.properties.mass,
+      point: point.toArray() as [number, number, number],
+      pedestrianPosition: ctx.character.position,
+      velocity: ctx.body.state.velocity.toArray() as [number, number, number],
+      other: dispatch.other
+        ? {
+            address: this.options.simulation.nativeObjectAddress(
+              dispatch.other,
+            ),
+            velocity: dispatch.other.state.velocity.toArray() as [
+              number,
+              number,
+              number,
+            ],
+          }
+        : null,
+      pedAddress: this.nativeAddress(ctx.owner),
+      timeMs: ctx.timeMs,
+      startSize: settings.scrapeStart,
+    });
+    const missing = packet ? [...this.emitBlood(ctx, packet)] : [];
+    const process = this.gameplay.state(ctx.owner).cache as Process | null;
+    if (process) {
+      const face = dispatch.firstRow?.sourceSurface;
+      const smear = accumulateNativePedWorldSmear(process.storage, {
+        goreLevel,
+        volumeGravity,
+        hitPoints: ctx.character.hitPoints,
+        otherPresent: !!dispatch.other,
+        point: point.toArray() as [number, number, number],
+        velocity: ctx.body.state.velocity.toArray() as [number, number, number],
+        face: face
+          ? {
+              normal: face.normal.toArray() as [number, number, number],
+              materialName: face.material,
+              pixelmapType: face.pixelmapType,
+            }
+          : null,
+      });
+      missing.push(...smear.requiredProviders);
+    }
+    return missing;
+  }
+  private bleed(
+    ctx: NativePedRuntimeCallback<Object3D>,
+  ): NativePedInstanceResult {
+    if (!this.options.emitBlood) return complete();
+    const frame = this.options.frame(),
+      gravity = ctx.body.specialVolume?.volume?.gravityMultiplier ?? null;
+    if (
+      (frame.goreLevel ?? 1) <= 0 ||
+      (gravity !== null && Math.fround(gravity) < 1)
+    )
+      return complete();
+    if (
+      !ctx.character.removedBoneMask &&
+      (!frame.pedestrianAnimation?.mutantSpeed ||
+        ctx.character.hitPoints > 0 ||
+        this.gameplay.state(ctx.owner).action !== 6)
+    )
+      return complete();
+    const settings = this.options.readBloodSettings?.();
+    if (!settings)
+      return {
+        ...complete(),
+        status: "provider-required",
+        requiredProviders: ["source-native-blood-settings-owner"],
+      };
+    const process = this.gameplay.state(ctx.owner).cache as Process | null;
+    const allocation = this.runtime.bonePool.allocation(ctx.character);
+    const result = processNativePedBleeding(
+      {
+        goreLevel: this.options.frame().goreLevel ?? 1,
+        volumeGravity:
+          ctx.body.specialVolume?.volume?.gravityMultiplier ?? null,
+        processStorage: process?.storage ?? null,
+        timeMs: ctx.timeMs,
+        hitPoints: ctx.character.hitPoints,
+        action: this.gameplay.state(ctx.owner).action,
+        mutantSpeed: this.options.frame().pedestrianAnimation?.mutantSpeed ?? 0,
+        removedBoneMask: ctx.character.removedBoneMask,
+        vanishedBoneMask: ctx.character.vanishedBoneMask,
+        pedestrianPosition: ctx.character.position,
+        pedAddress: this.nativeAddress(ctx.owner),
+        bodyVelocity: ctx.body.state.velocity.toArray() as [
+          number,
+          number,
+          number,
+        ],
+        characterVelocity: ctx.instance.nativeCharacterVelocity,
+        ...settings,
+        globals: this.bleedGlobals,
+        bones: ctx.instance.template.form.bones.map((bone, index) => ({
+          parent: bone.parent ?? -1,
+          childAttachment:
+            ctx.instance.template.bones[index].attachments?.child ?? null,
+          parentAttachment:
+            ctx.instance.template.bones[index].attachments?.parent ?? null,
+        })),
+      },
+      {
+        nextCrtInteger: () => sharedNativeRandom.nextInteger(),
+        readBone: (index) => ({
+          matrix: ctx.instance.bones[index]?.pose ?? null,
+          velocity:
+            allocation?.bodies[index]?.owner === ctx.owner
+              ? (allocation.bodies[index]?.state?.velocity.toArray() as [
+                  number,
+                  number,
+                  number,
+                ])
+              : null,
+        }),
+        preflightPacket: (packet) =>
+          this.options.preflightBlood?.(ctx, packet) ?? [],
+        emit: (packet) => this.emitBlood(ctx, packet),
+      },
+    );
+    return {
+      ...complete(),
+      status: result.requiredProviders.length
+        ? "provider-required"
+        : "complete",
+      requiredProviders: [...result.requiredProviders],
+    };
+  }
+  finishEffects(): void {
+    if (!this.lastFrame || this.lastSmearSerial === this.outerVisitSerial)
+      return;
+    this.lastSmearSerial = this.outerVisitSerial;
+    for (const owner of this.processedEffectsOwners) {
+      const character = this.runtime.character(owner),
+        process = this.gameplay.state(owner).cache as Process | null;
+      const result = consumeNativePedWorldSmear(
+        process?.storage ?? null,
+        true,
+        { skidSection: this.options.skidSection },
+      );
+      for (const requirement of result.requiredProviders) {
+        character.diagnostics.add(requirement);
+        this.options.warn(`Native pedestrian effects: ${requirement}`);
+      }
+    }
+  }
+  private beforeScopeRelease(
+    ctx: NativePedRuntimeCallback<Object3D>,
+  ): readonly string[] {
+    if (this.pendingScope.has(ctx.owner)) return [];
+    const state = this.gameplay.state(ctx.owner),
+      process = state.cache as Process | null;
+    const burning = process
+      ? new DataView(
+          process.storage.buffer,
+          process.storage.byteOffset,
+          process.storage.byteLength,
+        ).getInt32(0x98, true)
+      : 0;
+    const plan = planNativePedScopeExit({
+      rendered: true,
+      replay: false,
+      active: ctx.instance.physicsActive,
+      flags: ctx.character.flags,
+      hitPoints: ctx.character.hitPoints,
+      burningValue: burning,
+    });
+    if (!plan.beforeRelease.length && !plan.afterRelease.length) return [];
+    if (plan.afterRelease.includes("count") && !this.options.onVanish)
+      return ["source-native-vanish-population-owner"];
+    if (burning && !this.options.clearBurning)
+      return ["source-scope-burning-resource-owner"];
+    if (burning) {
+      const requirements =
+        this.options.burningRequirements?.(
+          this.entries.get(ctx.owner)!,
+          burning,
+        ) ?? (burning < 0 ? ["source-scope-burning-resource-preflight"] : []);
+      if (requirements.length) return requirements;
+    }
+    const position = ctx.character.position;
+    let height = 0;
+    if (plan.afterRelease.includes("score-fall")) {
+      const floor = this.options.readScopeFloor?.(position);
+      if (!floor) return ["source-native-scope-floor-owner"];
+      if (floor.requiredProviders.length) return floor.requiredProviders;
+      height = nativePedFallingHeight(position[1], floor.height);
+    }
+    this.pendingScope.set(ctx.owner, {
+      ctx,
+      plan,
+      burning,
+      height,
+      position: [...position],
+      cache: state.cache ? { ...state.cache } : null,
+    });
+    for (const action of plan.beforeRelease)
+      if (action === "vanish") ctx.character.flags |= 0x80;
+    return [];
+  }
+  private afterScopeRelease(owner: Object3D): void {
+    const pending = this.pendingScope.get(owner);
+    if (!pending) return;
+    const { ctx, plan, burning, height, cache, position } = pending;
+    for (const action of plan.afterRelease) {
+      if (action === "vanish") ctx.character.flags |= 0x80;
+      else if (action === "count") this.options.onVanish!(ctx);
+      else if (action === "score-fall" || action === "score-burn") {
+        const result = this.gameplay.scoreFromScope(
+          ctx,
+          action === "score-fall" ? height : 0,
+          action === "score-fall" ? "environment" : "napalm",
+          cache,
+          position,
+        );
+        for (const requirement of result.requiredProviders)
+          ctx.character.diagnostics.add(requirement);
+      } else if (action === "stop-burning") {
+        const missing =
+          this.options.clearBurning!(this.entries.get(owner)!, burning) ?? [];
+        for (const requirement of missing)
+          ctx.character.diagnostics.add(requirement);
+        const process = this.gameplay.state(owner).cache as Process | null;
+        if (process && !missing.length)
+          new DataView(
+            process.storage.buffer,
+            process.storage.byteOffset,
+            process.storage.byteLength,
+          ).setInt32(0x98, 0, true);
+      }
+    }
+    const ped = this.entries.get(owner)!;
+    if (ctx.character.flags & 0x80) ped.vanished = true;
+    this.records.update(this.recordIndices.get(owner)!, {
+      position: ctx.character.position,
+      action: this.gameplay.state(owner).action,
+      flags: ctx.character.flags & 0xffff,
+      hitPoints: ctx.character.hitPoints,
+    });
+    this.pendingScope.delete(owner);
+  }
   private scanObjects(
     ctx: NativePedRuntimeCallback<Object3D>,
     movement: NativePedOrdinaryMoveInput,
@@ -559,6 +925,7 @@ export class OrdinaryPedRuntime {
     this.scanRoster = null;
     for (const ctx of this.pendingVanish.values()) this.finishVanish(ctx);
     this.lastFrame = { camera: [camera.x, camera.y, camera.z], time };
+    this.outerVisitSerial++;
     const visits = this.runtime.prepareFrame({
       cameraOrigin: this.lastFrame.camera,
       timeMs: time,
@@ -571,9 +938,11 @@ export class OrdinaryPedRuntime {
     });
     this.exhaustedOwners.clear();
     this.visits = { processed: 0, exhausted: 0, unsupported: 0, outOfScope: 0 };
+    this.processedEffectsOwners.clear();
     for (const visit of visits) {
       if (visit.pool.status === "processed") {
         this.visits.processed++;
+        this.processedEffectsOwners.add(visit.pool.character.owner);
       } else if (visit.pool.status === "exhausted") {
         this.visits.exhausted++;
         this.exhaustedOwners.add(visit.pool.character.owner);
@@ -669,6 +1038,23 @@ export class OrdinaryPedRuntime {
         cache.storage.byteLength,
       ).setUint32(0x8c, Math.trunc(timeMs) >>> 0, true);
   }
+  canReserveNapalm(ped: Ped): boolean {
+    return this.gameplay.state(ped.object).cache?.napalmDeadlineMs === 0;
+  }
+  reserveNapalm(ped: Ped, slot: number): boolean {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= NAPALM_CAPACITY)
+      throw new Error("Invalid native pedestrian napalm slot");
+    if (!this.canReserveNapalm(ped)) return false;
+    // Installed SpawnNapalm4ce43e..45b stores -(zero-based slot+1).
+    this.gameplay.state(ped.object).cache!.napalmDeadlineMs = -(slot + 1);
+    return true;
+  }
+  releaseNapalm(ped: Ped, slot: number): void {
+    const cache = this.gameplay.state(ped.object).cache;
+    // Ignite writes the positive deadline before releasing the bolt. A stale
+    // reservation release must not erase that deadline or another slot's owner.
+    if (cache?.napalmDeadlineMs === -(slot + 1)) cache.napalmDeadlineMs = 0;
+  }
   ignite(ped: Ped, timeMs: number, deadlineMs: number, culprit?: object): void {
     const state = this.gameplay.state(ped.object),
       ctx = this.runtime.callbackContext(ped.object);
@@ -714,6 +1100,8 @@ export class OrdinaryPedRuntime {
     for (const unbind of this.unbind.values()) unbind();
     this.unbind.clear();
     this.pendingVanish.clear();
+    this.pendingScope.clear();
+    this.processedEffectsOwners.clear();
     this.entries.clear();
     this.disposed = true;
   }

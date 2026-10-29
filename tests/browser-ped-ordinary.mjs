@@ -209,6 +209,7 @@ try {
           "No active ordinary pedestrian body available for contact fixture",
         );
       const target = character.body;
+      window.__pedOrdinaryContactOwner = character.owner;
       const before = {
         hitPoints: character.hitPoints,
         impactCount: character.impactCount,
@@ -279,24 +280,55 @@ try {
     page.evaluate(() => {
       const c = window.carma,
         system = c.pedestrians,
+        bridge = system.nativeBridge,
         runtime = system.nativeRuntime;
-      const row = runtime.characters.find(
-        (character) =>
-          character.body &&
-          character.instance &&
-          system.renderActors.has(character.owner) &&
-          system.peds.find((ped) => ped.object === character.owner)?.alive,
+      const active = runtime.characters.find(
+        (row) =>
+          row.owner === window.__pedOrdinaryContactOwner &&
+          row.body &&
+          row.instance &&
+          c.simulation.phil.getState(row.body) === 2,
       );
-      if (!row)
+      if (!active)
         throw new Error(
-          "No living ordinary owner available for offscreen resource cycle",
+          "Actual collision owner is not PHIL header2 before scope exit",
         );
-      const owner = row.owner,
-        body = row.body,
+      // A second original, intact owner proves the separate passive resource
+      // path. Never force the collided actor asleep to obtain reacquisition.
+      const passive = runtime.characters
+        .filter(
+          (row) =>
+            row !== active &&
+            row.body &&
+            row.instance &&
+            c.simulation.phil.getState(row.body) === 1 &&
+            !row.instance.physicsActive &&
+            row.hitPoints > 0 &&
+            !(row.flags & 0x80) &&
+            !row.removedBoneMask &&
+            system.renderActors.has(row.owner),
+        )
+        .slice(0, 3)[0];
+      if (!passive)
+        throw new Error(
+          "No genuine original passive owner for resource reacquisition",
+        );
+      const activeBody = active.body,
+        passiveBody = passive.body,
+        activeInstance = active.instance,
         allocatedBodies = new Set(runtime.simpleResources),
         actorCount = system.renderActors.size,
         characters = runtime.characters.slice(),
-        near = [...row.position],
+        nearActive = [...active.position],
+        nearPassive = [...passive.position],
+        before = {
+          flags: active.flags,
+          hp: active.hitPoints,
+          action: bridge.gameplay.state(active.owner).action,
+          header: c.simulation.phil.getState(activeBody),
+          passiveFlags: passive.flags,
+          passiveHP: passive.hitPoints,
+        },
         settings = {
           processDistance: system.settings.processDistance,
           popupDistance: system.settings.popupDistance,
@@ -305,47 +337,103 @@ try {
           ),
           innerPopupDistance: Math.fround(system.settings.popupDistance * 0.6),
         };
-      const time = Math.max(0, Math.trunc(c.stats.gameTimeMs));
-      runtime.prepareFrame({
-        cameraOrigin: [100000, 100000, 100000],
-        timeMs: time + 1,
-        settings,
-        pedNearness: true,
-      });
-      system.finishPhysics();
-      if (row.body !== null || row.instance !== null)
-        throw new Error("Far camera did not release ACT and PHIL resources");
-      if (c.simulation.phil.registeredBodies.includes(body))
-        throw new Error("Released pedestrian body remains registered in PHIL");
-      runtime.prepareFrame({
-        cameraOrigin: near,
-        timeMs: time + 41,
-        settings,
-        pedNearness: true,
-      });
-      system.finishPhysics();
-      const sameCensus =
-        runtime.characters.length === characters.length &&
-        runtime.characters.every((entry, i) => entry === characters[i]);
-      const owners = c.simulation.phil.registeredBodies.filter(
-        (candidate) => candidate.owner === owner,
-      );
-      return {
-        sameCensus,
-        censusSize: runtime.characters.length,
-        actorCount,
-        actorCountAfter: system.renderActors.size,
-        sameOwner: row.owner === owner && system.renderActors.has(owner),
-        bodyReused: row.body === body,
-        bodyWasPreallocated:
-          allocatedBodies.has(row.body) &&
-          allocatedBodies.size === runtime.simpleResources.size,
-        reacquired: !!row.body && !!row.instance,
-        bodyOwner: row.body?.owner === owner,
-        philState: row.body ? c.simulation.phil.getState(row.body) : 0,
-        duplicateOwnerBodies: owners.length,
-        physical: system.nativeLifecycle.physical,
+      const countCalls = [],
+        oneLess = system.oneLessNativePed;
+      system.oneLessNativePed = function (owner, ...args) {
+        const counted = oneLess.call(this, owner, ...args);
+        if (owner === active.owner)
+          countCalls.push({
+            counted,
+            flags: active.flags,
+            hp: active.hitPoints,
+          });
+        return counted;
       };
+      const record = (row) => {
+        const view = new DataView(
+          bridge.records.memory.buffer,
+          bridge.nativeAddress(row.owner),
+          0x54,
+        );
+        return {
+          hp: view.getInt8(4),
+          flags: view.getUint16(8, true),
+          action: view.getInt32(0x10, true),
+        };
+      };
+      const time = Math.max(0, Math.trunc(c.stats.gameTimeMs)) + 8001;
+      try {
+        // Native Munge4d5369: an actual active root sets80 before release,
+        // counts once afterwards, then scores a living owner (HP0/action6).
+        runtime.prepareFrame({
+          cameraOrigin: [100000, 100000, 100000],
+          timeMs: time,
+          settings,
+          pedNearness: true,
+        });
+        system.finishPhysics();
+        const released = {
+          activeBody: active.body === null,
+          activeInstance: active.instance === null,
+          passiveBody: passive.body === null,
+          passiveInstance: passive.instance === null,
+          activeUnregistered: c.simulation.phil.getState(activeBody) === 0,
+          passiveUnregistered: c.simulation.phil.getState(passiveBody) === 0,
+          activeACTDetached: activeInstance.group.parent === null,
+          record: record(active),
+          flags: active.flags,
+          hp: active.hitPoints,
+          action: bridge.gameplay.state(active.owner).action,
+        };
+        runtime.prepareFrame({
+          cameraOrigin: nearActive,
+          timeMs: time + 40,
+          settings,
+          pedNearness: true,
+        });
+        system.finishPhysics();
+        const activeReacquired = !!active.body || !!active.instance;
+        runtime.prepareFrame({
+          cameraOrigin: nearPassive,
+          timeMs: time + 80,
+          settings,
+          pedNearness: true,
+        });
+        system.finishPhysics();
+        const owners = c.simulation.phil.registeredBodies.filter(
+          (body) => body.owner === passive.owner,
+        );
+        return {
+          before,
+          released,
+          countCalls,
+          activeReacquired,
+          activeStillReleased: active.body === null && active.instance === null,
+          activeFinalRecord: record(active),
+          activeStillOriginal: system.renderActors.has(active.owner),
+          sameCensus:
+            runtime.characters.length === characters.length &&
+            runtime.characters.every((row, i) => row === characters[i]),
+          actorCount,
+          actorCountAfter: system.renderActors.size,
+          passive: {
+            originalOwner: system.renderActors.has(passive.owner),
+            reacquired: !!passive.body && !!passive.instance,
+            bodyOwner: passive.body?.owner === passive.owner,
+            flags: passive.flags,
+            hp: passive.hitPoints,
+            bodyWasPreallocated:
+              allocatedBodies.has(passive.body) &&
+              allocatedBodies.size === runtime.simpleResources.size,
+            philState: passive.body
+              ? c.simulation.phil.getState(passive.body)
+              : 0,
+            duplicateOwnerBodies: owners.length,
+          },
+        };
+      } finally {
+        system.oneLessNativePed = oneLess;
+      }
     });
 
   for (const dataRoot of ["data", "adv_data"]) {
@@ -451,44 +539,99 @@ try {
 
     const offscreen = await runOffscreenReacquire();
     console.log(`Offscreen ${dataRoot}: ${JSON.stringify(offscreen)}`);
-    assert.equal(
-      offscreen.sameCensus,
-      true,
-      `${dataRoot}: release/reacquire preserves runtime character identities`,
+    assert.ok(
+      offscreen.sameCensus &&
+        offscreen.activeStillOriginal &&
+        offscreen.passive.originalOwner,
+      `${dataRoot}: scope changes preserve the original census identities`,
     );
     assert.equal(
-      offscreen.sameOwner,
-      true,
-      `${dataRoot}: reacquired owner remains the original population actor`,
-    );
-    assert.equal(
-      offscreen.bodyWasPreallocated,
-      true,
-      `${dataRoot}: reacquisition reuses a preallocated FORM slot without growing its pool`,
-    );
-    assert.equal(
-      offscreen.reacquired,
-      true,
-      `${dataRoot}: owner reacquires ACT and PHIL body`,
-    );
-    assert.equal(
-      offscreen.bodyOwner,
-      true,
-      `${dataRoot}: PHIL body points to the same owner after reacquire`,
+      offscreen.before.header,
+      2,
+      `${dataRoot}: collided root is genuinely active before scope exit`,
     );
     assert.ok(
-      offscreen.philState > 0,
-      `${dataRoot}: reacquired body is registered in PHIL`,
+      Object.entries(offscreen.released)
+        .filter(([key]) => !["record", "flags", "hp", "action"].includes(key))
+        .every(([, value]) => value === true),
+      `${dataRoot}: active and passive owners release their real ACT/PHIL resources`,
+    );
+    assert.ok(
+      offscreen.released.flags & 0x80,
+      `${dataRoot}: active offscope sets source vanish80`,
+    );
+    assert.ok(
+      offscreen.released.flags & 0x100,
+      `${dataRoot}: active offscope retains source counted100`,
     );
     assert.equal(
-      offscreen.duplicateOwnerBodies,
+      offscreen.released.hp,
+      0,
+      `${dataRoot}: active offscope scores living HP to0`,
+    );
+    assert.equal(
+      offscreen.released.action,
+      6,
+      `${dataRoot}: active offscope retains source dead action6`,
+    );
+    assert.equal(
+      offscreen.countCalls.length,
       1,
-      `${dataRoot}: reacquisition creates no duplicate body`,
+      `${dataRoot}: source offscope invokes population outlet once`,
+    );
+    assert.equal(
+      offscreen.countCalls.filter((row) => row.counted).length,
+      offscreen.before.flags & 0x100 ? 0 : 1,
+      `${dataRoot}: counted corpse is never counted twice`,
+    );
+    assert.deepEqual(
+      offscreen.released.record,
+      {
+        hp: offscreen.released.hp,
+        flags: offscreen.released.flags & 0xffff,
+        action: 6,
+      },
+      `${dataRoot}: source record bytes mirror released HP/flags/action`,
+    );
+    assert.ok(
+      !offscreen.activeReacquired && offscreen.activeStillReleased,
+      `${dataRoot}: source vanished active corpse cannot reacquire resources`,
+    );
+    assert.deepEqual(
+      offscreen.activeFinalRecord,
+      offscreen.released.record,
+      `${dataRoot}: near visits do not revive the vanished source record`,
+    );
+    assert.ok(
+      offscreen.passive.reacquired &&
+        offscreen.passive.bodyOwner &&
+        offscreen.passive.bodyWasPreallocated,
+      `${dataRoot}: genuine passive owner reacquires a preallocated FORM slot`,
+    );
+    assert.equal(
+      offscreen.passive.philState,
+      1,
+      `${dataRoot}: intact passive resource returns in PHIL header1`,
+    );
+    assert.equal(
+      offscreen.passive.duplicateOwnerBodies,
+      1,
+      `${dataRoot}: passive reacquisition has one body`,
+    );
+    assert.equal(
+      offscreen.passive.hp,
+      offscreen.before.passiveHP,
+      `${dataRoot}: passive scope cycle preserves HP`,
+    );
+    assert.equal(
+      offscreen.passive.flags & 0x180,
+      offscreen.before.passiveFlags & 0x180,
+      `${dataRoot}: passive resource cycle does not vanish or count the actor`,
     );
     assert.equal(
       offscreen.actorCountAfter,
       offscreen.actorCount,
-      `${dataRoot}: no population identity was created or lost`,
+      `${dataRoot}: no population identity created or lost`,
     );
 
     console.log(`Reloading ${dataRoot}`);

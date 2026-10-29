@@ -42,6 +42,7 @@ export interface NativePedPoolAllocation<Owner extends object, Render, Body> {
   render: Render;
   body: Body;
   phase: "owned" | "release-pending";
+  releaseReason?: "scope" | "current";
 }
 export interface NativePedPoolHost<Owner extends object, Render, Body> {
   /** Called once per FORM slot, before characters acquire anything. */
@@ -70,6 +71,10 @@ export interface NativePedPoolHost<Owner extends object, Render, Body> {
   ): readonly string[];
   /** Clear contact ring and character owner after PHIL removal completes. */
   clearSimple(allocation: NativePedPoolAllocation<Owner, Render, Body>): void;
+  afterRelease?(
+    allocation: NativePedPoolAllocation<Owner, Render, Body>,
+    reason: "scope" | "current",
+  ): void;
   /** Store current root/removed poses and remove ACTs. Body is NULL on init failure. */
   releaseRender(
     character: NativePedPoolCharacter<Owner>,
@@ -358,6 +363,7 @@ export class NativePedBodyPool<Owner extends object, Render, Body> {
     const missing = this.host.beforeRelease(a, reason);
     if (missing.length)
       return { phase: "provider-required", requiredProviders: missing };
+    a.releaseReason = reason;
     const removed = this.host.registrar.remove(a.body);
     if (
       (removed.code !== 0 && removed.code !== 3) ||
@@ -386,6 +392,7 @@ export class NativePedBodyPool<Owner extends object, Render, Body> {
     p.render[a.renderSlot].owner = null;
     this.allocations.delete(a.character.owner);
     this.pendingRemovedPartOwners.delete(a.character.owner);
+    this.host.afterRelease?.(a, a.releaseReason ?? "scope");
   }
   private visit(
     c: NativePedPoolCharacter<Owner>,

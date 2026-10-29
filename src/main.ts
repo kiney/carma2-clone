@@ -102,6 +102,7 @@ import { initializeNativeFireVertices, parseCarFireVertices } from "./car-fire";
 import { dispatchNativeDamageSmoke } from "./component-smoke";
 import { NativeTyreEffects } from "./physics/tyre-smoke";
 import { SkidMarkSystem } from "./skidmarks";
+import { captureNativePedAwardGeometry } from "./ped-award-geometry";
 import { SkidMaterialLibrary } from "./skid-materials";
 import { SparkSystem } from "./sparks";
 import { CarSparkAllocator } from "./car-sparks";
@@ -3197,6 +3198,8 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     text,
     collision.height.bind(collision),
     {
+      shards,
+      skidmarks,
       dataRoot: active.toLowerCase().startsWith("adv_data/")
         ? "adv_data"
         : "data",
@@ -3274,36 +3277,34 @@ async function loadPedestrians(text: string, loadGeneration: number) {
             event.owner === player &&
             player
           ) {
-            const inverse = player.state.orientation.clone().invert();
-            const center = player.properties.centerOfMass
-              .clone()
-              .applyQuaternion(player.state.orientation)
-              .add(player.state.position);
+            const driver = simulation?.pedestrianAttributionDriver(player);
+            const killerInputs = captureNativePedAwardGeometry(
+              player,
+              event.position,
+              driver,
+              simulation?.pedestrianAwardLocalVelocity(player) ?? null,
+            );
+            if (driver === undefined) {
+              const warning =
+                "Native pedestrian award: source-killer-driver-provider";
+              if (!assets.warnings.includes(warning))
+                assets.warnings.push(warning);
+            }
             const award = pedAwardCounter.score(
               event.timeMs,
               pedAwards,
               raceDifficulty,
               {
                 ...event.awardContext,
-                killerDriver: player.state.driver,
-                killerAngularVelocity: player.state.angularVelocity
-                  .clone()
-                  .applyQuaternion(inverse),
-                killerUpY: new THREE.Vector3(0, 1, 0).applyQuaternion(
-                  player.state.orientation,
-                ).y,
-                killerActorOriginY: player.state.position.y,
-                pedestrianY: event.position.y,
-                localPedPosition: event.position
-                  .clone()
-                  .sub(center)
-                  .applyQuaternion(inverse),
-                killerLocalVelocity: player.state.velocity
-                  .clone()
-                  .applyQuaternion(inverse),
+                ...killerInputs,
               },
             );
             if (award) {
+              for (const input of award.missingInputs) {
+                const warning = `Native pedestrian award: ${input}-provider`;
+                if (!assets.warnings.includes(warning))
+                  assets.warnings.push(warning);
+              }
               const before = race.credits;
               awardRaceCredits(race, award.credits);
               awardRaceTime(race, award.seconds);
@@ -4348,6 +4349,7 @@ function animate(now: number) {
       shards?.update(stats.gameTimeMs);
       simulation.wamRepairs.update(stats.gameTimeMs >>> 0);
       skidmarks?.update();
+      pedestrians?.finishEffects();
       // Native world render invokes sparks before smoke. Both advance once per
       // graphical game frame after physics and the final authored effects flush.
       sparks?.update(stats.gameTimeMs >>> 0, gameFrame.periodMs >>> 0);

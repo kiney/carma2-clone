@@ -153,6 +153,7 @@ export interface NativePedGameplayOptions<Owner extends object> {
   onScoreDeath?: (
     context: NativePedRuntimeCallback<Owner>,
     state: NativePedGameplayState,
+    packet?: { height: number; position?: PedVector },
   ) => OutletResult;
   /** Remaining active blood/scrape/player-car or passive car/status effects. */
   onContactEffects?: (
@@ -606,6 +607,41 @@ export class NativePedGameplay<Owner extends object = object> {
    * it directly and leaves dead move selection to the next native Munge visit. */
   killFromEnvironment(owner: Owner): NativePedCauseKillResult {
     return this.killExternal(owner, "environment", null, true);
+  }
+  /** Source ScoreForKilledPedestrian4cd026 stores HP0/action6/time before
+   * killer eligibility. Scope callers use it without FullKill effects/count. */
+  scoreFromScope(
+    ctx: NativePedRuntimeCallback<Owner>,
+    height: number,
+    cause: "environment" | "napalm",
+    cache: NativePedGameplayCache | null,
+    position?: PedVector,
+  ): NativePedCauseKillResult {
+    if (ctx.character.hitPoints <= 0)
+      return { status: "ineligible", requiredProviders: [] };
+    if (!Number.isFinite(f(height)))
+      throw new Error("Invalid native scope death height");
+    if (!this.options.onScoreDeath)
+      return {
+        status: "provider-required",
+        requiredProviders: ["source-ScoreForKilledPedestrian-owner"],
+      };
+    const state = this.state(ctx.owner);
+    ctx.character.hitPoints = ctx.body.hitPoints = 0;
+    state.action = 6;
+    state.deathTimeMs = uint(ctx.timeMs, "scope death clock");
+    state.deathCause = cause;
+    const missing = [
+      ...(this.options.onScoreDeath(
+        ctx,
+        { ...state, cache },
+        { height: f(height), position },
+      ) ?? []),
+    ];
+    diagnostic(ctx, state, missing);
+    return missing.length
+      ? { status: "provider-required", requiredProviders: missing }
+      : { status: "complete", requiredProviders: [] };
   }
   private killExternal(
     owner: Owner,
@@ -1098,7 +1134,11 @@ export class NativePedGameplay<Owner extends object = object> {
     c.hitPoints = ctx.body.hitPoints = 0;
     s.action = 6;
     s.deathTimeMs = uint(ctx.timeMs, "ped death clock");
-    this.outlet(ctx, this.options.onScoreDeath!(ctx, s), missing);
+    this.outlet(
+      ctx,
+      this.options.onScoreDeath!(ctx, s, { height: 0 }),
+      missing,
+    );
   }
   private contactDone(
     ctx: NativePedRuntimeCallback<Owner>,

@@ -179,7 +179,12 @@ export interface NativePedRuntimeHooks<Owner extends object> {
   ) => NativePedInstanceResult;
   beforeRelease?: (
     context: NativePedRuntimeCallback<Owner>,
+    reason?: "scope" | "current",
   ) => readonly string[];
+  afterRelease?: (
+    character: NativePedRuntimeCharacter<Owner>,
+    reason: "scope" | "current",
+  ) => void;
   /** Source bounded stored-dismembered table owner. Do not replace it with an
    * unlimited per-ped snapshot cache. Invoked after all PHIL removals. */
   storeRemovedPoses?: (
@@ -472,6 +477,10 @@ export class NativePedRuntime<Owner extends object = object> {
         a.body.onMoved = undefined;
         a.body.onHalt = undefined;
         record.body = null;
+      },
+      afterRelease: (a, reason) => {
+        if (!this.disposed)
+          this.hooks.afterRelease?.(this.character(a.character.owner), reason);
       },
       releaseRender: (c, render) => {
         const record = this.character(c.owner),
@@ -1164,11 +1173,14 @@ export class NativePedRuntime<Owner extends object = object> {
       !this.hooks.onHalt
     )
       missingProviders.push("native-active-halt-continuation");
+    // A mutating scope outlet may set80. Reject earlier topology prerequisites
+    // before invoking it, so refusal cannot vanish a still-owned PHIL object.
+    if (missingProviders.length) return missingProviders;
     missingProviders.push(
-      ...(this.hooks.beforeRelease?.(this.context(c)) ?? []),
+      ...(this.hooks.beforeRelease?.(this.context(c), reason) ?? []),
     );
     if (missingProviders.length) return missingProviders;
-    if (reason === "current") {
+    if (reason === "current" || c.flags & 0x80) {
       if (this.simulation.phil.getState(c.body!) === 2) {
         // Preserve the physical root without posing children: ordinary pose
         // synchronization can draw mutant-angle CRT even without clock advance.

@@ -75,6 +75,17 @@ living in-sight target, with no range limit. A target's cache field `+0x98`
 is negative while reserved and positive while burning. Source and target
 special-volume gravity below one reject/cancel the effect.
 
+Installed `4ce43e..4ce45b` stores `-(slot+1)` for zero-based slots0..4;
+`4ce520..4ce52f` rejects targets without a process cache or with nonzero `+98`.
+The production reservation now publishes that signed field, and actual bolt
+release clears only its matching negative value. It preserves the positive
+deadline written by ignition before the bolt is released. Cleanup preflight
+requires the signed slot, pedestrian slot and actual bolt target to agree.
+This deliberately preserves actual resource ownership over an installed bug:
+off-scope `4d541a..4d543e` and low-gravity `4d3b23..4d3b40` zero `+98` before
+rereading it for lookup, thereby selecting bolt1 regardless of the reservation.
+The browser cleans the verified owning bolt instead of reproducing that bug.
+
 Each runtime record retains its target, source/owner, birth clock, raw head
 position, direction and seven persistent flame positions. Spawn copies only
 the head actor position; the other six positions retain prior slot contents.

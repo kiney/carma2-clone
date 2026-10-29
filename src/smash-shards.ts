@@ -78,6 +78,7 @@ interface Vertex {
 }
 type Face = [number, number, number];
 interface Fragment {
+  owner?: object;
   slot: number;
   priority: number;
   ownsGeometry: boolean;
@@ -90,6 +91,20 @@ interface Fragment {
   endMs: number;
   groupId: number;
   firstUpdate: boolean;
+}
+/** Shared GetNextShrapnel admission. The producer runs only after a real slot
+ * has been admitted, so pool contention consumes no placement/movement RNG. */
+export interface SharedFragmentSource {
+  mesh: Mesh<BufferGeometry, Material | Material[]>;
+  velocity: Vector3;
+  spin: Vector3;
+  timeMs: number;
+  visibleMs: number;
+  maximumMs: number;
+  groupId: number;
+  owner?: object;
+  fullMatrix?: boolean;
+  ownsGeometry?: boolean;
 }
 const CAPACITY = 200;
 const EPSILON = 2 ** -22;
@@ -250,6 +265,76 @@ export class ShardRuntime {
   }
   private signed(max: number): number {
     return this.sample(-max, max);
+  }
+  createFragmentGroup(): number {
+    if (this.disposed) throw new Error("Shard runtime is disposed");
+    return this.nextGroupId++;
+  }
+  spawnFragment(
+    priority: number,
+    producer: () => SharedFragmentSource,
+  ): boolean {
+    if (this.disposed) throw new Error("Shard runtime is disposed");
+    if (!Number.isInteger(priority) || priority < 0 || priority > 255)
+      throw new Error("Invalid shared fragment priority");
+    const slot = this.reserveSlot(priority);
+    if (slot === undefined) return false;
+    const source = producer();
+    if (
+      !source.mesh ||
+      ![
+        ...source.velocity.toArray(),
+        ...source.spin.toArray(),
+        source.timeMs,
+        source.visibleMs,
+        source.maximumMs,
+        source.groupId,
+      ].every(Number.isFinite) ||
+      !Number.isInteger(source.timeMs) ||
+      source.timeMs < 0 ||
+      source.timeMs > 0xffffffff ||
+      !Number.isInteger(source.visibleMs) ||
+      source.visibleMs < 0 ||
+      !Number.isInteger(source.maximumMs) ||
+      source.maximumMs < source.visibleMs
+    )
+      throw new Error("Invalid shared fragment producer result");
+    const { mesh } = source;
+    mesh.visible = source.timeMs < (source.timeMs + source.visibleMs) >>> 0;
+    this.scene.add(mesh);
+    this.insert({
+      slot,
+      priority,
+      owner: source.owner,
+      ownsGeometry: source.ownsGeometry ?? false,
+      fullMatrix: source.fullMatrix ?? true,
+      mesh,
+      velocity: source.velocity,
+      spin: source.spin,
+      startMs: source.timeMs,
+      visibleUntilMs: (source.timeMs + source.visibleMs) >>> 0,
+      endMs: (source.timeMs + source.maximumMs) >>> 0,
+      groupId: source.groupId,
+      firstUpdate: true,
+    });
+    this.totalCreated++;
+    return true;
+  }
+  countOwner(owner: object): number {
+    return this.fragments.filter((fragment) => fragment.owner === owner).length;
+  }
+  clearOwner(owner: object): void {
+    for (const fragment of [...this.fragments])
+      if (fragment.owner === owner) this.removeFragment(fragment);
+  }
+  get stats() {
+    return {
+      capacity: CAPACITY,
+      active: this.fragments.length,
+      visible: this.fragments.filter((fragment) => fragment.mesh.visible)
+        .length,
+      totalCreated: this.totalCreated,
+    };
   }
 
   spawn(spec: SmashShrapnel, source: ShardSpawnSource): ShardSpawnResult {
@@ -708,6 +793,7 @@ export class ShardRuntime {
         .length,
       totalCreated: this.totalCreated,
       fragments: this.fragments.map((fragment) => ({
+        name: fragment.mesh.name,
         slot: fragment.slot,
         priority: fragment.priority,
         position: fragment.mesh.position.toArray(),

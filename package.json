@@ -77,7 +77,8 @@
     "test:bug-capture": "npm run build && node --import tsx tests/browser-bug-capture.mjs",
     "test:ped-ordinary": "npm run build && node tests/browser-ped-ordinary.mjs",
     "test:ped-recovery": "npm run build && node tests/browser-ped-recovery.mjs",
-    "test:ped-sever-population": "npm run build && node tests/browser-ped-sever-population.mjs"
+    "test:ped-sever-population": "npm run build && node tests/browser-ped-sever-population.mjs",
+    "test:ped-awards-effects": "npm run build && node tests/browser-ped-awards-effects.mjs"
   },
   "dependencies": {
     "three": "0.180.0",
