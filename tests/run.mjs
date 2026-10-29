@@ -83,6 +83,8 @@ import "./ped-bone-pose.test.mjs";
 import "./ped-native-assets.test.mjs";
 import "./ped-native-instance.test.mjs";
 import "./ped-animation-rewind.test.mjs";
+import "./ped-presentation.test.mjs";
+import "./ped-population-animation.test.mjs";
 import "./ped-physical-pose.test.mjs";
 import "./ped-dead-models.test.mjs";
 import "./ped-body-pool.test.mjs";

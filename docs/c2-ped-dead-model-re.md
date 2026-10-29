@@ -119,6 +119,16 @@ instance's independent actors and shared template geometry/materials can
 represent this distinction. A material or geometry should not be disposed
 when one pedestrian dies or loses a render slot.
 
+### Production inheritance correction (2026-10-29)
+
+The earlier adapter's choice of a personality package ACT for inherited rendering
+is superseded by the installed FORM allocation audit. Fresh FORM ACTs have NULL
+material and identity matrices; the personality binds exact MODEL resources,
+not an authored package ACT graph. Production now supplies the BRender
+context/default material while retaining raw NULL face pointers separately.
+See [asset-selection evidence](c2-ped-asset-selection-re.md). The dead-MAT
+construction and pointer-eligibility equations above are unchanged.
+
 ## Death selection and detached bodies
 
 The installed consumer is `KillPedestrian` at `4ccc20`, not a generic visual

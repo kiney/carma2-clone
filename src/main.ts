@@ -3054,6 +3054,9 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     text,
     collision.height.bind(collision),
     {
+      dataRoot: active.toLowerCase().startsWith("adv_data/")
+        ? "adv_data"
+        : "data",
       spawn: vehicle.position,
       collision,
       onCombatSound: (id) => {

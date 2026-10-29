@@ -633,3 +633,17 @@ Original SCROLLERS fonts, HUD slots and shared fancy/WASTED priority are integra
 See [collector/edge evidence](c2-world-smash-source-edges-re.md),
 [pickup equations](c2-pickup-act-re.md), [replacement fire](c2-replacement-fire-re.md)
 and the [producer census and remaining scopes](c2-effect-producer-audit.md).
+
+### PED-04 / ANI-01 native render integration (2026-10-29)
+
+Personality MODEL identifiers now resolve exactly through the registered source
+resources; FORM actors start flat/identity and use source BON/SKL root/bone poses.
+A package ACT's saved default matrix is not an animation root. The production
+population uses the existing verified pose kernels through a render-only bridge,
+while current gameplay remains the sole displacement/count owner. Both Stock and
+Advanced Newcity1 render all791 actors through that bridge, including upright
+CitySwat and advancing original frames. Ordinary legacy corpse/repulsion transport
+remains explicit. ANI-01 is still open for remaining animation/render providers;
+PHIL, grounding, severing and causes remain the selected PED-06/07/08/09 work.
+See [asset-selection evidence](c2-ped-asset-selection-re.md) and
+[presentation scope/validation](c2-ped-presentation-re.md).

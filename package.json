@@ -48,6 +48,7 @@
     "test:noncar-quiet": "npm run build && node tests/browser-noncar-quiet.mjs",
     "test:world-slicks": "npm run build && node tests/browser-world-slick.mjs",
     "test:ped-assets": "node tests/native-ped-personality-audit.mjs",
+    "test:ped-animation": "npm run build && node tests/browser-ped-animation.mjs",
     "test:ped-bones": "npm run build && node tests/browser-ped-bone-runtime.mjs",
     "test:ped-gameplay": "npm run build && node tests/browser-ped-native-gameplay.mjs",
     "test:render-state": "npm run build && node tests/browser-render-state.mjs",

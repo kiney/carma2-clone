@@ -3,7 +3,9 @@ import { parsePedPersonalityOptions } from "./ped-form";
 export { parsePedMotion } from "./ped-motion";
 export type { PedMotion } from "./ped-motion";
 import * as THREE from "three";
-import type { Assets } from "./content";
+import { Assets } from "./content";
+import { loadNativePedAssets, type NativePedAssets } from "./ped-native-assets";
+import { NativePedPresentation } from "./ped-presentation";
 import { WorldCollision } from "./world";
 import {
   DEFAULT_PED_SETTINGS,
@@ -113,6 +115,8 @@ export interface PedCombatSource {
 }
 export type PedGround = (x: number, z: number, nearY: number) => number | null;
 export interface PedOptions {
+  /** Match the selected Stock/Advanced race resource tree. */
+  dataRoot?: "data" | "adv_data";
   spawn: THREE.Vector3;
   /** Explicit test/debug override; production uses the original 2000 cap. */
   maxCount?: number;
@@ -225,6 +229,7 @@ interface Ped {
   nativeCountingCharacter?: NativePedCountingCharacter;
   object: THREE.Group;
   visual: THREE.Group;
+  presentation?: NativePedPresentation;
   limbs: Limb[];
   footOffset: number;
   home: THREE.Vector3;
@@ -460,6 +465,8 @@ export function collectPedSurfaces(
 async function loadPedProfile(
   assets: PedAssets,
   name: string,
+  dataRoot: "data" | "adv_data" = "data",
+  native?: NativePedAssets,
 ): Promise<PedProfile> {
   const profile: PedProfile = {
     available: new Set(),
@@ -476,14 +483,16 @@ async function loadPedProfile(
   };
   try {
     const personality = clean(
-      await assets.text(`data/PEDS/PEEPS/${name}/${name}.TXT`),
+      await assets.text(`${dataRoot}/PEDS/PEEPS/${name}/${name}.TXT`),
     );
-    const formText = await assets.text(`data/PEDS/FORMS/${personality[0]}.TXT`),
+    const formText = await assets.text(
+        `${dataRoot}/PEDS/FORMS/${personality[0]}.TXT`,
+      ),
       form = clean(formText);
     const moveStart = form.indexOf("START OF MOVES"),
       moveEnd = form.indexOf("END OF MOVES", moveStart);
     const defaults = clean(
-      await assets.text(`data/PEDS/MOVES/${personality[1]}.TXT`),
+      await assets.text(`${dataRoot}/PEDS/MOVES/${personality[1]}.TXT`),
     );
     const scales = new Map<number, number>();
     for (const source of [defaults, personality]) {
@@ -527,9 +536,11 @@ async function loadPedProfile(
       profile.available.add(id);
       profile.movePeriod.set(id, Math.trunc(1000 / Number(form[i + 1])));
       if (![0, 1, 2, 3, 4, 10, 11, 13, 30, 40, 41].includes(id)) continue;
-      const motion = parsePedMotion(
-        await assets.bytes(`data/PEDS/MOVES/${form[i + 4]}`),
-      );
+      const motion =
+        native?.moves.get(id)?.motion ??
+        parsePedMotion(
+          await assets.bytes(`${dataRoot}/PEDS/MOVES/${form[i + 4]}`),
+        );
       const root = Math.max(
         0,
         motion.bones.findIndex((b) => b.name === rootName),
@@ -576,8 +587,8 @@ function randomGenerator(seed: number) {
   };
 }
 
-/** Original face populations and reaction rules, with independent rendering.
- * Vehicle sweeps/death physics and rigid-part limb playback remain PED-03/ANI-01. */
+/** Original face populations and reaction rules with native FORM/BON visuals.
+ * Gameplay movement, sweeps and corpse transport remain the PED-06/07/08 bridge. */
 export class PedestrianSystem {
   readonly group = new THREE.Group();
   /** Render-only identities; population and physical ownership stay unchanged. */
@@ -603,6 +614,7 @@ export class PedestrianSystem {
     }
   >();
   private peds: Ped[] = [];
+  private readonly nativeTemplates = new Map<string, NativePedAssets>();
   private previousCar: THREE.Vector3;
   private random = randomGenerator(0x43a2c9);
   private elapsed = 0;
@@ -663,6 +675,16 @@ export class PedestrianSystem {
       position: p.object.position.clone(),
       group: p.spec.group,
       walkPeriod: p.walkPeriod,
+      animation: p.presentation
+        ? {
+            source: "original-bon-skl",
+            moveId: p.presentation.instance.moveId,
+            moveSlot: p.presentation.moveSlot,
+            frame: p.presentation.instance.clock.frame,
+            fraction: p.presentation.instance.clock.fraction,
+            diagnostics: [...p.presentation.diagnostics],
+          }
+        : undefined,
     }));
   }
   get combatStats() {
@@ -774,6 +796,7 @@ export class PedestrianSystem {
       /* Other config variants may lack readable section markers. */
     }
     const system = new PedestrianSystem(groundAt, options, specs);
+    const dataRoot = options.dataRoot ?? "data";
     if (!specs.length) {
       system.warnings.push(
         "Track has no readable pedestrian spawn specifications",
@@ -783,7 +806,7 @@ export class PedestrianSystem {
     system.collision = options.collision ?? new WorldCollision(track);
     let settingsText = "";
     try {
-      settingsText = await assets.text("data/PEDS/settings.txt");
+      settingsText = await assets.text(`${dataRoot}/PEDS/settings.txt`);
       system.settings = parsePedSettings(settingsText);
     } catch (e) {
       system.warnings.push(`Pedestrian settings: ${e}`);
@@ -802,7 +825,7 @@ export class PedestrianSystem {
     let groups = new Map<number, string[]>();
     try {
       groups = parsePedGroups(
-        settingsText || (await assets.text("data/PEDS/settings.txt")),
+        settingsText || (await assets.text(`${dataRoot}/PEDS/settings.txt`)),
       );
     } catch (e) {
       system.warnings.push(String(e));
@@ -816,7 +839,35 @@ export class PedestrianSystem {
     const templates = new Map<string, THREE.Group>();
     const profiles = new Map<string, PedProfile>();
     for (const name of names) {
-      const prefix = `data/peds/peeps/${name.toLowerCase()}/`;
+      if (assets instanceof Assets) {
+        let template: NativePedAssets | undefined;
+        try {
+          template = await loadNativePedAssets(
+            assets,
+            `PEDS/PEEPS/${name}`,
+            name,
+            dataRoot,
+          );
+          // Reject unsupported FORM render prerequisites once, before any
+          // ordinary population identity can borrow this template.
+          const probe = new NativePedPresentation(template);
+          probe.dispose();
+          system.nativeTemplates.set(name.toLowerCase(), template);
+          templates.set(name.toLowerCase(), template.group);
+          profiles.set(
+            name.toLowerCase(),
+            await loadPedProfile(assets, name, dataRoot, template),
+          );
+        } catch (error) {
+          template?.dispose();
+          const reason = `Pedestrian ${name}: ${String(error)}`;
+          system.warnings.push(reason);
+        }
+        continue;
+      }
+      // Minimal asset hosts used by isolated gameplay fixtures have no native
+      // registry/FORM library. Keep their explicit procedural fixture path.
+      const prefix = `${dataRoot}/peds/peeps/${name.toLowerCase()}/`;
       const acts = assets.manifest
         .filter(
           (e) =>
@@ -834,7 +885,10 @@ export class PedestrianSystem {
           size = box.getSize(new THREE.Vector3());
         if (!Number.isFinite(size.y) || size.y <= 0) continue;
         templates.set(name.toLowerCase(), result.group);
-        profiles.set(name.toLowerCase(), await loadPedProfile(assets, name));
+        profiles.set(
+          name.toLowerCase(),
+          await loadPedProfile(assets, name, dataRoot),
+        );
       } catch (e) {
         system.warnings.push(`Pedestrian ${name}: ${e}`);
       }
@@ -852,9 +906,23 @@ export class PedestrianSystem {
     );
     const templateNames = [...templates.keys()];
     for (const surface of surfaces) {
-      const choices = (groups.get(surface.spec.group) ?? templateNames)
-        .map((n) => n.toLowerCase())
-        .filter((n) => templates.has(n));
+      const declared = (groups.get(surface.spec.group) ?? templateNames).map(
+        (n) => n.toLowerCase(),
+      );
+      const choices = declared.filter((n) => templates.has(n));
+      if (
+        assets instanceof Assets &&
+        surface.count > 0 &&
+        choices.length > 0 &&
+        choices.length !== declared.length &&
+        !system.populationFailures.some(
+          (failure) => failure.group === surface.spec.group,
+        )
+      )
+        system.populationFailures.push({
+          group: surface.spec.group,
+          reason: `Pedestrian group ${surface.spec.group} has unavailable original personalities: ${declared.filter((name) => !templates.has(name)).join(", ")}`,
+        });
       if (!choices.length) {
         if (
           surface.count > 0 &&
@@ -873,16 +941,22 @@ export class PedestrianSystem {
       }
       for (let i = 0; i < surface.count && system.count < limit; i++) {
         const name =
-            choices[pedRandomInteger(system.random, 0, choices.length - 1)],
-          visual = templates.get(name)!.clone(true);
+          choices[pedRandomInteger(system.random, 0, choices.length - 1)];
+        const native = system.nativeTemplates.get(name);
+        const presentation = native
+          ? new NativePedPresentation(native)
+          : undefined;
+        const visual = presentation?.group ?? templates.get(name)!.clone(true);
         const position = pedTrianglePoint(
           surface.a,
           surface.b,
           surface.c,
           system.random,
         );
-        const rig = rigPedestrian(visual);
-        visual.position.y = rig.footOffset;
+        const rig = presentation
+          ? { limbs: [], footOffset: 0 }
+          : rigPedestrian(visual);
+        if (!presentation) visual.position.y = rig.footOffset;
         const object = new THREE.Group();
         object.name = `ped-${name}-${system.count}`;
         object.position.copy(position);
@@ -904,6 +978,7 @@ export class PedestrianSystem {
         system.peds.push({
           object,
           visual,
+          presentation,
           limbs: rig.limbs,
           footOffset: rig.footOffset,
           home: position.clone(),
@@ -941,6 +1016,8 @@ export class PedestrianSystem {
           profile,
           proximity: emptyPedProximity(),
         });
+        const created = system.peds[system.peds.length - 1];
+        if (presentation) system.posePresentation(created, 0, true);
         system.population.enroll(object, surface.spec.group);
         system.renderActors.add(object);
         system.group.add(object);
@@ -1734,6 +1811,7 @@ export class PedestrianSystem {
       segmentLength = dx * dx + dz * dz;
     const camera = frame.cameraPosition ?? car.position,
       threats = frame.threats ?? [car];
+    const presented: Ped[] = [];
     for (const ped of this.peds) {
       // A native-counted body retains actual native transport ownership.
       if (!ped.alive && ped.nativeCountingCharacter) continue;
@@ -1770,6 +1848,7 @@ export class PedestrianSystem {
         }
         continue;
       }
+      if (ped.presentation && !ped.nativeCountingCharacter) presented.push(ped);
       const volumeGravity = this.targetGravity(ped.object.position);
       if (volumeGravity !== undefined && volumeGravity < 1) {
         if (ped.napalmSlot >= 0) this.releaseNapalm(ped.napalmSlot);
@@ -1830,11 +1909,13 @@ export class PedestrianSystem {
           ped.velocity.multiplyScalar(Math.exp(-dt * 3));
           const y = this.groundAt(p.x, p.z, p.y + 0.3);
           if (y !== null) p.y = y + 0.025;
-          ped.visual.rotation.x = Math.min(Math.PI / 2, ped.fallTime * 5);
-          ped.visual.position.y = Math.max(
-            0.055,
-            ped.footOffset * (1 - ped.fallTime * 4),
-          );
+          if (!ped.presentation) {
+            ped.visual.rotation.x = Math.min(Math.PI / 2, ped.fallTime * 5);
+            ped.visual.position.y = Math.max(
+              0.055,
+              ped.footOffset * (1 - ped.fallTime * 4),
+            );
+          }
           if (
             y !== null &&
             ped.fallTime > 0.2 &&
@@ -2193,7 +2274,8 @@ export class PedestrianSystem {
               ped.phase,
           )
         : 0;
-      ped.visual.position.y = ped.footOffset + Math.abs(step) * 0.003;
+      if (!ped.presentation)
+        ped.visual.position.y = ped.footOffset + Math.abs(step) * 0.003;
       for (const limb of ped.limbs) {
         if (limb.kind === "arm")
           limb.object.rotation.x = -step * 0.35 * limb.side;
@@ -2202,12 +2284,55 @@ export class PedestrianSystem {
         else limb.object.rotation.x = Math.max(0, -step * limb.side) * 0.35;
       }
     }
+    // Only processed ordinary actors advance their original animation. Distant
+    // visible actors retain their last pose; PHIL-backed owners have a separate
+    // pose owner under PED-06 and must never receive this presentation bridge.
+    for (const ped of presented) this.posePresentation(ped, timeMs);
     this.updateNapalm(timeMs, frame.framePeriodMs ?? dt * 1000);
     this.updateCombatRays(timeMs);
     this.burnExplosion?.update(timeMs);
     this.blood?.update(dt, timeMs);
     this.nearReset = false;
     this.previousCar.copy(car.position);
+  }
+
+  private posePresentation(ped: Ped, timeMs: number, reset = false): void {
+    const presentation = ped.presentation;
+    if (!presentation) return;
+    const period =
+      ped.action === PedAction.Running
+        ? ped.runPeriod
+        : ped.action === PedAction.Walking
+          ? ped.walkPeriod || (ped.profile.movePeriod.get(ped.moveId) ?? 0)
+          : (ped.profile.movePeriod.get(ped.moveId) ?? 0);
+    const input = {
+      parent: ped.object,
+      worldPosition: ped.object.position,
+      heading: ped.heading,
+      groundY: ped.object.position.y,
+      moveId: ped.moveId,
+      periodMs: period,
+      timeMs: Math.trunc(timeMs) >>> 0,
+      alive: ped.alive,
+      legacyRigid: ped.corporeal,
+      legacyFall: !ped.alive
+        ? {
+            pitchRadians: Math.min(Math.PI / 2, ped.fallTime * 5),
+            rootHeight: Math.max(
+              0.055,
+              ped.footOffset * (1 - ped.fallTime * 4),
+            ),
+          }
+        : undefined,
+    };
+    const result = reset
+      ? presentation.reset(input)
+      : presentation.update(input);
+    if (ped.alive) ped.footOffset = presentation.groundingOffset;
+    for (const required of result.requiredProviders) {
+      const warning = `${ped.object.name}: animation provider required: ${required}`;
+      if (!this.warnings.includes(warning)) this.warnings.push(warning);
+    }
   }
 
   /** Presentation alone may expose retained distant poses. Processing, combat
@@ -2295,8 +2420,11 @@ export class PedestrianSystem {
       ped.heading = ped.initialYaw;
       ped.object.position.copy(ped.home);
       ped.object.rotation.set(0, ped.heading, 0);
-      ped.visual.rotation.set(0, 0, 0);
-      ped.visual.position.y = ped.footOffset;
+      if (ped.presentation) this.posePresentation(ped, 0, true);
+      else {
+        ped.visual.rotation.set(0, 0, 0);
+        ped.visual.position.y = ped.footOffset;
+      }
       ped.velocity.set(0, 0, 0);
       for (const limb of ped.limbs) limb.object.rotation.x = 0;
     }
@@ -2330,6 +2458,9 @@ export class PedestrianSystem {
     this.flameSprites = [];
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
+    // Native templates own their borrowed scene resources and remapped models.
+    // Remove instance trees before disposing procedural fixture resources.
+    for (const ped of this.peds) ped.presentation?.dispose();
     this.group.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       geometries.add(o.geometry);
@@ -2337,6 +2468,8 @@ export class PedestrianSystem {
         materials.add(m),
       );
     });
+    for (const template of this.nativeTemplates.values()) template.dispose();
+    this.nativeTemplates.clear();
     geometries.forEach((g) => g.dispose());
     materials.forEach((m) => m.dispose());
     // Textures belong to the asset cache and may be used by other loaded scenes.

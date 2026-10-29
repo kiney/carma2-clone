@@ -4,18 +4,24 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-29)
 
-The user selected the following implementation order. ANI-01/PED-04 form one
-active integration stage; the four P2 pedestrian tickets follow in `next`.
+The user selected the following implementation order. ANI-01/PED-04 form the first
+integration stage; PED-04 is done and ANI-01 remains active. The four P2
+pedestrian tickets follow in `next`.
 Existing numeric priorities remain unchanged: selection order is explicit and
-must not be inferred from priority alone. WIP is two tickets, below the limit3.
+must not be inferred from priority alone. WIP is one ticket, below the limit3.
 
-| Stage | Ticket                                | Status | Priority | Purpose                                                                                                 |
-| ----- | ------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------- |
-| 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | wip    | P3       | Original FORM/MODEL selection and BON/SKL root/bone presentation; resolve the systematic CitySwat lean. |
-| 2     | PED-06 / TASK-96                      | next   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                   |
-| 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                         |
-| 4     | PED-08 / TASK-98                      | next   | P2       | Visible severing and articulated body contacts.                                                         |
-| 5     | PED-09 / TASK-99                      | next   | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                          |
+| Stage | Ticket                                | Status                  | Priority | Purpose                                                                                                 |
+| ----- | ------------------------------------- | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | ANI-01 wip; PED-04 done | P3       | Original FORM/MODEL selection and BON/SKL root/bone presentation; resolve the systematic CitySwat lean. |
+| 2     | PED-06 / TASK-96                      | next                    | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                   |
+| 3     | PED-07 / TASK-97                      | next                    | P2       | Grounding, living falls and recovery ownership.                                                         |
+| 4     | PED-08 / TASK-98                      | next                    | P2       | Visible severing and articulated body contacts.                                                         |
+| 5     | PED-09 / TASK-99                      | next                    | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                          |
+
+ANI-01 living presentation is integrated and browser-validated, including the
+CitySwat correction. It remains open for native death/morph and specialized
+head/model/angle/prepared-vertex rendering; see
+[the exact milestone and remaining scope](../docs/c2-ped-presentation-re.md).
 
 The animation stage preserves current gameplay transport until the corresponding
 native physical owner is integrated. It must not duplicate population identities,
