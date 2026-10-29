@@ -3,10 +3,10 @@ id: TASK-129
 title: >-
   [P1] PERF-24: Eliminate world-query and CCD amplification from finite runaway
   wreck motion
-status: next
+status: wip
 assignee: []
 created_date: '2026-10-29 13:27'
-updated_date: '2026-10-29 14:09'
+updated_date: '2026-10-29 14:20'
 labels:
   - priority-1
   - PERF-24
@@ -48,4 +48,6 @@ Fresh original Desert1 live playtest on72f263d/index-mpUUxKme: user reports FPS 
 2026-10-29 user selected fundamental causal investigation and explicitly authorized Astra escalation. Root owns integration/query workload; Astra independently analyzes energy injection and real contact generation, Sol verifies original HW RQ solver/contact RHS, Luna audits alternate force/integration producers. Preserve paused live scene and use short serial numerical experiments. No production behavior change selected before evidence.
 
 2026-10-29 fundamental investigation complete (root+independent Astra+original-binary Sol audit). Redistributable procedural box against one nearly horizontal finite triangle reproduces source-generated contradiction: native chord row opens while angular guard row closes with opposing near-dependent OLD Jacobians. Native-only and guard-only packets stay benign, merged packet energy0.337728->1429039.106 with multipliers~1.617e10 and active physical residual~-0.535. Full production40ms tick also reproduces first accepted jump and thirteen response rounds; no prescribed impulses, original assets, friction or damage needed. Native unsigned/clipped packet RHS is verified, so changing it would be a behavioral deviation. New optional bounded oracle executes audited HW normal routine4c3900 only: same merged K/b returns[.0003020222,0],status-1 after25dependence removals/51loops; eight analytical controls plus native/rest and guard packet controls validate ABI and ordinary parity. The residual-correction tail demonstrably changes scratch without updating returned outputs in tested control; do not rely on it. Own repro/native-oracle tools and precise evidence docs/runaway-contact-root-cause.md added. Actual FAIR first impulse still unrecorded, and native dependence handling is not a universal energy cap. No production physics changed. Return to next after selected understanding stage; implementation acceptance remains open.
+
+User explicitly selected test-driven correction: write reviewed meaningful failing regressions first, checkpoint red tests and freeze their bytes, then change engine without editing those tests. Work in isolated /tmp/carma-perf24-tdd to preserve live production tab. Root owns acceptance/integration, independent worker owns test authoring, native-solver worker read-only until red checkpoint.
 <!-- SECTION:NOTES:END -->

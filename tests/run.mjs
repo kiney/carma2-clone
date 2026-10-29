@@ -454,3 +454,5 @@ import "./race-feedback.test.mjs";
 import "./population-availability.test.mjs";
 
 import "./diagnostics.test.mjs";
+
+import "./runaway-contact-regression.test.mjs";
