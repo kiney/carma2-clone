@@ -4085,6 +4085,7 @@ function animate(now: number) {
     forward.y = 0;
     if (forward.lengthSq() > 1e-8) forward.normalize();
     target.copy(renderPosition).add(new THREE.Vector3(0, carTargetHeight, 0));
+    const cameraCalculated = !!gameFrame || cameraNeedsReset;
     if (cameraMode === 0 && player && simulation && nativeCameraSettings) {
       const com = player.properties.centerOfMass
         .clone()
@@ -4194,6 +4195,7 @@ function animate(now: number) {
     }
     camera.updateProjectionMatrix();
     camera.lookAt(target);
+    if (cameraCalculated) pedestrians?.noteCameraPosition(camera.position);
     if (grooveFrameStarted && simulation && gameFrame) {
       worldAnimation?.update(dt);
       simulation.finishWorldGrooveFrame(stats.gameTimeMs >>> 0, {

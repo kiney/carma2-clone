@@ -622,6 +622,7 @@ export class PedestrianSystem {
   private blood?: PedBloodRuntime;
   private collision?: PedOptions["collision"];
   private nearReset = true;
+  private previousCamera?: THREE.Vector3;
   private combatFrame: PedFrameOptions = {};
   private napalm: Array<PedNapalmBolt | undefined> = Array.from({
     length: NAPALM_CAPACITY,
@@ -1824,7 +1825,17 @@ export class PedestrianSystem {
         Math.abs(p.x - camera.x) <= this.settings.popupDistance &&
         Math.abs(p.y - camera.y) <= 0.6 * this.settings.popupDistance &&
         Math.abs(p.z - camera.z) <= this.settings.popupDistance;
-      ped.active = inProcess && (ped.active || this.nearReset || !inPopup);
+      // Native popup suppression assumes unprocessed actors are not rendered.
+      // Extended presentation can already expose one inside that box; admit
+      // that visible actor before movement/combat/ordinary hit processing.
+      // The original process box still bounds all simulation work.
+      ped.active =
+        inProcess &&
+        (ped.active ||
+          this.nearReset ||
+          !inPopup ||
+          this.dormantRenderActors.has(ped.object));
+      if (ped.active) this.dormantRenderActors.delete(ped.object);
       ped.object.visible = ped.active && !ped.vanished;
       if (!ped.active) {
         // Installed4d545d scores an inactive burning target immediately, without
@@ -2370,6 +2381,19 @@ export class PedestrianSystem {
     this.previousCar.copy(position);
     this.nearReset = true;
   }
+
+  /** CalculateCameraStuff resets nearness after a camera jump greater than 20
+   * actor units. Camera calculation follows pedestrian processing, so this
+   * one-frame override belongs to the next ordinary population update. */
+  noteCameraPosition(position: THREE.Vector3): void {
+    if (
+      this.previousCamera &&
+      position.distanceToSquared(this.previousCamera) > 400
+    )
+      this.nearReset = true;
+    (this.previousCamera ??= new THREE.Vector3()).copy(position);
+  }
+
   reset() {
     this.dormantRenderActors.clear();
     this.presentationRevision++;
@@ -2389,6 +2413,7 @@ export class PedestrianSystem {
     this.combatFrame = {};
     this.blood?.reset();
     this.nearReset = true;
+    this.previousCamera = undefined;
     this.elapsed = 0;
     this.previousCar.copy(this.options.spawn);
     for (const ped of this.peds) {
@@ -2442,6 +2467,7 @@ export class PedestrianSystem {
     for (const mesh of this.repulseMeshes) mesh.visible = false;
   }
   dispose() {
+    this.previousCamera = undefined;
     this.dormantRenderActors.clear();
     this.presentationRevision++;
     this.clearCombatRays();

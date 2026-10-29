@@ -6,12 +6,12 @@ after the structural performance tickets and PERF-13 integration.
 
 ## Policy and native boundaries
 
-| Content      | New presentation range                                                            | Preserved native behavior                                                                                                                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Landscape    | 4 × authored GENERAL Yon × track multiplier; stock examples 35 → 140 C2 units     | Original Yon remains the input to GROOVE visibility, ghost-fragment admission and chase-camera startup framing. Near plane, projection, model scale and resolution are unchanged.                                                   |
-| Opponents    | Up to the extended landscape range, including valid committed remote FOLLOW poses | Physical/rematerialization distance remains `max(native Yon + 10, 45)`; objective selection, clocks, RNG, PHIL membership and safe-placement decisions are unchanged.                                                               |
-| Pedestrians  | 4 × original process distance, capped at landscape range; stock 12 → 48 units     | Original process box (12 horizontally, 7.2 vertically), popup box (9 / 5.4), threat processing, collisions, animation and combat eligibility retain their native rules. A conservative 2-unit bounding sphere avoids edge clipping. |
-| Material fog | Shader fog start/end distances ×4, preserving the authored colors                 | Retained MAT descriptors and native material/glorification calculations stay unchanged. Track clipping and base GENERAL fog Yon remain distinct.                                                                                    |
+| Content      | New presentation range                                                            | Preserved native behavior                                                                                                                                                                                                                                                       |
+| ------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Landscape    | 4 × authored GENERAL Yon × track multiplier; stock examples 35 → 140 C2 units     | Original Yon remains the input to GROOVE visibility, ghost-fragment admission and chase-camera startup framing. Near plane, projection, model scale and resolution are unchanged.                                                                                               |
+| Opponents    | Up to the extended landscape range, including valid committed remote FOLLOW poses | Physical/rematerialization distance remains `max(native Yon + 10, 45)`; objective selection, clocks, RNG, PHIL membership and safe-placement decisions are unchanged.                                                                                                           |
+| Pedestrians  | 4 × original process distance, capped at landscape range; stock 12 → 48 units     | Original process box (12 horizontally, 7.2 vertically), popup dimensions (9 / 5.4) and native process bounds remain fixed. Already presented near actors resume processing under the PED-10 consistency rule below. A conservative 2-unit bounding sphere avoids edge clipping. |
+| Material fog | Shader fog start/end distances ×4, preserving the authored colors                 | Retained MAT descriptors and native material/glorification calculations stay unchanged. Track clipping and base GENERAL fog Yon remain distinct.                                                                                                                                |
 
 `src/visual-distance.ts` owns the policy; `window.carma.visibility` reports the
 actual loaded values and distant presentation counts. There is no visibility
@@ -35,6 +35,17 @@ processing sleeps. Remote opponents use native path-following poses without
 full suspension; native rematerialization may adjust the pose. Extended views
 can reveal limits in the original scenery/backdrop. This change does not claim
 to solve every remaining frame-time spike (PERF-01).
+
+## Nearby admission correction (PED-10, 2026-10-29)
+
+A retained visible actor must resume normal processing once inside the original
+process box, including its inner popup box. Native popup suppression assumes an
+unprocessed actor is hidden; applying it to already rendered retained poses
+created visible frozen/unhittable pedestrians. The correction uses retained
+presentation membership before movement/contact checks and removes the dormant
+matrix certificate immediately on activation. Far actors remain presentation-only.
+The original greater-than20-unit camera-jump nearness hook is also restored.
+See [live evidence, source scope and tests](pedestrian-nearby-admission.md).
 
 ## Headed hardware comparison
 

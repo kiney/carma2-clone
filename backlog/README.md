@@ -18,6 +18,12 @@ must not be inferred from priority alone. WIP is one ticket, below the limit3.
 | 4     | PED-08 / TASK-98                      | next                    | P2       | Visible severing and articulated body contacts.                                                         |
 | 5     | PED-09 / TASK-99                      | next                    | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                          |
 
+P1 PED-10 / TASK-125 was inserted and completed during this stage: already
+visible retained pedestrians inside the native process box now resume movement
+and ordinary contact checks, while far actors remain presentation-only.
+[Evidence and regression checks](../docs/pedestrian-nearby-admission.md) retain
+the actual reported Newcity1 actor and source camera-jump hook.
+
 ANI-01 living presentation is integrated and browser-validated, including the
 CitySwat correction. It remains open for native death/morph and specialized
 head/model/angle/prepared-vertex rendering; see

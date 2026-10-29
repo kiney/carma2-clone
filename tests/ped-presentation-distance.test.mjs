@@ -140,7 +140,7 @@ test("presentation has independent spherical range and conservative frustum admi
   assert.equal(peds.states[0].active, false);
 });
 
-test("visual admission preserves native popup hysteresis and active actor visibility", async (t) => {
+test("presentation admission promotes retained actors while preserving active visibility", async (t) => {
   const { peds, actor } = await fixture(t);
   const target = actor.position.clone();
   const car = { position: new THREE.Vector3(100, 0, 100), yaw: 0, speed: 0 };
@@ -159,14 +159,127 @@ test("visual admission preserves native popup hysteresis and active actor visibi
   peds.updatePresentation(target, 64);
   assert.equal(
     peds.states[0].active,
-    false,
-    "visual admission cannot bypass popup",
+    true,
+    "retained presentation admission resumes processing",
   );
+  assert.equal(actor.visible, true);
+  assert.equal(peds.dormantRenderActors.has(actor), false);
   peds.resetCar(car.position);
   peds.update(0.1, car, { cameraPosition: target });
   peds.updatePresentation(target, 64);
   assert.equal(peds.states[0].active, true);
   assert.equal(peds.dormantRenderActors.size, 0);
+});
+
+test("popup hysteresis remains inactive when presentation is not opted in", async (t) => {
+  const { peds, actor } = await fixture(t);
+  const target = actor.position.clone();
+  const car = { position: new THREE.Vector3(100, 0, 100), yaw: 0, speed: 0 };
+  peds.update(0.1, car, { cameraPosition: target });
+  assert.equal(peds.states[0].active, true);
+  peds.update(0.1, car, {
+    cameraPosition: target.clone().add(new THREE.Vector3(20, 0, 0)),
+  });
+  assert.equal(peds.states[0].active, false);
+  peds.update(0.1, car, { cameraPosition: target });
+  assert.equal(peds.states[0].active, false);
+  assert.equal(actor.visible, false);
+  assert.equal(peds.dormantRenderActors.size, 0);
+});
+
+test("visible dormant actor remains eligible for a same-update vehicle hit", async (t) => {
+  const { peds, actor } = await fixture(t);
+  const farCamera = new THREE.Vector3(100, 0, 100);
+  actor.position.set(0, 0, 0);
+  const car = { position: new THREE.Vector3(0, 0, 2), yaw: 0, speed: 0 };
+
+  // Consume the initial near-reset, then leave this actor unprocessed while
+  // keeping it in presentation range and inside the native popup volume.
+  peds.update(0.1, car, { cameraPosition: farCamera });
+  peds.updatePresentation(new THREE.Vector3(), 64, frontFrustum());
+  assert.equal(peds.states[0].active, false);
+  assert.equal(actor.visible, true);
+  assert.ok(peds.dormantRenderActors.has(actor));
+
+  car.position.z = -2;
+  car.speed = 2;
+  peds.update(0.1, car, {
+    cameraPosition: new THREE.Vector3(),
+    gameTimeMs: 200,
+  });
+  assert.equal(
+    peds.hits,
+    1,
+    "the sweep counts the visible pedestrian hit once",
+  );
+  assert.equal(peds.states[0].alive, false);
+  assert.equal(peds.dormantRenderActors.has(actor), false);
+  assert.equal(peds.dormantRenderActors.size, 0);
+});
+
+test("camera reset detection is strict at twenty units and takes effect next update", async (t) => {
+  const { peds, actor } = await fixture(t);
+  actor.position.set(0, 0, 0);
+  const camera = new THREE.Vector3(100, 0, 100);
+  const car = { position: camera.clone(), yaw: 0, speed: 0 };
+  peds.noteCameraPosition(camera);
+  peds.update(0.1, car, { cameraPosition: camera }); // consume initial reset
+
+  peds.noteCameraPosition(camera.clone().add(new THREE.Vector3(20, 0, 0)));
+  peds.update(0.1, car, { cameraPosition: new THREE.Vector3() });
+  assert.equal(
+    peds.states[0].active,
+    false,
+    "exactly twenty units does not reset",
+  );
+
+  peds.noteCameraPosition(camera.clone().add(new THREE.Vector3(40.01, 0, 0)));
+  peds.update(0.1, car, { cameraPosition: new THREE.Vector3() });
+  assert.equal(
+    peds.states[0].active,
+    true,
+    "more than twenty units resets the next pass",
+  );
+
+  peds.reset();
+  peds.noteCameraPosition(new THREE.Vector3(500, 0, 500));
+  peds.update(0.1, car, { cameraPosition: new THREE.Vector3() });
+  assert.equal(
+    peds.states[0].active,
+    true,
+    "reset clears camera history and preserves reset activation",
+  );
+});
+
+test("an unseen actor inside popup remains inactive and native process bounds stay strict", async (t) => {
+  const { peds, actor } = await fixture(t);
+  const camera = new THREE.Vector3();
+  const farCamera = new THREE.Vector3(100, 0, 100);
+  const car = { position: new THREE.Vector3(100, 0, 100), yaw: 0, speed: 0 };
+  peds.update(0.1, car, { cameraPosition: farCamera }); // consume initial reset
+  actor.position.set(8, 0, 0); // inside popup, but outside visual range below
+  peds.updatePresentation(camera, 0);
+  assert.equal(actor.visible, false);
+  peds.update(0.1, car, { cameraPosition: camera });
+  assert.equal(peds.states[0].active, false);
+
+  actor.position.set(11.99, 0, 0);
+  peds.update(0.1, car, { cameraPosition: camera });
+  assert.equal(peds.states[0].active, true);
+  actor.position.set(12, 0, 0);
+  peds.update(0.1, car, { cameraPosition: camera });
+  assert.equal(
+    peds.states[0].active,
+    false,
+    "horizontal process extent is strict",
+  );
+  actor.position.set(0, 7.2, 0);
+  peds.update(0.1, car, { cameraPosition: camera });
+  assert.equal(
+    peds.states[0].active,
+    false,
+    "vertical process extent is strict",
+  );
 });
 
 test("vanished inactive burning actors remain absent after presentation", async (t) => {
