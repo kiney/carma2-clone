@@ -4,7 +4,7 @@ title: '[P2] PED-09: Bind native pedestrian contact causes, awards and effect ou
 status: next
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-29 00:42'
+updated_date: '2026-10-29 20:22'
 labels:
   - priority-2
   - PED-09
@@ -56,3 +56,9 @@ Source task: [PED-03 / TASK-35](task-35%20-%20P2-PED-03-Implement-native-pedestr
 - [ ] #3 Real original blood/giblets/scrape/status and shared slick consumers receive native physical inputs from the correct owning phase, with Stock/Advanced browser checks.
 - [ ] #4 Missing retained input or exceptional providers is explicitly diagnosed; no guessed height/driver or replay record is presented as verified original behavior.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PED-06 now routes ordinary actual contacts through native gameplay and preserves normal count/mission identity. Combat death entry reuses native Kill/SetPedMove; repulsion/napalm/electric use actual root/body ownership and existing effects. This preserves existing powerups but does not close the complete cause attribution/award geometry/full blood and sever-effect acceptance here. See docs/ped06-production-integration.md.
+<!-- SECTION:NOTES:END -->

@@ -134,6 +134,13 @@ try {
     window.addEventListener(
       "keydown",
       (e) => {
+        if (e.code === "KeyF") c.paused = false;
+      },
+      { capture: true, once: true },
+    );
+    window.addEventListener(
+      "keydown",
+      (e) => {
         if (e.code === "KeyF") c.paused = true;
       },
       { once: true },
@@ -141,10 +148,7 @@ try {
   }, index);
   // Real Chromium key input reaches the normal F handler. Capture/pause hooks
   // bracket that event so a later AI/physics frame cannot obscure its impulse.
-  await page.evaluate(() => {
-    document.activeElement?.blur();
-    window.carma.paused = false;
-  });
+  await page.evaluate(() => document.activeElement?.blur());
   await page.keyboard.press("f");
   report.repulsion = await page.evaluate((index) => {
     const c = window.carma,
@@ -209,7 +213,7 @@ try {
     );
     assert.ok(Number.isInteger(index), `original combat definition ${action}`);
     await page.selectOption("#debug-powerup", String(index));
-    await page.click("#debug-grant");
+    if (action !== 31) await page.click("#debug-grant");
     const setup = await page.evaluate(
       ({ index, action }) => {
         const c = window.carma,
@@ -225,19 +229,39 @@ try {
         ps.group.children
           .filter((o) => o.name !== "ped-blood")
           .slice(0, ps.count)
-          .forEach((o, i) =>
-            o.position
-              .copy(base)
+          .forEach((o, i) => {
+            const previous = o.position.clone();
+            const desired = base
+              .clone()
               .add(
                 i === 0
                   ? new base.constructor(0, 0, -1.2).applyQuaternion(
                       p.state.orientation,
                     )
                   : new base.constructor(500 + i, 0, 0),
-              ),
-          );
+              );
+            const character = ps.nativeRuntime?.characters.find(
+              (row) => row.owner === o,
+            );
+            if (character) {
+              // Preserve the native ACT root's source offset from the ordinary
+              // actor while moving both owners to the controlled fixture lane.
+              const root = Array.from(character.rootPose);
+              root[9] = Math.fround(root[9] + desired.x - previous.x);
+              root[10] = Math.fround(root[10] + desired.y - previous.y);
+              root[11] = Math.fround(root[11] + desired.z - previous.z);
+              const moved = ps.nativeRuntime.setRootPose(o, root);
+              if (moved.status !== "complete")
+                throw new Error(
+                  `Unable to place native fixture owner: ${moved.requiredProviders.join(",")}`,
+                );
+            }
+            o.position.copy(desired);
+          });
+        // Native electric scans the PHIL roster. Keep its actual firing car
+        // registered; only park unrelated opponents outside this fixture.
         for (const car of c.simulation.cars)
-          c.simulation.setCarPhysicsActive(car, false);
+          if (car !== p) c.simulation.setCarPhysicsActive(car, false);
         const farCar = base.clone().add(new base.constructor(0, 0, 100));
         ps.update(
           0,
@@ -263,9 +287,17 @@ try {
       },
       { index, action },
     );
+    if (action === 31) await page.click("#debug-grant");
     if (action !== 31) {
       await page.evaluate(() => {
         document.activeElement?.blur();
+        window.addEventListener(
+          "keydown",
+          (e) => {
+            if (e.code === "KeyF") window.carma.paused = false;
+          },
+          { capture: true, once: true },
+        );
         window.addEventListener(
           "keydown",
           (e) => {
@@ -273,7 +305,6 @@ try {
           },
           { once: true },
         );
-        window.carma.paused = false;
       });
       await page.keyboard.press("f");
     }
@@ -299,6 +330,23 @@ try {
       );
       return {
         action,
+        native: {
+          lifecycle: ps.nativeLifecycle,
+          warnings: ps.warnings,
+          first: ps.nativeRuntime
+            ? (() => {
+                const ch = ps.nativeRuntime.character(ps.peds[0].object);
+                return {
+                  flags: ch.flags,
+                  hp: ch.hitPoints,
+                  body: !!ch.body,
+                  physics: ch.physicsFlags,
+                  position: ch.position,
+                  diagnostics: [...ch.diagnostics],
+                };
+              })()
+            : null,
+        },
         hits: ps.hits,
         credits: c.race.credits,
         state: { ...ps.states[0], combatOwner: ps.states[0].combatOwner === p },
@@ -318,7 +366,7 @@ try {
     }, action);
     if (action === 45) {
       assert.equal(result.state.alive, true);
-      assert.equal(result.state.corporeal, true);
+      assert.equal(result.state.corporeal, true, JSON.stringify(result));
       assert.equal(result.state.moveId, 91);
       assert.ok(result.state.velocity.y > 0);
       assert.equal(result.hits, setup.beforeHits);

@@ -25,8 +25,12 @@ import {
   type NativePedPoolCharacter,
   type NativePedPoolFrame,
   type NativePedPoolVisit,
+  type NativePedPoolHost,
 } from "./ped-body-pool";
-import { NativePedBonePool } from "./physics/ped-bone-pool";
+import {
+  NativePedBonePool,
+  type NativePedBonePoolHost,
+} from "./physics/ped-bone-pool";
 import {
   createNativePedBody,
   prepareNativePedBody,
@@ -114,6 +118,20 @@ export interface NativePedRuntimeCallback<Owner extends object> {
   framePeriodMs: number;
 }
 export interface NativePedRuntimeHooks<Owner extends object> {
+  onRenderPrepared?: (
+    character: NativePedRuntimeCharacter<Owner>,
+    instance: NativePedInstance,
+  ) => void;
+  /** Unbind borrowed render consumers before the ACT ownership is released. */
+  onRenderReleased?: (
+    character: NativePedRuntimeCharacter<Owner>,
+    instance: NativePedInstance,
+  ) => void;
+  /** Temporary ordinary movement adapter after BON, before passive PHIL stores.
+   * Active roots and velocities always remain owned by the actual solver. */
+  passivePose?: (
+    context: NativePedRuntimeCallback<Owner>,
+  ) => NativePedInstanceResult | void;
   /** Original outer current-root grounding/proximity phase after resource
    * admission and before this frame's BON advancement or passive PHIL write. */
   beforePose?: (
@@ -189,6 +207,7 @@ export interface NativePedRuntimeHooks<Owner extends object> {
 export interface NativePedRuntimeOptions<Owner extends object> {
   /** Original global74299c; source character owner supplies it, without default. */
   levelOut: number;
+  nextCrtInteger?: () => number;
   hooks?: NativePedRuntimeHooks<Owner>;
 }
 export type NativePedRuntimeAllocation<Owner extends object> =
@@ -206,6 +225,7 @@ export interface NativePedRuntimeFrameVisit<Owner extends object> {
   pose: NativePedInstanceResult | null;
   /** Failure retains completed BON and passive Object V stores. */
   beforeSaveRoot?: NativePedInstanceResult;
+  passivePose?: NativePedInstanceResult;
   /** Does not undo an already completed BON advance on a missing outlet. */
   afterPose?: NativePedInstanceResult;
 }
@@ -240,6 +260,20 @@ export class NativePedRuntime<Owner extends object = object> {
     Group,
     NativePedBoneResource<Group>
   >;
+  private readonly bodyHost: NativePedPoolHost<
+    Owner,
+    NativePedRuntimeRender,
+    NativePedRuntimeBody<Owner>
+  >;
+  private readonly boneHost: NativePedBonePoolHost<
+    Owner,
+    Group,
+    Group,
+    NativePedBoneResource<Group>
+  >;
+  private readonly simpleResources = new Set<NativePedRuntimeBody<Owner>>();
+  private readonly boneResources = new Set<NativePedBoneResource<Group>>();
+  private disposed = false;
   private readonly forms = new Map<string, NativePedAssets>();
   private readonly personalities = new Map<string, Personality>();
   private readonly records = new Map<Owner, NativePedRuntimeCharacter<Owner>>();
@@ -252,9 +286,12 @@ export class NativePedRuntime<Owner extends object = object> {
     if (!Number.isFinite(f(options.levelOut)))
       throw new Error("Native level-out scalar required");
     this.hooks = options.hooks ?? {};
-    this.bonePool = new NativePedBonePool({
-      createBone: (_key, _slot, _index, bone) =>
-        createNativePedBoneResource<Group>(bone.collisionType),
+    this.boneHost = {
+      createBone: (_key, _slot, _index, bone) => {
+        const resource = createNativePedBoneResource<Group>(bone.collisionType);
+        this.boneResources.add(resource);
+        return resource;
+      },
       prepareBone: (a, body, request) => {
         prepareNativePedBoneResource(body, {
           request,
@@ -296,12 +333,9 @@ export class NativePedRuntime<Owner extends object = object> {
       },
       supportsShape: (bone) =>
         bone.collisionType === "BOX" || bone.collisionType === "SPHERE",
-    });
-    this.bodyPool = new NativePedBodyPool<
-      Owner,
-      NativePedRuntimeRender,
-      NativePedRuntimeBody<Owner>
-    >({
+    };
+    this.bonePool = new NativePedBonePool(this.boneHost);
+    this.bodyHost = {
       createRender: (key, slot) => {
         const group = new Group();
         group.name = `${key} render slot ${slot}`;
@@ -325,6 +359,7 @@ export class NativePedRuntime<Owner extends object = object> {
         // BrMemAllocate supplies zero persistent Object+19c/+64 and no header.
         // createNativePedBody is the prepared convenience constructor; reset
         // its post-registration policy here, before any source preparation.
+        this.simpleResources.add(body);
         body.owner = null;
         body.headerState = 0;
         body.rigidFlags = 0;
@@ -346,6 +381,7 @@ export class NativePedRuntime<Owner extends object = object> {
           rootPose: record.rootPose,
           actorSet: render.actorSet,
           modelSet1: personality.modelSet1,
+          nextCrtInteger: options.nextCrtInteger,
         });
         render.instance = record.instance = instance;
         this.copyMasks(record);
@@ -368,6 +404,7 @@ export class NativePedRuntime<Owner extends object = object> {
         );
         this.recordResult(record, selected);
         simulation.scene.add(instance.group);
+        this.hooks.onRenderPrepared?.(record, instance);
       },
       prepareSimple: (a) => {
         const record = this.character(a.character.owner),
@@ -421,9 +458,14 @@ export class NativePedRuntime<Owner extends object = object> {
         record.rootPose.set(instance.rootPose);
         record.modelSet = instance.modelSet;
         record.modelPoses = instance.bones.map((bone) => bone.poseIndex);
-        if (record.removedBoneMask && this.hooks.storeRemovedPoses)
+        if (
+          !this.disposed &&
+          record.removedBoneMask &&
+          this.hooks.storeRemovedPoses
+        )
           this.hooks.storeRemovedPoses(record, instance);
         for (const bone of instance.bones) instance.group.add(bone.actor);
+        this.hooks.onRenderReleased?.(record, instance);
         releaseNativePedActorSet(instance, {
           isPhysicsReleased: () =>
             !simulation.phil.registeredBodies.some(
@@ -459,7 +501,61 @@ export class NativePedRuntime<Owner extends object = object> {
         }
         return [];
       },
-    });
+    };
+    this.bodyPool = new NativePedBodyPool(this.bodyHost);
+  }
+  /** Whole-race destruction, outside PHIL traversal. This is not a gameplay
+   * halt or offscreen transition: no recovery, awards or RNG run at teardown. */
+  dispose(): void {
+    if (this.disposed) return;
+    // Match VehicleSimulation.dispose: remove actual physical references before
+    // releasing any ACT. Include prepared-but-unallocated resources on failure.
+    for (const body of this.simpleResources) {
+      if (this.simulation.phil.getState(body) !== 0)
+        this.simulation.removePedBody(body);
+    }
+    for (const resource of this.boneResources)
+      if (this.simulation.phil.getState(resource) !== 0)
+        this.simulation.removePedBoneBody(this.preparedBone(resource));
+    if (
+      [...this.simpleResources, ...this.boneResources].some(
+        (body) => this.simulation.phil.getState(body) !== 0,
+      )
+    )
+      throw new Error(
+        "Native runtime teardown requires completed PHIL removal",
+      );
+    this.disposed = true;
+    for (const body of this.simpleResources) {
+      body.owner = null;
+      body.contactProvider = undefined;
+      body.onActivated = undefined;
+      body.onContactDamage = undefined;
+      body.onMoved = undefined;
+      body.onHalt = undefined;
+    }
+    for (const resource of this.boneResources) {
+      resource.owner = null;
+      resource.poseTarget = undefined;
+      resource.registered = false;
+      resource.detached = false;
+    }
+    this.bonePool.dispose((body) => this.simulation.phil.getState(body) === 0);
+    this.bodyPool.dispose((body) => this.simulation.phil.getState(body) === 0);
+    for (const record of this.records.values()) {
+      record.body = null;
+      record.instance = null;
+      record.physicsFlags = 0;
+      record.bonedSlot = -1;
+    }
+    this.records.clear();
+    this.personalities.clear();
+    this.forms.clear();
+    this.simpleResources.clear();
+    this.boneResources.clear();
+  }
+  private assertLive(): void {
+    if (this.disposed) throw new Error("Native pedestrian runtime is disposed");
   }
   private preparedBone(
     resource: NativePedBoneResource<Group>,
@@ -488,6 +584,7 @@ export class NativePedRuntime<Owner extends object = object> {
       modelSet1?: NativePedDeadModels["modelSet1"];
     } = {},
   ): void {
+    this.assertLive();
     if (!name || this.personalities.has(name))
       throw new Error("Duplicate or missing native personality identity");
     const key = options.formKey ?? assets.profile.formName;
@@ -520,6 +617,7 @@ export class NativePedRuntime<Owner extends object = object> {
     hitPoints?: number;
     impactCount?: number;
   }): NativePedRuntimeCharacter<Owner> {
+    this.assertLive();
     if (!input.owner || this.records.has(input.owner))
       throw new Error("Native character owner must be distinct");
     const personality = this.personalities.get(input.personality);
@@ -566,6 +664,18 @@ export class NativePedRuntime<Owner extends object = object> {
     const record = this.records.get(owner);
     if (!record) throw new Error("Unknown native character owner");
     return record;
+  }
+  /** Current actual callback owner for an admitted ordinary native character.
+   * External gameplay causes use this instead of manufacturing ACT/body fields. */
+  callbackContext(
+    owner: Owner,
+    framePeriodMs = 0,
+  ): NativePedRuntimeCallback<Owner> {
+    if (!Number.isFinite(framePeriodMs) || framePeriodMs < 0)
+      throw new Error(
+        "Native callback context requires a nonnegative frame period",
+      );
+    return this.context(this.character(owner), framePeriodMs);
   }
   allocation(owner: Owner): NativePedRuntimeAllocation<Owner> | null {
     return this.bodyPool.allocation(owner);
@@ -701,12 +811,14 @@ export class NativePedRuntime<Owner extends object = object> {
   /** Once before actual physics; source records retain insertion/source order.
    * Ground/proximity/AI owners update root/move state before calling this. */
   prepareFrame(frame: NativePedPoolFrame): NativePedRuntimeFrameVisit<Owner>[] {
+    this.assertLive();
     this.currentTimeMs = frame.timeMs;
     const visits = this.bodyPool.visitFrame(this.characters, frame);
     return visits.map((pool) => {
       const c = this.character(pool.character.owner);
       let pose: NativePedInstanceResult | null = null;
       let beforeSaveRoot: NativePedInstanceResult | void = undefined;
+      let passivePose: NativePedInstanceResult | void = undefined;
       let afterPose: NativePedInstanceResult | void = undefined;
       if (c.body) c.body.pedestrianFlags = c.flags;
       if (pool.status === "processed" && c.instance && c.body) {
@@ -738,6 +850,14 @@ export class NativePedRuntime<Owner extends object = object> {
         this.recordResult(c, pose);
         if (pose.status === "complete") {
           if (!c.instance.physicsActive) {
+            passivePose = this.hooks.passivePose?.(this.context(c));
+            if (passivePose) {
+              this.recordResult(c, passivePose);
+              if (passivePose.status !== "complete")
+                return { pool, pose, passivePose };
+            }
+            if (!c.instance || !c.body || c.flags & 0x80)
+              return { pool, pose, ...(passivePose ? { passivePose } : {}) };
             this.simulation.phil.setPassiveMatrix(c.body, c.instance.rootPose);
             // Munge4d4bee..4d4c0c copies character+d8 raw world V into
             // the retained simple Object+68 before passive Stillify/head work.
@@ -779,6 +899,7 @@ export class NativePedRuntime<Owner extends object = object> {
         pool,
         pose,
         ...(beforeSaveRoot ? { beforeSaveRoot } : {}),
+        ...(passivePose ? { passivePose } : {}),
         ...(afterPose ? { afterPose } : {}),
       };
     });

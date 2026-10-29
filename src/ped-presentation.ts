@@ -23,6 +23,7 @@ import {
   selectNativePedBoneModel,
   stopNativePedMorph,
   type NativePedInstanceResult,
+  type NativePedInstance,
 } from "./ped-native-instance";
 
 export interface NativePedPresentationInput {
@@ -110,6 +111,36 @@ export class NativePedPresentation {
     this.unbindEffects = options.effects?.bind(this.instance);
     this.group = this.instance.group;
     this.group.name = `native-ped-presentation:${template.profile.formName}`;
+  }
+
+  /** Retain a released FORM owner's exact last visible pose for extended
+   * presentation. This does not acquire PHIL or advance any animation clock. */
+  captureStaticPose(source: NativePedInstance, parent: THREE.Object3D): void {
+    if (this.disposed) return;
+    const target = this.instance;
+    target.rootPose.set(source.rootPose);
+    target.characterOrientation = Float32Array.from(
+      source.characterOrientation,
+    );
+    target.direction = [...source.direction];
+    target.groundNormal = [...source.groundNormal];
+    target.moveId = source.moveId;
+    target.clock = { ...source.clock };
+    target.modelSet = source.modelSet;
+    for (let index = 0; index < target.bones.length; index++) {
+      const from = source.bones[index],
+        to = target.bones[index];
+      if (!from) continue;
+      selectNativePedBoneModel(target, index, from.poseIndex, source.modelSet);
+      to.pose.set(from.pose);
+      to.actor.matrix.copy(from.actor.matrix);
+      to.actor.visible = from.actor.visible;
+      to.actor.matrixWorldNeedsUpdate = true;
+    }
+    parent.updateWorldMatrix(true, false);
+    this.group.matrix.copy(parent.matrixWorld).invert();
+    this.group.matrixWorldNeedsUpdate = true;
+    this.group.visible = true;
   }
 
   get moveSlot(): number {

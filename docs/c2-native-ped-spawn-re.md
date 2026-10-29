@@ -8,6 +8,17 @@ The caller path is installed `ProcessModelsCB` at `0x40cf10` → `MungeFaces` at
 
 ## Installed eligibility and inputs
 
+ReadTrack calls `ReadPedSpecs 0x4ca7a0` at `0x5055bd` before
+`ExtractColumns 0x40cc50` at `0x5055ce`. ReadPedSpecs resolves all spawn,
+exclusion and exception MAT pointers before its marking pass
+`0x4caa43..0x4cab28`. That pass pads short identifiers by replacing their final
+four characters with `xxxxxxxx.MAT`, then always writes byte7=`?`. This is
+why ordinary unmarked names in the original MAT files satisfy the later
+predicate. The installed padding address is `buffer+strlen-4`; rec2's append
+at `buffer+strlen` is a transcription error. See
+[marker evidence](ped06-spawn-materials-re.md) for exact branches and malformed
+identifier boundaries.
+
 The installed `SpawnPedsOnFace` checks, in order, that network mode is off (`0x68a058`), the face normal's Y component is above the maximum-slope cosine, the face has a material and its identifier is non-NULL, `strlen(identifier) - 4 > 7`, `identifier[7] == '?'`, and the global pedestrian count is below 2,000. The byte check is `cmp [esi+7],0x3f; jne exit` at `0x4d2ade–0x4d2ae2`: identifiers with any other byte there are rejected.
 
 The face's three vertex indices address the selected model's vertex array. The callee reads each vertex's authored model-space position; it is invoked before track face migration. It receives the face and model, not an ACT actor or world transform. Therefore the source triangle is raw MODEL geometry, and any ACT transform application must be established by another native caller/context rather than inferred from the callee.
@@ -18,16 +29,86 @@ Spawn specs are scanned in their configured order and matched by material pointe
 
 For density `d >= 0`, installed code computes `carry + WORLD_SCALE² * area * d / 1000`, floors the result, and stores its fractional remainder after processing the face. The XZ triangle area is the absolute shoelace area divided by two; the installed constant corresponding to `WORLD_SCALE` is 6.9. For negative density, the candidate count is `-d`. The carry is stored on the matched spawn spec, so it continues across its faces. If the global capacity is reached during the spawn loop, the function returns before writing the new remainder. Capacity is 2,000 and is checked both on entry and before each pedestrian.
 
-The per-candidate sequence in the installed disassembly is group-member selection, animal exclusion check, two `SRandomPosNeg(1)` calls for X/Z direction components, then triangle-point generation, followed by pedestrian construction. `SRandomPosNeg(1)` produces signed floating-point samples; these are not discrete `+1/-1` signs. An excluded animal consumes the group-selection draw but skips direction, point, construction and pedestrian-count increment. The triangle point uses two random coefficients in `[0.1, 0.9)`, reflecting both when their sum exceeds one, then derives the third barycentric coefficient. BuildPedestrian receives the configured movement row. rec2's reconstruction shows the row's max walk-speed factor being sampled as an integer when nonzero, then passed into movement setup; zero chooses move 0. Exact parity of that reconstruction with the installed build path has not been confirmed by a numerical capture.
+The per-candidate sequence in the installed disassembly is group-member selection, animal exclusion check, two `SRandomPosNeg(1)` calls for X/Z direction components, then triangle-point generation, followed by pedestrian construction. `SRandomPosNeg(1)` produces signed floating-point samples; these are not discrete `+1/-1` signs. An excluded animal consumes the group-selection draw but skips direction, point, construction and pedestrian-count increment. The triangle point uses two random coefficients in `[0.1, 0.9)`, reflecting both when their sum exceeds one, then derives the third barycentric coefficient. Installed `BuildPedestrian 0x4d2dd0` receives the configured movement row.
+At `0x4d2f27..0x4d2f4c`, nonzero movement DWORD+0c selects move 30 with an
+integer sample between movement DWORD+08/+0c. Zero selects move 0 with speed−1,
+which requests the selected FORM move's authored period rather than period 0.
+`SetPedMove 0x4cba70` owns move substitution/fallback; the constructor's requested
+ID is not proof that this personality supplies that move. HP 100 and speed
+factor 1 are stored at `0x4d2f13` and `0x4d2f1d`. Direction normalization follows
+at `0x4d2f51..0x4d2fdc`. These are installed static instructions; no numerical
+native construction capture is claimed.
 
-After successful construction, installed race-type handling assigns objective ownership. For race type 5 (`SmashNPed`), pedestrians in the selected group get flag `0x200` and are registered through `AddSmashableRaceTarget` (`0x497640`). For race type 2 (`Peds`), a negative target count marks all spawned pedestrians; otherwise only configured target-group matches increment the initial target total and receive flag `0x200`. These flags and registrations are part of population creation, not merely hit-time score accounting.
+After successful construction, installed race-type handling assigns objective
+ownership before incrementing the pedestrian count:
 
-## RNG evidence and current implementation
+- Type 5 (`SmashNPed`), `0x4d3014..0x4d3055`: compare the spawn group's actual
+  index `(groupPointer-gPed_groups)/8` with race+1fc. A match ORs flag `0x200`
+  and calls `AddSmashableRaceTarget(NULL,NULL,pedIndex)`. This branch does not
+  increment the type 2 initial target total.
+- Type 2 (`Peds`), `0x4d3064..0x4d30df`: signed count at race+1f4 below 0
+  marks every spawn and increments initial target total `0x7429ac` once.
+  Count 0 selects none. A positive count scans DWORD group IDs beginning at
+  race+1f8; the pointer explicitly advances four bytes at `0x4d30b0`. The
+  first match marks/increments once and exits, including duplicate configured
+  groups. rec2's repeated comparison against the same union field is a
+  transcription error.
 
-Installed helper addresses are `IRandomBetween` `0x512f00`, `SRandomBetween` `0x513000`, and `SRandomPosNeg` `0x513030`. The static call order above is from installed HW disassembly. The current clone does not yet establish the same shared CRT stream for population generation; its default population random source is private. rec2's `SpawnPedsOnFace` at its differently revised address (`0x4d2cc0`) and `BuildPedestrian` at `0x407990` are useful reconstruction maps, not proof that every implementation detail matches this installed binary. The `newcommon/61-pedestrn.c` version contains stubs for these routines.
+`AddSmashableRaceTarget 0x497640` appends at most 300 records; capacity exhaustion
+silently skips the append after the objective flag has already been set.
+These flags, initial totals and registrations belong to population creation,
+not merely hit-time score accounting.
 
-Current `src/pedestrians.ts` parses the commented spawn specs and groups, then `collectPedSurfaces` traverses rendered scene meshes. It reconstructs source-face order where `sourceFaces` metadata exists, maps material names, applies each mesh's `matrixWorld` to triangle positions, computes slope from the rendered triangle cross product, and calculates population from that area. Population selection currently draws a group choice, point coefficients, heading, and walk period using the pedestrian system RNG. It therefore differs from native input ownership (raw selected MODEL before migration), MAT pointer identity, face-normal slope, continuous signed direction components, RNG chronology/stream, animal exclusion, native movement-factor selection, and objective initialization. It also skips zero-density specs before fractional carry processing.
+## RNG evidence and production integration
 
-## Remaining evidence needed
+Installed helpers are `IRandomBetween 0x512f00`, `SRandomBetween 0x513000`,
+`SRandomPosNeg 0x513030`, and shared CRT `srand/rand 0x575f70/0x575f80`.
+rec2 annotates SpawnPedsOnFace as `0x4d2cc0` for its different target revision.
+Installed BuildPedestrian is `0x4d2dd0`; `0x407990` is character-instance construction,
+not that pedestrian constructor. The newcommon pedestrian file remains a stub
+map. The per-candidate draw chronology above is verified static evidence,
+not a captured original population/RNG trajectory.
 
-To integrate this faithfully, track loading must retain and expose the actual source actor/MODEL traversal order, raw face indices and normal, and live MAT identity through destructive face preparation. Population creation needs access to the installed-equivalent shared CRT stream and race/network/animal/objective state. A numerical probe should then compare candidate count, RNG state and resulting pedestrian data against an independently authored fixture. Until those are available, rendered-scene population is an approximation and no exact native spawn capture is claimed.
+The normal race loader now resolves actual MAT bindings, marks the live spawn
+identifiers, and supplies `NativePedPopulationPlan.visit` to
+`prepareNativeWorldScene`'s load-time `spawnPedsOnFace` outlet. Visits arrive
+from ordered native ACT/MODEL preparation before each face migration. The plan
+consumes selected MODEL-local indexed triangles, reconstructed original face
+normals, actual MAT identity, per-spec carry and `sharedNativeRandom`. It
+retains each authored personality/group/triangle identity, sampled direction,
+position, initial walk period and objective policy for later actor creation.
+`PedestrianSystem.create` consumes those entries; it does not recalculate a
+production population from render batches.
+
+Personality packages load asynchronously after that plan. In the inspected
+normal path, `NativePedPresentation` construction and the initial frame0,
+nonmorph pose introduce no additional CRT draws: the instance merely retains
+its CRT callback, and mutant perturbation defaults off. Initial 0/30 selection
+uses the installed FSM table with actual loaded moves. A stationary movement's
+zero walk-period value remains a selection sentinel; the selected idle FORM
+period is used for animation. There is no added random phase or per-pedestrian
+turn-deadline draw at spawn; bounded process initialization schedules turns
+when an owner is actually processed.
+
+Production binds these same identities through `OrdinaryPedRuntime` into
+FORM/render/PHIL admission, the 100-record process pool and 85-slot ground pool.
+The ordinary source scanner receives actual live `0x54` records in browser-owned
+Wasm memory. Its pointer reseeds use those record byte offsets. This is an
+explicit host allocation policy, not Windows heap emulation or a guarantee of
+the same RNG choices as a historical Windows run. Unknown pointer fields are
+not fabricated, and missing asset/process/prepared-group owners retain explicit
+provider boundaries. The rendered `collectPedSurfaces` path remains a
+compatibility/fixture fallback when no native population plan is supplied.
+
+## Remaining evidence and limits
+
+There is still no independently captured original spawn output establishing
+bitwise RNG/population parity. The static source algorithms, production
+ownership, and host address policy must be distinguished from that stronger
+claim. Numerical area/point/direction arithmetic and JS transcendental helpers
+also do not establish exhaustive x87 equivalence. Source MAT identity, raw
+face chronology and bounded runtime admission are now represented; they are
+no longer missing solely because the renderer batches meshes. Full production
+validation results belong to the completed integration report. See
+[production boundaries](ped06-production-integration.md) and
+[ordinary movement](ped06-ordinary-move-re.md).

@@ -70,3 +70,15 @@ normal application updates, physics, keyboard input and death callbacks are used
 Original assets stay external/read only; generated reports/screenshots are
 ignored. This repairs browser-added visibility/activation coherence, not the
 separate native PHIL, recovery, severing or remaining ANI-01 animation providers.
+
+## PED-06 integration
+
+Ordinary supported owners now use FORM/PHIL rather than the visual sweep. The
+optional `NativePedPoolFrame.retainedPresentation` set carries this same browser
+appearance adaptation into native admission; default native callers remain
+unchanged. Original process bounds and shared FORM/header capacities still apply.
+A successful native presentation takeover removes the logical actor from the
+dormant set immediately and invalidates its matrix certificate. An exhausted
+nearby slot is hidden rather than shown as an unhittable static substitute.
+The Stock/Advanced replay now checks PHIL ownership and actual native HP/impact
+changes before its count-once assertion. See [production validation](ped06-production-integration.md).

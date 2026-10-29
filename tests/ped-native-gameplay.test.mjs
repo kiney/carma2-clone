@@ -96,7 +96,7 @@ function fixture() {
   }));
   for (const b of variants) b.actor = b.variants[0].actor;
   const moves = new Map();
-  for (const id of [30, 41, 80, 81, 90, 91, 92, 93, 94, 96, 97]) {
+  for (const id of [30, 41, 80, 81, 90, 91, 92, 93, 94, 96, 97, 113]) {
     const move = {
       id,
       periodMs: 100,
@@ -333,6 +333,72 @@ function active(h, lambda = 0.01, b = undefined) {
   h.simulation.pedDamageResult(body, r, "active");
   return r;
 }
+
+test("external cause Kill reuses native count/score order, retains cause, and selects move113 once", () => {
+  const scores = [];
+  const h = create(fixture(), {
+    onScoreDeath: (_ctx, state) => {
+      scores.push({
+        cause: state.deathCause,
+        hitPoints: _ctx.character.hitPoints,
+        timeMs: state.deathTimeMs,
+      });
+    },
+  });
+  const flagsBefore = h.c.flags;
+  const result = h.gameplay.killFromCause(h.c.owner, "annihilator");
+  assert.deepEqual(result, { status: "complete", requiredProviders: [] });
+  assert.equal(h.c.hitPoints, 0);
+  assert.equal(h.c.flags, flagsBefore | 0x100);
+  assert.equal(h.c.body.pedestrianFlags, flagsBefore | 0x100);
+  assert.equal(h.c.moveId, 113);
+  assert.equal(h.state.action, 6);
+  assert.equal(h.state.deathCause, "annihilator");
+  assert.equal(h.state.countCommitted, true);
+  assert.deepEqual(scores, [
+    { cause: "annihilator", hitPoints: 0, timeMs: 100 },
+  ]);
+  assert.deepEqual(
+    h.events.map((event) => event[0]),
+    ["count"],
+  );
+  assert.equal(h.events.filter((event) => event[0] === "count").length, 1);
+  assert.equal(
+    h.simulation.phil.count,
+    1,
+    "cause Kill reuses the existing PHIL owner",
+  );
+  assert.deepEqual(h.gameplay.killFromCause(h.c.owner, "electric"), {
+    status: "ineligible",
+    requiredProviders: [],
+  });
+  assert.equal(scores.length, 1);
+  assert.equal(h.simulation.phil.count, 1);
+});
+
+test("external cause Kill preflights count/score/effect owners before mutating native state", () => {
+  const h = create(
+    fixture(),
+    {
+      onScoreDeath: undefined,
+      onKillGiblets: undefined,
+    },
+    globals({ goreLevel: 2 }),
+  );
+  const flagsBefore = h.c.flags;
+  const result = h.gameplay.killFromCause(h.c.owner, "napalm");
+  assert.equal(result.status, "provider-required");
+  assert.ok(
+    result.requiredProviders.includes("source-ScoreForKilledPedestrian-owner"),
+  );
+  assert.ok(result.requiredProviders.includes("source-Kill-DoGiblets-owner"));
+  assert.equal(h.c.hitPoints, 100);
+  assert.equal(h.c.flags, flagsBefore);
+  assert.equal(h.state.countCommitted, false);
+  assert.equal(h.state.deathCause, undefined);
+  assert.equal(h.simulation.phil.count, 1);
+  assert.equal(h.events.length, 0);
+});
 
 test("actual PHIL passive activation commits WORD/cache/attribution before HP reaction and caller continuation", () => {
   const h = create();

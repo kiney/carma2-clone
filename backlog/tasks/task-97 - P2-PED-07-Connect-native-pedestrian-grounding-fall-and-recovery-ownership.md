@@ -4,7 +4,7 @@ title: '[P2] PED-07: Connect native pedestrian grounding, fall and recovery owne
 status: next
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-29 00:42'
+updated_date: '2026-10-29 20:22'
 labels:
   - priority-2
   - PED-07
@@ -57,3 +57,9 @@ Source task: [PED-03 / TASK-35](task-35%20-%20P2-PED-03-Implement-native-pedestr
 - [ ] #3 Car/prop contact normals, quiet/recovery state and selected-volume forces use actual source data rather than an invented floor normal or generic impulse.
 - [ ] #4 Unsupported negative groups/providers are explicit and mutation-safe; cache rollover, offscreen visits and reset are deterministic and bounded.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PED-06 foundation is complete:normal population now owns native FORM/PHIL bodies, canonical100-process/85-face caches, selected ordinary support, source steering/object scan and a real cache-only RecacheAndSetFace recovery outlet. Continue detailed fall/get-up/low-gravity/vanish integration and unsupported prepared-group floor branches; source boundaries stay explicit. See docs/ped06-production-integration.md.
+<!-- SECTION:NOTES:END -->

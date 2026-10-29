@@ -4,6 +4,14 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-29)
 
+P2 PED-06 / TASK-96 is `done`:authored ordinary Stock/Advanced identities now own
+bounded FORM/PHIL bodies, native BON transport and source steering/scanning.
+Original mass/COM/inertia, canonical process/face caches and shared CRT feed real
+contacts; the old visual sweep/second launch is bypassed. Stock/Advanced actual
+hits, release/reacquisition, reload, retained-visible admission, powerups and
+hardware Chromium are validated. Full integrated suite:3551 passed. See
+[implementation and explicit remaining boundaries](../docs/ped06-production-integration.md).
+
 P2 QUA-13 / TASK-132 is `done`: every playtest now keeps an automatic rolling
 three-minute bug history with a512MiB recorder budget, including download
 headroom. **Save bug capture** exports a local `.c2bug` file without MCP.
@@ -36,18 +44,18 @@ does not reproduce the failure. The bounded impact/component recorder remains
 available for another capture; see [evidence and boundaries](../docs/c2-ignore-world-reclaim-re.md).
 
 The user selected the following implementation order. ANI-01/PED-04 complete the
-first animation/resource stage. The four P2 pedestrian tickets follow in `next`.
+first animation/resource stage. PED-06 is complete; the remaining three P2 pedestrian tickets follow in `next`.
 Existing numeric priorities remain unchanged: selection order is explicit and
 must not be inferred from priority alone. No ticket currently occupies a WIP slot.
 
-| Stage | Ticket                                | Status | Priority | Purpose                                                                                                     |
-| ----- | ------------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------- |
+| Stage | Ticket                                | Status | Priority | Purpose                                                                                                      |
+| ----- | ------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------ |
 | 0b    | PERF-25 / TASK-130                    | done   | P1       | Resolve recurring anchored-scenery contact retries in Fridge Racer without hiding them through forced sleep. |
-| 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices. |
-| 2     | PED-06 / TASK-96                      | next   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                       |
-| 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                             |
-| 4     | PED-08 / TASK-98                      | next   | P2       | Visible severing and articulated body contacts.                                                             |
-| 5     | PED-09 / TASK-99                      | next   | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                              |
+| 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices.  |
+| 2     | PED-06 / TASK-96                      | done   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                        |
+| 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                              |
+| 4     | PED-08 / TASK-98                      | next   | P2       | Visible severing and articulated body contacts.                                                              |
+| 5     | PED-09 / TASK-99                      | next   | P2       | Native contact causes, awards and blood/giblet/effect outlets.                                               |
 
 P1 PED-10 / TASK-125 was inserted and completed during this stage: already
 visible retained pedestrians inside the native process box now resume movement
@@ -65,8 +73,8 @@ QUA-12 / TASK-124 retains its separate contact/effect-fixture scope.
 ANI-01 is complete for its animation/render scope, including native death and
 morph playback, head/blood model changes, body/head powerup geometry, shared-CRT
 mutant angles and exact prepared fire vertices. Stock/Advanced populations and
-hardware Chromium are validated. Native physical population, recovery, severing
-and contact-cause owners remain in the selected next tickets; see
+hardware Chromium are validated. Ordinary native physical population is integrated by PED-06; detailed recovery,
+severing and complete contact-cause owners remain in the selected next tickets; see
 [implemented behavior and ownership](../docs/c2-ped-presentation-re.md).
 
 The animation stage preserves current gameplay transport until the corresponding
@@ -97,9 +105,10 @@ The earlier PHY-11 / TASK-10, AI-05 / TASK-17 and DMG-01 / TASK-21 remain done.
 P3 PHY-20 / TASK-123 separately owns the modest bumpy-road suspension-history
 startup discrepancy.
 
-The completion boundary remains explicit: ordinary native pedestrian population,
-blood/giblet production and actual cause/physical adapters belong to PED-06 /
-TASK-96 and PED-09 / TASK-99, with their existing transitive prerequisites.
+The completion boundary remains explicit:ordinary native pedestrian population
+is complete under PED-06 / TASK-96. Detailed recovery, articulated bodies and
+full blood/giblet/cause adapters remain PED-07/08/09 with their existing
+transitive prerequisites.
 Positional event audio remains AUD-03 / TASK-71. DMG-02 / TASK-22 retains the
 unresolved, uncatalogued native `parallel` branch; this work also supplies its
 previously duplicated finite-prefix, source-edge and fancy outlets. The original

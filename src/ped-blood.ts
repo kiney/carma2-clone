@@ -23,6 +23,7 @@ export interface PedBloodSettings {
   lifetimeMs: [number, number];
   /** Original signed gPed_spurting_period; cache+84 stores its DWORD bits. */
   spurtingPeriodMs: number;
+  dismemberSpurtCount?: number;
   sizes: PedGibSize[];
   clouds: SmashExplosion[][];
   slick: {
@@ -48,9 +49,18 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
   const spurtMarker = /\/\/\s*SPURTING STUMP GIBLETS\s*:/i.exec(text);
   if (!spurtMarker)
     throw new Error("Missing pedestrian stump spurting settings");
-  const spurtPeriod = clean(
+  const spurtSettings = clean(
     text.slice(spurtMarker.index + spurtMarker[0].length),
-  )[1];
+  );
+  const spurtPeriod = spurtSettings[1];
+  const dismemberSpurtCount = Number(spurtSettings[2]);
+  if (
+    !/^[+-]?\d+$/.test(spurtSettings[2] ?? "") ||
+    !Number.isInteger(dismemberSpurtCount) ||
+    dismemberSpurtCount < -0x80000000 ||
+    dismemberSpurtCount > 0x7fffffff
+  )
+    throw new Error("Invalid dismembered pedestrian spurt count");
   if (spurtPeriod === undefined || !/^[+-]?\d+$/.test(spurtPeriod))
     throw new Error("Invalid pedestrian stump spurting period");
   const spurtingPeriodMs = Number(spurtPeriod);
@@ -201,6 +211,7 @@ export function parsePedBloodSettings(text: string): PedBloodSettings {
     spin,
     lifetimeMs,
     spurtingPeriodMs,
+    dismemberSpurtCount,
     sizes,
     clouds,
     slick: {

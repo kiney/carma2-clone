@@ -450,6 +450,30 @@ export class NativePedBonePool<
     this.host.onSlotReleased?.(allocation);
     return "complete";
   }
+  /** Whole-race teardown also clears empty/failed sever reservations. This
+   * requires actual physical release and does not mutate ordinary release gates. */
+  dispose(isPhysicsReleased: (body: Body) => boolean): void {
+    for (const body of this.resources)
+      if (!isPhysicsReleased(body) || !this.absent(body))
+        throw new Error("Native bone teardown requires actual PHIL removal");
+    for (const form of this.forms.values())
+      for (const slot of form.slots) {
+        const allocation = slot.allocation;
+        if (allocation) {
+          slot.bodies.forEach((body, index) => {
+            if (body) this.host.clearBone(allocation, body, index);
+          });
+          allocation.character.bonedSlot = -1;
+          slot.allocation = null;
+          this.host.onSlotReleased?.(allocation);
+        }
+        slot.pending.clear();
+        slot.cleared.clear();
+      }
+    this.owners.clear();
+    this.forms.clear();
+    this.resources.clear();
+  }
   counts(key: string): {
     capacity: number;
     owned: number;

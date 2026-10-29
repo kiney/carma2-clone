@@ -920,6 +920,11 @@ test("electric ray stores native squared float and expires after the physics win
   system.grant(1, car, race);
   assert.equal(events[0].kind, "effect");
   assert.equal(system.electricRayDistanceSquared, 12.25);
+  assert.equal(
+    car.proxyRayDistanceSquared,
+    12.25,
+    "owning car exposes the source electric range to PHIL pedestrian scans",
+  );
   assert.equal(system.abilities.size, 0);
   system.beginFrame(0.016, car, race, undefined, 30100);
   assert.equal(
@@ -933,6 +938,7 @@ test("electric ray stores native squared float and expires after the physics win
     0,
     "timer freeze leaves electric's normal game-time expiry running",
   );
+  assert.equal(car.proxyRayDistanceSquared, 0);
   system.grant(0, car, race);
   system.beginFrame(0.016, car, race, undefined, 31000);
   system.grant(0, car, race);

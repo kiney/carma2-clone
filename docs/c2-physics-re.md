@@ -679,3 +679,16 @@ released/movable/unsupported bodies remain guarded. This is a native-informed
 browser adaptation, not a recovered original temporal guard. Two original
 Fridge Racer cones fall from 2,400 responses over 40 ticks to 318, then release
 and settle normally. See [formulas, frozen tests and browser evidence](perf25-world-joint-phase.md).
+
+## Ordinary pedestrian production integration (PED-06)
+
+Normal authored Stock/Advanced identities now acquire the existing bounded
+FORM/PHIL runtime; native passive BON root velocity and original mass/COM/inertia
+feed actual collision activation. Supported owners bypass the old visual sweep,
+mean-displacement movement and estimated second corpse launch even when no pool
+slot is available. Raw pre-migration MODEL/MAT spawn visits, loader marker order,
+shared CRT, canonical100-process/85-face caches and source ordinary steering are
+integrated. See [production evidence and remaining boundaries](ped06-production-integration.md),
+[source movement](ped06-ordinary-move-re.md) and [object scan](ped06-object-scan-re.md).
+This does not close detailed PED-07 recovery, PED-08 articulation/severing or all
+PED-09 cause/award outlets.

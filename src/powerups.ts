@@ -825,6 +825,7 @@ export class PowerupSystem {
         break;
       case 31:
         this.proxyRayDistanceSquared = 0;
+        if (recipient) recipient.proxyRayDistanceSquared = 0;
         break;
       case 2:
         this.pedBodyScale = [1, 1, 1];
@@ -1029,6 +1030,7 @@ export class PowerupSystem {
               "Missing or invalid electric ray powerup parameter",
             );
           this.proxyRayDistanceSquared = squared;
+          vehicle.proxyRayDistanceSquared = squared;
         }
         if (def.action === 2) {
           const scale = def.floatParams.map((value) => Math.fround(value));

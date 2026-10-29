@@ -544,3 +544,16 @@ test("actor native floor-edge clipping turns before forbidden road and flag1 ope
   );
   peds.dispose();
 });
+
+test("ReadSettings retains source buoyancy scalar separately from reach and avoidance", () => {
+  const original = settings.replace(
+    "\n4\n// MOVEMENT",
+    "\n4\n2.0\n// MOVEMENT",
+  );
+  assert.equal(parsePedSettings(original).buoyancyFactor, Math.fround(2));
+  assert.equal(
+    parsePedSettings(settings).buoyancyFactor,
+    undefined,
+    "truncated fixture has no invented physical property",
+  );
+});

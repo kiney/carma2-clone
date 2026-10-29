@@ -1,6 +1,12 @@
 import type { PedVector } from "./ped-form";
 import {
   nativePedGroundingStep,
+  nativePedGroundCacheBounds,
+  nativePedInsideGroundCache,
+  nativePedRetainsGroundTriangle,
+  nativePedSelectGroundSupport,
+  NATIVE_PED_GROUND_CACHE_CAPACITIES,
+  type NativePedGroundHit,
   type NativePedGroundCache,
   type NativePedGroundCollectRequest,
   type NativePedGroundEffect,
@@ -110,6 +116,16 @@ export interface NativePedGroundingState<F extends NativePedGroundFace> {
 export interface NativePedGroundingVisit<F extends NativePedGroundFace> {
   ground: NativePedGroundResult<F, NativePedGroundCacheSlot<F>>;
   completion: NativePedInstanceResult;
+}
+export interface NativePedGroundRecacheResult<F extends NativePedGroundFace> {
+  status: "complete" | "provider-required";
+  requiredProviders: string[];
+  cache: NativePedGroundCache<F, NativePedGroundCacheSlot<F>> | null;
+  hit: NativePedGroundHit<F> | null;
+  needGround: boolean;
+  needProximityRescan: boolean;
+  rebuilt: boolean;
+  overflow: boolean;
 }
 const f = Math.fround;
 function vector(value: PedVector): PedVector {
@@ -310,6 +326,168 @@ export class NativePedGrounding<
     this.pool.reset();
     this.states = new WeakMap();
     this.invalidated = new WeakSet();
+  }
+  /** RecacheAndSetFace4d1b30 without its ordinary Munge caller. This is also
+   * the forced living-halt/recovery outlet: it does not gate on action or active
+   * physics, move/rotate a root, clear Munge flags, activate PHIL, or choose fall.
+   * One call performs one acquisition; a caller owning a native NULL retry must
+   * make that retry explicitly. The canonical85 slots remain this owner's. */
+  recache(
+    ctx: NativePedRuntimeCallback<Owner>,
+    force = false,
+  ): NativePedGroundRecacheResult<F> {
+    if (
+      this.runtime.character(ctx.owner) !== ctx.character ||
+      ctx.character.instance !== ctx.instance ||
+      ctx.character.body !== ctx.body
+    )
+      throw new Error(
+        "Native recache requires current character/ACT/body ownership",
+      );
+    if (
+      !Number.isInteger(ctx.timeMs) ||
+      ctx.timeMs < 0 ||
+      ctx.timeMs > 0xffffffff
+    )
+      throw new Error("Native recache clock must be uint32");
+    const input = this.options.readInput(ctx),
+      owner = ctx.owner;
+    let state = this.states.get(owner);
+    if (!state) {
+      state = this.createState(owner, input);
+      this.states.set(owner, state);
+    }
+    const result: NativePedGroundRecacheResult<F> = {
+      status: "complete",
+      requiredProviders: [],
+      cache: state.cache,
+      hit: null,
+      needGround: false,
+      needProximityRescan: false,
+      rebuilt: false,
+      overflow: false,
+    };
+    const require = (...names: string[]) => {
+      result.status = "provider-required";
+      result.requiredProviders.push(...names);
+      state!.requiredProviders = result.requiredProviders;
+      for (const name of names) ctx.character.diagnostics.add(name);
+      return result;
+    };
+    if (this.options.readProcessCache && !this.options.readProcessCache(owner))
+      return require("source-ground-current-process-cache-owner");
+    const root: PedVector = [
+      ctx.instance.rootPose[9],
+      ctx.instance.rootPose[10],
+      ctx.instance.rootPose[11],
+    ];
+    let cache = state.cache;
+    const rebuild =
+      force ||
+      this.invalidated.has(owner) ||
+      !cache ||
+      !nativePedInsideGroundCache(root, cache.bounds);
+    if (
+      !rebuild &&
+      cache?.selectedFace &&
+      nativePedRetainsGroundTriangle(cache.selectedFace, root)
+    )
+      return result;
+    if (rebuild && ctx.character.hitPoints <= 0 && !input.replayOverride) {
+      if (!this.options.selectMove) return require("source-ground-selectMove");
+      const outlet = this.options.selectMove(ctx, {
+        kind: "select-move",
+        move: 94,
+        period: -1,
+        restart: 0,
+        completion: 1,
+        action: 6,
+        timeMs: ctx.timeMs,
+      });
+      if (outlet?.requiredProviders?.length)
+        return require(...outlet.requiredProviders);
+      result.needGround = cache !== null;
+      result.needProximityRescan = true;
+      return result;
+    }
+    const missing = [
+      ...(!this.options.queryFace ? ["source-ground-queryFace"] : []),
+      ...(rebuild && !this.options.collectFaces
+        ? ["source-ground-collectFaces"]
+        : []),
+    ];
+    if (missing.length) return require(...missing);
+    const slot0 = ctx.instance.template.form.moves[0];
+    const clearance = slot0
+      ? (ctx.instance.template.profile.movement.get(slot0.id)
+          ?.groundingOffset ?? 0)
+      : 0;
+    if (rebuild) {
+      const bounds = nativePedGroundCacheBounds(
+        ctx.instance.rootPose,
+        ctx.instance.movement.subarray(0, 9),
+        ctx.instance.template.profile.jumpHeight,
+      );
+      const collected = this.options.collectFaces!(ctx, {
+        ...bounds,
+        limit: 76,
+        owner,
+        timeMs: ctx.timeMs,
+      });
+      if (collected.length > 76)
+        throw new Error("Native recache collector exceeded76 records");
+      result.overflow = collected.length > 75;
+      const faces = collected.slice(0, 75);
+      const capacity = NATIVE_PED_GROUND_CACHE_CAPACITIES.find(
+        (count) => faces.length <= count,
+      )!;
+      const slot = this.pool.acquire({
+        previous: cache,
+        preferredIdentity: cache?.capacity === capacity ? cache.identity : null,
+        capacity,
+        faces,
+        bounds: bounds.worldBounds,
+        owner,
+        timeMs: ctx.timeMs,
+      });
+      if (this.options.readProcessCache) this.process(owner).faceCache = slot;
+      cache = {
+        identity: slot,
+        bounds: slot.bounds,
+        capacity,
+        faces: slot.faces,
+        selectedFace: null,
+      };
+      result.rebuilt = true;
+      result.needProximityRescan = true;
+    }
+    const old = cache!.selectedFace;
+    const hit = nativePedSelectGroundSupport(
+      cache!.faces,
+      root,
+      clearance,
+      (face, query) => this.options.queryFace!(ctx, face, query),
+      input.excludePlingMaterials,
+    );
+    if (!rebuild) {
+      const normal = state.processFloorNormal;
+      result.needProximityRescan =
+        !old ||
+        !hit ||
+        normal[1] * old.normal[1] +
+          normal[2] * old.normal[2] +
+          normal[0] * old.normal[0] <
+          0.99;
+    }
+    cache = { ...cache!, selectedFace: hit?.face ?? null };
+    cache.identity.selectedFace = cache.selectedFace;
+    state.cache = cache;
+    state.requiredProviders = [];
+    this.invalidated.delete(owner);
+    result.cache = cache;
+    result.hit = hit;
+    result.needGround = true;
+    return result;
   }
   /** Callable NativePedRuntimeHooks.beforePose; runtime advances BON afterward. */
   readonly beforePose = (

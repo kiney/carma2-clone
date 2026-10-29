@@ -12,6 +12,8 @@ export interface VehicleState {
   /** Signed forward speed, in original world units per second. */
   speed: number;
   health: number;
+  /** Native owning car+170c, already squared distance. */
+  proxyRayDistanceSquared?: number;
 }
 /** Active normalized controls consumed by the native physics simulation. */
 export interface VehicleInput {

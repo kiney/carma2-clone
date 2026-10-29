@@ -138,14 +138,23 @@ function makeCache<Owner extends object, Face extends object>(
         get: () => {
           const address = view.getUint32(0x1c, true);
           if (!address) return null;
-          if (address !== 0x65d050 && address !== 0x65d054)
+          if (
+            address !== 0x65d048 &&
+            address !== 0x65d050 &&
+            address !== 0x65d054
+          )
             throw new Error(
               "Unrecovered native process-cache head sequence pointer",
             );
           return address;
         },
         set: (address: number | null) => {
-          if (address !== null && address !== 0x65d050 && address !== 0x65d054)
+          if (
+            address !== null &&
+            address !== 0x65d048 &&
+            address !== 0x65d050 &&
+            address !== 0x65d054
+          )
             throw new Error("Invalid native process-cache head sequence");
           view.setUint32(0x1c, address ?? 0, true);
         },

@@ -45,6 +45,7 @@ import {
   advanceNativePedHeadSequence,
   startNativePedHeadSequence,
   clearNativePedHeadSequence,
+  nativePedInitialFearHeadSequence,
   nativePedScareHeadSequence,
   nativePedCalmHeadSequence,
   type NativePedHeadSequence,
@@ -73,8 +74,15 @@ export interface NativePedGameplayState {
   deathTimeMs?: number;
   /** Native OneLessPed flag100 determines this; no second invented once guard. */
   countCommitted: boolean;
+  /** Cause supplied by an external installed KillPedestrian caller. Vehicle
+   * contacts leave this unset and retain the existing attribution-derived path. */
+  deathCause?: "annihilator" | "electric" | "napalm";
   diagnostics: Set<string>;
 }
+export type NativePedCauseKillResult =
+  | { status: "complete"; requiredProviders: [] }
+  | { status: "ineligible"; requiredProviders: [] }
+  | { status: "provider-required"; requiredProviders: string[] };
 export interface NativePedGameplayGlobals {
   immortal: boolean;
   exploding: boolean;
@@ -392,6 +400,7 @@ export class NativePedGameplay<Owner extends object = object> {
       get sequence() {
         const address = cache.headSequence!.address;
         if (address === null) return null;
+        if (address === 0x65d048) return nativePedInitialFearHeadSequence;
         if (address === 0x65d050) return nativePedScareHeadSequence;
         if (address === 0x65d054) return nativePedCalmHeadSequence;
         throw new Error("Unrecovered native head sequence pointer");
@@ -582,6 +591,82 @@ export class NativePedGameplay<Owner extends object = object> {
       processedFrames: 0,
       completedMove: false,
     };
+  }
+  /** Reuse the installed shared KillPedestrian continuation for an external
+   * cause. This owns no launch impulse; the caller must already have an actual
+   * admitted runtime body and supplies any cause-specific physical activation. */
+  killFromCause(
+    owner: Owner,
+    cause: "annihilator" | "electric" | "napalm",
+    deadMoveId = 113,
+  ): NativePedCauseKillResult {
+    const runtime = this.host();
+    let ctx: NativePedRuntimeCallback<Owner>;
+    try {
+      ctx = runtime.callbackContext(owner);
+    } catch (error) {
+      if (/current ACT\/body ownership/.test(String(error)))
+        return { status: "ineligible", requiredProviders: [] };
+      throw error;
+    }
+    const { character: c, instance } = ctx;
+    const state = this.state(owner),
+      globals = this.options.readGlobals();
+    if (
+      c.hitPoints <= 0 ||
+      c.flags & 0x100 ||
+      state.countCommitted ||
+      globals.immortal
+    )
+      return { status: "ineligible", requiredProviders: [] };
+    if (!Number.isInteger(deadMoveId) || deadMoveId < 0 || deadMoveId > 117)
+      throw new Error("Invalid external pedestrian death move");
+
+    const missing: string[] = [];
+    if (globals.replay) missing.push("source-replay-gameplay-owner");
+    if (!this.options.onOneLessPed) missing.push("source-OneLessPed-owner");
+    if (!this.options.onScoreDeath)
+      missing.push("source-ScoreForKilledPedestrian-owner");
+    const gravity = this.gravity(ctx);
+    if (gravity === undefined) missing.push("source-special-volume-gravity");
+    const physical =
+      globals.goreLevel > 0 &&
+      (gravity === null || (gravity !== undefined && gravity >= 1));
+    if (physical) {
+      if (!this.options.onKillGiblets)
+        missing.push("source-Kill-DoGiblets-owner");
+      if (instance.bones.some((bone) => !bone.modelSets[1]))
+        missing.push("native-model-set1-provider");
+    }
+    if (!instance.template.moves.has(deadMoveId))
+      missing.push(`native-authored-move-${deadMoveId}`);
+    if (
+      (globals.moveSubstitutionRequired || c.removedBoneMask & 0x28) &&
+      !this.options.resolveMove &&
+      !this.options.planMove
+    )
+      missing.push("source-SetPedMove-substitution-owner");
+    if (missing.length) {
+      diagnostic(ctx, state, missing);
+      return {
+        status: "provider-required",
+        requiredProviders: [...new Set(missing)],
+      };
+    }
+
+    // Preserve the cause for the real population/score outlet before Kill's
+    // native ordering: dead visuals/effects, flag100 + OneLessPed, then score.
+    state.deathCause = cause;
+    this.kill(ctx, null, globals, missing);
+    this.move(ctx, deadMoveId, -1, false, 6, missing);
+    if (missing.length) {
+      diagnostic(ctx, state, missing);
+      return {
+        status: "provider-required",
+        requiredProviders: [...new Set(missing)],
+      };
+    }
+    return { status: "complete", requiredProviders: [] };
   }
   release(owner: Owner): void {
     const c = this.host().character(owner);

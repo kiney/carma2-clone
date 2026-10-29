@@ -171,6 +171,45 @@ test("recent event does not bypass the separate newly appearing popup gate", () 
     true,
   );
 });
+test("retained presentation bypasses popup only and never extends outer process range", () => {
+  const { pool: defaultPool } = fixture();
+  const popupOwner = character("retained-popup", { position: [8, 0, 0] });
+  assert.equal(
+    processed(popupOwner),
+    false,
+    "unpresented popup owner remains unprocessed by default",
+  );
+  assert.equal(
+    defaultPool.visitFrame([popupOwner], frame())[0].status,
+    "out-of-scope",
+  );
+
+  const { pool: retainedPool } = fixture();
+  const retained = character("retained-popup", { position: [8, 0, 0] });
+  const presented = new Set([retained.owner]);
+  Object.freeze(presented);
+  const retainedFrame = frame({ retainedPresentation: presented });
+  assert.equal(processed(retained, retainedFrame) & 1, 1);
+  const [admitted] = retainedPool.visitFrame([retained], retainedFrame);
+  assert.equal(admitted.status, "processed");
+  assert.equal(
+    admitted.character.owner,
+    retained.owner,
+    "presentation retains the original owner identity",
+  );
+
+  const outside = character("outside-retained", { position: [12, 0, 0] });
+  const outsideResult = retainedPool.visitFrame(
+    [outside],
+    frame({ retainedPresentation: new Set([outside.owner]) }),
+  )[0];
+  assert.equal(
+    outsideResult.status,
+    "out-of-scope",
+    "presented actors outside the strict outer box stay unprocessed",
+  );
+  assert.equal(retainedPool.allocation(outside.owner), null);
+});
 test("FORM resources preallocate once and share across personality owners", () => {
   const { pool, log } = fixture();
   assert.equal(log.length, 4);

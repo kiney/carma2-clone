@@ -29,6 +29,9 @@ export interface NativePedPoolFrame {
   settings: NativePedPoolSettings;
   /** Source one-frame global override; caller resets it at the outer tail. */
   pedNearness?: boolean;
+  /** Browser visibility extension: these retained actors are already shown.
+   * Bypass only popup appearance suppression, preserving process bounds. */
+  retainedPresentation?: ReadonlySet<object>;
   replay?: boolean;
 }
 export interface NativePedPoolAllocation<Owner extends object, Render, Body> {
@@ -172,6 +175,7 @@ export function nativePedCameraProcessedFlags<Owner extends object>(
   const popup =
     !(character.flags & 1) &&
     !frame.pedNearness &&
+    !frame.retainedPresentation?.has(character.owner) &&
     f(d[0]) <= s.popupDistance &&
     f(d[1]) <= s.innerPopupDistance &&
     f(d[2]) <= s.popupDistance;
@@ -276,6 +280,19 @@ export class NativePedBodyPool<Owner extends object, Render, Body> {
       renderOwned: p.render.filter((s) => s.owner !== null).length,
       simpleOwned: p.simple.filter((s) => s.owner !== null).length,
     };
+  }
+  /** Whole-race teardown after actual PHIL removal; never invokes gameplay halt.
+   * Check every preallocated object before freeing any ownership or ACT. */
+  dispose(isPhysicsReleased: (body: Body) => boolean): void {
+    for (const form of this.forms.values())
+      for (const slot of form.simple)
+        if (!isPhysicsReleased(slot.resource))
+          throw new Error("Native FORM teardown requires actual PHIL removal");
+    for (const allocation of [...this.allocations.values()])
+      this.finishRelease(allocation);
+    this.forms.clear();
+    this.allocations.clear();
+    this.pendingRemovedPartOwners.clear();
   }
   /** Caller array is the source pedestrian order; no proximity sort/eviction. */
   visitFrame(

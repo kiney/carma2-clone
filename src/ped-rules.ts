@@ -63,6 +63,8 @@ export interface PedSettings {
   maxSlopeDegrees: number;
   reach: number;
   avoidDistance: number;
+  /** ReadSettings general scalar6, native Object property8. */
+  buoyancyFactor?: number;
   movements: PedMovement[];
 }
 const rows = (text: string) =>
@@ -71,9 +73,9 @@ const rows = (text: string) =>
     .map((l) => l.split("//")[0].trim())
     .filter(Boolean);
 export function parsePedSettings(text: string): PedSettings {
-  const general = rows(text);
   const movementMarker = /\/\/\s*MOVEMENT STUFF\b/i.exec(text);
   if (!movementMarker) throw new Error("Missing pedestrian movement settings");
+  const general = rows(text.slice(0, movementMarker.index));
   const motion = rows(
     text.slice(movementMarker.index + movementMarker[0].length),
   );
@@ -132,6 +134,9 @@ export function parsePedSettings(text: string): PedSettings {
     maxSlopeDegrees: values[2],
     reach: values[3],
     avoidDistance: values[4],
+    buoyancyFactor: Number.isFinite(Number(general[5]))
+      ? Math.fround(Number(general[5]))
+      : undefined,
     movements,
   };
 }
@@ -141,6 +146,7 @@ export const DEFAULT_PED_SETTINGS: PedSettings = {
   maxSlopeDegrees: 25,
   reach: 0.5,
   avoidDistance: 4,
+  buoyancyFactor: 2,
   movements: [
     {
       minTurnMs: 2000,

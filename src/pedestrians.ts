@@ -1,3 +1,17 @@
+import { NativePedSlickMaterialRegistry } from "./ped-slick-materials";
+import { createNativeRenderMaterial } from "./native-material-render";
+import { OrdinaryPedRuntime } from "./ped-ordinary-runtime";
+import {
+  parsePedContactSettings,
+  type PedContactSettings,
+} from "./physics/ped-contact";
+import {
+  parseNativePedNoiseGroups,
+  nativePedNoiseDiagnostics,
+  type NativePedNoiseGroups,
+} from "./ped-noise";
+import type { VehicleSimulation } from "./physics/simulation";
+import type { NativePedPopulationEntry } from "./ped-native-population";
 import { parsePedMotion } from "./ped-motion";
 import { parsePedPersonalityOptions } from "./ped-form";
 export { parsePedMotion } from "./ped-motion";
@@ -135,6 +149,9 @@ export type PedGround = (x: number, z: number, nearY: number) => number | null;
 export interface PedOptions {
   /** Match the selected Stock/Advanced race resource tree. */
   dataRoot?: "data" | "adv_data";
+  nativePopulation?: readonly NativePedPopulationEntry[];
+  nativeMaterials?: ReadonlyMap<string, import("./formats").MatMaterial | null>;
+  onNoiseSound?: (id: number, position: THREE.Vector3) => void;
   spawn: THREE.Vector3;
   /** Explicit test/debug override; production uses the original 2000 cap. */
   maxCount?: number;
@@ -237,13 +254,16 @@ interface Surface {
   c: THREE.Vector3;
   spec: PedSpawnSpec;
   count: number;
+  nativeSpawn?: NativePedPopulationEntry;
 }
 interface Limb {
   object: THREE.Group;
   side: number;
   kind: "arm" | "leg" | "knee";
 }
-interface Ped {
+export interface Ped {
+  personality: string;
+  nativeObjective?: boolean;
   nativeCountingCharacter?: NativePedCountingCharacter;
   object: THREE.Group;
   visual: THREE.Group;
@@ -292,7 +312,7 @@ interface Ped {
     faces: WorldSurface[];
   };
 }
-interface PedProfile {
+export interface PedProfile {
   available: Set<number>;
   movePeriod: Map<number, number>;
   groundingOffset: Map<number, number>;
@@ -645,12 +665,37 @@ export class PedestrianSystem {
   private readonly nativeDeadModels = new Map<string, NativePedDeadModels>();
   private readonly nativeDeadMaterials = new NativePedDeadMaterialRegistry();
   private moveFSM?: NativePedMoveFSM;
+  private nativeSlickMaterials?: NativePedSlickMaterialRegistry;
+  private nativeBridge?: OrdinaryPedRuntime;
+  private nativeSimulation?: VehicleSimulation;
+  private nativeContactSettings?: PedContactSettings;
+  private nativeSpurtingPeriod = 0;
+  private readonly nativeNoises = new Map<string, NativePedNoiseGroups>();
+  get nativeRuntime() {
+    return this.nativeBridge?.runtime;
+  }
+  get nativeLifecycle() {
+    return this.nativeBridge?.stats;
+  }
+  get needsLegacyThreats(): boolean {
+    return (
+      !this.nativeBridge || this.nativeBridge.entries.size !== this.peds.length
+    );
+  }
   private visualRevision = -1;
   private visualBodyX = 1;
   private lastAnimationTime?: number;
 
   nativePresentation(actor: THREE.Object3D): NativePedPresentation | undefined {
     return this.peds.find((ped) => ped.object === actor)?.presentation;
+  }
+  nativeInstance(actor: THREE.Object3D) {
+    const ped = this.peds.find((ped) => ped.object === actor);
+    if (!ped) return undefined;
+    return this.nativeBridge?.owns(ped)
+      ? (this.nativeRuntime!.character(actor).instance ??
+          ped.presentation?.instance)
+      : ped.presentation?.instance;
   }
   private previousCar: THREE.Vector3;
   private random = randomGenerator(0x43a2c9);
@@ -696,34 +741,44 @@ export class PedestrianSystem {
     return this.settings.processDistance;
   }
   get states() {
-    return this.peds.map((p) => ({
-      action: p.action,
-      moveId: p.moveId,
-      active: p.active,
-      alive: p.alive,
-      corporeal: p.corporeal,
-      velocity: p.velocity.clone(),
-      angularVelocity: p.angularVelocity.clone(),
-      mass: p.profile.mass,
-      networkStateCutoffMs: p.networkStateCutoffMs,
-      burningUntilMs: p.burningUntilMs,
-      napalmSlot: p.napalmSlot,
-      combatOwner: p.combatOwner,
-      awardCauseFlags: p.awardCauseFlags,
-      position: p.object.position.clone(),
-      group: p.spec.group,
-      walkPeriod: p.walkPeriod,
-      animation: p.presentation
-        ? {
-            source: "original-bon-skl",
-            moveId: p.presentation.instance.moveId,
-            moveSlot: p.presentation.moveSlot,
-            frame: p.presentation.instance.clock.frame,
-            fraction: p.presentation.instance.clock.fraction,
-            diagnostics: [...p.presentation.diagnostics],
-          }
-        : undefined,
-    }));
+    return this.peds.map((p) => {
+      const instance = this.nativeBridge?.owns(p)
+        ? (this.nativeRuntime!.character(p.object).instance ??
+          p.presentation?.instance)
+        : p.presentation?.instance;
+      return {
+        action: p.action,
+        moveId: p.moveId,
+        active: p.active,
+        alive: p.alive,
+        corporeal: p.corporeal,
+        velocity: p.velocity.clone(),
+        angularVelocity: p.angularVelocity.clone(),
+        mass: p.profile.mass,
+        networkStateCutoffMs: p.networkStateCutoffMs,
+        burningUntilMs: p.burningUntilMs,
+        napalmSlot: p.napalmSlot,
+        combatOwner: p.combatOwner,
+        awardCauseFlags: p.awardCauseFlags,
+        position: p.object.position.clone(),
+        group: p.spec.group,
+        walkPeriod: p.walkPeriod,
+        animation: instance
+          ? {
+              source: "original-bon-skl",
+              moveId: instance.moveId,
+              moveSlot: instance.template.form.moves.findIndex(
+                (move) => move.id === instance.moveId,
+              ),
+              frame: instance.clock.frame,
+              fraction: instance.clock.fraction,
+              diagnostics: this.nativeBridge?.owns(p)
+                ? [...this.nativeRuntime!.character(p.object).diagnostics]
+                : [...(p.presentation?.diagnostics ?? [])],
+            }
+          : undefined,
+      };
+    });
   }
   get combatStats() {
     return {
@@ -846,14 +901,22 @@ export class PedestrianSystem {
     try {
       settingsText = await assets.text(`${dataRoot}/PEDS/settings.txt`);
       system.settings = parsePedSettings(settingsText);
+      system.nativeContactSettings = parsePedContactSettings(settingsText);
+      system.nativeSpurtingPeriod =
+        parsePedBloodSettings(settingsText).spurtingPeriodMs;
     } catch (e) {
       system.warnings.push(`Pedestrian settings: ${e}`);
     }
-    const surfaces = collectPedSurfaces(
-      track,
-      specs,
-      system.settings.maxSlopeDegrees,
-    );
+    const surfaces: Surface[] = options.nativePopulation
+      ? options.nativePopulation.map((entry) => ({
+          a: new THREE.Vector3(...entry.sourceTriangle[0]),
+          b: new THREE.Vector3(...entry.sourceTriangle[1]),
+          c: new THREE.Vector3(...entry.sourceTriangle[2]),
+          spec: entry.spec,
+          count: 1,
+          nativeSpawn: entry,
+        }))
+      : collectPedSurfaces(track, specs, system.settings.maxSlopeDegrees);
     if (!surfaces.length) {
       system.warnings.push(
         "No rendered surfaces match pedestrian spawn materials",
@@ -907,6 +970,23 @@ export class PedestrianSystem {
           effects = new NativePedRenderEffects(template, deadModels);
           const probe = new NativePedPresentation(template, { effects });
           probe.dispose();
+          try {
+            const sounds = parseNativePedNoiseGroups(
+              await assets.text(
+                `${dataRoot}/PEDS/SOUND/${template.profile.soundFilename}`,
+              ),
+            );
+            system.nativeNoises.set(name.toLowerCase(), sounds);
+            system.warnings.push(
+              ...nativePedNoiseDiagnostics(sounds).map(
+                (reason) => `${name}: ${reason}`,
+              ),
+            );
+          } catch (error) {
+            system.warnings.push(
+              `${name}: native noise prerequisites: ${String(error)}`,
+            );
+          }
           system.nativeTemplates.set(name.toLowerCase(), template);
           system.nativeVisuals.set(name.toLowerCase(), effects);
           system.nativeDeadModels.set(name.toLowerCase(), deadModels);
@@ -969,12 +1049,16 @@ export class PedestrianSystem {
       const declared = (groups.get(surface.spec.group) ?? templateNames).map(
         (n) => n.toLowerCase(),
       );
-      const choices = declared.filter((n) => templates.has(n));
+      const choices = surface.nativeSpawn
+        ? templates.has(surface.nativeSpawn.personality.toLowerCase())
+          ? [surface.nativeSpawn.personality.toLowerCase()]
+          : []
+        : declared.filter((n) => templates.has(n));
       if (
         assets instanceof Assets &&
         surface.count > 0 &&
         choices.length > 0 &&
-        choices.length !== declared.length &&
+        declared.some((name) => !templates.has(name)) &&
         !system.populationFailures.some(
           (failure) => failure.group === surface.spec.group,
         )
@@ -1001,6 +1085,7 @@ export class PedestrianSystem {
       }
       for (let i = 0; i < surface.count && system.count < limit; i++) {
         const name =
+          surface.nativeSpawn?.personality.toLowerCase() ??
           choices[pedRandomInteger(system.random, 0, choices.length - 1)];
         const native = system.nativeTemplates.get(name);
         const presentation = native
@@ -1031,12 +1116,9 @@ export class PedestrianSystem {
             })
           : undefined;
         const visual = presentation?.group ?? templates.get(name)!.clone(true);
-        const position = pedTrianglePoint(
-          surface.a,
-          surface.b,
-          surface.c,
-          system.random,
-        );
+        const position = surface.nativeSpawn
+          ? new THREE.Vector3(...surface.nativeSpawn.position)
+          : pedTrianglePoint(surface.a, surface.b, surface.c, system.random);
         const rig = presentation
           ? { limbs: [], footOffset: 0 }
           : rigPedestrian(visual);
@@ -1045,21 +1127,47 @@ export class PedestrianSystem {
         object.name = `ped-${name}-${system.count}`;
         object.position.copy(position);
         object.add(visual);
-        const heading = Math.atan2(
-          system.random() * 2 - 1,
-          system.random() * 2 - 1,
-        );
+        const heading = surface.nativeSpawn
+          ? Math.atan2(
+              surface.nativeSpawn.direction[0],
+              surface.nativeSpawn.direction[2],
+            )
+          : Math.atan2(system.random() * 2 - 1, system.random() * 2 - 1);
         object.rotation.y = heading;
         const movement =
           system.settings.movements[surface.spec.movement] ??
           DEFAULT_PED_SETTINGS.movements[0];
-        const walkPeriod = pedRandomInteger(
-          system.random,
-          movement.minWalkPeriod,
-          movement.maxWalkPeriod,
-        );
+        const walkPeriod =
+          surface.nativeSpawn?.walkPeriod ??
+          pedRandomInteger(
+            system.random,
+            movement.minWalkPeriod,
+            movement.maxWalkPeriod,
+          );
         const profile = profiles.get(name)!;
+        let initialMove = walkPeriod ? 30 : 0;
+        let initialAction = PedAction.Walking;
+        if (native && system.moveFSM) {
+          const initial = planNativePedMove(system.moveFSM, {
+            requestedId: initialMove,
+            previousAction: 0,
+            requestedAction: 0,
+            walkSpeed: walkPeriod || -1,
+            pedestrianSpeedFactor: 0,
+            removedBoneMask: 0,
+            drunk: false,
+            dancing: false,
+            panicking: false,
+            availableMoves: new Set(native.moves.keys()),
+          });
+          if (initial.status !== "complete")
+            throw new Error(initial.requiredProviders.join(", "));
+          initialMove = initial.moveId;
+          initialAction = initial.action;
+        }
         system.peds.push({
+          personality: name,
+          nativeObjective: surface.nativeSpawn?.objective,
           object,
           visual,
           presentation,
@@ -1068,7 +1176,7 @@ export class PedestrianSystem {
           home: position.clone(),
           initialYaw: heading,
           heading,
-          phase: system.random() * Math.PI * 2,
+          phase: surface.nativeSpawn ? 0 : system.random() * Math.PI * 2,
           alive: true,
           vanished: false,
           fallTime: 0,
@@ -1078,7 +1186,7 @@ export class PedestrianSystem {
           spec: surface.spec,
           movement,
           walkPeriod,
-          nextTurnMs: system.nextTurn(movement, 0),
+          nextTurnMs: surface.nativeSpawn ? 0 : system.nextTurn(movement, 0),
           lastScareMs: 0,
           firstScareMs: 0,
           nextAvoidMs: 0,
@@ -1088,8 +1196,8 @@ export class PedestrianSystem {
           turnEnd: 0,
           actionSinceMs: 0,
           runPeriod: 100,
-          action: PedAction.Walking,
-          moveId: walkPeriod ? 30 : 0,
+          action: initialAction,
+          moveId: initialMove,
           active: false,
           corporeal: false,
           angularVelocity: new THREE.Vector3(),
@@ -1154,6 +1262,36 @@ export class PedestrianSystem {
     } catch (e) {
       system.warnings.push(`Pedestrian blood: ${e}`);
     }
+    if (assets instanceof Assets) {
+      const rendering = assets.nativeRenderingOptions;
+      system.nativeSlickMaterials = new NativePedSlickMaterialRegistry(assets, {
+        dataRoot,
+        pixelmapDirectory: "PIX16",
+        textureQuality: {
+          interpolation: !!rendering.interpolation,
+          antialiasing: !!rendering.antialiasing,
+          perspective: !!rendering.perspective,
+          exceptionFlags: (name) =>
+            rendering.textureExceptions?.get(name.toLowerCase()) ?? null,
+        },
+        mapMaterial: (source, pixelmap, kind) => {
+          const material = createNativeRenderMaterial(source, pixelmap, {
+            ...rendering,
+            shading: kind === "procedural-gibslick" ? 0 : 4,
+          });
+          return {
+            status: "complete",
+            owned: true,
+            requiredProviders: [],
+            material,
+            ownedTextures: material.map ? [material.map] : [],
+          };
+        },
+      });
+      const slickPreparation = await system.nativeSlickMaterials.prepare();
+      for (const missing of slickPreparation.requiredProviders)
+        system.warnings.push(`Pedestrian slick: ${missing}`);
+    }
     await system.loadCombatVisuals(assets, settingsText);
     return system;
   }
@@ -1164,10 +1302,15 @@ export class PedestrianSystem {
       this.options.readGravityMultiplier
     )?.(position);
   }
+  private combatPosition(ped: Ped): THREE.Vector3 {
+    return this.nativeBridge?.admitted(ped)
+      ? this.nativeRuntime!.character(ped.object).body!.state.position
+      : ped.object.position;
+  }
   private combatTargets() {
     return this.peds.map((ped) => ({
       ped,
-      position: ped.object.position,
+      position: this.combatPosition(ped),
       alive: ped.alive,
       inSight: ped.active,
       burningOrReserved: ped.burningUntilMs > 0 || ped.napalmSlot >= 0,
@@ -1266,12 +1409,28 @@ export class PedestrianSystem {
         const impulse = pedestrianRepulsionImpulse(
           source.position,
           target.position,
-          ped.profile.mass,
+          this.nativeBridge?.admitted(ped)
+            ? this.nativeRuntime!.character(ped.object).body!.properties.mass
+            : ped.profile.mass,
           parameters!,
           physicsTickMs,
           random,
         );
         if (!impulse) continue;
+        if (this.nativeBridge?.admitted(ped)) {
+          this.nativeBridge.repel(
+            ped,
+            ped.runPeriod,
+            impulse.deltaVelocity,
+            impulse.deltaAngularVelocity,
+            gameTimeMs,
+          );
+          ped.startingVelocity.copy(ped.velocity);
+          ped.networkStateCutoffMs = impulse.networkStateCutoffMs;
+          this.addRepulseRay(ped, source, gameTimeMs);
+          this.nativeBridge.finishRepulsion(ped, gameTimeMs);
+          continue;
+        }
         ped.velocity.add(impulse.deltaVelocity);
         ped.startingVelocity.copy(ped.velocity);
         ped.angularVelocity.add(impulse.deltaAngularVelocity);
@@ -1322,7 +1481,7 @@ export class PedestrianSystem {
       target,
       source,
       readSourcePosition: () => source.readPosition?.() ?? source.position,
-      readTargetPosition: () => target.object.position,
+      readTargetPosition: () => this.combatPosition(target),
       innerRadius: Math.fround(0.03),
       outerRadius: Math.fround(0.05),
       startMs: timeMs,
@@ -1365,7 +1524,7 @@ export class PedestrianSystem {
         continue;
       }
       const origin = ray.source.readRayOrigin?.() ?? ray.source.position;
-      const target = ray.target.object.position;
+      const target = this.combatPosition(ray.target);
       const delta = target.clone().sub(origin),
         distance = delta.length();
       const direction =
@@ -1468,6 +1627,11 @@ export class PedestrianSystem {
     moveId: number,
     inactiveBurnScore = false,
   ): boolean {
+    if (
+      this.nativeBridge?.admitted(ped) &&
+      (cause === "annihilator" || cause === "electric" || cause === "napalm")
+    )
+      return this.nativeBridge.killFromCause(ped, cause, owner);
     const gravity = this.targetGravity(ped.object.position);
     if (
       !ped.alive ||
@@ -1554,23 +1718,35 @@ export class PedestrianSystem {
         this.releaseNapalm(slot);
         continue;
       }
-      stepNapalmMotion(bolt, ped.object.position, nowMs, dtMs, random);
+      const nativeBody = this.nativeBridge?.admitted(ped)
+        ? this.nativeRuntime!.character(ped.object).body!
+        : null;
+      const position = this.combatPosition(ped);
+      stepNapalmMotion(bolt, position, nowMs, dtMs, random);
       bolt.flames[0].copy(bolt.position);
       // Native first checks head distance against each of the six simple-box
       // coordinate squares, then tests seven current flame actors in body axes.
-      const bounds = ped.profile.bounds;
-      const distanceSquared = bolt.position.distanceToSquared(
-        ped.object.position,
-      );
+      const bounds = nativeBody
+        ? new THREE.Box3(
+            new THREE.Vector3(...nativeBody.profile.bounds.min),
+            new THREE.Vector3(...nativeBody.profile.bounds.max),
+          )
+        : ped.profile.bounds;
+      const distanceSquared = bolt.position.distanceToSquared(position);
       const broad = [...bounds.min.toArray(), ...bounds.max.toArray()].some(
         (value) => distanceSquared < value * value,
       );
-      const inverse = ped.object.quaternion.clone().invert();
+      const orientation =
+        nativeBody?.state.orientation ?? ped.object.quaternion;
+      const inverse = orientation.clone().invert();
       const hit =
         broad &&
         bolt.flames.some((position) =>
           bounds.containsPoint(
-            position.clone().sub(ped.object.position).applyQuaternion(inverse),
+            position
+              .clone()
+              .sub(this.combatPosition(ped))
+              .applyQuaternion(inverse),
           ),
         );
       if (hit) {
@@ -1579,7 +1755,14 @@ export class PedestrianSystem {
         ped.awardCauseFlags |= 0x20;
         ped.lastScareMs = nowMs;
         ped.firstScareMs ||= nowMs;
-        if (!ped.corporeal && ped.alive) {
+        if (nativeBody)
+          this.nativeBridge!.ignite(
+            ped,
+            nowMs,
+            ped.burningUntilMs,
+            bolt.source.owner,
+          );
+        else if (!ped.corporeal && ped.alive) {
           ped.action = PedAction.Running;
           ped.moveId = this.reactionMove(ped, 41);
           ped.runPeriod = 100;
@@ -1760,6 +1943,116 @@ export class PedestrianSystem {
     );
   }
 
+  /** The existing population object remains the only map/count/mission owner. */
+  initializeNativePhysics(simulation: VehicleSimulation): void {
+    this.disposeNativePhysics();
+    this.nativeSimulation = simulation;
+    if (!this.moveFSM || !this.nativeContactSettings) {
+      this.warnings.push(
+        "Native pedestrian physical prerequisites unavailable: original move/contact tables",
+      );
+      return;
+    }
+    const warn = (text: string) => {
+      if (!this.warnings.includes(text)) this.warnings.push(text);
+    };
+    this.nativeBridge = new OrdinaryPedRuntime({
+      simulation,
+      peds: this.peds,
+      templates: this.nativeTemplates,
+      effects: this.nativeVisuals,
+      noises: this.nativeNoises,
+      settings: this.settings,
+      contactSettings: this.nativeContactSettings,
+      moveFSM: this.moveFSM,
+      spurtingPeriodMs: this.nativeSpurtingPeriod,
+      dismemberSpurtCount: this.blood?.settings.dismemberSpurtCount ?? 0,
+      frame: () => this.combatFrame,
+      retainedPresentation: () => this.dormantRenderActors,
+      onAdmitted: (ped) => {
+        if (this.dormantRenderActors.delete(ped.object))
+          this.presentationRevision++;
+      },
+      groundAt: this.groundAt,
+      warn,
+      resolveMaterial: (name) =>
+        this.options.nativeMaterials?.get(name.toLowerCase()),
+      readSlick: () => this.blood?.settings.slick ?? null,
+      readSlickMaterials: () => this.nativeSlickMaterials?.materials ?? null,
+      bind: (ped, character) =>
+        this.bindNativeCountingOwner(ped.object, ped.object, character),
+      oneLess: (ctx) => {
+        this.oneLessNativePed(ctx.owner, ctx.character, ctx.timeMs);
+      },
+      electric: (ped, body, timeMs) =>
+        this.electrocute(
+          ped,
+          {
+            position: body.state.position,
+            velocity: body.state.velocity,
+            owner: body,
+          },
+          timeMs,
+          "electric",
+        ),
+      playNoise: (id, position) => this.options.onNoiseSound?.(id, position),
+      killGiblets: (ctx, _dispatch, packet) => {
+        const ped = this.peds.find((p) => p.object === ctx.owner)!;
+        this.blood?.hit(
+          new THREE.Vector3(...packet.position),
+          ped.profile.bounds,
+          ctx.body.state.velocity,
+          packet.force,
+          ctx.timeMs,
+        );
+      },
+      contactEffects: (ctx, dispatch, result) => {
+        if (
+          "applied" in result &&
+          result.applied &&
+          ctx.character.hitPoints > 0 &&
+          ("damage" in result ? (result.damage ?? 0) : 0) > 0
+        )
+          this.blood?.hit(
+            new THREE.Vector3(...ctx.character.position),
+            this.peds.find((p) => p.object === ctx.owner)!.profile.bounds,
+            ctx.body.state.velocity,
+            dispatch.force?.length() ?? 0,
+            ctx.timeMs,
+          );
+      },
+      scoreDeath: (ctx, state) => {
+        const ped = this.peds.find((p) => p.object === ctx.owner)!;
+        // Ordinary Kill passes literal height0 (HW4ccd8f). Nonordinary falling
+        // and detailed retained award/cause outlets remain PED-09.
+        this.options.onHit?.({
+          timeMs: ctx.timeMs,
+          group: ped.spec.group,
+          count: 1,
+          total: this.hits,
+          speed: ctx.body.state.velocity.length(),
+          position: new THREE.Vector3(...ctx.character.position),
+          owner: state.cache?.killer ?? undefined,
+          cause: state.deathCause ?? "vehicle",
+          awardContext: {
+            cachePresent: state.cache !== null,
+            cacheFlags: state.cache?.flags ?? 0,
+            height: 0,
+            napalmDeadlineMs: state.cache?.napalmDeadlineMs ?? 0,
+            pedVelocity: ctx.body.state.velocity.clone(),
+          },
+        });
+      },
+    });
+  }
+  finishPhysics(): void {
+    this.nativeBridge?.sync();
+  }
+  disposeNativePhysics(): void {
+    this.nativeBridge?.dispose();
+    this.nativeBridge = undefined;
+  }
+
   private nextTurn(movement: PedMovement, timeMs: number) {
     return movement.maxTurnMs
       ? timeMs +
@@ -1822,6 +2115,7 @@ export class PedestrianSystem {
   /** Native changed-point notifications force face recaching after world edits. */
   invalidateWorldGeometry() {
     for (const ped of this.peds) ped.faceCache = undefined;
+    this.nativeBridge?.invalidateWorldGeometry();
   }
   private setDirection(
     ped: Ped,
@@ -1921,30 +2215,34 @@ export class PedestrianSystem {
     const camera = frame.cameraPosition ?? car.position,
       threats = frame.threats ?? [car];
     const presented: Ped[] = [];
+    this.nativeBridge?.sync();
+    this.nativeBridge?.prepare(camera, timeMs, this.nearReset);
     for (const ped of this.peds) {
       // A native-counted body retains actual native transport ownership.
       if (!ped.alive && ped.nativeCountingCharacter) continue;
       const p = ped.object.position;
-      const inProcess =
-        Math.abs(p.x - camera.x) < this.settings.processDistance &&
-        Math.abs(p.y - camera.y) < 0.6 * this.settings.processDistance &&
-        Math.abs(p.z - camera.z) < this.settings.processDistance;
-      const inPopup =
-        Math.abs(p.x - camera.x) <= this.settings.popupDistance &&
-        Math.abs(p.y - camera.y) <= 0.6 * this.settings.popupDistance &&
-        Math.abs(p.z - camera.z) <= this.settings.popupDistance;
-      // Native popup suppression assumes unprocessed actors are not rendered.
-      // Extended presentation can already expose one inside that box; admit
-      // that visible actor before movement/combat/ordinary hit processing.
-      // The original process box still bounds all simulation work.
-      ped.active =
-        inProcess &&
-        (ped.active ||
-          this.nearReset ||
-          !inPopup ||
-          this.dormantRenderActors.has(ped.object));
-      if (ped.active) this.dormantRenderActors.delete(ped.object);
-      ped.object.visible = ped.active && !ped.vanished;
+      if (!this.nativeBridge?.owns(ped)) {
+        const inProcess =
+          Math.abs(p.x - camera.x) < this.settings.processDistance &&
+          Math.abs(p.y - camera.y) < 0.6 * this.settings.processDistance &&
+          Math.abs(p.z - camera.z) < this.settings.processDistance;
+        const inPopup =
+          Math.abs(p.x - camera.x) <= this.settings.popupDistance &&
+          Math.abs(p.y - camera.y) <= 0.6 * this.settings.popupDistance &&
+          Math.abs(p.z - camera.z) <= this.settings.popupDistance;
+        // Native popup suppression assumes unprocessed actors are not rendered.
+        // Extended presentation can already expose one inside that box; admit
+        // that visible actor before movement/combat/ordinary hit processing.
+        // The original process box still bounds all simulation work.
+        ped.active =
+          inProcess &&
+          (ped.active ||
+            this.nearReset ||
+            !inPopup ||
+            this.dormantRenderActors.has(ped.object));
+        if (ped.active) this.dormantRenderActors.delete(ped.object);
+        ped.object.visible = ped.active && !ped.vanished;
+      }
       if (!ped.active) {
         // Installed4d545d scores an inactive burning target immediately, without
         // OneLessPed, ordinary immortality/volume gates or waiting for expiry.
@@ -1994,6 +2292,7 @@ export class PedestrianSystem {
         ped.burningUntilMs = 0;
       }
       if (
+        !this.nativeBridge?.owns(ped) &&
         ped.alive &&
         !frame.immortalPedestrians &&
         electricRayHits(
@@ -2057,6 +2356,7 @@ export class PedestrianSystem {
         }
         continue;
       }
+      if (this.nativeBridge?.movementOwned(ped)) continue;
       if (ped.turnEnd) {
         if (timeMs >= ped.turnEnd) {
           ped.heading = ped.turnTo;
@@ -2079,6 +2379,7 @@ export class PedestrianSystem {
       const distance = Math.hypot(p.x - from.x - dx * t, p.z - from.z - dz * t),
         nearCarY = from.y + (to.y - from.y) * t;
       if (
+        !this.nativeBridge?.owns(ped) &&
         Math.abs(car.speed) > 0.45 &&
         distance < 0.34 &&
         Math.abs(p.y - nearCarY) < 0.45
@@ -2407,6 +2708,7 @@ export class PedestrianSystem {
     // visible actors retain their last pose; PHIL-backed owners have a separate
     // pose owner under PED-06 and must never receive this presentation bridge.
     for (const ped of presented) this.posePresentation(ped, timeMs);
+
     this.updateNapalm(timeMs, frame.framePeriodMs ?? dt * 1000);
     this.updateCombatRays(timeMs);
     this.burnExplosion?.update(timeMs);
@@ -2487,8 +2789,21 @@ export class PedestrianSystem {
     sphere.radius = 2 * this.group.matrixWorld.getMaxScaleOnAxis();
     const distance = Math.max(0, visualDistance) + sphere.radius;
     for (const ped of this.peds) {
+      // An exhausted native slot must not become a visible, unhittable nearby
+      // substitute. Far retained poses remain the presentation-only extension.
+      if (
+        this.nativeBridge?.owns(ped) &&
+        !this.nativeBridge.canShowRetained(ped)
+      ) {
+        ped.object.visible = false;
+        continue;
+      }
       // Native transport may reparent and animate this actor independently.
-      if (ped.nativeCountingCharacter) continue;
+      if (
+        this.nativeBridge?.admitted(ped) ||
+        (ped.nativeCountingCharacter && !this.nativeBridge?.owns(ped))
+      )
+        continue;
       sphere.center
         .copy(ped.object.position)
         .applyMatrix4(this.group.matrixWorld);
@@ -2521,6 +2836,8 @@ export class PedestrianSystem {
   }
 
   reset() {
+    const nativeSimulation = this.nativeSimulation;
+    this.disposeNativePhysics();
     this.dormantRenderActors.clear();
     this.presentationRevision++;
     this.population.reset();
@@ -2580,6 +2897,7 @@ export class PedestrianSystem {
       ped.velocity.set(0, 0, 0);
       for (const limb of ped.limbs) limb.object.rotation.x = 0;
     }
+    if (nativeSimulation) this.initializeNativePhysics(nativeSimulation);
   }
 
   private clearCombatRays() {
@@ -2594,6 +2912,8 @@ export class PedestrianSystem {
     for (const mesh of this.repulseMeshes) mesh.visible = false;
   }
   dispose() {
+    this.disposeNativePhysics();
+    this.nativeSimulation = undefined;
     this.previousCamera = undefined;
     this.lastAnimationTime = undefined;
     this.dormantRenderActors.clear();
@@ -2629,6 +2949,7 @@ export class PedestrianSystem {
     this.nativeVisuals.clear();
     for (const models of this.nativeDeadModels.values()) models.dispose();
     this.nativeDeadModels.clear();
+    this.nativeSlickMaterials?.dispose(() => !this.nativeBridge);
     this.nativeDeadMaterials.dispose();
     for (const template of this.nativeTemplates.values()) template.dispose();
     this.nativeTemplates.clear();

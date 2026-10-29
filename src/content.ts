@@ -317,6 +317,9 @@ export class Assets {
     );
     return { defaultTrackMaterial, blackMaterial };
   }
+  get nativeRenderingOptions(): Readonly<NativeMaterialRenderOptions> {
+    return this.nativeRenderOptions;
+  }
   configureNativeRendering(options: NativeMaterialRenderOptions) {
     this.nativeRenderOptions = { ...options };
     for (const source of this.generatedMaterials.values())

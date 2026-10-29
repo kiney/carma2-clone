@@ -2,10 +2,17 @@
  * Actual SetCharacterBoneModelAR/SetCharacterModelAR and replay recording belong
  * to the explicit model owner; this kernel never changes physics or BON clocks. */
 export interface NativePedHeadSequence {
-  readonly address: 0x65d050 | 0x65d054;
+  readonly address: 0x65d048 | 0x65d050 | 0x65d054;
   readonly count: number;
   readonly poses: readonly number[];
 }
+/** Initial object-scan fear finishes at99; repeated fear uses65d050. */
+export const nativePedInitialFearHeadSequence: NativePedHeadSequence =
+  Object.freeze({
+    address: 0x65d048,
+    count: 4,
+    poses: Object.freeze([1, 2, 1, 99]),
+  });
 export const nativePedScareHeadSequence: NativePedHeadSequence = Object.freeze({
   address: 0x65d050,
   count: 3,
@@ -79,11 +86,13 @@ function integer(
 }
 function sequence(value: NativePedHeadSequence): void {
   const installed =
-    value.address === 0x65d050
-      ? nativePedScareHeadSequence
-      : value.address === 0x65d054
-        ? nativePedCalmHeadSequence
-        : null;
+    value.address === 0x65d048
+      ? nativePedInitialFearHeadSequence
+      : value.address === 0x65d050
+        ? nativePedScareHeadSequence
+        : value.address === 0x65d054
+          ? nativePedCalmHeadSequence
+          : null;
   if (
     !installed ||
     value.count !== installed.count ||

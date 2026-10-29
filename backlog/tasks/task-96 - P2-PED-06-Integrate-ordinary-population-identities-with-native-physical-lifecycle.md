@@ -3,10 +3,10 @@ id: TASK-96
 title: >-
   [P2] PED-06: Integrate ordinary population identities with native physical
   lifecycle
-status: next
+status: done
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-29 00:42'
+updated_date: '2026-10-29 20:22'
 labels:
   - priority-2
   - PED-06
@@ -49,8 +49,22 @@ Source task: [PED-03 / TASK-35](task-35%20-%20P2-PED-03-Implement-native-pedestr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 At least one real authored ordinary population identity in each Stock/Advanced browser scene is admitted through FORM/PHIL and receives actual solver contacts; no duplicate population identity or collider is created.
-- [ ] #2 Passive activation receives the actual character velocity/mass/COM/inertia; admitted native owners bypass the old visual sweep and estimated second launch.
-- [ ] #3 Admission, offscreen/release/reacquisition, reload and capacity exhaustion retain original identities and bounded resources, with unsupported asset prerequisites reported explicitly.
-- [ ] #4 Population/count/mission ownership uses PED-03 and existing movement remains correct; native movement/spawn chronology is backed by source evidence before claiming parity.
+- [x] #1 At least one real authored ordinary population identity in each Stock/Advanced browser scene is admitted through FORM/PHIL and receives actual solver contacts; no duplicate population identity or collider is created.
+- [x] #2 Passive activation receives the actual character velocity/mass/COM/inertia; admitted native owners bypass the old visual sweep and estimated second launch.
+- [x] #3 Admission, offscreen/release/reacquisition, reload and capacity exhaustion retain original identities and bounded resources, with unsupported asset prerequisites reported explicitly.
+- [x] #4 Population/count/mission ownership uses PED-03 and existing movement remains correct; native movement/spawn chronology is backed by source evidence before claiming parity.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+User selected PED-06 implementation. Audit live ordinary population versus controlled native enrollment; integrate in isolated /tmp/carma-ped06 to preserve playtest tabs. Root owns identity/lifecycle/render/physics integration, with narrow read-only source/API audits and deterministic tests before final browser checks. Preserve original assets, existing counting/animations, bounded source pools and explicit unsupported branches.
+
+Implemented normal authored population→FORM/PHIL ownership, raw pre-migration MODEL/MAT/shared-CRT spawn chronology and marker loader order, canonical process/ground caches, source ordinary movement/object scan, actual contact/death/count bridge and bounded resource teardown. Supported owners never use legacy sweep, mean displacement or estimated second launch, including offscreen/capacity states. Corrected original buoyancy, default idle period/FSM fallback, objective flags, per-car electric range and repulsion event retention. Preserved PED-10 retained-visible admission and immediate matrix-certificate invalidation; capacity-denied nearby substitutes stay hidden. Details: docs/ped06-production-integration.md.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Completed and integrated. npm test:3551 passed, no failures/skips; production build passes. Stock/Advanced actual solver hits and once-only counting, bounded preallocated resource reuse, offscreen release/reacquisition and fresh race reload pass. Combat powerup and native nearby-admission browser regressions pass. Hardware Chromium via DevTools MCP:actual W-drive collision HP100→0, one native impact/count, zero console/WebGL errors. PED-07/08/09 retain their detailed recovery, articulation and full cause/effect scope.
+<!-- SECTION:FINAL_SUMMARY:END -->

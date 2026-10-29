@@ -2097,6 +2097,13 @@ export class VehicleSimulation {
     }
     return faces;
   }
+  /** Pedestrian support uses the same finite native collector and ACT outlets. */
+  collectPedestrianFaces(
+    query: NativeWorldFaceQuery,
+    capacity = 76,
+  ): Surface[] {
+    return this.collectWorldFaces(query, capacity, true);
+  }
   /** Native finite emission and ACT callbacks run before eligibility filtering. */
   private collectWorldFaces(
     query: NativeWorldFaceQuery,

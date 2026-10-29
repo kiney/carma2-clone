@@ -176,6 +176,7 @@ test("pedestrian GIBSLICK parser retains exact authored config tuples", () => {
   assert.deepEqual(parsed.slick.smearDistance, [1, 1]);
   assert.equal(parsed.slick.smearMaterial, "GIBSMEAR.MAT");
   assert.equal(parsed.spurtingPeriodMs, 100);
+  assert.equal(parsed.dismemberSpurtCount, 100);
 });
 test("stump spurting period retains signed GetAnInt values and rejects missing or unsafe data", () => {
   const authored = syntheticPedSettings();

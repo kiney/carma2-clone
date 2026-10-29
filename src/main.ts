@@ -1,3 +1,8 @@
+import {
+  NativePedPopulationPlan,
+  type NativePedPopulationEntry,
+} from "./ped-native-population";
+import { parsePedSettings } from "./ped-rules";
 import { PlaytestCapture } from "./bug-capture/runtime";
 import { createBugCaptureControls } from "./bug-capture/controls";
 import { prepareNativePedVertexSampler } from "./ped-render-effects";
@@ -195,7 +200,13 @@ import {
 import { setMotionSuspension } from "./physics/motion";
 import { applyUpgradePickup } from "./physics/upgrade-pickup";
 import { RoadNavigator } from "./ai";
-import { PedestrianSystem } from "./pedestrians";
+import { markNativePedSpawnMaterials } from "./ped-spawn-materials";
+import type { MatMaterial } from "./formats";
+import {
+  PedestrianSystem,
+  parsePedSpawnSpecs,
+  parsePedGroups,
+} from "./pedestrians";
 import {
   pedestrianMapEnabled,
   pedestrianMapColor,
@@ -1061,6 +1072,10 @@ function groupMaterials(group: THREE.Object3D) {
 }
 let rivals: Rival[] = [];
 let pedestrians: PedestrianSystem | undefined;
+let pendingNativePedMaterials:
+  | ReadonlyMap<string, MatMaterial | null>
+  | undefined;
+let pendingNativePedPopulation: readonly NativePedPopulationEntry[] | undefined;
 let powerups: PowerupSystem | undefined;
 let upgradeSettings: UpgradeSettings | undefined;
 const noPowerups: readonly PowerupDefinition[] = [];
@@ -1231,18 +1246,75 @@ async function loadRace() {
         `Native track layout: ${initialNativeLayout.requiredProvider}`,
       );
     const nativeSmashTargets: Array<{
-      model: object;
-      actor: object;
-      index: -1;
+      model: object | null;
+      actor: object | null;
+      index: number;
     }> = [];
+    const pedDataRoot = currentTrack.toLowerCase().startsWith("adv_data/")
+      ? "adv_data"
+      : "data";
+    const pedSettingsText = await assets.text(
+      `${pedDataRoot}/PEDS/settings.txt`,
+    );
+    const pedSpawnSettings = parsePedSettings(pedSettingsText);
+    // ReadPedSpecs resolves every MAT pointer before it marks spawn identifiers.
+    // Retain those pointers: later exclusions and smash triggers still refer to
+    // their original configuration names, not the newly marked identifier.
+    const pedSpecs = parsePedSpawnSpecs(trackText);
+    const pedMaterials = new Map<string, MatMaterial | null>();
+    for (const spec of pedSpecs)
+      for (const name of [
+        spec.material,
+        ...spec.exclusions,
+        ...spec.exceptions,
+      ])
+        pedMaterials.set(
+          name.toLowerCase(),
+          world.findSourceMaterial(name) ?? null,
+        );
+    const smashMaterials = worldSmashSpecs.map((spec) =>
+      spec.trigger.kind === "material"
+        ? (world.findSourceMaterial(spec.trigger.name) ?? null)
+        : null,
+    );
+    const marked = markNativePedSpawnMaterials(
+      pedSpecs.map(
+        (spec) => pedMaterials.get(spec.material.toLowerCase()) ?? null,
+      ),
+    );
+    for (const reason of marked.requiredProviders)
+      assets.warnings.push(`Pedestrian spawn materials: ${reason}`);
+    pendingNativePedMaterials = pedMaterials;
+    const pedSpawnPlan = new NativePedPopulationPlan({
+      specs: pedSpecs.map((spec) => ({
+        spec,
+        material: pedMaterials.get(spec.material.toLowerCase()) ?? null,
+      })),
+      groups: parsePedGroups(pedSettingsText),
+      movements: pedSpawnSettings.movements,
+      maxSlopeDegrees: pedSpawnSettings.maxSlopeDegrees,
+      random: sharedNativeRandom.random,
+      objectiveGroups:
+        definition?.raceType === "peds" ||
+        definition?.raceType === "smashAndPed"
+          ? definition.pedGroupsToKill
+          : [],
+      allObjectives:
+        definition?.raceType === "peds" &&
+        (definition.numberOfPedGroupsToKill ?? 0) < 0,
+      onObjective: (_entry, index) => {
+        if (
+          definition?.raceType === "smashAndPed" &&
+          nativeSmashTargets.length < 300
+        )
+          nativeSmashTargets.push({ model: null, actor: null, index });
+      },
+    });
     const nativeWorld = prepareNativeWorldScene(world, {
       initialLayout: initialNativeLayout,
       ...generatedMaterials,
-      smashSpecs: worldSmashSpecs.map((spec) => ({
-        material:
-          spec.trigger.kind === "material"
-            ? (world.findSourceMaterial(spec.trigger.name) ?? null)
-            : null,
+      smashSpecs: worldSmashSpecs.map((spec, index) => ({
+        material: smashMaterials[index],
         triggerType:
           spec.trigger.kind === "material"
             ? 0
@@ -1289,10 +1361,10 @@ async function loadRace() {
           }
         : null,
       pixelBits: 16,
-      // PED-06 owns native load-time enrollment. The current population reads
-      // immutable source DAT coverage once, after world load; never respawn it
-      // from the compacted/migrated face tables.
-      spawnPedsOnFace: () => {},
+      // Consume raw MODEL/MAT inputs in the real pre-migration face visit.
+      spawnPedsOnFace: (visit) => {
+        pedSpawnPlan.visit(visit);
+      },
       updateMaterial: (material) => assets.updateNativeMaterial(material),
       retainChangingPowerupMaterial: (material) =>
         assets.retainNativeMaterial(material),
@@ -1302,6 +1374,7 @@ async function loadRace() {
         nativeSmashTargets.push({ model, actor, index });
       },
     });
+    pendingNativePedPopulation = pedSpawnPlan.entries;
     world.group.userData.nativeSmashTargets = nativeSmashTargets;
     camera.fov = nativeCameraSettings.runtimeFovDegrees;
     nativeCameraYon = Math.fround(
@@ -1628,6 +1701,7 @@ async function loadRace() {
     );
     noncarRenderBatch?.dispose();
     for (const body of simulation?.cars ?? []) tyreEffects.stopOwner(body);
+    pedestrians?.disposeNativePhysics();
     simulation?.dispose();
     noncarDebrisActors?.removeFromParent();
     noncarDebrisActors?.clear();
@@ -1750,6 +1824,8 @@ async function loadRace() {
       true,
       { immutableHulls: true },
     );
+    player.state.proxyRayDistanceSquared =
+      currentCar.split("/").pop()?.toUpperCase() === "STELLA.TXT" ? 6 : 0;
     if (!placeCarAtStart(player, collision, noncarBodies).placed)
       throw new Error(
         "No supported, collision-free player start could be found near the race grid.",
@@ -2937,6 +3013,8 @@ async function loadRivals(
         false,
         { immutableHulls: true },
       );
+      body.state.proxyRayDistanceSquared =
+        configPath.split("/").pop()?.toUpperCase() === "STELLA.TXT" ? 6 : 0;
       const animation = new CarAnimation(model.group, text);
       stagedAnimations.push(animation);
       const textures = new TextureAnimation(
@@ -3123,7 +3201,13 @@ async function loadPedestrians(text: string, loadGeneration: number) {
         ? "adv_data"
         : "data",
       spawn: vehicle.position,
+      nativePopulation: pendingNativePedPopulation,
+      nativeMaterials: pendingNativePedMaterials,
+      random: sharedNativeRandom.random,
       collision,
+      onNoiseSound: (id) => {
+        void audio.playSound(id);
+      },
       onCombatSound: (id) => {
         void audio.playSound(id);
       },
@@ -3132,8 +3216,8 @@ async function loadPedestrians(text: string, loadGeneration: number) {
         if (rigid) smoke?.stopObject(rigid);
       },
       onNapalmIgnited: (actor, velocity, omega) => {
-        const presentation = system.nativePresentation(actor);
-        const root = presentation?.instance.bones[0];
+        const instance = system.nativeInstance(actor);
+        const root = instance?.bones[0];
         if (!root?.model || !smoke) return;
         let model = root.model;
         let sampler = prepareNativePedVertexSampler(model);
@@ -3238,6 +3322,7 @@ async function loadPedestrians(text: string, loadGeneration: number) {
     system.dispose();
     return;
   }
+  if (simulation) system.initializeNativePhysics(simulation);
   pedestrians = system;
   // Establish native processing/popup visibility before the first rendered
   // frame, including a race which remains paused after its asynchronous load.
@@ -3922,6 +4007,58 @@ function animate(now: number) {
           player.input.handbrake = false;
         }
         updateRivals(dt, modifiers?.opponentSpeedFactor ?? 1);
+        pedestrians?.update(
+          dt,
+          {
+            position: vehicle.position,
+            yaw: vehicle.heading,
+            speed: vehicle.speed,
+            velocity: vehicle.velocity,
+          },
+          {
+            cameraPosition: camera.position,
+            pedestrianAnimation: powerups?.pedestrianAnimationState,
+            gameTimeMs: stats.gameTimeMs,
+            physicsTickMs: Math.round((simulation?.elapsed ?? 0) * 1000) >>> 0,
+            framePeriodMs: gameFrame.periodMs,
+            electricRayDistanceSquared:
+              player.state.proxyRayDistanceSquared ?? 0,
+            combatOwner: player,
+            combatPosition: readPlayerCombatPosition(),
+            readCombatRayOrigin: readPlayerCombatRayOrigin,
+            cameraOrientation: camera.getWorldQuaternion(
+              new THREE.Quaternion(),
+            ),
+            gravityMultiplier: player?.specialVolume?.volume?.gravityMultiplier,
+            threats:
+              simulation && pedestrians?.needsLegacyThreats
+                ? [...simulation.cars, ...simulation.noncars].map((body) => {
+                    // Source SetObjectRadius uses the furthest authored bound on each
+                    // axis, preserving different original car sizes in ped prediction.
+                    const extent = new THREE.Vector3();
+                    for (const hull of body.hulls)
+                      for (const point of hull.vertices) {
+                        extent.x = Math.max(extent.x, Math.abs(point.x));
+                        extent.y = Math.max(extent.y, Math.abs(point.y));
+                        extent.z = Math.max(extent.z, Math.abs(point.z));
+                      }
+                    return {
+                      position: body.state.position,
+                      yaw:
+                        "heading" in body.state
+                          ? Number(body.state.heading)
+                          : 0,
+                      speed:
+                        "speed" in body.state
+                          ? Number(body.state.speed)
+                          : body.state.velocity.length(),
+                      velocity: body.state.velocity,
+                      radiusSquared: extent.lengthSq(),
+                    };
+                  })
+                : undefined,
+          },
+        );
         simulation.beginWorldGrooveFrame({ isVisible: worldGrooveVisible });
         grooveFrameStarted = true;
         const physicsWindow = simulation.updateFrame(
@@ -3929,6 +4066,7 @@ function animate(now: number) {
           gameFrame.periodMs,
         );
         stats.physicsSkippedMs += physicsWindow.skippedMs;
+        pedestrians?.finishPhysics();
         // Installed4567db–4567f3 copies sound velocity after physics. Retain
         // this frame's snapshot for subsequent mechanics-phase tyre calls.
         for (const body of simulation.cars)
@@ -3976,51 +4114,6 @@ function animate(now: number) {
                 : "CHECKPOINT!",
         );
       }
-      pedestrians?.update(
-        dt,
-        {
-          position: vehicle.position,
-          yaw: vehicle.heading,
-          speed: vehicle.speed,
-          velocity: vehicle.velocity,
-        },
-        {
-          cameraPosition: camera.position,
-          pedestrianAnimation: powerups?.pedestrianAnimationState,
-          gameTimeMs: stats.gameTimeMs,
-          physicsTickMs: Math.round((simulation?.elapsed ?? 0) * 1000) >>> 0,
-          framePeriodMs: gameFrame.periodMs,
-          electricRayDistanceSquared: powerups?.electricRayDistanceSquared ?? 0,
-          combatOwner: player,
-          combatPosition: readPlayerCombatPosition(),
-          readCombatRayOrigin: readPlayerCombatRayOrigin,
-          cameraOrientation: camera.getWorldQuaternion(new THREE.Quaternion()),
-          gravityMultiplier: player?.specialVolume?.volume?.gravityMultiplier,
-          threats: simulation
-            ? [...simulation.cars, ...simulation.noncars].map((body) => {
-                // Source SetObjectRadius uses the furthest authored bound on each
-                // axis, preserving different original car sizes in ped prediction.
-                const extent = new THREE.Vector3();
-                for (const hull of body.hulls)
-                  for (const point of hull.vertices) {
-                    extent.x = Math.max(extent.x, Math.abs(point.x));
-                    extent.y = Math.max(extent.y, Math.abs(point.y));
-                    extent.z = Math.max(extent.z, Math.abs(point.z));
-                  }
-                return {
-                  position: body.state.position,
-                  yaw: "heading" in body.state ? Number(body.state.heading) : 0,
-                  speed:
-                    "speed" in body.state
-                      ? Number(body.state.speed)
-                      : body.state.velocity.length(),
-                  velocity: body.state.velocity,
-                  radiusSquared: extent.lengthSq(),
-                };
-              })
-            : undefined,
-        },
-      );
       checkRaceObjective();
       const animationInput = {
         ...(player ? motionAnimation(player) : {}),

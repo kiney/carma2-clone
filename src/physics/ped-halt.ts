@@ -19,7 +19,7 @@ export interface NativePedHaltCache {
   runFactor?: number;
   /** Process-cache +1c/+78/+1a. NULL pointer retains timestamp/index. */
   headSequence?: {
-    address: 0x65d050 | 0x65d054 | null;
+    address: 0x65d048 | 0x65d050 | 0x65d054 | null;
     startTimeMs: number;
     index: number;
   };

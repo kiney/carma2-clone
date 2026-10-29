@@ -24,7 +24,7 @@ server.stdout.on("data", (d) => (serverLog += d));
 server.stderr.on("data", (d) => (serverLog += d));
 const report = {
   fixture:
-    "Captured original Newcity1 near-popup ghost, controlled dormant setup, real keyboard-driven ordinary hit",
+    "Authored living BIPED1 retained-presentation regression; historical private-RNG target coordinates are reference-only; real keyboard-driven PHIL contact",
   cases: [],
   errors: [],
   failedRequests: [],
@@ -86,34 +86,94 @@ try {
     const setup = await page.evaluate(() => {
       const c = window.carma,
         p = c.pedestrians,
-        target = p.peds.find((x) => x.object.name === "ped-spec1-456");
+        nativeRuntime = p.nativeRuntime;
+      const nativeCharacter = nativeRuntime?.characters.find((row) => {
+        const actor = p.peds.find((entry) => entry.object === row.owner);
+        return row.formKey === "BIPED1" && actor?.alive && !!actor.presentation;
+      });
+      const target =
+        nativeCharacter &&
+        p.peds.find((entry) => entry.object === nativeCharacter.owner);
       if (!target?.alive || !target.presentation)
-        throw Error("Original captured living pedestrian is absent");
+        throw Error(
+          "No authored living BIPED1 identity is enrolled for the retained-presentation fixture",
+        );
       const V = c.player.state.position.constructor;
-      c.player.state.position.set(-11.455115747, -0.817796844, -33.535243218);
-      c.player.state.heading = 0;
-      c.player.state.velocity.set(0, 0, 0);
-      c.simulation.reset(c.player);
-      c.camera.position.copy(c.player.state.position).add(new V(0, 0.4, 1));
+      const historicalReferencePosition = [
+        -11.455115747, -0.817796844, -33.535243218,
+      ];
+      const sourcePosition = target.object.position.clone();
+      c.camera.position.copy(sourcePosition);
       c.camera.lookAt(target.object.position);
       p.noteCameraPosition(c.camera.position);
       p.resetCar(c.player.state.position);
-      // Consume source near-reset outside process. The visual extension then
-      // exposes the exact inner-popup target, reproducing the reported state.
+      p.nearReset = true;
       p.update(
         0,
         { position: c.player.state.position, yaw: 0, speed: 0 },
-        {
-          cameraPosition: c.camera.position.clone().add(new V(100, 0, 100)),
-          gameTimeMs: c.stats.gameTimeMs,
-        },
+        { cameraPosition: sourcePosition, gameTimeMs: c.stats.gameTimeMs },
       );
-      p.updatePresentation(c.camera.position, 48);
+      const initiallyAdmittedBody = nativeCharacter.body;
+      const preallocatedBodies = new Set(p.nativeRuntime.simpleResources);
+      if (!initiallyAdmittedBody)
+        throw Error(
+          "Authored BIPED1 did not acquire its normal native body slot",
+        );
+      // Native normal admission may apply its authored ground offset; use that
+      // resulting source root as the camera/lane reference from here onward.
+      const authoredPosition = target.object.position.clone();
+      const farCamera = authoredPosition.clone().add(new V(100, 0, 100));
+      c.camera.position.copy(farCamera);
+      p.noteCameraPosition(farCamera);
+      p.update(
+        0,
+        { position: c.player.state.position, yaw: 0, speed: 0 },
+        { cameraPosition: farCamera, gameTimeMs: c.stats.gameTimeMs + 1 },
+      );
+      if (
+        nativeCharacter.body ||
+        c.simulation.phil.registeredBodies.includes(initiallyAdmittedBody)
+      )
+        throw Error("Far-camera setup failed to release native PHIL resources");
+
+      // Place only Eagle and camera. The authored actor and native root are
+      // untouched; retain their original population coordinates.
       const targetPosition = target.object.position.clone();
+      const lane = new V(Math.sin(target.heading), 0, Math.cos(target.heading));
+      const carPosition = targetPosition.clone().addScaledVector(lane, -0.8);
+      c.simulation.reset(c.player);
+      c.player.state.position.copy(carPosition);
+      c.player.state.heading = Math.atan2(-lane.x, -lane.z);
+      c.player.state.orientation.set(
+        0,
+        Math.sin(c.player.state.heading / 2),
+        0,
+        Math.cos(c.player.state.heading / 2),
+      );
+      c.player.state.velocity.set(lane.x * 2, 0, lane.z * 2);
+      c.player.state.angularVelocity.set(0, 0, 0);
+      c.player.state.speed = 2;
+      c.player.input.throttle = 0;
+      c.player.input.brake = 0;
+      c.player.input.steer = 0;
+      c.player.input.handbrake = false;
+      c.camera.position.copy(carPosition).add(new V(0, 0.4, 1));
+      c.camera.lookAt(target.object.position);
+      p.noteCameraPosition(c.camera.position);
+      p.resetCar(c.player.state.position);
+      p.nearReset = false;
+      p.updatePresentation(c.camera.position, 48);
       const d = targetPosition.clone().sub(c.camera.position);
       const state = {
         name: target.object.name,
+        formKey: nativeCharacter.formKey,
+        historicalReferencePosition,
         position: targetPosition.toArray(),
+        populationXZMatchesAuthored:
+          Math.abs(target.object.position.x - sourcePosition.x) < 1e-5 &&
+          Math.abs(target.object.position.z - sourcePosition.z) < 1e-5,
+        initiallyAdmittedBodyReleased: !nativeCharacter.body,
+        originalPopulationOwner: nativeCharacter.owner === target.object,
         alive: target.alive,
         active: target.active,
         visible: target.object.visible,
@@ -123,7 +183,16 @@ try {
         insidePopup:
           Math.abs(d.x) <= 9 && Math.abs(d.y) <= 5.4 && Math.abs(d.z) <= 9,
       };
-      const capture = { target, updates: [], count: 0 };
+      const capture = {
+        target,
+        updates: [],
+        nativeSamples: [],
+        nativeCharacter,
+        initiallyAdmittedBody,
+        nativeHPBefore: nativeCharacter.hitPoints,
+        nativeImpactsBefore: nativeCharacter.impactCount,
+        count: 0,
+      };
       window.__pedGhostCapture = capture;
       const count = p.options.onCount;
       p.options.onCount = (event) => {
@@ -138,34 +207,61 @@ try {
           nearReset: p.nearReset,
         };
         update(...args);
+        const row = p.nativeRuntime?.characters.find(
+          (entry) => entry.owner === target.object,
+        );
+        if (row && capture.nativeSamples.length < 16)
+          capture.nativeSamples.push({
+            hadBody: !!row.body,
+            hitPoints: row.hitPoints,
+            impactCount: row.impactCount,
+            flags: row.flags,
+            philState: row.body ? c.simulation.phil.getState(row.body) : 0,
+            originalOwner: row.owner === target.object,
+          });
         if (capture.updates.length < 8)
           capture.updates.push({
             before,
             active: target.active,
             alive: target.alive,
             dormant: p.dormantRenderActors.has(target.object),
-            frame: target.presentation.instance.clock.frame,
+            frame:
+              p.nativeRuntime?.character(target.object).instance?.clock.frame ??
+              target.presentation.instance.clock.frame,
           });
       };
-      c.player.state.velocity.set(0, 0, -2);
+      const threat = {
+        position: c.player.state.position,
+        velocity: c.player.state.velocity,
+        yaw: c.player.state.heading,
+        speed: 0,
+      };
+      p.update(0, threat, {
+        cameraPosition: c.camera.position.clone(),
+        gameTimeMs: c.stats.gameTimeMs + 2,
+        framePeriodMs: 40,
+      });
+      if (
+        !nativeCharacter.body ||
+        nativeCharacter.body.owner !== target.object ||
+        !preallocatedBodies.has(nativeCharacter.body) ||
+        !c.simulation.phil.registeredBodies.includes(nativeCharacter.body)
+      )
+        throw Error(
+          `Retained visible owner did not reacquire a bounded native body: ${JSON.stringify({ state, flags: nativeCharacter.flags, body: !!nativeCharacter.body, diagnostics: [...nativeCharacter.diagnostics] })}`,
+        );
+      capture.reacquiredSamePhysicalSlot =
+        nativeCharacter.body === initiallyAdmittedBody;
       c.paused = false;
       document.querySelector("#view").focus();
-      for (let i = 0; i < 3; i++) {
-        window.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            code: "KeyC",
-            key: "c",
-            bubbles: true,
-          }),
-        );
-        window.dispatchEvent(
-          new KeyboardEvent("keyup", { code: "KeyC", key: "c", bubbles: true }),
-        );
-      }
       return state;
     });
     assert.deepEqual(
       {
+        formKey: setup.formKey,
+        initiallyAdmittedBodyReleased: setup.initiallyAdmittedBodyReleased,
+        originalPopulationOwner: setup.originalPopulationOwner,
+        populationXZMatchesAuthored: setup.populationXZMatchesAuthored,
         alive: setup.alive,
         active: setup.active,
         visible: setup.visible,
@@ -174,6 +270,10 @@ try {
         insidePopup: setup.insidePopup,
       },
       {
+        formKey: "BIPED1",
+        initiallyAdmittedBodyReleased: true,
+        originalPopulationOwner: true,
+        populationXZMatchesAuthored: true,
         alive: true,
         active: false,
         visible: true,
@@ -204,10 +304,22 @@ try {
         ext = gl.getExtension("WEBGL_debug_renderer_info");
       return {
         updates: x.updates,
+        nativeSamples: x.nativeSamples,
+        nativeHPBefore: x.nativeHPBefore,
+        nativeImpactsBefore: x.nativeImpactsBefore,
+        nativeHitPoints: x.nativeCharacter.hitPoints,
+        nativeImpactCount: x.nativeCharacter.impactCount,
+        nativeOwner: x.nativeCharacter.owner === t.object,
+        nativeCountingCharacter: !!t.nativeCountingCharacter,
+        nativeDamageObserved:
+          x.nativeCharacter.hitPoints < x.nativeHPBefore ||
+          x.nativeCharacter.impactCount > x.nativeImpactsBefore,
+        nativeBodySeen: x.nativeSamples.some((sample) => sample.hadBody),
         count: x.count,
         alive: t.alive,
         active: t.active,
-        visible: t.object.visible,
+        visible: x.nativeCharacter.instance?.group.visible ?? t.object.visible,
+        ordinaryAnchorVisible: t.object.visible,
         dormant: c.pedestrians.dormantRenderActors.has(t.object),
         player: c.player.state.position.toArray(),
         glError: gl.getError(),
@@ -233,6 +345,26 @@ try {
     assert.equal(after.updates[0].dormant, false);
     assert.equal(after.count, 1);
     assert.equal(after.alive, false);
+    assert.equal(
+      after.nativeOwner,
+      true,
+      "original dormant actor remains the native character owner",
+    );
+    assert.equal(
+      after.nativeBodySeen,
+      true,
+      "the retained presentation entered the native PHIL pool",
+    );
+    assert.equal(
+      after.nativeDamageObserved,
+      true,
+      "actual PHIL contact changed native HP or impact count",
+    );
+    assert.equal(
+      after.nativeCountingCharacter,
+      true,
+      "the same population owner retains count-once identity",
+    );
     assert.equal(after.visible, true);
     assert.equal(after.glError, 0);
     assert.deepEqual(after.diagnostics, []);
