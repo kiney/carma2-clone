@@ -1,22 +1,23 @@
 ---
 id: TASK-128
-title: '[P1] PHY-23: Attribute reported fatal light-scenery impacts in damaged scenes'
-status: next
+title: '[P3] PHY-23: Attribute reported fatal light-scenery impacts in damaged scenes'
+status: backlog
 assignee: []
 created_date: '2026-10-29 13:01'
+updated_date: '2026-10-29 17:30'
 labels:
-  - priority-1
   - PHY-23
   - physics
   - reported
   - diagnostics
+  - priority-3
 dependencies:
   - TASK-127
 references:
   - docs/c2-ignore-world-reclaim-re.md
   - tools/impact-history-recorder.mjs
-priority: high
-ordinal: 1150
+priority: medium
+ordinal: 3104
 ---
 
 ## Description
@@ -30,3 +31,9 @@ User reported another apparently indestructible sign wasting The Plow during the
 - [ ] #1 Obtain an original-data replay or bounded live capture identifying actual accepted contact rows and component transitions for the reported fatal scenery collision.
 - [ ] #2 Determine whether post-PHY-22 behavior still violates C2 collision/damage mechanics; implement and validate a source-backed correction if a defect is established.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+User deferred this unconfirmed historical fatal-sign report to medium priority (P3), backlog, until it occurs again or a concrete reproducible mismatch is available. Clean original-data approach does not reproduce fatal damage. Preserve evidence and the distinction from the completed PHY-22 fix; no speculative collision/damage tuning.
+<!-- SECTION:NOTES:END -->

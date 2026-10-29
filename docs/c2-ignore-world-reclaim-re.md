@@ -72,6 +72,10 @@ protected and which can return to static scenery.
 
 ## Validation and reported-impact boundary
 
+Current disposition: the user deferred the unconfirmed fatal-sign report
+(PHY-23 / TASK-128) to P3, `backlog`, until another occurrence or a concrete
+reproduction is available. The verified PHY-22 reclaim fix remains complete.
+
 Focused participation tests exercise the production contact entry point with an
 awake owner and sleeping motor, no-model collection, finite predictive cache
 bounds/inverse, empty physical face range, near-owner protection and distant

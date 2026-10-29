@@ -23,10 +23,11 @@ snap callback chronology questions in `backlog`.
 P1 PHY-22 / TASK-127 fixes the newly reproduced ignore-world lift cache omission
 that globally blocked scenery reclaim. Its original Stock/Advanced and hardware
 Chromium checks preserve near-owner protection and zero lift world contacts.
-P1 PHY-23 / TASK-128 follows in `next` for the reported fatal sign
-impact: the actual historical damaging rows remain unknown, and a clean Plow
-approach does not reproduce the failure. Bounded impact/component telemetry is
-installed in the preserved user tab; see [evidence and boundaries](../docs/c2-ignore-world-reclaim-re.md).
+P3 PHY-23 / TASK-128 is deferred in `backlog` at medium priority until the
+reported fatal sign impact recurs or a concrete mismatch can be reproduced.
+The actual historical damaging rows remain unknown, and a clean Plow approach
+does not reproduce the failure. The bounded impact/component recorder remains
+available for another capture; see [evidence and boundaries](../docs/c2-ignore-world-reclaim-re.md).
 
 The user selected the following implementation order. ANI-01/PED-04 complete the
 first animation/resource stage. The four P2 pedestrian tickets follow in `next`.
@@ -36,7 +37,6 @@ must not be inferred from priority alone. No ticket currently occupies a WIP slo
 | Stage | Ticket                                | Status | Priority | Purpose                                                                                                     |
 | ----- | ------------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------- |
 | 0b    | PERF-25 / TASK-130                    | done   | P1       | Resolve recurring anchored-scenery contact retries in Fridge Racer without hiding them through forced sleep. |
-| 0c    | PHY-23 / TASK-128                     | next   | P1       | Attribute the reported fatal sign impact using retained committed-contact and component-change evidence. |
 | 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices. |
 | 2     | PED-06 / TASK-96                      | next   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                       |
 | 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                             |
