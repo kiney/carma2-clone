@@ -4,6 +4,15 @@ The project code is licensed under MIT; see LICENSE.
 The bundled libraries retain the following copyright and license notices.
 Original Carmageddon II game data is not included in this distribution.
 
+Optional research tools (not bundled or imported by the browser engine):
+tools/native-normal-oracle.py can use separately installed Unicorn 2.1.4
+and pefile 2024.8.26. Unicorn's engine COPYING is GPL-2.0, despite the Python
+package metadata mentioning BSD; pefile is MIT. These external distributions
+and the user's original executable are not vendored here. Our standalone
+oracle wrapper and procedural reproducer are independently authored tooling.
+https://github.com/unicorn-engine/unicorn/blob/2.1.4/COPYING
+https://github.com/erocarrera/pefile/blob/v2024.8.26/LICENSE
+
 ========================================================================
 three 0.180.0
 https://github.com/mrdoob/three.js

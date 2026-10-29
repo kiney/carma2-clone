@@ -5,5 +5,7 @@
 /generated-assets/
 /artifacts/
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
 .env
 screenvid*.mp4

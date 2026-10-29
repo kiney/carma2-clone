@@ -6,7 +6,7 @@ title: >-
 status: done
 assignee: []
 created_date: '2026-10-24 14:42'
-updated_date: '2026-10-29 13:28'
+updated_date: '2026-10-29 14:09'
 labels:
   - priority-1
   - PHY-19
@@ -41,6 +41,8 @@ PHY-18 contains escaped free props and eliminates their empty-world high-spin gu
 2026-10-24: Bounded audit started14:54UTC and closed within approximately15minutes per user instruction. Eight original-inertia prescribed contact solves expose biased near-dependent-row amplification (speed4047,omega89084), but nine actual guard-geometry cases did not reproduce an explosion. Original HW dependence-removal, single-row gate and residual-correction safeguards were verified statically; exact native outcome and historical first contact remain unproven. Wake/release callback invalidation, inertia scaling and basic coupling/Jacobian signs showed no defect. No solver/physics or live scene changes. Original cause-fix criteria remain intentionally unchecked; user-authorized closure accepts the remaining occasional-explosion limitation protected by PHY-18.
 
 2026-10-29 fresh disruptive in-world stall meets the stated reopening condition. PERF-24/TASK-129 (P1 next) owns the newly selected first-event capture, runaway wreck world-query/CCD amplification and coherent car containment. Earliest FAIR is already wrecked but still in-map at speed1371.94 actor units/s and spin14789.63rad/s; real measured ticks up to1448ms and five-tick updates5837ms. FAIR and FRBUMPR.DA dominate slow world-contact collection. The initiating impulse is unrecorded and not proven identical to the earlier prop numerical gap. Keep this accepted bounded investigation history; do not relabel its original cause fixed. See docs/screwie-runaway-car-stall.md.
+
+2026-10-29 stronger follow-up establishes actual source-generated mechanism, beyond the old prescribed-contact counterexample. One procedural box/floor suffices: native and angular packets individually benign, merged packet injects extreme energy; full production tick reproduces. Audited original HW numerical oracle rejects the same packet with bounded partial multipliers and status-1. Native RHS clipping confirmed correct. Native residual correction tail is ineffective on returned output in tested control, superseding the earlier uncertain safeguard interpretation. PERF-24 owns actual contact/numerical repair and runtime acceptance. Details/repro commands: docs/runaway-contact-root-cause.md. Historical first FAIR/Timber impulse remains unproven.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

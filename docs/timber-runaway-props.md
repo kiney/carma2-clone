@@ -160,6 +160,17 @@ Correction evidence: `artifacts/phy18-copied-state-comparison.json`,
 
 ## PHY-19 bounded causal investigation and accepted limitation
 
+2026-10-29 follow-up: [a single-plane, generated-box reproduction and bounded
+original-solver oracle](runaway-contact-root-cause.md) now demonstrate a real
+contact/solver energy-injection mechanism. Native and angular guard contacts
+are individually benign but their merged packet produces enormous impulses in
+the browser. The original numerical routine rejects that packet with bounded
+partial output. This is stronger evidence than the earlier prescribed-contact
+experiment below, while FAIR's actual historical first packet remains unknown.
+PERF-24 owns implementation. The new oracle also shows that the final native
+residual-correction tail changes scratch values without updating returned
+impulses in the tested case; do not treat that tail as an effective safeguard.
+
 On 2026-10-24 the user limited further investigation to approximately fifteen
 minutes unless a strong actionable cause emerged, accepting occasional
 explosions while PHY-18 prevents their ongoing off-world simulation cost.

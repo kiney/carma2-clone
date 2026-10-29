@@ -8,6 +8,11 @@ P1 PERF-24 / TASK-129 is now first in `next`: a subsequent live Screwie report
 captures real multi-second physics updates from runaway FAIR/bumper motion,
 separate from the earlier browser RAF-delivery episode. Preserve the initiating
 impulse uncertainty; see [recorded workload and limits](../docs/screwie-runaway-car-stall.md).
+Its fundamental investigation now has a [single-plane reproduction and original
+numerical oracle](../docs/runaway-contact-root-cause.md): native and guard rows
+can be individually benign but destructive when merged, and the browser solver
+omits the original dependence/failure semantics. Research is complete for this
+stage; production correction and runtime acceptance remain selected in `next`.
 
 P1 PHY-22 / TASK-127 fixes the newly reproduced ignore-world lift cache omission
 that globally blocked scenery reclaim. Its original Stock/Advanced and hardware

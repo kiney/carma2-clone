@@ -1,0 +1,4 @@
+# Optional isolated research environment; never a production dependency.
+# Unicorn engine: GPL-2.0; pefile: MIT. Do not vendor their distributions.
+unicorn==2.1.4
+pefile==2024.8.26

@@ -1,5 +1,10 @@
 # PERF-24: runaway wreck and bumper stall
 
+Follow-up: [reproduced contact/solver cause](runaway-contact-root-cause.md)
+isolates extreme energy injection on one generated floor triangle, and compares
+the identical matrix/RHS with the original HW numerical routine. This supplies
+a concrete repair target without claiming recovery of FAIR's first event.
+
 ## Outcome (2026-10-29)
 
 The user reported a severe FPS collapse while being rammed by Screwie in
