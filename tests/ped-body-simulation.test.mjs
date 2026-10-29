@@ -26,6 +26,7 @@ import { decodeText } from "../src/formats.ts";
 import { DamageSystem } from "../src/damage.ts";
 import { originalCar } from "./support/original-car.mjs";
 import { resolvePedContactDamage } from "../src/physics/ped-contact.ts";
+import { createNativePedBoneBody } from "../src/physics/ped-bone-body.ts";
 
 const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 function profile(mass = Math.fround(0.068)) {
@@ -209,12 +210,16 @@ test("active PHIL body has exact40ms gravity, no header0 air drag, passive pose 
 test("active world contacts populate source flags and quiet zeros after commit, halt once per outer frame", () => {
   const sim = simulation([plane]),
     ped = body([-0.1, 0.051, -0.1]);
+  // Production bodies carry their retained population owner. That reference
+  // must not classify them as generic WAM parts with a second quiet record.
+  ped.owner = {};
   sim.addPedBody(ped);
   activateNativePedBody(ped, new Vector3());
   const seen = [];
   sim.update(0.04);
   assert.ok(sim.lastImpacts.some((i) => i.a === ped && i.solverAccepted));
   assert.ok(ped.collisionFlags & 1);
+  assert.equal(sim.hierarchyQuiet.get(ped), null);
   ped.onHalt = (b, ms) => {
     seen.push([
       ms,
@@ -244,6 +249,37 @@ test("active world contacts populate source flags and quiet zeros after commit, 
   assert.equal(ped.filterA, 0x10000);
   assert.equal(ped.suppressWorldFaces, true);
   assert.equal(ped.rigidFlags, 0x78);
+});
+
+test("owned native bone bodies retain only their canonical bone quiet provider", () => {
+  const sim = simulation();
+  const bone = createNativePedBoneBody({
+    owner: {},
+    levelOut: 0,
+    retained: { rigidFlags: 0, objectFriction: 0 },
+    request: {
+      index: 1,
+      slot: 0,
+      bone: { name: "HEAD", mass: Math.fround(0.004), collisionType: "BOX" },
+      snapshot: {
+        actor: new Group(),
+        model: {},
+        nativePose: identity,
+        bounds: { min: [-0.02, -0.02, -0.02], max: [0.02, 0.02, 0.02] },
+      },
+      rigidType: 5,
+      filterA: 0x40000,
+      filterB: 0x50000,
+    },
+  });
+  assert.equal(sim.addPedBoneBody(bone).accepted, true);
+  sim.retainHierarchyQuiet();
+  assert.equal(sim.hierarchyQuiet.get(bone), null);
+  assert.ok(sim.pedBoneQuiet.get(bone));
+  assert.equal(
+    sim.nativeQuietRingState(bone),
+    sim.pedBoneQuiet.get(bone).quietState,
+  );
 });
 
 test("exclusion masks reject shape contacts and both pair commit/refinement guards", () => {

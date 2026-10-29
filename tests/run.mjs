@@ -1,3 +1,4 @@
+import "./ped-ordinary-volume.test.mjs";
 import "./ped-ordinary-runtime.test.mjs";
 import "./ped-ordinary-steering.test.mjs";
 import "./ped-ordinary-object-scan.test.mjs";
@@ -8,6 +9,7 @@ import "./ped-native-population.test.mjs";
 import "./ped-native-runtime-bridge.test.mjs";
 import "./ped-ordinary-move.test.mjs";
 import "./ped-ordinary-support.test.mjs";
+import "./ped-recovery-preview.test.mjs";
 import "./ped-ordinary-gameplay.test.mjs";
 import "./ped-noise.test.mjs";
 import "./bug-capture-ring.test.mjs";

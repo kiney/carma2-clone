@@ -160,3 +160,39 @@ the subsequent passive grounding, move and physical-level transitions.
 The steering integration suite now covers twelve deterministic scenarios,
 including the real object-scan kernel with an actual host-allocated Ped address,
 source-provider failure propagation and readiness before the legacy loop.
+
+## PED-07 recovery readiness and resolved NULL support
+
+Installed `4cc06b..4cc07f` dereferences the current process, then returns when
+its borrowed list or selected-face pointer is NULL. `setNativePedXZDirection`
+now treats that resolved state as a successful no-op before reading requested
+direction or requiring a character-direction callback. The production wrapper
+still reports a missing current canonical process. Likewise the proximity
+wrapper preserves `4cf87f..4cf890`'s early NULL return before resolving MATs.
+No missing support is replaced with world Y.
+
+`OrdinaryPedSteering.preflightRecovery(context, direction, recoveryAction)`
+checks the forced living-halt recache/direction/proximity chain using temporary
+copies of source face records and canonical process bytes. Pass action1 for an
+upright recovery and action4 for a lying/get-up recovery, matching the action
+at the later rescan. It uses actual native bounds, slot0 clearance, finite
+support selection and source direction/proximity kernels. It performs no pool
+acquisition/ring rotation, root/action/clock mutation or CRT draw. It preserves
+explicit rejection of excluded negative prepared groups rather than supplying
+group0, raw vertices or a synthetic floor normal. The object scanner's later
+callbacks retain their own readiness contract.
+
+A dedicated `previewWorldFaces` provider is mandatory: the normal simulation
+collector can pull ACTs and stop grooves, so silently invoking it in a read-only
+preflight would change the scene. An unavailable preview is an explicit
+`source-recovery-readonly-world-face-provider` diagnostic before collection.
+The host owns correctness and mutation safety of its preview provider.
+
+The optional production `vanish` outlet forwards the complete native event,
+flag80, physics/render release and once-only count operation to its host.
+Grounding still preflights the missing outlet. A successful vanish ends ordinary
+steering immediately; the runtime's existing resource/flag checks prevent later
+BON advancement. The transitional fall-owner warning remains only for hosts
+without that outlet. Focused tests cover resolved NULL versus missing process,
+negative-group preflight with unchanged canonical records/roots/rings/shared
+CRT, and once-only vanish forwarding.

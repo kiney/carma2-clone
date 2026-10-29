@@ -376,6 +376,34 @@ test("external cause Kill reuses native count/score order, retains cause, and se
   assert.equal(h.simulation.phil.count, 1);
 });
 
+test("environment FullKill bypasses immortality and leaves dead-move selection to Munge", () => {
+  const h = create(fixture(), {}, globals({ immortal: true, goreLevel: 2 }));
+  h.c.body.specialVolume = { volume: { gravityMultiplier: 0.5 } };
+  const flagsBefore = h.c.flags,
+    moveBefore = h.c.moveId;
+  const result = h.gameplay.killFromEnvironment(h.c.owner);
+  assert.deepEqual(result, { status: "complete", requiredProviders: [] });
+  assert.equal(h.c.hitPoints, 0);
+  assert.equal(h.c.flags, flagsBefore | 0x100);
+  assert.equal(h.state.action, 6);
+  assert.equal(h.c.moveId, moveBefore, "FullKill does not force move113");
+  assert.equal(h.state.deathCause, "environment");
+  assert.equal(h.state.countCommitted, true);
+  assert.deepEqual(
+    h.events.map((event) => event[0]),
+    ["count", "score"],
+    "low selected-volume gravity suppresses physical giblet/model effects",
+  );
+  assert.equal(h.simulation.phil.count, 1);
+  assert.deepEqual(h.gameplay.killFromEnvironment(h.c.owner), {
+    status: "ineligible",
+    requiredProviders: [],
+  });
+  assert.equal(h.events.filter((event) => event[0] === "count").length, 1);
+  assert.equal(h.events.filter((event) => event[0] === "score").length, 1);
+  assert.equal(h.simulation.phil.count, 1);
+});
+
 test("external cause Kill preflights count/score/effect owners before mutating native state", () => {
   const h = create(
     fixture(),

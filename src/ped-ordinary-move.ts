@@ -189,8 +189,11 @@ export function setNativePedXZDirection(
   requested: PedVector,
   distance: number,
 ): NativePedOrdinaryMoveResult {
-  const v = view(input),
-    unavailable = directionProvider(input);
+  const v = view(input);
+  // Installed4cc074..4cc07f returns before reading direction/providers when
+  // the actual process has no list or selected support. NULL is resolved state.
+  if (input.selectedFloorNormal === null) return complete();
+  const unavailable = directionProvider(input);
   if (unavailable) return unavailable;
   const floor = vector(input.selectedFloorNormal!);
   const direction = normalise(

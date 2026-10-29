@@ -108,13 +108,8 @@ export function createOrdinaryNativePedGameplay<Owner extends object>(
           normal.y,
           normal.z,
         ]),
-        optionalFaceNormal: body.firstWorldFaceNormal
-          ? [
-              body.firstWorldFaceNormal.x,
-              body.firstWorldFaceNormal.y,
-              body.firstWorldFaceNormal.z,
-            ]
-          : null,
+        // CBActiveHalted passes NULL; the source kernel selects the highest positive face.
+        optionalFaceNormal: null,
         mass: body.properties.mass,
         inertia: [
           body.properties.inertia.x,

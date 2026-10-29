@@ -103,7 +103,7 @@ export interface PedHitEvent {
   speed: number;
   position: THREE.Vector3;
   owner?: object;
-  cause?: "vehicle" | "annihilator" | "electric" | "napalm";
+  cause?: "vehicle" | "annihilator" | "electric" | "napalm" | "environment";
   /** Native cache score inputs, retained independently of the eventual killer. */
   awardContext: {
     cachePresent: boolean;
@@ -858,14 +858,21 @@ export class PedestrianSystem {
     owner: object,
     character: NativePedCountingCharacter,
     timeMs: number,
+    reason: "killed" | "vanished" = "killed",
   ): boolean {
     const binding = this.nativeCountingOwners.get(owner);
     if (!binding || binding.character !== character)
       throw new Error("Unknown native pedestrian counting owner");
-    if (!(character.flags & PED_COUNTED_FLAG)) return false;
+    if (!(character.flags & (reason === "vanished" ? 0x80 : PED_COUNTED_FLAG)))
+      return false;
     const event = this.population.oneLess(binding.ped.object);
     if (!event) return false;
     binding.ped.alive = false;
+    if (reason === "vanished") {
+      // Installed OneLessPed owns flag100; vanish supplied only80 before count.
+      character.flags |= PED_COUNTED_FLAG;
+      binding.ped.vanished = true;
+    }
     this.options.onCount?.({
       ...event,
       timeMs,
@@ -1981,6 +1988,17 @@ export class PedestrianSystem {
       readSlickMaterials: () => this.nativeSlickMaterials?.materials ?? null,
       bind: (ped, character) =>
         this.bindNativeCountingOwner(ped.object, ped.object, character),
+      onVanish: (ctx) => {
+        this.oneLessNativePed(ctx.owner, ctx.character, ctx.timeMs, "vanished");
+      },
+      clearBurning: (ped, signedIndex) => {
+        if (signedIndex < 0 && ped.burningUntilMs === 0 && ped.napalmSlot < 0)
+          return ["source-negative-napalm-resource-owner"];
+        if (ped.napalmSlot >= 0) this.releaseNapalm(ped.napalmSlot);
+        if (ped.burningUntilMs > 0)
+          this.options.onNapalmExtinguished?.(ped.object);
+        ped.burningUntilMs = 0;
+      },
       oneLess: (ctx) => {
         this.oneLessNativePed(ctx.owner, ctx.character, ctx.timeMs);
       },

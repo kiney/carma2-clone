@@ -1,10 +1,10 @@
 ---
 id: TASK-97
 title: '[P2] PED-07: Connect native pedestrian grounding, fall and recovery ownership'
-status: next
+status: done
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-29 20:22'
+updated_date: '2026-10-29 21:06'
 labels:
   - priority-2
   - PED-07
@@ -52,14 +52,18 @@ Source task: [PED-03 / TASK-35](task-35%20-%20P2-PED-03-Implement-native-pedestr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Normal enrolled owners acquire/reuse/release the original bounded process/ground records and actual retained source face identities in evidenced order.
-- [ ] #2 Living fall, blocked-ground retry, recovery direction/head/proximity and move completion run exactly once from their owning phases with Stock/Advanced coverage.
-- [ ] #3 Car/prop contact normals, quiet/recovery state and selected-volume forces use actual source data rather than an invented floor normal or generic impulse.
-- [ ] #4 Unsupported negative groups/providers are explicit and mutation-safe; cache rollover, offscreen visits and reset are deterministic and bounded.
+- [x] #1 Normal enrolled owners acquire/reuse/release the original bounded process/ground records and actual retained source face identities in evidenced order.
+- [x] #2 Living fall, blocked-ground retry, recovery direction/head/proximity and move completion run exactly once from their owning phases with Stock/Advanced coverage.
+- [x] #3 Car/prop contact normals, quiet/recovery state and selected-volume forces use actual source data rather than an invented floor normal or generic impulse.
+- [x] #4 Unsupported negative groups/providers are explicit and mutation-safe; cache rollover, offscreen visits and reset are deterministic and bounded.
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 PED-06 foundation is complete:normal population now owns native FORM/PHIL bodies, canonical100-process/85-face caches, selected ordinary support, source steering/object scan and a real cache-only RecacheAndSetFace recovery outlet. Continue detailed fall/get-up/low-gravity/vanish integration and unsupported prepared-group floor branches; source boundaries stay explicit. See docs/ped06-production-integration.md.
+
+User authorized PED-07, PED-08 and PED-09 in that implementation order. PED-07 starts alone; isolated /tmp/carma-ped07 preserves the paused playtest and prior production builds. Audit remaining source ground/recovery/quiet/volume providers, reuse existing conformance kernels, validate real Stock/Advanced population and checkpoint before PED-08.
+
+Completed normal population recovery and volume integration. Fixed duplicate native simple/bone quiet ownership with failing-before regressions; actual Stock72→81→41 and Advanced72→80→41 browser sequences each halt/complete once and release selected ground. Corrected NULL support and best-positive-Y halt normal, mutation-safe recovery preflight, vanish release/count without Kill, selected-volume process/activation/moved phases. Full suite3580:3569 pass,5 optional local captures skip,6 sandbox EPERM startup cases; startup rerun8/8 passes with localhost access. Final focused regressions, TypeScript/build, serial Stock/Advanced browser and hardware DevTools MCP recovery pass with no provider/console/HTTP/WebGL errors. Explicit source negative-group OOB and exceptional ownership boundaries retained. See docs/ped07-production-integration.md.
 <!-- SECTION:NOTES:END -->

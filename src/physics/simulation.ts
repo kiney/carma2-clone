@@ -1,3 +1,4 @@
+import { NativePedOrdinarySupportError } from "../ped-ordinary-support";
 import { HierarchyPredictionCache } from "./cached-hierarchy-motion";
 import { freeWorldEnvelope } from "./free-world-envelope";
 import {
@@ -759,8 +760,10 @@ export class VehicleSimulation {
       positionPassivePedBody(body, pose);
     },
     onActivated: (body) => {
-      if (isNativePedBody(body) || isNativePedBoneBody(body))
+      if (isNativePedBody(body) || isNativePedBoneBody(body)) {
         body.headerState = 2;
+        this.resetCarSpecialVolume(body);
+      }
       this.invalidateWorldFaceCache(body);
     },
   });
@@ -867,11 +870,13 @@ export class VehicleSimulation {
       }
     for (const body of bodies) {
       const generic =
-        "damage" in body ||
-        "owner" in body ||
-        ("kind" in body &&
-          body.kind === "noncar" &&
-          !this.noncarQuiet.has(body));
+        !isNativePedBody(body) &&
+        !isNativePedBoneBody(body) &&
+        ("damage" in body ||
+          "owner" in body ||
+          ("kind" in body &&
+            body.kind === "noncar" &&
+            !this.noncarQuiet.has(body)));
       if (!generic) {
         this.hierarchyQuiet.remove(body);
         continue;
@@ -2104,6 +2109,36 @@ export class VehicleSimulation {
   ): Surface[] {
     return this.collectWorldFaces(query, capacity, true);
   }
+  /** Recovery lookahead publishes derived geometry caches, but never changes
+   * ACT/PHIL/GROOVE gameplay ownership. A required mutation remains explicit. */
+  previewPedestrianFaces(
+    query: NativeWorldFaceQuery,
+    capacity = 76,
+  ): Surface[] {
+    const collect =
+      this.world.collectFaces ?? WorldCollision.prototype.collectFaces;
+    return collect.call(this.world, query, capacity, true, {
+      mutationsTracked: true,
+      onFaceReadOnly: true,
+      pullActorFromWorld: (actor) => {
+        const body = this.noncarsByActor.get(actor);
+        if (
+          this.physicsQueryDepth &&
+          (!body || !this.isNonCarPhysicsActive(body))
+        )
+          throw new NativePedOrdinarySupportError([
+            "source-recovery-preview-ACT-pull-required",
+          ]);
+        return null;
+      },
+      stopGroovidelic: (actor) => {
+        if (this.worldGrooveFrameActive && this.grooves?.actors.has(actor))
+          throw new NativePedOrdinarySupportError([
+            "source-recovery-preview-GROOVE-stop-required",
+          ]);
+      },
+    });
+  }
   /** Native finite emission and ACT callbacks run before eligibility filtering. */
   private collectWorldFaces(
     query: NativeWorldFaceQuery,
@@ -2591,7 +2626,9 @@ export class VehicleSimulation {
   /** Installed ResetCarSpecialVolume4ff2c0 changes only automatic volume/depth.
    * Recompute immediately; do not erase authored volume or water-plane caches.
    */
-  resetCarSpecialVolume(car: SimulatedCar): void {
+  resetCarSpecialVolume(
+    car: SimulatedCar | NativePedBody | NativePedBoneBody,
+  ): void {
     const hit = this.world.raycast(
       car.state.position,
       new Vector3(0, 1, 0),

@@ -21,6 +21,11 @@ import type {
 import type { VehicleSimulation } from "./physics/simulation";
 import type { NativeWorldFaceQuery } from "./physics/world-face-cache";
 import type { Surface } from "./world";
+import {
+  nativePedGroundCacheBounds,
+  nativePedSelectGroundSupport,
+  type NativePedGroundEffect,
+} from "./ped-grounding";
 import { sharedNativeRandom } from "./native-random";
 import {
   rescanNativePedProximity,
@@ -61,6 +66,17 @@ export interface OrdinaryPedSteeringOptions {
   /** Undefined is unresolved; NULL is an actual resolved native MAT pointer. */
   resolveMaterial?: (name: string) => MatMaterial | null | undefined;
   warn(message: string): void;
+  /** Read-only finite collection for recovery preflight. Normal collection may
+   * pull ACTs/stop grooves, so it cannot be silently reused as a preview. */
+  previewWorldFaces?: (
+    query: NativeWorldFaceQuery,
+    capacity: number,
+  ) => readonly Surface[];
+  /** Source position event, flag80, level0/render release and once-only count. */
+  vanish?: (
+    context: NativePedRuntimeCallback<Object3D>,
+    effect: Extract<NativePedGroundEffect, { kind: "vanish" }>,
+  ) => { requiredProviders?: readonly string[] } | void;
   /** Source scanNativeOrdinaryPedObjects provider at the verified source slot.
    * The host supplies actual allocated Ped bytes/address, PHIL order and live
    * gameplay/head/noise/electric outlets, and synchronizes its Ped record.
@@ -166,8 +182,9 @@ export class OrdinaryPedSteering {
         options.gameplay.state(ctx.owner).action = action;
         options.readPed(ctx.owner).action = action;
       },
-      // Vanish/count/release ownership remains PED-07. Omitting that outlet
-      // makes NativePedGrounding preflight its unsupported branch before writes.
+      // Omit the outlet when the host has no complete release/count owner so
+      // grounding rejects before committing the source vanish transition.
+      ...(options.vanish ? { vanish: options.vanish } : {}),
       proximityRescan: (ctx) => this.scan(ctx, null),
     });
   }
@@ -233,14 +250,26 @@ export class OrdinaryPedSteering {
   private scan(
     ctx: NativePedRuntimeCallback<Object3D>,
     direction: PedVector | null,
+    staged?: {
+      storage: Uint8Array;
+      faceCache: {
+        faces: readonly NativePedOrdinarySupportFace[];
+        selectedFace: NativePedOrdinarySupportFace | null;
+      } | null;
+    },
+    characterDirection = ctx.instance.direction,
+    action = this.options.gameplay.state(ctx.owner).action,
   ): NativePedOrdinaryMoveResult & { distance: number } {
-    const process = this.process(ctx.owner);
+    const process = staged ?? this.process(ctx.owner);
     if (!process)
       return {
         status: "provider-required",
         requiredProviders: ["source-ground-current-process-cache-owner"],
         distance: 10000,
       };
+    //4cf87f..4cf890 returns before material, direction and process stores.
+    if (!process.faceCache?.selectedFace)
+      return { status: "complete", requiredProviders: [], distance: 10000 };
     const resolved = this.exclusions(ctx);
     if ("requiredProviders" in resolved)
       return {
@@ -262,11 +291,11 @@ export class OrdinaryPedSteering {
         ctx.instance.rootPose[10],
         ctx.instance.rootPose[11],
       ],
-      characterDirection: ctx.instance.direction,
+      characterDirection,
       direction,
       personalityBoundsMaxX: ctx.instance.template.profile.bounds.max[0],
       cosMaxSlope: nativePedSlopeCosine(this.options.settings.maxSlopeDegrees),
-      action: this.options.gameplay.state(ctx.owner).action,
+      action,
       suicidal: false,
       exclusionSpec: resolved.spec,
       readIndexedFace: (face) => this.support.readIndexedFace(face),
@@ -425,6 +454,94 @@ export class OrdinaryPedSteering {
       throw error;
     }
   }
+  /** Validate the forced living-halt support/direction/proximity chain against
+   * transient source records. No pool acquisition, ACT/root writes or CRT draw
+   * occurs. The host must supply a read-only native face collector.
+   * The later object scanner retains its separate provider readiness contract. */
+  preflightRecovery(
+    ctx: NativePedRuntimeCallback<Object3D>,
+    desiredDirection: PedVector | null,
+    recoveryAction: number,
+  ): readonly string[] {
+    const process = this.process(ctx.owner);
+    if (!process) return ["source-ground-current-process-cache-owner"];
+    if (!this.options.previewWorldFaces)
+      return ["source-recovery-readonly-world-face-provider"];
+    try {
+      const support = new NativePedOrdinarySupport(
+        this.options.simulation.world,
+        {
+          collectWorldFaces: this.options.previewWorldFaces,
+        },
+      );
+      const bounds = nativePedGroundCacheBounds(
+        ctx.instance.rootPose,
+        ctx.instance.movement.subarray(0, 9),
+        ctx.instance.template.profile.jumpHeight,
+      );
+      const faces = support
+        .collectFaces({
+          ...bounds,
+          owner: ctx.owner,
+          timeMs: ctx.timeMs,
+          limit: 76,
+        })
+        .slice(0, 75)
+        .map((face) => ({
+          ...face,
+          a: [...face.a] as PedVector,
+          b: [...face.b] as PedVector,
+          c: [...face.c] as PedVector,
+          normal: [...face.normal] as PedVector,
+        }));
+      const first = ctx.instance.template.form.moves[0];
+      const clearance = first
+        ? (ctx.instance.template.profile.movement.get(first.id)
+            ?.groundingOffset ?? 0)
+        : 0;
+      const root: PedVector = [
+        ctx.instance.rootPose[9],
+        ctx.instance.rootPose[10],
+        ctx.instance.rootPose[11],
+      ];
+      const hit = nativePedSelectGroundSupport(
+        faces,
+        root,
+        clearance,
+        (face, query) => support.queryFace(face, query),
+        false,
+      );
+      const staged = {
+        storage: process.storage.slice(),
+        faceCache: { faces, selectedFace: hit?.face ?? null },
+      };
+      const movement = this.movement(ctx)!;
+      let direction = ctx.instance.direction;
+      if (desiredDirection) {
+        const result = setNativePedXZDirection(
+          {
+            ...movement,
+            process: staged,
+            selectedFloorNormal: hit?.face.normal ?? null,
+            providers: {
+              setCharacterDirection: (value) => {
+                direction = value;
+              },
+            },
+          },
+          desiredDirection,
+          0,
+        );
+        if (result.status !== "complete") return result.requiredProviders;
+      }
+      return this.scan(ctx, null, staged, direction, recoveryAction)
+        .requiredProviders;
+    } catch (error) {
+      if (error instanceof NativePedOrdinarySupportError)
+        return error.requiredProviders;
+      throw error;
+    }
+  }
   /** Root calls after canonical process acquisition, before any BON advance. */
   prepare(ctx: NativePedRuntimeCallback<Object3D>): NativePedInstanceResult {
     const previouslyReady = this.ready(ctx.owner);
@@ -464,8 +581,10 @@ export class OrdinaryPedSteering {
       const ground = this.grounding.advance(ctx);
       if (ground.completion.status !== "complete")
         return this.record(ctx, ground.completion);
+      if (ground.ground.status === "vanish") return complete();
       if (ground.ground.status === "fall" || ctx.instance.physicsActive) {
-        this.warning("source-PED07-fall-and-recovery-production-owner");
+        if (!this.options.vanish)
+          this.warning("source-PED07-fall-and-recovery-production-owner");
         return complete();
       }
       if (!input.selectedFloorNormal)

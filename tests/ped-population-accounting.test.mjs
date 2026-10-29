@@ -171,6 +171,43 @@ test("ordinary counting precedes scoring and existing native binding inherits it
   peds.dispose();
 });
 
+test("source vanish releases population once without Kill, score, blood or HP changes", async () => {
+  const counts = [],
+    hits = [];
+  const peds = await fixture(
+    (event) => counts.push(event),
+    (event) => hits.push(event),
+  );
+  const actor = peds.group.children[0],
+    owner = {},
+    character = { flags: 0x40, hitPoints: 100 };
+  peds.bindNativeCountingOwner(owner, actor, character);
+  const before = peds.states[0],
+    bloodBefore = peds.bloodStats;
+  assert.equal(peds.oneLessNativePed(owner, character, 12, "vanished"), false);
+  character.flags |= 0x80;
+  assert.equal(peds.oneLessNativePed(owner, character, 13, "vanished"), true);
+  assert.equal(
+    character.flags,
+    0x1c0,
+    "OneLess supplies100 after vanish supplied80",
+  );
+  assert.equal(character.hitPoints, 100, "vanish does not call Kill");
+  assert.equal(peds.oneLessNativePed(owner, character, 14, "vanished"), false);
+  assert.equal(peds.oneLessNativePed(owner, character, 15), false);
+  assert.equal(peds.hits, 1);
+  assert.equal(peds.alive, 0);
+  assert.equal(counts.length, 1);
+  assert.equal(counts[0].timeMs, 13);
+  assert.equal(hits.length, 0, "vanish is not a score-death outlet");
+  assert.deepEqual(peds.states[0].velocity, before.velocity);
+  assert.deepEqual(peds.bloodStats, bloodBefore);
+  peds.reset();
+  assert.equal(peds.hits, 0);
+  assert.equal(peds.alive, 1);
+  peds.dispose();
+});
+
 test("inactive napalm scoring does not consume population or mission group counts", async () => {
   const counts = [],
     hits = [];

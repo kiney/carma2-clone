@@ -322,7 +322,13 @@ export class NativePedRuntime<Owner extends object = object> {
           const body = this.preparedBone(resource),
             code = simulation.phil.getState(body) === 0 ? 3 : 0;
           simulation.removePedBoneBody(body);
-          return { code, phase: "complete" };
+          return {
+            code,
+            phase:
+              simulation.phil.getState(resource) === 0
+                ? "complete"
+                : "deferred",
+          };
         },
       },
       clearBone: (_a, resource) => {
@@ -428,9 +434,11 @@ export class NativePedRuntime<Owner extends object = object> {
           const record = this.character(body.owner!),
             code = simulation.phil.getState(body) === 0 ? 3 : 0;
           simulation.removePedBody(body);
+          if (simulation.phil.getState(body) !== 0)
+            return { code: 0, phase: "deferred" };
           const release = this.bonePool.releaseRemovedParts(record);
           if (release === "release-pending")
-            throw new Error("Native removed-part release is still pending");
+            return { code: 0, phase: "deferred" };
           record.vanishedBoneMask >>>= 0;
           this.copyMasks(record);
           return { code, phase: "complete" };
@@ -440,8 +448,8 @@ export class NativePedRuntime<Owner extends object = object> {
         finishNativePedBodyInitialization(a.body);
         simulation.addPedBody(a.body);
       },
-      beforeRelease: (a) =>
-        this.beforeRelease(this.character(a.character.owner)),
+      beforeRelease: (a, reason) =>
+        this.beforeRelease(this.character(a.character.owner), reason),
       clearSimple: (a) => {
         const record = this.character(a.character.owner);
         a.body.owner = null;
@@ -679,6 +687,41 @@ export class NativePedRuntime<Owner extends object = object> {
   }
   allocation(owner: Owner): NativePedRuntimeAllocation<Owner> | null {
     return this.bodyPool.allocation(owner);
+  }
+  /** Lower current physical/render ownership while retaining the enrolled Ped.
+   * Explicit vanish/release owns its own count/flags; this calls no gameplay
+   * halt, Kill, animation advance or random provider. */
+  releaseCurrent(owner: Owner): NativePedInstanceResult {
+    this.assertLive();
+    const c = this.character(owner),
+      allocation = this.allocation(owner);
+    let requiredProviders: readonly string[] = [];
+    if (c.physicsFlags & 2)
+      requiredProviders = ["native boned character pool owner"];
+    else if (allocation?.phase === "release-pending") {
+      // Do not queue another root removal while its actual header is live.
+      // Once absent, the source part pool can prove/complete its own removals.
+      if (this.simulation.phil.getState(allocation.body) === 0) {
+        const removed = this.bodyHost.registrar.remove(allocation.body);
+        if (removed.phase === "complete") this.bodyPool.completeRelease(owner);
+      }
+      if (this.allocation(owner))
+        requiredProviders = ["native-current-resource-release-pending"];
+    } else {
+      const released = this.bodyPool.releaseCurrent(c);
+      requiredProviders =
+        released.phase === "release-pending"
+          ? ["native-current-resource-release-pending"]
+          : released.requiredProviders;
+    }
+    const result: NativePedInstanceResult = {
+      status: requiredProviders.length ? "provider-required" : "complete",
+      requiredProviders: [...requiredProviders],
+      processedFrames: 0,
+      completedMove: false,
+    };
+    this.recordResult(c, result);
+    return result;
   }
   /** Read the enrolled personality's actual signed FORM head index, including−1. */
   headBone(owner: Owner): number {
@@ -1090,6 +1133,7 @@ export class NativePedRuntime<Owner extends object = object> {
   }
   private beforeRelease(
     c: NativePedRuntimeCharacter<Owner>,
+    reason: "scope" | "current" = "scope",
   ): readonly string[] {
     const missingProviders: string[] = [];
     if (c.removedBoneMask && !this.hooks.storeRemovedPoses)
@@ -1097,12 +1141,25 @@ export class NativePedRuntime<Owner extends object = object> {
     const resources = this.bonePool.allocation(c)?.bodies ?? [];
     if (resources.some((body) => body?.nativeJoint2) && !this.hooks.unlinkBone)
       missingProviders.push("native-retained-joint2-owner");
-    if (this.simulation.phil.getState(c.body!) === 2 && !this.hooks.onHalt)
+    if (
+      reason === "scope" &&
+      this.simulation.phil.getState(c.body!) === 2 &&
+      !this.hooks.onHalt
+    )
       missingProviders.push("native-active-halt-continuation");
     missingProviders.push(
       ...(this.hooks.beforeRelease?.(this.context(c)) ?? []),
     );
     if (missingProviders.length) return missingProviders;
+    if (reason === "current") {
+      if (this.simulation.phil.getState(c.body!) === 2) {
+        // Preserve the physical root without posing children: ordinary pose
+        // synchronization can draw mutant-angle CRT even without clock advance.
+        c.instance!.rootPose.set(nativePedRootPose(c.body!));
+        this.saveRoot(c);
+      }
+      return [];
+    }
     if (
       this.simulation.phil.getState(c.body!) === 2 &&
       this.halt(c, 0, "release") === null

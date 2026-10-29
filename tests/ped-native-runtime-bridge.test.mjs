@@ -478,3 +478,202 @@ test("pool teardown checks actual PHIL release before clearing ownership", () =>
   assert.equal(runtime.bonePool.allocation(c).bodies[1], part);
   runtime.dispose();
 });
+
+test("releaseCurrent frees active resources without halt/RNG/HP or enrolled identity changes", () => {
+  let randomCalls = 0,
+    released = 0;
+  const process = { storage: new Uint8Array(0x12c), retryCount: 2 },
+    { runtime, simulation } = setup(
+      {
+        onHalt() {
+          assert.fail("explicit current release must not invoke gameplay halt");
+        },
+        onMoved() {
+          assert.fail("release snapshot must not invoke moved gameplay");
+        },
+        onRenderReleased() {
+          released++;
+        },
+      },
+      {},
+      () => {
+        randomCalls++;
+        return 17;
+      },
+    );
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  runtime.activate(c.owner);
+  runtime.updateState(c.owner, { hitPoints: 37, impactCount: 9 });
+  c.testProcess = process;
+  process.storage[0x94] = 27;
+  const body = c.body,
+    instance = c.instance,
+    clock = { ...instance.clock },
+    callsBefore = randomCalls;
+  instance.mutantSpeed = 1;
+  instance.mutantHealth = 1;
+  instance.mutantAction = 0;
+  instance.mutantSameTimeGuard = false;
+  body.state.position.set(3, 4, 5);
+  const r = runtime.releaseCurrent(c.owner);
+  assert.equal(r.status, "complete");
+  assert.equal(r.processedFrames, 0);
+  assert.equal(r.completedMove, false);
+  assert.equal(runtime.character(c.owner), c);
+  assert.equal(runtime.characters.length, 1);
+  assert.equal(c.testProcess, process);
+  assert.equal(process.storage[0x94], 27);
+  assert.equal(c.hitPoints, 37);
+  assert.equal(c.impactCount, 9);
+  assert.deepEqual(c.position, [3, 4, 5]);
+  assert.deepEqual(instance.clock, clock);
+  assert.equal(c.body, null);
+  assert.equal(c.instance, null);
+  assert.equal(c.physicsFlags, 0);
+  assert.equal(body.owner, null);
+  assert.equal(simulation.phil.count, 0);
+  assert.equal(simulation.pedBodies.length, 0);
+  assert.equal(instance.group.parent, null);
+  assert.equal(released, 1);
+  assert.equal(randomCalls, callsBefore);
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(released, 1);
+  // Reacquisition uses the same logical Ped without enroll or HP initialization.
+  runtime.prepareFrame(frame(101));
+  assert.equal(runtime.character(c.owner), c);
+  assert.equal(c.body, body);
+  assert.equal(c.hitPoints, 37);
+  assert.equal(simulation.phil.count, 1);
+  runtime.dispose();
+});
+
+test("flag80 never acquires a released owner even when recent-event grace keeps camera flag1", () => {
+  const { runtime, simulation } = setup();
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  runtime.updateState(c.owner, {
+    flags: c.flags | 0x80,
+    cacheEventTimeMs: 100,
+  });
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(runtime.prepareFrame(frame(101))[0].pool.status, "out-of-scope");
+  assert.ok(
+    c.flags & 1,
+    "camera grace remains independent of new resource admission",
+  );
+  assert.ok(c.flags & 0x80);
+  assert.equal(c.instance, null);
+  assert.equal(c.body, null);
+  assert.equal(runtime.allocation(c.owner), null);
+  assert.equal(simulation.phil.count, 0);
+  runtime.dispose();
+});
+
+test("releaseCurrent releases actual current sever resources through their source pool", () => {
+  let stored = 0;
+  const { runtime, simulation } = setup({
+    storeRemovedPoses() {
+      stored++;
+    },
+    onHalt() {
+      assert.fail("no gameplay halt on explicit release");
+    },
+  });
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  const root = c.body,
+    head = severHead(runtime, c);
+  assert.equal(simulation.phil.count, 2);
+  runtime.activate(c.owner);
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(simulation.phil.getState(root), 0);
+  assert.equal(simulation.phil.getState(head), 0);
+  assert.equal(simulation.pedBodies.length, 0);
+  assert.equal(simulation.pedBoneBodies.length, 0);
+  assert.equal(head.owner, null);
+  assert.equal(runtime.bonePool.allocation(c), null);
+  assert.equal(c.bonedSlot, -1);
+  assert.ok(c.removedBoneMask & 2);
+  assert.ok(c.vanishedBoneMask & 2);
+  assert.equal(stored, 1);
+  assert.equal(runtime.character(c.owner), c);
+  runtime.dispose();
+});
+
+test("releaseCurrent retains all slot/ACT ownership until deferred root PHIL removal completes", () => {
+  let released = 0,
+    requests = 0;
+  const { runtime, simulation } = setup({
+    onRenderReleased() {
+      released++;
+    },
+  });
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  const root = c.body,
+    instance = c.instance,
+    remove = simulation.removePedBody.bind(simulation);
+  simulation.removePedBody = () => {
+    requests++;
+  };
+  const first = runtime.releaseCurrent(c.owner);
+  assert.deepEqual(first.requiredProviders, [
+    "native-current-resource-release-pending",
+  ]);
+  assert.equal(runtime.allocation(c.owner).phase, "release-pending");
+  assert.equal(c.instance, instance);
+  assert.equal(c.body, root);
+  assert.equal(root.owner, c.owner);
+  assert.equal(simulation.phil.count, 1);
+  assert.equal(released, 0);
+  runtime.releaseCurrent(c.owner);
+  assert.equal(requests, 1, "a pending live header is not queued twice");
+  remove(root);
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(c.body, null);
+  assert.equal(c.instance, null);
+  assert.equal(released, 1);
+  assert.equal(runtime.allocation(c.owner), null);
+  simulation.removePedBody = remove;
+  runtime.dispose();
+});
+
+test("releaseCurrent keeps ACT/current part owner until deferred detached PHIL removal completes", () => {
+  let released = 0,
+    requests = 0;
+  const { runtime, simulation } = setup({
+    storeRemovedPoses() {},
+    onRenderReleased() {
+      released++;
+    },
+  });
+  const c = enroll(runtime, {});
+  runtime.prepareFrame(frame(100));
+  const root = c.body,
+    head = severHead(runtime, c),
+    instance = c.instance,
+    remove = simulation.removePedBoneBody.bind(simulation);
+  simulation.removePedBoneBody = () => {
+    requests++;
+  };
+  assert.equal(runtime.releaseCurrent(c.owner).status, "provider-required");
+  assert.equal(simulation.phil.getState(root), 0);
+  assert.equal(simulation.phil.getState(head), 2);
+  assert.equal(c.instance, instance);
+  assert.equal(c.body, root);
+  assert.equal(head.owner, c.owner);
+  assert.equal(released, 0);
+  runtime.releaseCurrent(c.owner);
+  assert.equal(requests, 1);
+  remove(head);
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(c.instance, null);
+  assert.equal(c.body, null);
+  assert.equal(head.owner, null);
+  assert.equal(c.bonedSlot, -1);
+  assert.equal(released, 1);
+  assert.equal(simulation.phil.count, 0);
+  simulation.removePedBoneBody = remove;
+  runtime.dispose();
+});

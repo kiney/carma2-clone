@@ -66,6 +66,7 @@ export interface NativePedPoolHost<Owner extends object, Render, Body> {
    * active/cache/boned providers return their names, retaining ownership. */
   beforeRelease(
     allocation: NativePedPoolAllocation<Owner, Render, Body>,
+    reason?: "scope" | "current",
   ): readonly string[];
   /** Clear contact ring and character owner after PHIL removal completes. */
   clearSimple(allocation: NativePedPoolAllocation<Owner, Render, Body>): void;
@@ -93,6 +94,10 @@ export interface NativePedPoolVisit<Owner extends object, Render, Body> {
   /** Native MakeCharacterCollideworthy0/21/23; NULL when not attempted. */
   collideworthyReturn: 0 | 21 | 23 | null;
   registrationReturn: 0 | 1 | 2 | null;
+  requiredProviders: readonly string[];
+}
+export interface NativePedPoolReleaseResult {
+  phase: "complete" | "release-pending" | "provider-required";
   requiredProviders: readonly string[];
 }
 interface Slot<T, Owner extends object> {
@@ -338,6 +343,35 @@ export class NativePedBodyPool<Owner extends object, Render, Body> {
       throw new Error("No deferred native body release for owner");
     this.finishRelease(a);
   }
+  /** Release current resources without changing logical identity/camera flags.
+   * Deferred removal retains both slots until an actual completion proof. */
+  releaseCurrent(
+    character: NativePedPoolCharacter<Owner>,
+    reason: "scope" | "current" = "current",
+  ): NativePedPoolReleaseResult {
+    const a = this.allocation(character.owner);
+    if (!a) return { phase: "complete", requiredProviders: [] };
+    if (a.character !== character || a.formKey !== character.formKey)
+      throw new Error("Native release character/FORM identity changed");
+    if (a.phase === "release-pending")
+      return { phase: "release-pending", requiredProviders: [] };
+    const missing = this.host.beforeRelease(a, reason);
+    if (missing.length)
+      return { phase: "provider-required", requiredProviders: missing };
+    const removed = this.host.registrar.remove(a.body);
+    if (
+      (removed.code !== 0 && removed.code !== 3) ||
+      (removed.phase !== "complete" && removed.phase !== "deferred") ||
+      (removed.code === 3 && removed.phase === "deferred")
+    )
+      throw new Error("Invalid PHIL removal provider result");
+    if (removed.phase === "deferred") {
+      a.phase = "release-pending";
+      return { phase: "release-pending", requiredProviders: [] };
+    }
+    this.finishRelease(a);
+    return { phase: "complete", requiredProviders: [] };
+  }
   private form(key: string): FormPool<Owner, Render, Body> {
     const p = this.forms.get(key);
     if (!p) throw new Error(`Native FORM is not registered: ${key}`);
@@ -380,24 +414,15 @@ export class NativePedBodyPool<Owner extends object, Render, Body> {
         "native boned character pool owner",
       ]);
     if (a?.phase === "release-pending") return output("release-pending");
-    if (!(c.flags & 1)) {
+    if (!(c.flags & 1) || c.flags & 0x80) {
       if (!a) return output("out-of-scope");
-      const missing = this.host.beforeRelease(a);
-      if (missing.length)
-        return output("provider-required", null, null, missing);
-      const removed = this.host.registrar.remove(a.body);
-      if (
-        (removed.code !== 0 && removed.code !== 3) ||
-        (removed.phase !== "complete" && removed.phase !== "deferred") ||
-        (removed.code === 3 && removed.phase === "deferred")
-      )
-        throw new Error("Invalid PHIL removal provider result");
-      if (removed.phase === "deferred") {
-        a.phase = "release-pending";
-        return output("release-pending");
-      }
-      this.finishRelease(a);
-      return output("out-of-scope");
+      const released = this.releaseCurrent(c, "scope");
+      return output(
+        released.phase === "complete" ? "out-of-scope" : released.phase,
+        null,
+        null,
+        released.requiredProviders,
+      );
     }
     let register: 0 | 1 | 2 | null = null;
     const existing = !!a;

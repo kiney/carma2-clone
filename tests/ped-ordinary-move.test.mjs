@@ -119,15 +119,24 @@ test("reverse acceleration and unsigned native underflow retain installed branch
   assert.equal(h.process.runSpeed, -950 >>> 0);
 });
 
-test("direction requires selected floor; smooth projection retains source timestamps and dot guard", () => {
+test("direction skips resolved NULL support; smooth projection retains source timestamps and dot guard", () => {
   const h = fixture();
   h.input.selectedFloorNormal = null;
   const old = h.process.storage.slice();
   assert.equal(
     setNativePedXZDirection(h.input, [1, 0, 0], 1).status,
-    "provider-required",
+    "complete",
   );
   assert.deepEqual(h.process.storage, old);
+  assert.deepEqual(h.events, []);
+  const providers = h.input.providers;
+  h.input.providers = {};
+  assert.equal(
+    setNativePedXZDirection(h.input, [NaN, NaN, NaN], NaN).status,
+    "complete",
+  );
+  assert.deepEqual(h.process.storage, old);
+  h.input.providers = providers;
   h.input.selectedFloorNormal = [0, f(Math.SQRT1_2), f(Math.SQRT1_2)];
   setNativePedXZDirection(h.input, [0, 0, 1], 1);
   assert.deepEqual(h.read(0x48), [0, f(-Math.SQRT1_2), f(Math.SQRT1_2)]);

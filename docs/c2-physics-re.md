@@ -692,3 +692,13 @@ integrated. See [production evidence and remaining boundaries](ped06-production-
 [source movement](ped06-ordinary-move-re.md) and [object scan](ped06-object-scan-re.md).
 This does not close detailed PED-07 recovery, PED-08 articulation/severing or all
 PED-09 cause/award outlets.
+
+## Ordinary pedestrian recovery integration (PED-07)
+
+Installed source normal selection, NULL-support no-op, atomic recovery preflight,
+current-resource vanish and selected-volume phases now run through actual
+population owners. Native simple/bone quiet state is no longer shadowed by a
+second generic provider. Real Stock/Advanced falling bodies land, dispatch one
+halt, play their authored get-up and release selected ground on one completion.
+See [integration, validation and explicit boundaries](ped07-production-integration.md)
+and [volume addresses/formulas](c2-ped-ordinary-volume-re.md).

@@ -76,7 +76,7 @@ export interface NativePedGameplayState {
   countCommitted: boolean;
   /** Cause supplied by an external installed KillPedestrian caller. Vehicle
    * contacts leave this unset and retain the existing attribution-derived path. */
-  deathCause?: "annihilator" | "electric" | "napalm";
+  deathCause?: "annihilator" | "electric" | "napalm" | "environment";
   diagnostics: Set<string>;
 }
 export type NativePedCauseKillResult =
@@ -600,6 +600,19 @@ export class NativePedGameplay<Owner extends object = object> {
     cause: "annihilator" | "electric" | "napalm",
     deadMoveId = 113,
   ): NativePedCauseKillResult {
+    return this.killExternal(owner, cause, deadMoveId, false);
+  }
+  /** FullKill has no immortality gate. The outer selected-volume timeout calls
+   * it directly and leaves dead move selection to the next native Munge visit. */
+  killFromEnvironment(owner: Owner): NativePedCauseKillResult {
+    return this.killExternal(owner, "environment", null, true);
+  }
+  private killExternal(
+    owner: Owner,
+    cause: NonNullable<NativePedGameplayState["deathCause"]>,
+    deadMoveId: number | null,
+    bypassImmortal: boolean,
+  ): NativePedCauseKillResult {
     const runtime = this.host();
     let ctx: NativePedRuntimeCallback<Owner>;
     try {
@@ -616,10 +629,13 @@ export class NativePedGameplay<Owner extends object = object> {
       c.hitPoints <= 0 ||
       c.flags & 0x100 ||
       state.countCommitted ||
-      globals.immortal
+      (!bypassImmortal && globals.immortal)
     )
       return { status: "ineligible", requiredProviders: [] };
-    if (!Number.isInteger(deadMoveId) || deadMoveId < 0 || deadMoveId > 117)
+    if (
+      deadMoveId !== null &&
+      (!Number.isInteger(deadMoveId) || deadMoveId < 0 || deadMoveId > 117)
+    )
       throw new Error("Invalid external pedestrian death move");
 
     const missing: string[] = [];
@@ -638,7 +654,7 @@ export class NativePedGameplay<Owner extends object = object> {
       if (instance.bones.some((bone) => !bone.modelSets[1]))
         missing.push("native-model-set1-provider");
     }
-    if (!instance.template.moves.has(deadMoveId))
+    if (deadMoveId !== null && !instance.template.moves.has(deadMoveId))
       missing.push(`native-authored-move-${deadMoveId}`);
     if (
       (globals.moveSubstitutionRequired || c.removedBoneMask & 0x28) &&
@@ -658,7 +674,7 @@ export class NativePedGameplay<Owner extends object = object> {
     // native ordering: dead visuals/effects, flag100 + OneLessPed, then score.
     state.deathCause = cause;
     this.kill(ctx, null, globals, missing);
-    this.move(ctx, deadMoveId, -1, false, 6, missing);
+    if (deadMoveId !== null) this.move(ctx, deadMoveId, -1, false, 6, missing);
     if (missing.length) {
       diagnostic(ctx, state, missing);
       return {

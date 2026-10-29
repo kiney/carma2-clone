@@ -1,3 +1,8 @@
+import {
+  processOrdinaryPedVolume,
+  activateImmersedOrdinaryPed,
+  moveOrdinaryPedInVolume,
+} from "./ped-ordinary-volume";
 import { createOrdinaryPedRecoveryHost } from "./ped-ordinary-recovery";
 import type { PedBloodSettings } from "./ped-blood";
 import type { Material } from "three";
@@ -83,6 +88,8 @@ export interface OrdinaryPedRuntimeOptions {
     ped: Ped,
     character: ReturnType<NativePedRuntime<Object3D>["enroll"]>,
   ) => void;
+  onVanish?: (context: NativePedRuntimeCallback<Object3D>) => void;
+  clearBurning?: (ped: Ped, signedIndex: number) => void | readonly string[];
   oneLess: OrdinaryNativePedGameplayOptions<Object3D>["oneLess"];
   scoreDeath: OrdinaryNativePedGameplayOptions<Object3D>["scoreDeath"];
   killGiblets: OrdinaryNativePedGameplayOptions<Object3D>["killGiblets"];
@@ -109,6 +116,10 @@ export class OrdinaryPedRuntime {
   private unbind = new Map<Object3D, () => void>();
   private readonly exhaustedOwners = new Set<Object3D>();
   private scanRoster: NativeOrdinaryPedScanObject<RigidBody>[] | null = null;
+  private pendingVanish = new Map<
+    Object3D,
+    NativePedRuntimeCallback<Object3D>
+  >();
   private disposed = false;
   private lastFrame?: { camera: PedVector; time: number };
   private visits = {
@@ -151,6 +162,10 @@ export class OrdinaryPedRuntime {
       scoreDeath: options.scoreDeath,
       killGiblets: options.killGiblets,
       contactEffects: options.contactEffects,
+      onMovedVolume: (ctx) =>
+        moveOrdinaryPedInVolume(ctx.body, ctx.character.hitPoints, () =>
+          sharedNativeRandom.nextInteger(),
+        ).requiredProviders,
       readGroundHeight: (context) => {
         const p = context.character.position;
         return options.groundAt(p[0], p[2], p[1] + 0.2) ?? undefined;
@@ -207,12 +222,23 @@ export class OrdinaryPedRuntime {
       resolveMaterial: options.resolveMaterial,
       warn: options.warn,
       scanForObjects: (ctx, movement) => this.scanObjects(ctx, movement),
+      previewWorldFaces: (query, capacity) =>
+        simulation.previewPedestrianFaces(query, capacity),
+      vanish: (ctx) => this.vanish(ctx),
     });
     const recovery = createOrdinaryPedRecoveryHost<Object3D, GroundSlot>({
       readAllocation: (owner) => this.runtime.allocation(owner),
       readOil: () => simulation.oil ?? null,
       readSlick: options.readSlick,
       readMaterials: options.readSlickMaterials,
+      preflight: (ctx, _state, _input, decision) =>
+        decision.kind === "upright" || decision.kind === "lying"
+          ? this.steering.preflightRecovery(
+              ctx,
+              decision.direction,
+              decision.kind === "upright" ? 1 : 4,
+            )
+          : [],
       readProcess: (owner) =>
         this.gameplay.state(owner).cache as Process | null,
       releaseBorrowedFaceSlot: (slot) => this.steering.releaseBorrowed(slot),
@@ -320,8 +346,86 @@ export class OrdinaryPedRuntime {
         status: "provider-required",
         requiredProviders: visit.requiredProviders,
       };
-    if (ctx.instance.physicsActive || !ped.alive) return complete();
-    return this.steering.prepare(ctx);
+    const input = () => ({
+      body: ctx.body,
+      processStorage:
+        (this.gameplay.state(ctx.owner).cache as Process | null)?.storage ??
+        null,
+      hitPoints: ctx.character.hitPoints,
+      moveId: ctx.character.moveId,
+      timeMs: ctx.timeMs,
+      replay: false,
+      physicsActive: ctx.instance.physicsActive,
+      globalGravity: this.options.simulation.gravityMultiplier,
+    });
+    const host = {
+      setMove: (request: {
+        id: 110 | 94;
+        speed: -1;
+        completion: false;
+        action: 5;
+        timeMs: number;
+      }) => this.gameplay.requestMove(ctx, request).requiredProviders,
+      kill: () =>
+        this.gameplay.killFromEnvironment(ctx.owner).requiredProviders,
+      clearBurning: this.options.clearBurning
+        ? (signedIndex: number) => this.options.clearBurning!(ped, signedIndex)
+        : undefined,
+      stopSmoothTurn: () => {
+        const process = this.gameplay.state(ctx.owner).cache as Process | null;
+        if (!process) return ["source-ped-volume-process-owner"];
+        new DataView(
+          process.storage.buffer,
+          process.storage.byteOffset,
+          process.storage.byteLength,
+        ).setUint32(0x6c, 0, true);
+      },
+      activate: () =>
+        this.options.simulation.phil.getState(ctx.body) === 2 ||
+        this.runtime.activate(ctx.owner)
+          ? undefined
+          : ["source-ped-volume-activation-owner"],
+      nextCrtInteger: () => sharedNativeRandom.nextInteger(),
+    };
+    let volume = processOrdinaryPedVolume(input(), host);
+    if (volume.status !== "complete") return { ...complete(), ...volume };
+    const steering = this.steering.prepare(ctx);
+    if (
+      steering.status !== "complete" ||
+      !ctx.character.body ||
+      !ctx.character.instance ||
+      ctx.character.flags & 0x80
+    )
+      return steering;
+    volume = activateImmersedOrdinaryPed(input(), host);
+    return { ...complete(), ...volume };
+  }
+  private vanish(ctx: NativePedRuntimeCallback<Object3D>): {
+    requiredProviders?: readonly string[];
+  } {
+    if (!this.options.onVanish)
+      return { requiredProviders: ["source-native-vanish-population-owner"] };
+    // Position recording is explicitly disabled, matching the ordinary AR policy.
+    // Vanish is not Kill: retain HP and process ownership, release current PHIL/ACT.
+    ctx.character.flags |= 0x80;
+    this.pendingVanish.set(ctx.owner, ctx);
+    return this.finishVanish(ctx);
+  }
+  private finishVanish(ctx: NativePedRuntimeCallback<Object3D>): {
+    requiredProviders?: readonly string[];
+  } {
+    const result = this.runtime.releaseCurrent(ctx.owner);
+    if (result.status !== "complete") return result;
+    this.entries.get(ctx.owner)!.vanished = true;
+    this.options.onVanish!(ctx);
+    this.records.update(this.recordIndices.get(ctx.owner)!, {
+      position: ctx.character.position,
+      action: this.gameplay.state(ctx.owner).action,
+      flags: ctx.character.flags & 0xffff,
+      hitPoints: ctx.character.hitPoints,
+    });
+    this.pendingVanish.delete(ctx.owner);
+    return {};
   }
   private scanObjects(
     ctx: NativePedRuntimeCallback<Object3D>,
@@ -453,6 +557,7 @@ export class OrdinaryPedRuntime {
     if (this.disposed) return;
     const time = Math.trunc(timeMs) >>> 0;
     this.scanRoster = null;
+    for (const ctx of this.pendingVanish.values()) this.finishVanish(ctx);
     this.lastFrame = { camera: [camera.x, camera.y, camera.z], time };
     const visits = this.runtime.prepareFrame({
       cameraOrigin: this.lastFrame.camera,
@@ -608,6 +713,7 @@ export class OrdinaryPedRuntime {
     this.records.dispose();
     for (const unbind of this.unbind.values()) unbind();
     this.unbind.clear();
+    this.pendingVanish.clear();
     this.entries.clear();
     this.disposed = true;
   }

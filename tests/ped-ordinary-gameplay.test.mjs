@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Quaternion, Vector3 } from "three";
 import { createOrdinaryNativePedGameplay } from "../src/ped-ordinary-gameplay.ts";
 import { NativeRandom, sharedNativeRandom } from "../src/native-random.ts";
+import { decideNativePedHalt } from "../src/physics/ped-halt.ts";
 
 const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 function fixture() {
@@ -141,17 +142,49 @@ test("ordinary attribution inherits actual contacted character cache and refresh
   assert.equal(state.cache.flags, 0);
 });
 
-test("halt reads actual root, contacts, allocation, physical properties and selected volume without synthetic floor", () => {
+test("ordinary halt uses the highest positive world face when first contact is a wall", () => {
   const h = fixture(),
     gameplay = createOrdinaryNativePedGameplay(h.options);
+  h.context.body.worldFaceNormals = [
+    new Vector3(0, -0.6, 0.8), // first contact is a wall/down-facing surface
+    new Vector3(0, 0.8, 0.6), // actual floor support
+    new Vector3(0, 0.8, -0.6), // tied floor; native scan keeps the first maximum
+  ];
+  h.context.body.firstWorldFaceNormal = new Vector3(1, 0, 0);
   const input = gameplay.options.readHaltInput(h.context);
   assert.deepEqual([...input.actorRootPose].slice(9), [1, 2, 3]);
   assert.equal(
     input.characterOrientation,
     h.context.instance.characterOrientation,
   );
-  assert.deepEqual(input.worldFaceNormals, [[0, 0.6, 0.8]]);
-  assert.deepEqual(input.optionalFaceNormal, [1, 0, 0]);
+  assert.deepEqual(input.worldFaceNormals, [
+    [0, -0.6, 0.8],
+    [0, 0.8, 0.6],
+    [0, 0.8, -0.6],
+  ]);
+  assert.equal(input.optionalFaceNormal, null);
+  const decision = decideNativePedHalt(
+    {
+      hitPoints: 100,
+      flags: 8,
+      moveId: 93,
+      action: 5,
+      impactSerial: 0,
+      cache: { retryCount: 0 },
+      doNothing: true,
+      rigidFlags: 0,
+      rigidPose: Float32Array.from(identity),
+      localOmega: [0, 0, 0],
+      filterA: 0x20000,
+      filterB: 0x40000,
+    },
+    { ...input, replay: h.options.readGlobals().replay },
+  );
+  assert.deepEqual(decision.supportNormal, [
+    0,
+    Math.fround(0.8),
+    Math.fround(0.6),
+  ]);
   assert.deepEqual(input.inertia, [0.1, 0.2, 0.3]);
   assert.equal(input.mass, 0.07);
   assert.equal(input.bounds, h.context.body.profile.bounds);

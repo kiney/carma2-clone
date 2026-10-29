@@ -11,6 +11,7 @@ import {
 import { OrdinaryPedSteering } from "../src/ped-ordinary-steering.ts";
 import { scanNativeOrdinaryPedObjects } from "../src/ped-ordinary-object-scan.ts";
 import { NativeRandom } from "../src/native-random.ts";
+import { sharedNativeRandom } from "../src/native-random.ts";
 import { NativeResourceArena } from "../src/native-resource-arena.ts";
 import { WorldCollision } from "../src/world.ts";
 import { VehicleSimulation } from "../src/physics/simulation.ts";
@@ -739,6 +740,126 @@ test("recovery movement wrappers expose canonical process and retain the selecte
     assert.equal(h.steering.rescanForRecovery(ctx).status, "complete");
     assert.equal(h.process.faceCache, slot);
     assert.deepEqual(h.process.retainedDirection, [0, 0, 1]);
+  } finally {
+    h.dispose();
+  }
+});
+
+test("recovery preflight stages native negative-group scan without changing canonical owners, faces or CRT", () => {
+  const h = host();
+  try {
+    h.steering.prepare(h.context());
+    const slot = h.process.faceCache;
+    const captured = h.simulation.collectPedestrianFaces({
+      bounds: new Box3(new Vector3(-2, -1, -2), new Vector3(2, 1, 2)),
+      matrix: new Group().matrix,
+    });
+    h.steering.options.previewWorldFaces = () => captured;
+    h.ped.spec.exclusions = ["road"];
+    h.ped.spec.exclusionFlags = [0];
+    h.steering.options.resolveMaterial = () => h.world.material;
+    const ctx = h.context(),
+      root = ctx.instance.rootPose.slice(),
+      direction = [...ctx.instance.direction],
+      storage = h.process.storage.slice(),
+      faces = slot.faces.map((face) => ({
+        ...face,
+        normal: [...face.normal],
+        a: [...face.a],
+        b: [...face.b],
+        c: [...face.c],
+      })),
+      rings = [5, 10, 40, 75].map((capacity) =>
+        h.steering.grounding.pool.order(capacity),
+      ),
+      crt = sharedNativeRandom.state;
+    assert.deepEqual(h.steering.preflightRecovery(ctx, [0, 0, 1], 4), [
+      "source-proximity-unchecked-negative-prepared-group-storage",
+    ]);
+    h.ped.spec.exclusionFlags = [1];
+    assert.deepEqual(h.steering.preflightRecovery(ctx, [0, 0, 1], 1), []);
+    assert.deepEqual(h.steering.preflightRecovery(ctx, [0, 0, 1], 4), [
+      "source-proximity-unchecked-negative-prepared-group-storage",
+    ]);
+    assert.deepEqual(h.process.storage, storage);
+    assert.equal(h.process.faceCache, slot);
+    assert.deepEqual(slot.faces, faces);
+    assert.deepEqual(ctx.instance.rootPose, root);
+    assert.deepEqual(ctx.instance.direction, direction);
+    assert.equal(sharedNativeRandom.state, crt);
+    for (const [i, capacity] of [5, 10, 40, 75].entries())
+      assert.deepEqual(h.steering.grounding.pool.order(capacity), rings[i]);
+    h.steering.options.previewWorldFaces = () => [];
+    assert.deepEqual(h.steering.preflightRecovery(ctx, [0, 0, 1], 4), []);
+    assert.deepEqual(h.process.storage, storage);
+    assert.equal(h.process.faceCache, slot);
+    assert.deepEqual(ctx.instance.rootPose, root);
+  } finally {
+    h.dispose();
+  }
+});
+
+test("recovery NULL selected support is a no-op while absent canonical process remains unsupported", () => {
+  const h = host();
+  try {
+    const ctx = h.context(),
+      root = ctx.instance.rootPose.slice(),
+      direction = [...ctx.instance.direction],
+      storage = h.process.storage.slice();
+    assert.equal(h.process.faceCache, null);
+    h.ped.spec.exclusions = ["unresolved-MAT"];
+    assert.equal(h.steering.rescanForRecovery(ctx).status, "complete");
+    assert.equal(
+      h.steering.directionForRecovery(ctx, [1, 0, 1]).status,
+      "complete",
+    );
+    assert.deepEqual(ctx.instance.rootPose, root);
+    assert.deepEqual(ctx.instance.direction, direction);
+    assert.deepEqual(h.process.storage, storage);
+    assert.deepEqual(h.steering.preflightRecovery(ctx, [1, 0, 1], 4), [
+      "source-recovery-readonly-world-face-provider",
+    ]);
+    h.gameplay.state(h.owner).cache = null;
+    assert.deepEqual(
+      h.steering.directionForRecovery(ctx, [1, 0, 1]).requiredProviders,
+      ["source-ground-current-process-cache-owner"],
+    );
+    assert.deepEqual(h.steering.preflightRecovery(ctx, [1, 0, 1], 4), [
+      "source-ground-current-process-cache-owner",
+    ]);
+  } finally {
+    h.dispose();
+  }
+});
+
+test("production vanish outlet executes once and outer runtime skips BON after flag80", () => {
+  const events = [];
+  const h = host({
+    vanish: (ctx, effect) => {
+      events.push([ctx.owner, effect, ctx.character.flags]);
+      h.runtime.updateState(ctx.owner, { flags: effect.flags });
+    },
+  });
+  try {
+    const ctx = h.context(),
+      root = ctx.instance.rootPose.slice();
+    root[9] = 20;
+    h.runtime.setRootPose(h.owner, root);
+    h.runtime.updateState(h.owner, { flags: 1 });
+    const clock = { ...ctx.instance.clock };
+    assert.equal(h.steering.prepare(ctx).status, "complete");
+    assert.equal(events.length, 1);
+    assert.equal(events[0][2] & 0x80, 0);
+    assert.equal(ctx.character.flags & 0x80, 0x80);
+    assert.equal(ctx.instance.physicsActive, false);
+    assert.deepEqual(ctx.instance.clock, clock);
+    h.enable();
+    h.runtime.prepareFrame(h.outerFrame(1020));
+    assert.equal(events.length, 1);
+    assert.deepEqual(ctx.instance.clock, clock);
+    assert.ok(
+      !h.warnings.some((message) => message.includes("source-ground-vanish")),
+    );
   } finally {
     h.dispose();
   }
