@@ -1,5 +1,14 @@
 # PERF-01: frame-time investigation
 
+2026-10-29 live update: [browser frame-delivery evidence](live-browser-cadence.md)
+separates a reproduced approximately 1FPS RAF cadence from engine CPU work.
+Paused 100ms timer callbacks remained timely; activating the browser restored
+approximately 60FPS without changing the simulation. Exact Chromium cause is
+unknown; the running scene still measures 43–46FPS. This does not resolve earlier
+engine stalls. PERF-01 remains user-deferred at **P5, backlog**; status/priority
+references in the dated investigation below describe its earlier implementation
+phase.
+
 Latest user-paused Timber drop: [live evidence and recorder](live-timber-drop.md).
 The isolated post-drop trajectory exposes expensive rotating-part pair guards;
 attribution of the preceding full frame remains open. Use the durable live

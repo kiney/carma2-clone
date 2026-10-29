@@ -4,7 +4,7 @@ title: '[P5] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: backlog
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-24 15:43'
+updated_date: '2026-10-29 12:34'
 labels:
   - PERF-01
   - performance
@@ -96,6 +96,8 @@ PERF-19 implementation checkpoint: scoped native preparation, scalar collector k
 2026-10-16 user explicitly split implementation into PERF-20 movement guarding (implemented), PERF-21 persistent collision data (P1 next), PERF-22 repeated rediscovery (P1 next, depends on21). PERF-13 retains integration acceptance in backlog. PERF-20 proves controlled guard-work reduction with native-informed motion certificates/continuous SAT and passes crash/repair validation, but adverse hardware captures remain and no whole-frame FPS fix is claimed. Details: docs/perf20-adaptive-movement-guard.md.
 
 2026-10-17 post-PERF04 live Timber drop at checkpoint39468ce: user-paused last game period1000ms, cumulative skipped physics9560ms at game time100990ms. New browser had no pre-pause rolling recorder, so the original active frame cannot be attributed from the paused CPU profile. Bounded recorder1024 rows now installed. Separately reproduced adverse-view render regression: extended ranges46-47FPS/2576calls versus native render-only ranges59FPS/756calls, restored comparison; AMD ANGLE2832x1672. Paused profile shows substantial program-selection/material work, not proof of shader recompilation. Independent cloned current hierarchy/pair guard is modest and cannot replay world/response/full-tick costs. Elevated rotating Zee/spoiler state preserved without causal attribution. See docs/perf04-live-timber-drop.md; PERF-23 separately tracks the verified rendering problem.
+
+2026-10-29 new live user report inspected without reload. SHEIK, RATTLE & ROLL, cached82a5cc8 plus PED-10/PHY-21 adapters (new ANI-01 not loaded), hardware AMD ANGLE2067x1430. Initial running43.36FPS; later reproduced0.67FPS with966/1101ms RAF gaps but only111ms simulation CPU and12ms render CPU over3s. Paused independent heartbeat: RAF1016.6ms apart while all16 100ms timer callbacks remain timely. MCP bringToFront restores59.32FPS paused; subsequent running46.41FPS with mean12.43ms physics tick and approximately1ms GPU. Strong evidence for frame-delivery scheduling in this captured episode, exact Chromium mechanism unknown; not proof that historical engine stalls are fixed. Existing bounded physics recorder and separate cadence/heartbeat/long-task rings installed in preserved paused tab for recurrence. No production code or physics policy changed. See docs/live-browser-cadence.md; keep user-deferred P5 backlog priority/ordinal.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
