@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BoundedCaptureRing } from "../src/bug-capture/ring.ts";
@@ -135,8 +135,31 @@ test("blocks output traversal into repository sources and original assets", asyn
     "carma2_orig",
     "forbidden-bug-capture.json",
   );
+  // Original data is deliberately absent from CI. Missing parents are rejected
+  // before scope validation; an installed directory must reach the scope guard.
+  const originalDirectoryExists = await stat(join(root, "carma2_orig")).then(
+    (entry) => entry.isDirectory(),
+    (error) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    },
+  );
   await assert.rejects(
     run([input, "--json", originalTarget]),
-    /must be under \/tmp or the repository artifacts/,
+    originalDirectoryExists
+      ? /must be under \/tmp or the repository artifacts/
+      : /Output directory must already exist/,
   );
+});
+
+test("rejects missing output directories without creating them", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "c2bug-cli-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const input = await fixture(dir);
+  const missingDirectory = join(dir, "absent");
+  await assert.rejects(
+    run([input, "--json", join(missingDirectory, "decoded.json")]),
+    /Output directory must already exist/,
+  );
+  await assert.rejects(stat(missingDirectory), { code: "ENOENT" });
 });
