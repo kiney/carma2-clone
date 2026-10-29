@@ -1,3 +1,6 @@
+import "./bug-capture-ring.test.mjs";
+import "./bug-capture-cli.test.mjs";
+import "./bug-capture-runtime.test.mjs";
 import "./ped-animation-special.test.mjs";
 import "./ped-render-effects.test.mjs";
 import "./ped-animation-powerups.test.mjs";

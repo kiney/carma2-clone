@@ -1,3 +1,5 @@
+import { PlaytestCapture } from "./bug-capture/runtime";
+import { createBugCaptureControls } from "./bug-capture/controls";
 import { prepareNativePedVertexSampler } from "./ped-render-effects";
 import {
   assessPopulationAvailability,
@@ -392,8 +394,64 @@ const stats = {
   physicsSkippedMs: 0,
   assetWarnings: assets.warnings,
 };
+const bugCapture = new PlaytestCapture({
+  readContext: () => ({
+    build:
+      document.querySelector<HTMLScriptElement>('script[type="module"]')?.src ??
+      "development",
+    track: currentTrack,
+    car: currentCar,
+    race: definition?.name,
+    difficulty: raceDifficulty,
+    gameTimeMs: stats.gameTimeMs,
+    paused,
+    nativeRandomState: sharedNativeRandom.state,
+    raceState: race
+      ? {
+          status: race.status,
+          elapsed: race.elapsed,
+          timeLeft: race.timeLeft,
+          credits: race.credits,
+          lap: race.lap,
+          nextCheckpoint: race.nextCheckpoint,
+        }
+      : null,
+    counts: {
+      cars: simulation?.cars.length ?? 0,
+      debris: simulation?.debris.length ?? 0,
+      noncars: simulation?.noncars.length ?? 0,
+      pedestrians: pedestrians?.count ?? 0,
+    },
+    populations: populationLoads,
+    keys: [...keys],
+    warnings: assets.warnings.slice(-32),
+    visibility: document.visibilityState,
+    focused: document.hasFocus(),
+  }),
+});
+const bugCaptureControls = createBugCaptureControls(app, bugCapture, () => {
+  const gl = renderer.getContext();
+  const ext = gl.getExtension("WEBGL_debug_renderer_info");
+  return {
+    userAgent: navigator.userAgent,
+    renderer: ext
+      ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL))
+      : "unknown",
+    drawingBuffer: [gl.drawingBufferWidth, gl.drawingBufferHeight],
+    pixelRatio: renderer.getPixelRatio(),
+  };
+});
+addEventListener("error", (event) =>
+  bugCapture.event("uncaught-error", { message: event.message.slice(0, 2048) }),
+);
+addEventListener("unhandledrejection", (event) =>
+  bugCapture.event("unhandled-rejection", {
+    message: String(event.reason?.stack ?? event.reason).slice(0, 2048),
+  }),
+);
 const debug = {
   stats,
+  bugCapture,
   audio,
   get shards() {
     return shards;
@@ -661,6 +719,10 @@ function message(text: string, duration = 3) {
   el("message").textContent = text;
 }
 function setPaused(value: boolean) {
+  bugCapture.setPlaying(performance.now(), !value && !loading && stats.ready);
+  bugCapture.event(value ? "pause" : "resume", {
+    gameTimeMs: stats.gameTimeMs,
+  });
   gameClock.setPaused(value, performance.now());
   paused = value;
   keys.clear();
@@ -1700,6 +1762,8 @@ async function loadRace() {
     });
     updateUpgradeFactors(player);
     simulation = new VehicleSimulation(newCollision, scene);
+    bugCapture.session();
+    simulation.bugCapture = bugCapture;
     const dustCount = parseDustShades(trackText).length;
     simulation.onFinishCars = (framePeriodMs) => {
       if (!smoke || !simulation || !dustCount) return;
@@ -3524,7 +3588,13 @@ addEventListener("keydown", (event) => {
     } else void loadRace();
   }
 });
-addEventListener("keyup", (event) => keys.delete(event.code));
+addEventListener("keyup", (event) => {
+  keys.delete(event.code);
+  bugCapture.event("key-up", { code: event.code });
+});
+addEventListener("keydown", (event) => {
+  if (!event.repeat) bugCapture.event("key-down", { code: event.code });
+});
 addEventListener("blur", () => {
   keys.clear();
   if (vehicle && !loading) setPaused(true);
@@ -3783,6 +3853,7 @@ function worldGrooveVisible(
 
 function animate(now: number) {
   requestAnimationFrame(animate);
+  bugCapture.beginFrame(now, stats.ready && !loading && !paused);
   // Loading retires native resource storages before awaiting the next scene.
   // Drawing the preceding scene in that interval reuploads disposed textures
   // whose owners are then removed without another GPU release. Keep the last
@@ -4362,6 +4433,7 @@ function animate(now: number) {
   stats.fps = fps;
   stats.drawCalls = renderer.info.render.calls;
   stats.triangles = renderer.info.render.triangles;
+  bugCapture.endFrame(stats, paused, camera.position);
 }
 diagnosticsPanel = createDiagnosticsPanel(
   el("diagnostics"),

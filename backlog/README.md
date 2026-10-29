@@ -4,6 +4,12 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-29)
 
+P2 QUA-13 / TASK-132 is `done`: every playtest now keeps an automatic rolling
+three-minute bug history with a512MiB recorder budget, including download
+headroom. **Save bug capture** exports a local `.c2bug` file without MCP.
+Pause/lock history, actual download decoding, physics parity and short hardware
+overhead are checked. See [capture contents and limits](../docs/bug-captures.md).
+
 P3 PERF-24 / TASK-129 is deferred in `backlog` at medium priority until the
 extreme-motion stall occurs again or the user explicitly selects it. The
 [reproduced contact/solver energy source](../docs/runaway-contact-root-cause.md)

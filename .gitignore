@@ -9,3 +9,6 @@ __pycache__/
 *.py[cod]
 .env
 screenvid*.mp4
+
+# Local original-data-derived diagnostic downloads
+*.c2bug

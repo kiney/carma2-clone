@@ -407,6 +407,27 @@ export type SimulationBody =
   | MineBody<SimulatedCar>
   | NativePedBody
   | NativePedBoneBody;
+/** Scalar diagnostic sink. Implementations must isolate their own failures and
+ * retain no live body/contact references. Provider identities stay unchanged. */
+export interface PhysicsCaptureObserver {
+  startStep(simulation: VehicleSimulation, bodies: readonly RigidBody[]): void;
+  finishStep(
+    simulation: VehicleSimulation,
+    bodies: readonly RigidBody[],
+    complete: boolean,
+  ): void;
+  contacts(
+    simulation: VehicleSimulation,
+    impacts: readonly ContactImpact[],
+    phase: 0 | 1,
+    accepted?: boolean,
+  ): void;
+  joints(
+    simulation: VehicleSimulation,
+    impacts: readonly JointConstraintImpact[],
+    accepted: boolean,
+  ): void;
+}
 function isNativePedBody(body: RigidBody): body is NativePedBody {
   return "kind" in body && body.kind === "pedestrian";
 }
@@ -1069,6 +1090,7 @@ export class VehicleSimulation {
   lastImpacts: ContactImpact[] = [];
   readonly cameraContacts = new CameraContactFrame();
   onBeforeStep?: () => void;
+  bugCapture?: PhysicsCaptureObserver;
   onRepair?: (car: SimulatedCar, cost: number, finished?: boolean) => void;
   onImpact?: (car: SimulatedCar, impact: number) => void;
   onWorldSparks?: (source: WorldSparkSource) => void;
@@ -5791,6 +5813,9 @@ export class VehicleSimulation {
     return changed;
   }
   step() {
+    const capture = this.bugCapture;
+    capture?.startStep(this, this.allBodies());
+    let captureComplete = false;
     this.containEscapedBodies();
     this.onBeforeStep?.();
     this.physicsQueryDepth++;
@@ -6180,6 +6205,8 @@ export class VehicleSimulation {
                 restartGroups,
               );
               if (accepted !== false) this.processPedContactDamage(impacts);
+              capture?.contacts(this, impacts, 0, accepted !== false);
+              capture?.joints(this, jointImpacts, accepted !== false);
               rejected ||= accepted === false;
               return accepted;
             },
@@ -6191,6 +6218,7 @@ export class VehicleSimulation {
               reportedFailure ||= solution.status === "numerical-failure";
             },
           );
+          capture?.contacts(this, impacts, 1);
           // Geometry/COM/attachment changes are visible at the next local
           // collection barrier. Never keep rows against a pre-split shape.
           for (const car of this.cars)
@@ -6355,6 +6383,7 @@ export class VehicleSimulation {
         : 1;
       if (!this.collectingOrdinaryCrush)
         this.finishPedFrame(PHYSICS_STEP * 1000);
+      captureComplete = true;
     } finally {
       this.world.endNativePreparation?.();
       this.correctionWorkingSet = previousWorkingSet;
@@ -6362,6 +6391,7 @@ export class VehicleSimulation {
       this.quietCollisionFlags = previousQuietFlags;
       this.quietSolverLocalV = previousQuietV;
       this.physicsQueryDepth--;
+      capture?.finishStep(this, this.allBodies(), captureComplete);
     }
   }
   private detachParts(car: SimulatedCar) {

@@ -25,3 +25,8 @@ state and serialization. `npm run test:diagnostics` verifies the actual headless
 Chromium menu, safe text rendering, grouping and downloaded JSON contents using
 controlled in-memory warning inputs. No physical-display styling judgment is
 claimed. The menu refreshes snapshots rather than introducing gameplay polling.
+
+The separate always-on **Save bug capture** control keeps a bounded rolling
+three-minute physics/event history and downloads a `.c2bug` file. This is richer
+than the warning report, while still not a complete deterministic gameplay
+replay. See [retention, memory budget and inspection](bug-captures.md).

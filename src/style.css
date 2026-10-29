@@ -647,3 +647,34 @@ select {
   left: 2%;
   max-width: min(720px, 96%);
 }
+
+#bug-capture-save {
+  position: fixed;
+  top: 65px;
+  right: 2%;
+  z-index: 30;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #d7c89b;
+  background: #17130fbf;
+}
+#bug-capture-feedback {
+  position: fixed;
+  right: 2%;
+  top: 99px;
+  z-index: 30;
+  max-width: 300px;
+  font-size: 11px;
+  color: #e4d7bd;
+  background: #17130fbf;
+  pointer-events: none;
+}
+#bug-capture-feedback:empty {
+  display: none;
+}
+#app:has(#panel:not([hidden])) #bug-capture-save {
+  top: 8px;
+}
+#app:has(#panel:not([hidden])) #bug-capture-feedback {
+  top: 42px;
+}

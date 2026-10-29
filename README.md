@@ -116,6 +116,15 @@ silently changing ports. Stop your previous server or use, for example,
 asset roots also produce a concise diagnostic. Ctrl+C closes the HTTP server and
 development HMR connections cleanly.
 
+Every playtest automatically keeps a rolling **three-minute bug capture**.
+Use **Save bug capture** in the upper-right corner to download a `.c2bug` file,
+including from a browser started manually. Pauses preserve history. The recorder
+has a **512 MiB budget**, including reserved download headroom; storage grows on
+demand and byte pressure can shorten the retained window. Captures contain
+physics states, contact/damage evidence and timing, not a guaranteed full-game
+replay. Reloading the page clears unsaved history. See [capture contents,
+inspection commands and limits](docs/bug-captures.md).
+
 The race menu uses image tiles: choose a **location**, then an individual **race
 or mission**, and a **vehicle**. Locations use the original `LOCATION` names where
 available and group event variants by their authored map series. Stock and Advanced
