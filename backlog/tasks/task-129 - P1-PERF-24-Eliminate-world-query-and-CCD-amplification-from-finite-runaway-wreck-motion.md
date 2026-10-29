@@ -1,25 +1,25 @@
 ---
 id: TASK-129
 title: >-
-  [P1] PERF-24: Eliminate world-query and CCD amplification from finite runaway
+  [P3] PERF-24: Eliminate world-query and CCD amplification from finite runaway
   wreck motion
-status: next
+status: backlog
 assignee: []
 created_date: '2026-10-29 13:27'
-updated_date: '2026-10-29 15:20'
+updated_date: '2026-10-29 17:26'
 labels:
-  - priority-1
   - PERF-24
   - performance
   - physics
   - runaway
+  - priority-3
 dependencies: []
 references:
   - docs/screwie-runaway-car-stall.md
   - docs/timber-runaway-props.md
   - docs/c2-world-face-cache-re.md
-priority: high
-ordinal: 1130
+priority: medium
+ordinal: 3103
 ---
 
 ## Description
@@ -56,4 +56,6 @@ TDD correction implemented against immutable red checkpoint f76c807: 14 reviewed
 AC2 remains deliberately unchecked: the procedural causal mechanism is fixed, but the historical FAIR first event is not replayed and arbitrary pre-existing extreme velocity is not yet guaranteed cheap. Do not equate green numerical regressions with closing the broader workload/lifecycle ticket.
 
 PERF-24 causal correction checkpoint is landed; remaining capture/lifecycle hardening is inactive while user selects the distinct PERF-25 anchored-scenery retry diagnosis. Return to next to keep WIP representative of actual active work.
+
+User deferred remaining work until the extreme-motion stall occurs again. Medium priority (P3), backlog. The reproduced energy-source correction stays implemented; do not resume speculative first-event capture or lifecycle hardening without a new concrete occurrence or explicit selection.
 <!-- SECTION:NOTES:END -->

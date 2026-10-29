@@ -1,5 +1,10 @@
 # PERF-24 regression contract
 
+Current disposition: the demonstrated energy-source fix remains implemented.
+The user deferred remaining capture and extreme-motion workload/lifecycle work
+to P3 (medium), `backlog`, until the problem occurs again or is explicitly
+selected. Acceptance remains open; this is deferral rather than completion.
+
 The user requested failing tests first, followed by engine changes without
 changing the tests. The root reviewed the procedural fixtures and controls
 before freezing these files on 2026-10-29, against engine checkpoint `2b2c2bc`.
