@@ -66,7 +66,7 @@ Reviewed before any engine changes on2026-10-29:
 
 ```text
 cc1ffa7f966e6f25b740eafcbfac0f1b8911c9945048ed353926ed5e8d1acfbd  tests/world-joint-phase-admission.test.mjs
-7165b4f23ba448a565ce52867ab395a1630b2fb514d2952337b47c42039724e2  tests/support/world-joint-phase-fixture.mjs
+d2c94993589d45bf05516ad12ff0d89ca3844f0cdd79fa006a84d53d6bcc3bcc  tests/support/world-joint-phase-fixture.mjs
 3946da3453cac66b055dac83c8ff099659a57a5af0ec803e59ccabf3795cb825  tests/run.mjs
 ```
 
@@ -87,3 +87,16 @@ Tests/fixture/runner are frozen for this correction. Existing PERF-24 regression
 assertions and fixture remain unchanged; the runner only adds this new suite.
 PERF-25 completion still requires a real-scene workload check: correcting phase
 progress alone is not proof that sustained repeated work has disappeared.
+
+### Test-setup correction before the replacement red checkpoint
+
+The first checkpoint `6151d4b` contained an invalid free-body control: passing
+`jointType: none` failed to remove `createNonCarBody`'s default WORLD joint.
+That control was physically indistinguishable from the attached case. The root
+caught it during the first candidate run and did not add an engine exception to
+satisfy it. The engine was restored byte-for-byte to the unchanged baseline,
+then only the fixture setup was corrected to clear that joint and attachment.
+No assertion or expected value changed. Baseline again gives six passes/eight
+expected failures. The assertion file and runner hashes are unchanged; the
+fixture hash above supersedes `7165b4f2...`. This correction is explicit rather
+than claiming that the first fixture was valid or silently weakening a test.

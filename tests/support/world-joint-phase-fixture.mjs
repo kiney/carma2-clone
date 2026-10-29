@@ -144,6 +144,12 @@ export function worldJointFixture({
       v(0, 1),
       1,
     );
+  if (jointType === "none") {
+    // createNonCarBody supplies the ordinary authored WORLD joint by default.
+    // A genuinely free-body control must explicitly remove that attachment.
+    body.joint = undefined;
+    body.attached = false;
+  }
   const simulation = new VehicleSimulation(new WorldCollision(scene), scene);
   simulation.addNonCar(body);
   if (!simulation.admitNonCar(body, { wake: true, resetVelocity: false }))
