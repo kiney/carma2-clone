@@ -39,6 +39,14 @@ Tasks, evidence and priorities are maintained with [Backlog.md](backlog/README.m
 
 The deferred P5 PERF-01 umbrella retains frame-time findings after the concrete performance tickets were completed. [Scene-hierarchy preparation](docs/render-hierarchy-performance.md) avoids duplicate sky/main traversal and unseen pedestrian subtree updates. [Physics hot-path optimization](docs/physics-performance.md) now evaluates SAT axes lazily and reuses per-invocation bounds/depths while preserving numerical collision results. [Spatial body-pair discovery and shared phase geometry](docs/body-pair-performance.md) remove global pair scans and repeated transforms while preserving crash results. [Retained native MODEL bounds](docs/model-bounds-performance.md) avoid repeated raw-vertex scans for unchanged resources. [World synchronization](docs/world-sync-performance.md) retains unchanged collision geometry and prepares only query-selected native actors while preserving callback snapshots. Short hardware comparisons show lower CPU cost, with workload and cold-frame limitations documented; remaining spikes still need investigation. Resolution policy remains open. [PERF-23](docs/perf23-render-state.md) stabilizes sky/main light state to remove redundant material-program selection while preserving the extended view and pixel output. [Extended visual visibility](docs/visual-visibility.md) now presents landscape and opponents at four times authored Yon, and pedestrians at four times their original process distance, without widening native simulation activation.
 
+[PERF-25](docs/perf25-world-joint-phase.md) removes a permanent anchored-scenery
+contact cycle: the extra browser guard now permits movement against exactly
+qualified native OLD contacts. Original Fridge Racer cones advance, release and
+settle normally; new obstacles retain protection. The bounded original-level
+replay drops from 2,400 responses to 318 over 40 ticks, without changing impulse
+coefficients, retry limits or sleep thresholds. Other performance gaps remain
+separately tracked.
+
 [PHY-12](docs/guard-coupling-fix.md) corrects a trajectory-guard defect where a
 nearby blocked prop could freeze a collision-free airborne car. Actual contact
 and attachment constraints remain guarded; the native impulse/damage formulas

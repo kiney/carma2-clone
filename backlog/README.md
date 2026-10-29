@@ -4,7 +4,7 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-29)
 
-P1 PERF-24 / TASK-129 is in `wip`: a subsequent live Screwie report
+P1 PERF-24 / TASK-129 is in `next`: a subsequent live Screwie report
 captures real multi-second physics updates from runaway FAIR/bumper motion,
 separate from the earlier browser RAF-delivery episode. Preserve the initiating
 impulse uncertainty; see [recorded workload and limits](../docs/screwie-runaway-car-stall.md).
@@ -16,10 +16,13 @@ stage. The reproduced contact/solver energy source is corrected in `bb61b30`
 against frozen red/green tests; durable first-event capture and extreme-motion
 workload/lifecycle acceptance remain open.
 
-P1 PERF-25 / TASK-130 is first in `next`: the retained Fridge Racer scene
-reveals two anchored cones consuming thirty contact/joint responses each on
-every tick, independently of runaway energy. See
-[measurements and separate browser cadence](../docs/fridge-racer-frame-time.md).
+P1 PERF-25 / TASK-130 is `done`: the additional browser guard froze movement
+against native-qualified OLD faces, keeping two anchored cones in a permanent
+contact cycle. Frozen regressions and original Fridge Racer replay verify
+normal phase progress, release and settling. See
+[correction and measurement limits](../docs/perf25-world-joint-phase.md).
+P3 PHY-24 / TASK-131 records separate released-actor initialization and source
+snap callback chronology questions in `backlog`.
 
 P1 PHY-22 / TASK-127 fixes the newly reproduced ignore-world lift cache omission
 that globally blocked scenery reclaim. Its original Stock/Advanced and hardware
@@ -32,12 +35,12 @@ installed in the preserved user tab; see [evidence and boundaries](../docs/c2-ig
 The user selected the following implementation order. ANI-01/PED-04 complete the
 first animation/resource stage. The four P2 pedestrian tickets follow in `next`.
 Existing numeric priorities remain unchanged: selection order is explicit and
-must not be inferred from priority alone. PERF-24 occupies one WIP slot, below the limit3.
+must not be inferred from priority alone. No ticket currently occupies a WIP slot.
 
 | Stage | Ticket                                | Status | Priority | Purpose                                                                                                     |
 | ----- | ------------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------- |
-| 0a    | PERF-24 / TASK-129                    | wip    | P1       | Eliminate the measured runaway wreck world-query/CCD amplification and retain first-event diagnostics. |
-| 0b    | PERF-25 / TASK-130                    | next   | P1       | Resolve recurring anchored-scenery contact retries in Fridge Racer without hiding them through forced sleep. |
+| 0a    | PERF-24 / TASK-129                    | next   | P1       | Eliminate the measured runaway wreck world-query/CCD amplification and retain first-event diagnostics. |
+| 0b    | PERF-25 / TASK-130                    | done   | P1       | Resolve recurring anchored-scenery contact retries in Fridge Racer without hiding them through forced sleep. |
 | 0c    | PHY-23 / TASK-128                     | next   | P1       | Attribute the reported fatal sign impact using retained committed-contact and component-change evidence. |
 | 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices. |
 | 2     | PED-06 / TASK-96                      | next   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                       |

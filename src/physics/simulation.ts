@@ -1,6 +1,10 @@
 import { HierarchyPredictionCache } from "./cached-hierarchy-motion";
 import { freeWorldEnvelope } from "./free-world-envelope";
 import {
+  captureWorldJointOldContacts,
+  isFixedNonCarWorldJoint,
+} from "./world-joint-phase";
+import {
   admitSampledWorldContacts,
   mergeWorldContacts,
 } from "./world-contact-admission";
@@ -1144,6 +1148,22 @@ export class VehicleSimulation {
   private detachmentScheduling = createDetachmentSchedulingContext();
   private admittingInitialCars = false;
   private contactSurfaces = new Map<RigidBody, Surface[]>();
+  private contactSurfaceRevisions = new WeakMap<
+    RigidBody,
+    object | undefined
+  >();
+  private contactSurfaceInputs = new WeakMap<RigidBody, object>();
+  private worldJointGuardVersions = new WeakMap<
+    RigidBody,
+    {
+      nativeInput?: object;
+      revision: object;
+      attached: boolean;
+      marker: string;
+      kind?: string;
+      token: object;
+    }
+  >();
   private bodyBroadphase = new BodyBroadphase();
   private bodyTrajectoryGuard = new BodyTrajectoryGuard();
   private hierarchyMotion?: Omit<HierarchyMotionPhase, "commit">;
@@ -3859,6 +3879,11 @@ export class VehicleSimulation {
       profile.eligibleFaces = nearby.length;
     }
     surfaces.push(...nearby);
+    if (isFixedNonCarWorldJoint(body))
+      this.contactSurfaceRevisions.set(
+        body,
+        this.world.getOwnerlessGuardRevision?.(),
+      );
     if (isNativePedBody(body)) {
       body.worldFaceNormals = nearby.map((surface) => surface.normal.clone());
       body.firstWorldFaceNormal = body.worldFaceNormals[0]?.clone() ?? null;
@@ -4014,6 +4039,10 @@ export class VehicleSimulation {
         )
       : emit();
     carBody.worldOverlapDetected ||= result.overlap;
+    // The producer's result identity certifies its complete native inventory
+    // and geometry inputs. Do not substitute array identity: source wrappers
+    // may be recreated while the exact native feature result is reused.
+    this.contactSurfaceInputs.set(body, result);
     return reuseFeatures ? copyContactRows(result.contacts) : result.contacts;
   }
 
@@ -4038,13 +4067,45 @@ export class VehicleSimulation {
     const working = this.correctionWorkingSet;
     // Polygon guards discard every owner-tagged surface. Moving actors do
     // not invalidate the remaining static query; participation/material edits do.
-    const revision = !isNativeSphereBody(body)
+    let revision = !isNativeSphereBody(body)
       ? this.world.getOwnerlessGuardRevision?.()
       : this.movingWorld.length
         ? undefined
         : this.world.getStaticGuardRevision?.();
     if (!working || revision === undefined)
       return this.computeAdvanceWorldContacts(body, refine);
+    if (
+      "kind" in body &&
+      body.kind === "noncar" &&
+      body.joint?.type === "ball"
+    ) {
+      const nativeInput = this.contactSurfaceInputs.get(body);
+      const marker = body.actor.name[3];
+      const kind = body.mechanics.worldJoint?.kind;
+      let version = this.worldJointGuardVersions.get(body);
+      if (
+        !version ||
+        version.nativeInput !== nativeInput ||
+        version.revision !== revision ||
+        version.attached !== body.attached ||
+        version.marker !== marker ||
+        version.kind !== kind
+      ) {
+        version = {
+          nativeInput,
+          revision,
+          attached: body.attached,
+          marker,
+          kind,
+          token: {},
+        };
+        this.worldJointGuardVersions.set(body, version);
+      }
+      // Eligibility and nearest-face inventory are additional guard inputs.
+      // A cached admitted result must not survive release metadata or a fresh
+      // source collection merely because pose and world geometry stayed equal.
+      revision = version.token;
+    }
     const result = working.world(
       body,
       working.capture(body),
@@ -4170,6 +4231,25 @@ export class VehicleSimulation {
     let old = body.hulls.map((hull) =>
       transformHull(hull, basePosition, baseOrientation),
     );
+    // This phase may use only a current native face inventory. Native and
+    // spatial-query surfaces have different wrappers but retain source face IDs.
+    // Never enlarge this OLD admission from later angular samples.
+    const revision = isFixedNonCarWorldJoint(body)
+      ? this.world.getOwnerlessGuardRevision?.()
+      : undefined;
+    const admittedOldFace =
+      revision !== undefined &&
+      revision === this.contactSurfaceRevisions.get(body)
+        ? captureWorldJointOldContacts(
+            body,
+            old,
+            this.recoverySurfaces(
+              (this.contactSurfaces.get(body) ?? []).filter(
+                (surface) => !surface.owner && surface.enabled !== false,
+              ),
+            ),
+          )
+        : undefined;
     let earliest = 1;
     const hits: HullContact[] = [];
     for (let sample = 1; sample <= samples; sample++) {
@@ -4198,7 +4278,9 @@ export class VehicleSimulation {
                 envelope,
               )
             : this.world.querySurfaces(bounds.min, bounds.max)
-        ).filter((surface) => !surface.owner);
+        ).filter(
+          (surface) => !surface.owner && !admittedOldFace?.(shape, surface),
+        );
         if (this.world.faceDiagnostics) {
           this.world.faceDiagnostics.guardSweepFaces =
             (this.world.faceDiagnostics.guardSweepFaces ?? 0) + nearby.length;

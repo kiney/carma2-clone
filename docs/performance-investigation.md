@@ -1,5 +1,12 @@
 # PERF-01: frame-time investigation
 
+2026-10-29 follow-up: [PERF-25 fixed WORLD scenery phases](perf25-world-joint-phase.md)
+removes the independently reproduced Fridge Racer cone cycle. Original-level
+replay drops from 2,400 responses to 318 over 40 ticks, with normal release and
+settling. PERF-24 remains in `next` for its separate first-event capture and
+extreme-motion workload/lifecycle acceptance; the demonstrated energy source
+was already corrected in `bb61b30`. Window-manager/focus cadence is separate.
+
 2026-10-29 subsequent Screwie report: [runaway wreck CPU capture](screwie-runaway-car-stall.md)
 establishes a separate genuine physics stall: up to 1.45s per tick and 5.84s per
 five-tick update, concentrated in FAIR/bumper world contact collection and

@@ -1,5 +1,13 @@
 # Fridge Racer frame-time investigation (2026-10-29)
 
+Follow-up: **PERF-25 is corrected and browser-verified.** The additional angular
+guard froze native-qualified WORLD-joint movement, preserving a biased contact
+cycle. In an original-level replay of the two captured cones, 40 ticks now
+produce 318 responses instead of 2,400; both later release and settle through
+normal mechanics. See [the causal correction and measurement limits](perf25-world-joint-phase.md).
+The earlier captures below describe the unchanged baseline. Window-manager/focus
+cadence is separate and was not altered by this fix.
+
 ## Findings
 
 The user's retained Advanced Fridge Racer scene on `bb61b30` exhibits two

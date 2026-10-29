@@ -666,3 +666,16 @@ response retries and geometry-change rejection. The angular guard's temporal
 admission is a browser adaptation, not source C2 behavior. See
 [root-cause evidence and deviations](runaway-contact-root-cause.md) and
 [the frozen red/green regression contract](perf24-tdd.md).
+
+## PERF-25 fixed WORLD scenery phase correction (2026-10-29)
+
+Verified HW `0x4bac72` fresh contact collection, `0x4b8890` WORLD force rows,
+`0x4b8d80` anchor positioning, `0x4bbe7a` full 40 ms reintegration and `0x420380`
+snap callback distinguish native contact response from the browser's extra
+trajectory guard. A fixed COM and alternating biased support contacts can retain
+spin while our guard freezes the OLD pose indefinitely. Native-qualified finite
+OLD faces now permit ordinary WORLD ball-joint phase progress; new faces and
+released/movable/unsupported bodies remain guarded. This is a native-informed
+browser adaptation, not a recovered original temporal guard. Two original
+Fridge Racer cones fall from 2,400 responses over 40 ticks to 318, then release
+and settle normally. See [formulas, frozen tests and browser evidence](perf25-world-joint-phase.md).

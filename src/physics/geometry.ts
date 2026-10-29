@@ -211,6 +211,7 @@ export function recoverWorldContacts(
   predicted: CollisionHull,
   surfaces: readonly WorldRecoverySurface[],
   centerOfMassWorld: Vector3,
+  onDetectedSurface?: (surface: WorldRecoverySurface) => void,
 ): WorldRecoveryResult {
   const result: WorldRecoveryResult = {
     contacts: [],
@@ -256,6 +257,10 @@ export function recoverWorldContacts(
     }
     result.suppressedVertices.add(suppressed);
     result.overlapDetected = true;
+    // Detection owns OLD face selection even when candidate drift emits no
+    // response row. Consumers must not recover faces independently and thereby
+    // admit a farther face that lost the native nearest-hit selection.
+    onDetectedSurface?.(selected.surface);
     const localPoint = selected.point
       .clone()
       .sub(old.position)

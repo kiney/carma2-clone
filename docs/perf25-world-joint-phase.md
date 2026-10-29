@@ -85,8 +85,8 @@ It does not force sleep or prescribe a fabricated low retry limit.
 
 Tests/fixture/runner are frozen for this correction. Existing PERF-24 regression
 assertions and fixture remain unchanged; the runner only adds this new suite.
-PERF-25 completion still requires a real-scene workload check: correcting phase
-progress alone is not proof that sustained repeated work has disappeared.
+The real-scene workload check below independently verifies that sustained
+repeated work disappears; green phase tests alone would not establish that.
 
 ### Test-setup correction before the replacement red checkpoint
 
@@ -100,3 +100,73 @@ No assertion or expected value changed. Baseline again gives six passes/eight
 expected failures. The assertion file and runner hashes are unchanged; the
 fixture hash above supersedes `7165b4f2...`. This correction is explicit rather
 than claiming that the first fixture was valid or silently weakening a test.
+
+## Implemented correction and cache ownership
+
+`world-joint-phase.ts` captures native OLD detection provenance for ordinary
+fixed WORLD NONCAR ball joints. The additional angular sweep omits only those
+exact qualified finite faces for that hull and captured phase. Native contact
+emission, impulses, friction, thirty-response limit, authored bend/release and
+quiet thresholds remain unchanged. A released actor marker also disqualifies
+stale attachment metadata. The next clear phase rearms normal protection.
+
+The working-set guard key includes the native feature producer's certified
+result identity, static-world revision, attachment state, actor marker and
+authored joint kind. Pose/joint geometry remains in the existing snapshot key.
+Thus native face-inventory or release changes invalidate admission even if the
+pose happens to stay equal. Unknown revision providers retain the guarded path.
+Independent review found no production-path cache blocker.
+
+## Original-scene browser comparison
+
+Short serial MCP runs used separate production tabs, preserving the user's
+original tab and damaged scene. Each loaded original Advanced Fridge Racer with
+69mach1, admitted the actual retained actors `&44C0112` and `&44C0126`, then
+restored their captured state, properties, flags and authored anchor. Geometry,
+world collection and all responses were the real browser engine. No replacement
+floor, forced sleep, modified impulse or guard wrapper was used.
+
+| Observation | Baseline `index-DZzIaBW9.js` | Fixed `index-C4e27w3i.js` |
+| --- | --- | --- |
+| Cone responses in first 40 ticks | 2,400 | 318 (including 9 ordinary responses after release) |
+| Committed movement | Both remain at the captured poses | Both advance and cross authored release thresholds |
+| Tick CPU median, first 40 ticks | 48.65 ms | 9.60 ms |
+| Tick CPU median, ticks 11–40 | 44.60 ms | 9.25 ms |
+| Fixed state after 80 ticks | Not run further | Both released; zero linear/angular velocities; no forced sleep |
+
+The fixed first cone stops its repeated response sequence at tick 10; the second
+after tick 1. Subsequent free-body floor contacts remain active. Counts identify
+the removed workload more reliably than timings: fresh-scene opponent rosters,
+JIT warm-up, diagnostic overhead and shared workstation activity make CPU/FPS
+measurements noisy. This is a replay of the **two captured bodies in their real
+level**, not restoration of the user's complete damaged race or a universal
+fivefold frame-rate claim.
+
+A subsequent 2.8-second normal graphical run recorded 39 real physics ticks:
+median 12 ms, p95 36.8 ms, max 47 ms; neither cone generated a response. Frame
+interval median 33.3 ms, p95 50.1 ms, max 116.7 ms. Hardware was ANGLE AMD Radeon
+(radeonsi gfx1150 / LLVM 19.1.7), OpenGL 4.6, buffer 2073×1438, DPR about 1.48,
+4×MSAA. WebGL error was zero; no warning/error console messages occurred. An
+earlier candidate graphical capture had no ticks because the preceding manual
+steps had advanced physics ahead of graphical game time; it is excluded from
+performance conclusions. Browser focus/cadence remains separate.
+
+Original 69mach1/Skyline controlled collisions produced seven accepted pair
+impact records. A second collision raised 69mach1 engine damage to 56 and
+advanced deformation revision; normal repair cleared all twelve components.
+Both cars retained finite states. The focused unchanged PERF-24 regressions pass
+14/14, new frozen regressions 14/14, and working-set/native-contact cache tests
+pass. Production build passes. The full candidate suite recorded 3,454 tests:
+3,448 pass, 5 skip and one intermittent unrelated HMR-shutdown timeout; the
+focused server suite subsequently passes 8/8 with loopback socket access.
+
+## Remaining fidelity questions
+
+The source calls TestNonCarSnapOff from the per-response post-movement callback;
+the browser currently checks bending after committed movement. Separately,
+`createNonCarBody` initially derives attachment from mechanics even for an
+authored `!` released marker, although mass selection does inspect the marker.
+These need a focused lifecycle audit before claiming exact source callback and
+load-mode parity. Neither is silently changed as part of this phase correction.
+The historical FAIR first-event replay and extreme-motion lifecycle hardening
+remain PERF-24, not acceptance claims of PERF-25.
