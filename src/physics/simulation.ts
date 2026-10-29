@@ -632,6 +632,8 @@ export class VehicleSimulation {
   /** Retained ACT catalog, deliberately larger than the active PHIL roster. */
   noncars: NonCarBody[] = [];
   readonly nonCarSlots = new NativeNonCarSlots<NonCarBody>();
+  /** Race-scoped counts, not an unbounded per-query log. */
+  readonly nonCarAdmissionFailures = { capacity: 0, missingMechanics: 0 };
   private readonly noncarReclaim = sharedNoncarReclaim;
   private readonly noncarsByActor = new Map<Object3D, NonCarBody>();
   private readonly admittedNoncars = new Set<NonCarBody>();
@@ -1525,8 +1527,9 @@ export class VehicleSimulation {
       );
   }
   /** Installed41ff40 reserves a type slot then a global extra before PHIL.
-   * A header failure rolls back to static coverage: deliberate browser safety
-   * adaptation of the original unchecked PHIL return, not native sticky-x. */
+   * Browser resource backpressure is retryable: full slots/headers retain
+   * static coverage without permanently disabling otherwise valid scenery.
+   * Missing mechanics still follows the separate native sticky-x path. */
   admitNonCar(
     body: NonCarBody,
     options: {
@@ -1553,12 +1556,10 @@ export class VehicleSimulation {
       options.slot,
     );
     if (!slot) {
-      // Native physical capacity failure permanently disables numeric pulls;
-      // the original MODEL continues emitting ordinary static faces.
-      body.actor.name =
-        body.actor.name.slice(0, 1) + "x" + body.actor.name.slice(2);
-      const native = this.world.getNonCarNativeActor?.(body.actor);
-      if (native) native.name = body.actor.name;
+      // Installed420007 writes sticky 'x' here. Do not let a transient browser
+      // allocation failure poison a retained ACT for the rest of the race.
+      // Reclaim invalidates face caches, so a later local query can retry.
+      this.nonCarAdmissionFailures.capacity++;
       return false;
     }
     const velocity = body.state.velocity.clone(),
@@ -1650,6 +1651,8 @@ export class VehicleSimulation {
       physicalSlots: this.nonCarSlots.count,
       dedicatedSlots: this.nonCarSlots.dedicatedCount,
       extraSlots: this.nonCarSlots.extraCount,
+      capacityDeferrals: this.nonCarAdmissionFailures.capacity,
+      missingMechanics: this.nonCarAdmissionFailures.missingMechanics,
       phil: this.phil.registeredBodies.length,
       supportedQuiet: active.filter((b) => this.noncarQuiet.has(b)).length,
       sleeping: active.filter(
@@ -2077,8 +2080,9 @@ export class VehicleSimulation {
     if (!this.physicsQueryDepth) return null;
     const body = this.noncarsByActor.get(actor);
     if (!body) {
-      // Installed420007: missing mechanics has the same sticky numeric-pull
-      // failure as exhausted physical slots. Its MODEL remains static.
+      // Installed420007 permanently disables actors with missing mechanics.
+      // This is distinct from retryable host capacity; MODEL stays static.
+      this.nonCarAdmissionFailures.missingMechanics++;
       this.world.invalidateNativePreparation?.("pose");
       actor.name = actor.name.slice(0, 1) + "x" + actor.name.slice(2);
       const native = this.world.getNonCarNativeActor?.(actor);

@@ -1,10 +1,10 @@
 ---
 id: TASK-126
 title: '[P1] PHY-21: Diagnose and fix movable scenery becoming permanently static'
-status: next
+status: done
 assignee: []
 created_date: '2026-10-29 08:33'
-updated_date: '2026-10-29 08:34'
+updated_date: '2026-10-29 08:59'
 labels:
   - priority-1
   - PHY-21
@@ -31,9 +31,9 @@ A separate fresh original Newcity1 production Chromium case starts with zero x m
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Capture the first actual sticky-x transition and attribute it to missing body identity, physical slot saturation or another verified source; distinguish intended native capacity failure from a browser defect.
-- [ ] #2 The same original sign and other stock props respond to genuine car contacts after the corrected scenario; test normal admission, quiet/reclaim/repull and real capacity exhaustion.
-- [ ] #3 Preserve source-bounded participation/performance, unchanged crash coefficients, original-data read-only policy and the existing live scene.
+- [x] #1 Capture the first actual sticky-x transition and attribute it to missing body identity, physical slot saturation or another verified source; distinguish intended native capacity failure from a browser defect.
+- [x] #2 The same original sign and other stock props respond to genuine car contacts after the corrected scenario; test normal admission, quiet/reclaim/repull and real capacity exhaustion.
+- [x] #3 Preserve source-bounded participation/performance, unchanged crash coefficients, original-data read-only policy and the existing live scene.
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -42,4 +42,16 @@ A separate fresh original Newcity1 production Chromium case starts with zero x m
 Fresh isolated production Chromium verified the exact reported actor &20s0078 / original &20s0078.ACT: a real W-key approach from [45.278461,-0.823819,52] with initial velocity [0,0,-3] moves it from z=50.506348 to z=44.798204, rotates it and leaves velocity z=-4.36746 after 2666 ms. One dedicated index-20 slot/PHIL owner, zero x transitions. Short test only; no sustained benchmark. Private evidence /tmp/stop-sign-diagnosis.json.
 
 Live page5 remains paused at gameTime 251791 with identical player pose. Bounded old-runtime instrumentation is installed as window.__carmaNoncarPullAudit: wraps original pullWorldActor/admitNonCar without altering return values or state, counts attempts and peak physical occupancy, retains at most 64 new failure records with missing-body versus admission-capacity attribution. Existing sticky-x markers were deliberately not reset. Read this audit on the next report; its absence after reload is expected. The historical cause of the already marked 549 actors remains unknown.
+
+Implemented deliberate browser capacity backpressure instead of installed permanent x on allocation exhaustion. The dedicated-per-type/40-extra pool and 100-header PHIL table are unchanged. Valid waiting ACTs retain numeric Three/native identities and static MODEL coverage; normal reclaim invalidates caches and allows ordinary local retry. Missing mechanics still has the separate permanent native failure. Added bounded race-scoped capacity/missing-mechanics counters.
+
+The exact original stop-sign browser regression fails on unchanged 59769de at the first controlled capacity failure: 42 quiet original props, 40 extras full, sign renamed &x0s0078. Candidate Stock/Advanced cases retain the name, preserve 28 actor-specific static faces, release capacity via production reclaim effects, and ordinary W-key driving then activates/displaces/tips the sign (observed rotations 1.5567/0.5830 radians). No post-release manual target admission. Four existing original Newcity/Carrier admission/quiet/reclaim/repull browser cases also pass; no console/request/GL failures, SwiftShader 1280x800 correctness only.
+
+13 participation tests include actual once-per-second reclaim with no manual cache invalidation and no retry on cache hits. Full suite: 3372 tests, 3361 passes, 5 optional captured-fixture skips, 6 sandbox socket EPERM failures; all 8 server-startup tests pass when rerun with socket access, resolving those 6 environment failures. Build passes. Historical query that first produced the users 549 markers remains unknown; this fixes the reproduced permanent-failure class, not a claim that oversized speculative queries are eliminated.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Valid scenery no longer becomes permanently unmovable after a transient full physical pool. Normal local collection retries after capacity is reclaimed; missing mechanics and finite participation remain explicit. Exact original sign regressions reproduce old failure and verify recovered motion/tipping in Stock and Advanced. User scene is preserved for one-time validated legacy-state repair; original historical saturation trigger remains unproven.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -24,11 +24,12 @@ and ordinary contact checks, while far actors remain presentation-only.
 [Evidence and regression checks](../docs/pedestrian-nearby-admission.md) retain
 the actual reported Newcity1 actor and source camera-jump hook.
 
-P1 PHY-21 / TASK-126 is now first in `next`: diagnose movable scenery becoming
-permanently static. The user's stop sign and 549/606 retained props have sticky
-failed-pull markers, despite currently empty physical slots. A fresh contact
-with the exact original sign works; the earlier failure cause remains open.
-QUA-12 / TASK-124 links its related contact-fixture investigation to this issue.
+P1 PHY-21 / TASK-126 is complete: physical capacity exhaustion now defers valid
+scenery instead of permanently disabling it. Stock/Advanced original stop-sign
+regressions reproduce the old failure and verify normal contact-driven motion
+and tipping after capacity release. The query that caused the earlier 549 failed
+actors is still unknown; see [evidence and adaptation](../docs/noncar-capacity-recovery.md).
+QUA-12 / TASK-124 retains its separate contact/effect-fixture scope.
 
 ANI-01 living presentation is integrated and browser-validated, including the
 CitySwat correction. It remains open for native death/morph and specialized

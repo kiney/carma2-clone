@@ -40,6 +40,11 @@ and [reclaim](c2-noncar-slot-reclaim-re.md). Relevant verified installed address
   once per outer frame. Its shared BSS clock advances only with active NONCARs;
   one pass at >=1000ms discards excess, without race-load/dispose reset.
 
+PHY-21 adapts physical capacity exhaustion to retryable static coverage, instead
+of permanently writing `x` to valid scenery. Missing mechanics retains the source
+permanent failure. Both pools remain bounded; see
+[the live failure and retry tests](noncar-capacity-recovery.md).
+
 PHIL's separate hundred-header table is not the forty-extra physical pool.
 The original pull does not check header-allocation failure. The browser
 **deliberately** rolls back physical occupancy and preserves retryable static

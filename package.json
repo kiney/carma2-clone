@@ -55,6 +55,7 @@
     "test:render-state": "npm run build && node tests/browser-render-state.mjs",
     "test:render-matrices": "npm run build && node tests/browser-render-matrices.mjs",
     "test:render-presentation": "npm run build && node tests/browser-render-presentation.mjs",
+    "test:noncar-capacity": "npm run build && node tests/browser-noncar-capacity.mjs",
     "test:noncar-participation": "npm run build && node tests/browser-noncar-participation.mjs",
     "test:hierarchy-quiet": "npm run build && node tests/browser-hierarchy-quiet.mjs",
     "test:wam-binding": "npm run build && node tests/browser-wam-binding.mjs",

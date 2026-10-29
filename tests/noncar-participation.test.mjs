@@ -239,24 +239,80 @@ test("collection-time pull replaces static faces with an immediate quiet candida
   assert.ok(impacts[1].normalImpulse > 0);
 });
 
-test("physical capacity failure retains static MODEL and sticky-x survives a freed slot", () => {
+test("physical capacity defers a valid ACT and retries after a slot becomes free", () => {
   const f = fixture(),
     body = f.bodies[0],
     owners = Array.from({ length: 41 }, () => ({}));
   for (const owner of owners)
     assert.ok(f.simulation.nonCarSlots.claim(owner, 7));
   assert.equal(physicsCollection(f).length, 12);
-  assert.equal(body.actor.name[1], "x");
-  assert.equal(f.state.actors[1].name[1], "x");
+  assert.equal(body.actor.name[1], "0");
+  assert.equal(f.state.actors[1].name[1], "0");
   assert.equal(f.simulation.phil.count, 0);
   assert.equal(f.simulation.isNonCarPhysicsActive(body), false);
-  f.simulation.nonCarSlots.release(owners[0]);
-  assert.equal(physicsCollection(f).length, 12);
-  assert.equal(f.simulation.admitNonCar(body, { wake: true }), false);
+  assert.equal(f.simulation.nonCarAdmissionFailures.capacity, 1);
+  assert.equal(f.simulation.nonCarSlots.count, 41);
   assert.equal(
     f.world.querySurfaces(f.query.bounds.min, f.query.bounds.max).length,
     12,
+    "deferred ACT still supplies static collision faces",
   );
+  f.simulation.nonCarSlots.release(owners[0]);
+  assert.deepEqual(physicsCollection(f), []);
+  assert.equal(f.simulation.isNonCarPhysicsActive(body), true);
+  assert.equal(f.simulation.nonCarSlots.count, 41);
+  assert.equal(f.simulation.phil.count, 1);
+  assert.equal(
+    f.world.querySurfaces(f.query.bounds.min, f.query.bounds.max).length,
+    0,
+    "successful retry replaces static faces instead of duplicating them",
+  );
+});
+
+test("missing mechanics keeps the native permanent static failure separately from capacity", () => {
+  const f = fixture();
+  f.simulation.noncarsByActor.delete(f.bodies[0].actor);
+  assert.equal(physicsCollection(f).length, 12);
+  assert.equal(f.bodies[0].actor.name[1], "x");
+  assert.equal(f.state.actors[1].name[1], "x");
+  assert.equal(f.simulation.nonCarAdmissionFailures.missingMechanics, 1);
+  assert.equal(f.simulation.nonCarAdmissionFailures.capacity, 0);
+  assert.equal(f.simulation.nonCarSlots.count, 0);
+});
+
+test("ordinary reclaim invalidates a waiting ACT cache and the next local collection retries", () => {
+  const f = fixture(42),
+    waiting = f.bodies.at(-1),
+    observer = externalBody();
+  observer.state.position.copy(waiting.state.position);
+  for (const body of f.bodies.slice(0, 41))
+    assert.equal(f.simulation.admitNonCar(body), true);
+  const collect = () => {
+    f.simulation.physicsQueryDepth++;
+    try {
+      return f.simulation.facesNearBody(observer, waiting.hulls);
+    } finally {
+      f.simulation.physicsQueryDepth--;
+    }
+  };
+  assert.equal(collect().length, 12);
+  const cache = f.simulation.worldFaceStates.get(observer);
+  assert.equal(f.simulation.worldFaceCache.valid(cache), true);
+  assert.equal(f.simulation.nonCarSlots.count, 41);
+  assert.equal(f.simulation.isNonCarPhysicsActive(waiting), false);
+  const attempts = f.simulation.nonCarAdmissionFailures.capacity;
+  assert.equal(collect().length, 12);
+  assert.equal(
+    f.simulation.nonCarAdmissionFailures.capacity,
+    attempts,
+    "a cache hit does not spin on a full pool",
+  );
+  f.simulation.finishNonCarReclaim(1000);
+  assert.equal(f.simulation.nonCarSlots.count, 0);
+  assert.equal(f.simulation.worldFaceCache.valid(cache), false);
+  assert.deepEqual(collect(), []);
+  assert.equal(f.simulation.isNonCarPhysicsActive(waiting), true);
+  assert.equal(f.simulation.nonCarSlots.count, 1);
 });
 
 test("PHIL header exhaustion rolls back ownership and retains retryable static ACT", () => {

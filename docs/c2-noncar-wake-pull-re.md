@@ -156,6 +156,12 @@ static and later automatic ActorBoxPick collections skip its numeric pull
 branch, even if physical slots become free. No automatic name-restoration
 writer was established. Do not silently retry such ACTs every frame.
 
+Browser exception (PHY-21): the installed sticky failure above remains native
+evidence. Production now preserves numeric ACT identity on physical capacity
+exhaustion so ordinary collection can retry after reclaim. Missing mechanics
+still follows the permanent source path. See
+[the explicit adaptation and regressions](noncar-capacity-recovery.md).
+
 ## Immediate registration and same-collection candidates
 
 While `FindObjectCollisions` queries its world faces, it publishes the
