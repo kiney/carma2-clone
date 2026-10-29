@@ -1,10 +1,10 @@
 ---
 id: TASK-97
 title: '[P2] PED-07: Connect native pedestrian grounding, fall and recovery ownership'
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-29 00:42'
 labels:
   - priority-2
   - PED-07

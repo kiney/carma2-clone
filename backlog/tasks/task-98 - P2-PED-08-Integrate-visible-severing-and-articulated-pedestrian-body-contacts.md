@@ -3,10 +3,10 @@ id: TASK-98
 title: >-
   [P2] PED-08: Integrate visible severing and articulated pedestrian body
   contacts
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-29 00:42'
 labels:
   - priority-2
   - PED-08

@@ -1,10 +1,10 @@
 ---
 id: TASK-99
 title: '[P2] PED-09: Bind native pedestrian contact causes, awards and effect outlets'
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-29 00:42'
 labels:
   - priority-2
   - PED-09

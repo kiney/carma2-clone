@@ -1,10 +1,10 @@
 ---
 id: TASK-62
 title: '[P3] ANI-01: Play original pedestrian BON/SKL animations and root frames'
-status: backlog
+status: wip
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-28 22:45'
+updated_date: '2026-10-29 00:42'
 labels:
   - priority-3
   - ANI-01
@@ -40,6 +40,12 @@ Scope clarification after PED-03 split: complete prepared BON/SKL/root/bone vert
 
 Related tasks: [TASK-96](task-96%20-%20P2-PED-06-Integrate-ordinary-population-identities-with-native-physical-lifecycle.md), [TASK-98](task-98%20-%20P2-PED-08-Integrate-visible-severing-and-articulated-pedestrian-body-contacts.md).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Selected 2026-10-29: joint first stage ANI-01/PED-04, then PED-06 -> PED-07 -> PED-08 -> PED-09. Preserve existing numeric priorities. Implement and validate in an isolated source/build so the user's paused production scene remains intact.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

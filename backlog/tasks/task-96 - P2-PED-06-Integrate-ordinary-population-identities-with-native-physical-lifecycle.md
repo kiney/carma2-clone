@@ -3,10 +3,10 @@ id: TASK-96
 title: >-
   [P2] PED-06: Integrate ordinary population identities with native physical
   lifecycle
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-29 00:42'
 labels:
   - priority-2
   - PED-06
