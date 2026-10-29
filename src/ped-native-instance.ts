@@ -316,6 +316,13 @@ function render(instance: NativePedInstance): void {
   }
   instance.group.updateMatrixWorld(true);
 }
+/** Publish retained native matrices after render acquisition, without BON,
+ * root advance, physical integration or random draws. */
+export function synchronizeNativePedRenderPose(
+  instance: NativePedInstance,
+): void {
+  render(instance);
+}
 function applyBonePose(
   instance: NativePedInstance,
   mode: 0 | 1 | 2 | 3,

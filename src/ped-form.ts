@@ -416,9 +416,18 @@ export function parsePedPersonalitySimpleBody(
     min: [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.min(p[2], q[2])],
     max: [Math.max(p[0], q[0]), Math.max(p[1], q[1]), Math.max(p[2], q[2])],
   };
-  const movement = defaultMovesText
-    ? parsePedPersonalityMoves(defaultMovesText, form)
-    : new Map<number, PedPersonalityMove>();
+  // ReadPersonality407359..407378 initializes every FORM move before either
+  // authored overlay: scale1 and floating. Native leaves the offset word
+  // unwritten; zero represents that unread field while the mode is floating.
+  const movement = new Map<number, PedPersonalityMove>(
+    form.moves.map((move) => [
+      move.id,
+      { scale: 1, groundingMode: -1, groundingOffset: 0 },
+    ]),
+  );
+  if (defaultMovesText)
+    for (const [id, move] of parsePedPersonalityMoves(defaultMovesText, form))
+      movement.set(id, move);
   for (const [id, move] of parsePedPersonalityMoves(text, form))
     movement.set(id, move);
   return {

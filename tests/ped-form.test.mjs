@@ -558,6 +558,68 @@ test("original humanoid and quadruped personalities provide independent remapped
   }
 });
 
+test("Stock and Advanced humanoid FORM moves retain initialized personality defaults before authored overlays", async (t) => {
+  for (const root of ["data", "adv_data"])
+    for (const person of ["Blokebl", "Bandsman"]) {
+      const archive = await original(`${root}/PEDS/PEEPS/${person}.TWT`, t);
+      if (!archive) return;
+      const entry = parseTwt(archive).entries.find(
+        (entry) => entry.name.toLowerCase() === `${person.toLowerCase()}.txt`,
+      );
+      assert.ok(entry);
+      const text = decodeText(
+        archive.subarray(entry.offset, entry.offset + entry.size),
+      );
+      const rows = text
+        .split(/\r?\n/)
+        .map((row) => row.split("//")[0].trim())
+        .filter(Boolean);
+      const formBytes = await original(`${root}/PEDS/FORMS/${rows[0]}.TXT`, t);
+      const defaultBytes = await original(
+        `${root}/PEDS/MOVES/${rows[1]}.TXT`,
+        t,
+      );
+      if (!formBytes || !defaultBytes) return;
+      const form = parsePedForm(decodeText(formBytes));
+      const remapBytes = await original(
+        `${root}/PEDS/REMAPS/${form.remapFilename}`,
+        t,
+      );
+      if (!remapBytes) return;
+      const defaults = decodeText(defaultBytes);
+      const authored = new Map([
+        ...parsePedPersonalityMoves(defaults, form),
+        ...parsePedPersonalityMoves(text, form),
+      ]);
+      const profile = parsePedPersonalitySimpleBody(
+        text,
+        form,
+        parsePedRemap(decodeText(remapBytes)),
+        defaults,
+      );
+      assert.equal(profile.movement.size, form.moves.length);
+      for (const id of [4, 5, 6]) {
+        assert.ok(form.moves.some((move) => move.id === id));
+        assert.equal(
+          authored.has(id),
+          false,
+          `${root}/${person}/${id} has no authored override`,
+        );
+        assert.deepEqual(profile.movement.get(id), {
+          scale: 1,
+          groundingMode: -1,
+          groundingOffset: 0,
+        });
+      }
+      for (const [id, move] of authored)
+        assert.deepEqual(
+          profile.movement.get(id),
+          move,
+          `${root}/${person}/${id} preserves authored overlay`,
+        );
+    }
+});
+
 test("Stock and Advanced callback jump distances come from original personality options", async (t) => {
   for (const root of ["data", "adv_data"]) {
     for (const [person, expectedJump, expectedSounds] of [

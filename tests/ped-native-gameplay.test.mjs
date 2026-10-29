@@ -566,6 +566,48 @@ test("moved period uses raw body V and shared CRT once; no duplicated settling o
   assert.equal(h.c.body.state.velocity.x, 1);
 });
 
+test("moved and halted period-only core calls bypass gameplay FSM and preserve action/run state", () => {
+  const h = create(fixture(), {
+    values: [16384],
+    planMove: () => {
+      throw new Error("SetPedMove must not run");
+    },
+  });
+  h.runtime.activate(h.c.owner);
+  h.runtime.setMove(h.c.owner, 93, [0, 0, 1], [0, 1, 0], 100);
+  h.state.action = 6;
+  h.state.cache.runSpeed = 321;
+  h.state.callback.flags = 6;
+  h.state.callback.queuedMoveIndex = 2;
+  h.c.body.state.velocity.set(1, 0, 0);
+  const clock = { ...h.c.instance.clock };
+  h.c.body.onMoved(h.c.body, 40);
+  assert.equal(h.c.moveId, 93);
+  assert.equal(h.c.instance.clock.periodMs, 25);
+  assert.equal(h.state.action, 6);
+  assert.equal(h.state.cache.runSpeed, 321);
+  assert.equal(h.state.callback.flags, 6);
+  assert.equal(h.state.callback.queuedMoveIndex, 2);
+  assert.equal(h.c.instance.clock.frame, clock.frame);
+  assert.equal(h.c.instance.clock.fraction, clock.fraction);
+  assert.equal(h.c.instance.clock.lastTimeMs, clock.lastTimeMs);
+  h.c.instance.physicsActive = false;
+  h.c.physicsFlags &= ~4;
+  const missing = [];
+  h.gameplay.recoveryEffect(
+    h.runtime.callbackContext(h.c.owner),
+    { kind: "freeze-move", moveId: -1, speed: 0, timeMs: 100 },
+    missing,
+  );
+  assert.deepEqual(missing, []);
+  assert.equal(h.c.moveId, 93);
+  assert.equal(h.c.instance.clock.periodMs, 0);
+  assert.equal(h.state.action, 6);
+  assert.equal(h.state.cache.runSpeed, 321);
+  assert.equal(h.state.callback.flags, 6);
+  assert.equal(h.draws(), 1);
+});
+
 test("halt absent source providers refuses acceptance rather than synthesizing recovery", () => {
   const h = create();
   h.runtime.activate(h.c.owner);

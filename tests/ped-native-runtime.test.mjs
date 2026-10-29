@@ -768,18 +768,65 @@ test("severed current MODEL uses shared boned resources/header, source launch an
   assert.equal(stored.length, 1);
 });
 
-test("missing stored removed-part and articulated ownership remain explicit; no unbounded snapshot fallback", () => {
-  const { runtime } = host(),
+test("bounded stored removed poses restore before PHIL admission and survive failed admission", () => {
+  const { runtime, simulation } = host(),
     c = enroll(runtime, {});
   runtime.prepareFrame(frame());
-  runtime.updateState(c.owner, { flags: 0x80, removedBoneMask: 2 });
-  const missing = runtime.prepareFrame(frame(100))[0];
-  assert.equal(missing.pool.status, "provider-required");
-  assert.ok(
-    missing.pool.requiredProviders.includes(
-      "native-stored-dismembered-pose-owner",
-    ),
+  runtime.updateState(c.owner, { removedBoneMask: 2 });
+  c.instance.bones[1].pose.set([...identity.slice(0, 9), 7, 8, 9]);
+  const pose = [...c.instance.bones[1].pose];
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(runtime.storedPoses.stats.occupied, 1);
+  assert.equal(c.vanishedBoneMask, 0);
+  const register = simulation.phil.registerImmediate.bind(simulation.phil);
+  let sawRestored = false;
+  simulation.phil.registerImmediate = (body) => {
+    sawRestored = [...c.instance.bones[1].pose].every((n, i) => n === pose[i]);
+    assert.equal(c.instance.bones[1].actor.matrix.elements[12], 7);
+    assert.equal(runtime.storedPoses.stats.occupied, 0);
+    return 1;
+  };
+  assert.equal(runtime.prepareFrame(frame(100))[0].pool.status, "exhausted");
+  assert.equal(sawRestored, true);
+  assert.equal(
+    runtime.storedPoses.stats.occupied,
+    1,
+    "failed admission stores restored render state again",
   );
+  assert.equal(c.vanishedBoneMask, 0);
+  simulation.phil.registerImmediate = register;
+  runtime.updateState(c.owner, { flags: 1 });
+  const visits = runtime.prepareFrame(frame(140));
+  assert.equal(visits[0].pool.status, "processed");
+  assert.equal(runtime.storedPoses.stats.occupied, 0);
+  assert.equal(c.removedBoneMask, 2);
+  assert.equal(c.vanishedBoneMask, 0);
+  const body = runtime.bonePool.allocation(c).bodies[1];
+  assert.deepEqual(body.state.velocity.toArray(), [0, 0, 0]);
+  assert.deepEqual(body.state.angularVelocity.toArray(), [0, 0, 0]);
+  assert.equal(c.instance.detachedBoneMask, 2);
+  assert.equal(body.actor, c.instance.bones[1].actor);
+  runtime.dispose();
+  assert.equal(simulation.phil.count, 0);
+  assert.equal(runtime.storedPoses.stats.occupied, 0);
+});
+
+test("retained joint2 is rejected before native bone admission or mask mutation", () => {
+  const { runtime, simulation } = host(),
+    c = enroll(runtime, {});
+  runtime.prepareFrame(frame());
+  const resource = runtime.bonePool.previewBodies(c)[1];
+  resource.nativeJoint2 = { quietOrientationY: 1 };
+  const before = simulation.phil.count;
+  assert.deepEqual(runtime.preflightSeverBones(c.owner, [1]), [
+    "native-retained-joint2-constraint",
+  ]);
+  assert.equal(runtime.bonePool.counts(c.formKey).owned, 0);
+  assert.equal(simulation.phil.count, before);
+  assert.equal(c.removedBoneMask, 0);
+  assert.equal(resource.owner, null);
+  assert.deepEqual(runtime.preflightSeverBones(c.owner, [2]), []);
+  runtime.dispose();
 });
 
 for (const tree of ["data", "adv_data"])

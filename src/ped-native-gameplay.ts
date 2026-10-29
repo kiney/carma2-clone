@@ -902,6 +902,8 @@ export class NativePedGameplay<Owner extends object = object> {
       },
       providers: {
         sever: {
+          preflightBones: (indices) =>
+            this.host().preflightSeverBones(ctx.owner, indices),
           nextCrtInteger: this.options.nextCrtInteger,
           reserveBonedSlot: () => this.host().reserveBonedSlot(ctx.owner),
           readBone: (index) => this.host().readBone(ctx.owner, index),
@@ -1142,7 +1144,7 @@ export class NativePedGameplay<Owner extends object = object> {
         if (gravity !== null && gravity !== undefined && gravity < 1)
           period = Math.trunc(period * 1.5);
       }
-      this.move(ctx, -1, period, false, this.state(ctx.owner).action, missing);
+      missing.push(...this.corePeriod(ctx, period));
     }
     if (gravity === undefined) missing.push("source-special-volume-gravity");
     else if (gravity !== null && gravity < 1 && ctx.character.hitPoints > 0) {
@@ -1151,6 +1153,34 @@ export class NativePedGameplay<Owner extends object = object> {
       else missing.push("source-moved-low-gravity-continuation");
     }
     diagnostic(ctx, this.state(ctx.owner), missing);
+  }
+  /** Moved4d2864 and corpse halt4d185e call SetCharacterMoveAR directly.
+   * A period update is not SetPedMove: no FSM, speed factor, action or cache80. */
+  private corePeriod(
+    ctx: NativePedRuntimeCallback<Owner>,
+    speed: number,
+  ): string[] {
+    const result = ctx.instance.physicsActive
+      ? this.hooks.activeSetMove?.(
+          ctx,
+          -1,
+          ctx.character.direction,
+          ctx.character.groundNormal,
+          { periodMs: speed, completionRequested: false },
+        )
+      : this.recoveryMove(ctx, {
+          id: -1,
+          speed,
+          completion: false,
+          retainRoot: false,
+        });
+    if (!result) return ["native-core-period-owner"];
+    if (result.status === "complete")
+      ctx.character.moveOptions = {
+        ...ctx.character.moveOptions,
+        periodMs: ctx.instance.clock.periodMs,
+      };
+    return [...result.requiredProviders];
   }
   private haltState(ctx: NativePedRuntimeCallback<Owner>): NativePedHaltState {
     const c = ctx.character,
@@ -1192,7 +1222,7 @@ export class NativePedGameplay<Owner extends object = object> {
         retainRoot,
       );
     else if (e.kind === "freeze-move")
-      this.move(ctx, -1, e.speed, false, s.action, missing);
+      missing.push(...this.corePeriod(ctx, e.speed));
     else if (e.kind === "position") ctx.character.position = [...e.position];
     else if (e.kind === "action") s.action = e.action;
     else if (e.kind === "sync-root-basis") ctx.body.rigidFlags |= e.rigidFlag;

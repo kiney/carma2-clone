@@ -167,6 +167,25 @@ test("ordinary subtree is ascending depth-first, source policy and actor data re
   assert.equal(h.log.filter((e) => e[0] === "caller").length, 1);
   assert.deepEqual(h.log.at(-1), ["caller", 60, 40]);
 });
+
+test("unsupported retained resources preflight before CRT, reservation, masks or common HP tail", () => {
+  const s = state(),
+    before = structuredClone(s),
+    h = host(s, [], {
+      preflightBones: (indices) => {
+        assert.deepEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        return ["native-retained-joint2-constraint"];
+      },
+    });
+  const result = mutateNativePedSever(s, input(), h);
+  assert.equal(result.status, "provider-required");
+  assert.deepEqual(result.requiredProviders, [
+    "native-retained-joint2-constraint",
+  ]);
+  assert.equal(result.randomDraws, 0);
+  assert.deepEqual(h.log, []);
+  assert.deepEqual(s, before);
+});
 test("threshold equality and chance10 boundary spend budget without changing HP damage", () => {
   for (const [damage, values, attemptCount] of [
     [39, [], 0],

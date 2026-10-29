@@ -5,11 +5,13 @@ import { Group, Mesh, Vector3 } from "three";
 import type { PedVector } from "./ped-form";
 import type { NativePedAssets } from "./ped-native-assets";
 import type { NativePedDeadModels } from "./ped-dead-models";
+import { NativePedStoredPoses } from "./ped-stored-poses";
 import {
   createNativePedInstance,
   advanceNativePedPose,
   poseNativePedFrame,
   synchronizeNativePedPhysicalPose,
+  synchronizeNativePedRenderPose,
   selectNativePedMove,
   selectNativePedBoneModel,
   releaseNativePedActorSet,
@@ -249,6 +251,7 @@ function missing(...providers: string[]): NativePedInstanceResult {
 }
 
 export class NativePedRuntime<Owner extends object = object> {
+  readonly storedPoses = new NativePedStoredPoses<Owner>();
   readonly bodyPool: NativePedBodyPool<
     Owner,
     NativePedRuntimeRender,
@@ -409,6 +412,16 @@ export class NativePedRuntime<Owner extends object = object> {
           record.moveOptions,
         );
         this.recordResult(record, selected);
+        if (record.removedBoneMask) {
+          // Installed408200 restores retained matrices during render acquisition,
+          // before simple PHIL registration. A failed admission stores them again.
+          if (this.hooks.restoreRemovedPoses) {
+            const providers = this.hooks.restoreRemovedPoses(record, instance);
+            for (const provider of providers) record.diagnostics.add(provider);
+          } else this.storedPoses.restore(record, instance);
+          this.copyMasks(record);
+          synchronizeNativePedRenderPose(instance);
+        }
         simulation.scene.add(instance.group);
         this.hooks.onRenderPrepared?.(record, instance);
       },
@@ -466,12 +479,11 @@ export class NativePedRuntime<Owner extends object = object> {
         record.rootPose.set(instance.rootPose);
         record.modelSet = instance.modelSet;
         record.modelPoses = instance.bones.map((bone) => bone.poseIndex);
-        if (
-          !this.disposed &&
-          record.removedBoneMask &&
-          this.hooks.storeRemovedPoses
-        )
-          this.hooks.storeRemovedPoses(record, instance);
+        if (!this.disposed && record.removedBoneMask) {
+          if (this.hooks.storeRemovedPoses)
+            this.hooks.storeRemovedPoses(record, instance);
+          else this.storedPoses.store(record, instance);
+        }
         for (const bone of instance.bones) instance.group.add(bone.actor);
         this.hooks.onRenderReleased?.(record, instance);
         releaseNativePedActorSet(instance, {
@@ -491,11 +503,16 @@ export class NativePedRuntime<Owner extends object = object> {
       },
       acquireRemovedParts: (a) => {
         const record = this.character(a.character.owner);
-        const restored = this.hooks.restoreRemovedPoses?.(
-          record,
-          record.instance!,
-        ) ?? ["native-stored-dismembered-pose-owner"];
-        if (restored.length) return restored;
+        const indices = record
+          .instance!.bones.map((_, index) => index)
+          .filter(
+            (index) =>
+              index > 0 &&
+              record.removedBoneMask & (1 << index) &&
+              !(record.vanishedBoneMask & (1 << index)),
+          );
+        const requirements = this.preflightSeverBones(record.owner, indices);
+        if (requirements.length) return requirements;
         const acquired = this.bonePool.reacquire(record, (index) =>
           this.readBone(record.owner, index),
         );
@@ -550,6 +567,7 @@ export class NativePedRuntime<Owner extends object = object> {
     }
     this.bonePool.dispose((body) => this.simulation.phil.getState(body) === 0);
     this.bodyPool.dispose((body) => this.simulation.phil.getState(body) === 0);
+    this.storedPoses.clear();
     for (const record of this.records.values()) {
       record.body = null;
       record.instance = null;
@@ -602,6 +620,7 @@ export class NativePedRuntime<Owner extends object = object> {
     this.forms.set(key, old ?? assets);
     this.bodyPool.registerForm(key, assets.form);
     this.bonePool.registerForm(key, assets.form);
+    this.storedPoses.registerForm(key, assets.form);
     this.personalities.set(name, {
       assets,
       formKey: key,
@@ -1136,8 +1155,6 @@ export class NativePedRuntime<Owner extends object = object> {
     reason: "scope" | "current" = "scope",
   ): readonly string[] {
     const missingProviders: string[] = [];
-    if (c.removedBoneMask && !this.hooks.storeRemovedPoses)
-      missingProviders.push("native-stored-dismembered-pose-owner");
     const resources = this.bonePool.allocation(c)?.bodies ?? [];
     if (resources.some((body) => body?.nativeJoint2) && !this.hooks.unlinkBone)
       missingProviders.push("native-retained-joint2-owner");
@@ -1205,6 +1222,16 @@ export class NativePedRuntime<Owner extends object = object> {
   reserveBonedSlot(owner: Owner): number | null {
     return this.bonePool.reserve(this.character(owner));
   }
+  preflightSeverBones(
+    owner: Owner,
+    indices: readonly number[],
+  ): readonly string[] {
+    const bodies = this.bonePool.previewBodies(this.character(owner));
+    // Existing source zero-capacity behavior remains normal reservation failure.
+    return indices.some((index) => bodies?.[index]?.nativeJoint2)
+      ? ["native-retained-joint2-constraint"]
+      : [];
+  }
   readBone(
     owner: Owner,
     index: number,
@@ -1243,6 +1270,11 @@ export class NativePedRuntime<Owner extends object = object> {
     owner: Owner,
     request: NativePedSeverBoneRequest<Group, Group>,
   ): NativePedSeverRegistration<NativePedBoneBody<Group>> | null {
+    const missing = this.preflightSeverBones(owner, [request.index]);
+    if (missing.length)
+      throw new Error(
+        `Unsupported native sever resource: ${missing.join(", ")}`,
+      );
     const result = this.bonePool.registerBone(this.character(owner), request);
     return result.registration
       ? {

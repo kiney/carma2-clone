@@ -1,4 +1,6 @@
 import "./ped-ordinary-volume.test.mjs";
+import "./ped-stored-poses.test.mjs";
+import "./ped-gore-options.test.mjs";
 import "./ped-ordinary-runtime.test.mjs";
 import "./ped-ordinary-steering.test.mjs";
 import "./ped-ordinary-object-scan.test.mjs";

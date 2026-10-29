@@ -12,6 +12,14 @@ export interface NativePedMoveFSM {
   readonly rows: readonly (readonly number[])[];
   readonly sourceAddress: number;
   readonly sourceOffset: number;
+  /** Installed SetPedMove reads these preceding-data cells for row−1's
+   * missing-leg columns2/3. They are not a fabricated logical FSM row. */
+  readonly negativeLegSubstitutions?: {
+    readonly values: readonly [number, number];
+    /** Provenance of column2; column3 immediately follows it. */
+    readonly sourceAddress: number;
+    readonly sourceOffset: number;
+  };
 }
 
 /** Locate the shared HW/SW initialized-data table without assuming equal RVAs.
@@ -77,14 +85,36 @@ export function readNativePedMoveFSM(bytes: Uint8Array): NativePedMoveFSM {
           valid = false;
         rows.push(Object.freeze(values));
       }
-      if (valid)
+      if (valid) {
+        // Require the complete preceding row to belong to this same bounded
+        // initialized, non-executable section. Read only the two audited cells;
+        // other columns alias unrelated globals and remain unsupported.
+        const prefixOffset = at - COLUMNS * 4;
+        let negativeLegSubstitutions:
+          | NativePedMoveFSM["negativeLegSubstitutions"]
+          | undefined;
+        if (prefixOffset >= offset) {
+          const cellOffset = prefixOffset + 2 * 4;
+          const values = [
+            view.getInt32(cellOffset, true),
+            view.getInt32(cellOffset + 4, true),
+          ] as const;
+          if (values.every((value) => value >= -1 && value < ROWS))
+            negativeLegSubstitutions = Object.freeze({
+              values: Object.freeze(values),
+              sourceAddress: imageBase + rva + cellOffset - offset,
+              sourceOffset: cellOffset,
+            });
+        }
         matches.push(
           Object.freeze({
             rows: Object.freeze(rows),
             sourceAddress: imageBase + rva + at - offset,
             sourceOffset: at,
+            ...(negativeLegSubstitutions ? { negativeLegSubstitutions } : {}),
           }),
         );
+      }
     }
   }
   if (matches.length !== 1)
@@ -154,16 +184,26 @@ export function planNativePedMove(
           : input.removedBoneMask & 32
             ? 3
             : 0;
-  // The original reads before the FSM for id−1 plus a substitution. Preserve
-  // this as an explicit unsafe-original boundary, not an invented identity.
-  if (column && input.requestedId === -1)
-    return {
-      status: "provider-required",
-      requiredProviders: ["native-negative-FSM-row-under-substitution"],
-    };
-  let moveId = column
-    ? table.rows[input.requestedId][column]
-    : input.requestedId;
+  let moveId: number;
+  if (column && input.requestedId === -1) {
+    const prefix = table.negativeLegSubstitutions;
+    if (
+      (column !== 2 && column !== 3) ||
+      !prefix ||
+      prefix.sourceOffset !== table.sourceOffset - 20 ||
+      prefix.sourceAddress !== table.sourceAddress - 20 ||
+      prefix.values.length !== 2 ||
+      !prefix.values.every(
+        (value) => Number.isInteger(value) && value >= -1 && value < ROWS,
+      )
+    )
+      return {
+        status: "provider-required",
+        requiredProviders: ["native-negative-FSM-row-under-substitution"],
+      };
+    moveId = prefix.values[column - 2];
+  } else
+    moveId = column ? table.rows[input.requestedId][column] : input.requestedId;
   let action =
     input.requestedAction >= 0 &&
     input.requestedId >= 0 &&

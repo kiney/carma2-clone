@@ -241,7 +241,9 @@ export function decideNativePedHalt(
   const retry =
     !upright && normal !== null && normal[1] !== 0 && Math.abs(dot!) < 0.706;
   const required = [...(input.unsupportedBranches ?? [])];
-  if (!upright && normal === null)
+  // Installed4d0ff0 tests live bestY=0 before the undefined stack dot matters.
+  // Dead4d13bc then enters the corpse branch without selecting80/81 by its sign.
+  if (state.hitPoints > 0 && !upright && normal === null)
     required.push("positive-world-face-normal-unavailable");
   const common = {
     upright,

@@ -99,6 +99,9 @@ export interface NativePedSeverTailContext {
   emitKillModelEffects: () => void;
 }
 export interface NativePedSeverProviders<Actor, Model, Body, Tail> {
+  /** Host-only readiness of retained source resources, before reservation/RNG.
+   * Unsupported retained constraints cannot be discovered after PHIL/mask commit. */
+  preflightBones?: (indices: readonly number[]) => readonly string[];
   nextCrtInteger?: () => number;
   /** null is native pool exhaustion. Reservation is retained on later failure. */
   reserveBonedSlot?: () => number | null;
@@ -331,6 +334,8 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
           }
     }
   }
+  if (selectionPossible && !input.articulated && providers.preflightBones)
+    required.push(...providers.preflightBones([...snapshots.keys()]));
   if (required.length) return finish();
   const draw = () => {
     const n = integer(providers.nextCrtInteger!(), 0, 32767, "CRT result");

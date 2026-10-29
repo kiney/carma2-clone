@@ -1,6 +1,7 @@
 import { NativePedSlickMaterialRegistry } from "./ped-slick-materials";
 import { createNativeRenderMaterial } from "./native-material-render";
 import { OrdinaryPedRuntime } from "./ped-ordinary-runtime";
+import { parseNativePedGoreOption } from "./ped-gore-options";
 import {
   parsePedContactSettings,
   type PedContactSettings,
@@ -670,6 +671,7 @@ export class PedestrianSystem {
   private nativeSimulation?: VehicleSimulation;
   private nativeContactSettings?: PedContactSettings;
   private nativeSpurtingPeriod = 0;
+  private nativeGoreLevel = 1;
   private readonly nativeNoises = new Map<string, NativePedNoiseGroups>();
   get nativeRuntime() {
     return this.nativeBridge?.runtime;
@@ -897,6 +899,23 @@ export class PedestrianSystem {
     }
     const system = new PedestrianSystem(groundAt, options, specs);
     const dataRoot = options.dataRoot ?? "data";
+    const goreOptions = [`${dataRoot}/OPTIONS.TXT`, "data/OPTIONS.TXT"]
+      .map(
+        (path) =>
+          assets.manifest.find(
+            (entry) => entry.path.toLowerCase() === path.toLowerCase(),
+          )?.path,
+      )
+      .find((path) => path !== undefined);
+    if (goreOptions) {
+      try {
+        system.nativeGoreLevel = parseNativePedGoreOption(
+          await assets.text(goreOptions),
+        );
+      } catch (error) {
+        system.warnings.push(`Native pedestrian gore option: ${error}`);
+      }
+    }
     if (!specs.length) {
       system.warnings.push(
         "Track has no readable pedestrian spawn specifications",
@@ -1652,7 +1671,9 @@ export class PedestrianSystem {
       !inactiveBurnScore && (gravity === undefined || gravity >= 1);
     ped.alive = false;
     ped.deadModelSet =
-      physicalDeath && (this.combatFrame.goreLevel ?? 1) > 0 ? 1 : 0;
+      physicalDeath && (this.combatFrame.goreLevel ?? this.nativeGoreLevel) > 0
+        ? 1
+        : 0;
     // Installed KillPedestrian commits action6 independently of the requested
     // death BON. Rigid transport continues through its separate corpse owner.
     ped.action = PedAction.Dead;
@@ -1974,7 +1995,10 @@ export class PedestrianSystem {
       moveFSM: this.moveFSM,
       spurtingPeriodMs: this.nativeSpurtingPeriod,
       dismemberSpurtCount: this.blood?.settings.dismemberSpurtCount ?? 0,
-      frame: () => this.combatFrame,
+      frame: () => ({
+        ...this.combatFrame,
+        goreLevel: this.combatFrame.goreLevel ?? this.nativeGoreLevel,
+      }),
       retainedPresentation: () => this.dormantRenderActors,
       onAdmitted: (ped) => {
         if (this.dormantRenderActors.delete(ped.object))

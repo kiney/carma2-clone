@@ -145,6 +145,29 @@ test("ordered highest positive face retains ties, no support leaves a bounded pr
     "upright",
   );
 });
+
+test("dead airborne halt follows corpse continuation without reading an absent floor normal", () => {
+  const s = state({ hitPoints: 0 }),
+    i = input({
+      worldFaceNormals: [
+        [1, 0, 0],
+        [0, -1, 0],
+      ],
+      goreLevel: 0,
+    });
+  const decision = decideNativePedHalt(s, i);
+  assert.equal(decision.kind, "dead");
+  assert.equal(decision.supportNormal, null);
+  assert.equal(decision.axisDotNormal, null);
+  const result = mutateNativePedHalt(s, i, providers());
+  assert.equal(result.returnValue, 1);
+  assert.deepEqual(result.requiredProviders, [
+    "source-volume-state-clear-provider",
+    "source-animation-move-provider",
+  ]);
+  assert.ok(result.effects.some((effect) => effect.kind === "freeze-move"));
+  assert.equal(s.hitPoints, 0);
+});
 test("strict Float32-spilled .706 retry gate and alive/dead cache limits", () => {
   const make = (dot) =>
     input({ worldFaceNormals: [[-dot, 1, 0]], inertia: [3, 2, 1] });

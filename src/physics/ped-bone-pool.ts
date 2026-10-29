@@ -239,6 +239,16 @@ export class NativePedBonePool<
     return allocation;
   }
   /** Existing ownership is shared by sever/acquisition callbacks, not reallocated. */
+  previewBodies(
+    character: NativePedBonePoolCharacter<Owner>,
+  ): readonly (Body | null)[] | null {
+    const form = this.form(character),
+      existing = this.allocation(character);
+    if (existing) return existing.phase === "owned" ? existing.bodies : null;
+    if (character.bonedSlot >= 0)
+      throw new NativePedBonePoolProviderError("occupied-slot-adoption");
+    return form.slots.find((slot) => slot.allocation === null)?.bodies ?? null;
+  }
   reserve(character: NativePedBonePoolCharacter<Owner>): number | null {
     const form = this.form(character),
       existing = this.allocation(character);

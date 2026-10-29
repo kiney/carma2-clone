@@ -3,10 +3,10 @@ id: TASK-98
 title: >-
   [P2] PED-08: Integrate visible severing and articulated pedestrian body
   contacts
-status: next
+status: done
 assignee: []
 created_date: '2026-10-11 16:33'
-updated_date: '2026-10-29 00:42'
+updated_date: '2026-10-29 21:33'
 labels:
   - priority-2
   - PED-08
@@ -54,8 +54,16 @@ Source task: [PED-03 / TASK-35](task-35%20-%20P2-PED-03-Implement-native-pedestr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An original-data ordinary population impact removes eligible displayed bones locally and registers genuinely independent detached physical parts with source transforms/mass/velocity.
-- [ ] #2 Repeated torso/limb/corpse contacts preserve source masks, pinned-damage and once-only HP/count semantics; physical contact geometry follows current body/part state.
-- [ ] #3 Retained joints and resource release/reuse are coherent through death, offscreen state and race reset; no orphan PHIL/ACT/MODEL owner remains.
-- [ ] #4 Stock/Advanced body variants and representative nonhumanoid/exceptional prerequisites are checked; unrecovered native branches remain explicit rather than silently approximated.
+- [x] #1 An original-data ordinary population impact removes eligible displayed bones locally and registers genuinely independent detached physical parts with source transforms/mass/velocity.
+- [x] #2 Repeated torso/limb/corpse contacts preserve source masks, pinned-damage and once-only HP/count semantics; physical contact geometry follows current body/part state.
+- [x] #3 Retained joints and resource release/reuse are coherent through death, offscreen state and race reset; no orphan PHIL/ACT/MODEL owner remains.
+- [x] #4 Stock/Advanced body variants and representative nonhumanoid/exceptional prerequisites are checked; unrecovered native branches remain explicit rather than silently approximated.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Starting after completed PED-07 checkpoint6c60071. Audit confirms real ordinary sever-to-independent-body wiring already exists; remaining production work is bounded source stored-dismembered pose ownership and correct render reacquisition chronology, atomic unsupported retained-topology preflight, and normal Stock/Advanced population impact/release/reset evidence. Full articulated/nonhumanoid/exploding providers remain explicit per AC4.
+
+Completed ordinary production severing, OPTIONS GoreLevel mapping, bounded shared FORM pose retention and render-before-PHIL restoration, failed-admission restorage, retained-joint preflight before sever mutations, source personality defaults and direct core period callers. Source dead/no-positive-face halt now releases correctly. Serial Stock/Advanced real population car impacts verify BOX limbs/SPHERE head, source mass/ACT/MODEL, independent transforms, repeat/no-relaunch/count once, exact active-part vanished masks, storage0→1→0 and zero old PHIL/ACT/storage owners after race reset. No provider/console/HTTP/WebGL errors. Hardware DevTools verifies actual four-part car severing with source gore2 and no diagnostics. Combined focused tests151 pass/1 absent AdvancedOPTIONS skip; TypeScript/build pass. Exceptional articulated/nonhumanoid/joint2 providers stay explicitly unsupported as permitted by AC4 and remain tracked in PED-11/TASK-134; no free-body substitute. See docs/ped08-production-integration.md.
+<!-- SECTION:NOTES:END -->

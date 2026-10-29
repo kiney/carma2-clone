@@ -6,8 +6,11 @@ import {
   planNativePedMove,
 } from "../src/ped-move-fsm.ts";
 
-function fixture(duplicates = false) {
-  const bytes = new Uint8Array(0x400 + (duplicates ? 2 : 1) * 118 * 7 * 4),
+function fixture(duplicates = false, prefixLength = 0) {
+  const tableOffset = 0x400 + prefixLength;
+  const bytes = new Uint8Array(
+      tableOffset + (duplicates ? 2 : 1) * 118 * 7 * 4,
+    ),
     view = new DataView(bytes.buffer);
   view.setUint16(0, 0x5a4d, true);
   view.setUint32(0x3c, 0x80, true);
@@ -29,7 +32,7 @@ function fixture(duplicates = false) {
     rows
       .flat()
       .forEach((value, i) =>
-        view.setInt32(0x400 + (copy * 118 * 7 + i) * 4, value, true),
+        view.setInt32(tableOffset + (copy * 118 * 7 + i) * 4, value, true),
       );
   return { bytes, view, section };
 }
@@ -70,6 +73,63 @@ test("PE lookup rejects short, out-of-bounds, ambiguous and executable-section t
     mutate(input);
     assert.throws(() => readNativePedMoveFSM(input.bytes), /FSM/);
   }
+});
+test("negative missing-leg substitutions retain only valid cells inside the source section", () => {
+  const input = fixture(false, 28);
+  input.view.setInt32(0x408, 5, true);
+  input.view.setInt32(0x40c, 6, true);
+  const table = readNativePedMoveFSM(input.bytes);
+  assert.deepEqual(table.negativeLegSubstitutions, {
+    values: [5, 6],
+    sourceAddress: 0x402008,
+    sourceOffset: 0x408,
+  });
+  for (const [removedBoneMask, expected] of [
+    [8, 5],
+    [32, 6],
+  ]) {
+    const result = planNativePedMove(
+      table,
+      request({ requestedId: -1, removedBoneMask }),
+    );
+    assert.equal(result.status, "complete");
+    assert.equal(result.moveId, expected);
+  }
+  for (const extra of [{ drunk: true }, { dancing: true }, { panicking: true }])
+    assert.equal(
+      planNativePedMove(table, request({ requestedId: -1, ...extra })).status,
+      "provider-required",
+    );
+  assert.equal(
+    readNativePedMoveFSM(fixture(false, 16).bytes).negativeLegSubstitutions,
+    undefined,
+  );
+  input.view.setInt32(0x408, 118, true);
+  assert.equal(
+    readNativePedMoveFSM(input.bytes).negativeLegSubstitutions,
+    undefined,
+  );
+  const { negativeLegSubstitutions, ...withoutPrefix } = table;
+  assert.equal(
+    planNativePedMove(
+      withoutPrefix,
+      request({ requestedId: -1, removedBoneMask: 8 }),
+    ).status,
+    "provider-required",
+  );
+  assert.equal(
+    planNativePedMove(
+      {
+        ...table,
+        negativeLegSubstitutions: {
+          ...negativeLegSubstitutions,
+          sourceOffset: 0,
+        },
+      },
+      request({ requestedId: -1, removedBoneMask: 8 }),
+    ).status,
+    "provider-required",
+  );
 });
 test("SetPedMove precedence is drunk, dancing, panic, first leg, second leg", () => {
   const table = readNativePedMoveFSM(fixture().bytes);
@@ -192,6 +252,27 @@ test("installed HW/SW share all FSM values while retaining distinct data address
   assert.deepEqual(hardware.rows, software.rows);
   assert.equal(hardware.sourceAddress, 0x65c360);
   assert.equal(software.sourceAddress, 0x656ca8);
+  for (const table of [hardware, software]) {
+    assert.deepEqual(table.negativeLegSubstitutions.values, [0, 0]);
+    assert.equal(
+      table.negativeLegSubstitutions.sourceAddress,
+      table.sourceAddress - 20,
+    );
+    assert.equal(
+      table.negativeLegSubstitutions.sourceOffset,
+      table.sourceOffset - 20,
+    );
+    for (const removedBoneMask of [8, 32, 40]) {
+      const result = planNativePedMove(
+        table,
+        request({ requestedId: -1, removedBoneMask }),
+      );
+      assert.equal(result.status, "complete");
+      assert.equal(result.moveId, 0);
+      assert.deepEqual(result.attempts, [0]);
+      assert.equal(result.action, 0);
+    }
+  }
   assert.deepEqual(hardware.rows[41].slice(1), [40, 50, 51, 111, 31, 112]);
   assert.deepEqual(
     planNativePedMove(
