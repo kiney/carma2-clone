@@ -6,7 +6,7 @@ title: >-
 status: wip
 assignee: []
 created_date: '2026-10-29 13:27'
-updated_date: '2026-10-29 14:20'
+updated_date: '2026-10-29 14:56'
 labels:
   - priority-1
   - PERF-24
@@ -33,7 +33,7 @@ Fresh original Desert1 live playtest on72f263d/index-mpUUxKme: user reports FPS 
 - [ ] #1 Retain a reload-safe opt-in bounded capture of first extreme-motion transition, actual query bounds, body/part ownership, tick/contact/guard costs and accepted/rejected solver rows without materially perturbing normal play.
 - [ ] #2 Reproduce or isolate the original FAIR/bumper extreme-motion workload and eliminate multi-second frame amplification while preserving ordinary crashes, source callbacks and collision coverage.
 - [ ] #3 Define and validate coherent escaped wreck/hierarchy handling without breaking opponent counts, race completion, repair, legitimate high jumps or player recovery; label any browser adaptation.
-- [ ] #4 Validate Stock/Advanced normal and damaged car-car/world/part scenarios plus a short real Chromium capture, separating hardware FPS, diagnostic overhead and unresolved initiating impulse.
+- [x] #4 Validate Stock/Advanced normal and damaged car-car/world/part scenarios plus a short real Chromium capture, separating hardware FPS, diagnostic overhead and unresolved initiating impulse.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -50,4 +50,8 @@ Fresh original Desert1 live playtest on72f263d/index-mpUUxKme: user reports FPS 
 2026-10-29 fundamental investigation complete (root+independent Astra+original-binary Sol audit). Redistributable procedural box against one nearly horizontal finite triangle reproduces source-generated contradiction: native chord row opens while angular guard row closes with opposing near-dependent OLD Jacobians. Native-only and guard-only packets stay benign, merged packet energy0.337728->1429039.106 with multipliers~1.617e10 and active physical residual~-0.535. Full production40ms tick also reproduces first accepted jump and thirteen response rounds; no prescribed impulses, original assets, friction or damage needed. Native unsigned/clipped packet RHS is verified, so changing it would be a behavioral deviation. New optional bounded oracle executes audited HW normal routine4c3900 only: same merged K/b returns[.0003020222,0],status-1 after25dependence removals/51loops; eight analytical controls plus native/rest and guard packet controls validate ABI and ordinary parity. The residual-correction tail demonstrably changes scratch without updating returned outputs in tested control; do not rely on it. Own repro/native-oracle tools and precise evidence docs/runaway-contact-root-cause.md added. Actual FAIR first impulse still unrecorded, and native dependence handling is not a universal energy cap. No production physics changed. Return to next after selected understanding stage; implementation acceptance remains open.
 
 User explicitly selected test-driven correction: write reviewed meaningful failing regressions first, checkpoint red tests and freeze their bytes, then change engine without editing those tests. Work in isolated /tmp/carma-perf24-tdd to preserve live production tab. Root owns acceptance/integration, independent worker owns test authoring, native-solver worker read-only until red checkpoint.
+
+TDD correction implemented against immutable red checkpoint f76c807: 14 reviewed procedural regressions, initial 10 pass/4 expected failures, now 14/14 pass with identical test/fixture/runner hashes. Chronological local sampled admission replaces conflicting full-chord events and retains full encounter witnesses before row reduction. Independent Givens RQ normal solve uses verified native dependence/failure semantics, no compliance or speed/energy caps; numerical failures reach the native separate three-report owner budget. Exact duplicate unilateral equations share aggregate load to preserve existing symmetric browser behavior. Full suite 3440 tests: 3434 pass, 5 skip, 1 intermittent unrelated HMR shutdown timeout; focused HMR rerun passes on baseline and isolated checkout. Production build passes. Unchanged headless crash matrix passes three Stock cases (Eagle3, Buggy, Bigdump, including damage/deformation/repair) then stops at its stale Advanced carrier_mission practice case because no rival exists. Separate real-GPU MCP Advanced Fridge Racer/69mach1 versus Coupe crash and repair passes with deformation/component damage, no console/WebGL errors; Stock Plow/Zee crash loses two parts and remains finite. Actual FAIR first impulse is still unrecorded. Capture/lifecycle hardening acceptance #1/#3 remains open; this checkpoint fixes the independently reproducible energy source, not every possible extreme-motion stall.
+
+AC2 remains deliberately unchecked: the procedural causal mechanism is fixed, but the historical FAIR first event is not replayed and arbitrary pre-existing extreme velocity is not yet guaranteed cheap. Do not equate green numerical regressions with closing the broader workload/lifecycle ticket.
 <!-- SECTION:NOTES:END -->

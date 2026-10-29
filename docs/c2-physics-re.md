@@ -655,3 +655,14 @@ remains explicit. ANI-01 is still open for remaining animation/render providers;
 PHIL, grounding, severing and causes remain the selected PED-06/07/08/09 work.
 See [asset-selection evidence](c2-ped-asset-selection-re.md) and
 [presentation scope/validation](c2-ped-presentation-re.md).
+
+## PERF-24 normal response correction (2026-10-29)
+
+Verified original HW normal routine `0x4c3900` and caller `0x4bb860` now guide
+the browser's independent RQ/dependence/failure path. Preserve the verified
+unsigned impact RHS; changing it would disguise the actual compatibility gap.
+The native three-report failure budget is now wired separately from positive
+response retries and geometry-change rejection. The angular guard's temporal
+admission is a browser adaptation, not source C2 behavior. See
+[root-cause evidence and deviations](runaway-contact-root-cause.md) and
+[the frozen red/green regression contract](perf24-tdd.md).

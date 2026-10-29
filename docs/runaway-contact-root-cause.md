@@ -21,9 +21,57 @@ dependent rows repeatedly and returns failure status `-1` with a small partial
 result. This establishes a numerical compatibility gap as well as a contact
 admission problem. It does not reconstruct FAIR's unrecorded first impact.
 
-No production physics behavior changed during this investigation. PERF-24
-retains implementation and runtime acceptance; passing the oracle's checks is
-not a claim that the game is fixed.
+The research checkpoint changed no production physics. The subsequent
+test-driven correction is described below; passing the numerical oracle alone
+does not establish that every historical playtest stall has the same cause.
+
+## Test-driven engine correction
+
+The regression contract was reviewed, run red and frozen in `f76c807` before
+engine edits: 14 tests, 10 passing and four expected failures. The unchanged
+contract now passes. See [the frozen hashes and results](perf24-tdd.md).
+
+- `world-contact-admission.ts` admits sampled encounters chronologically before
+  separating normal directions. Nearby opposed events on one finite plane
+  patch cannot represent simultaneous support at the same OLD feature. The
+  sampled path takes precedence over a conflicting full-tick chord locally;
+  chord/sample fractions are deliberately never compared as equivalent times.
+  Independent walls, perpendicular floor/wall constraints and opposed contacts
+  at separated levers remain. This is a **native-informed browser adaptation**,
+  using the native reducer's `.0045` squared-distance rule with authored
+  feature/plane provenance, not verified original temporal-manifold behavior.
+- The full coherent sampled encounter set remains available for chord rejection
+  even when response reduction removes a redundant row. Independent review
+  caught and verified overlapping-hull and nearby-parallel-plane cases where
+  using only reduced response rows would reintroduce the contradiction.
+  Final safe-prefix commitment still considers **all** trajectory crossings.
+- `normal-solver.ts` replaces diagonal regularization and unchecked projected
+  fallback with an independently expressed Givens RQ active-set solve. It uses
+  the verified native dependence ratio `100000`, unilateral activation and
+  negative-multiplier thresholds, protected signed rows, finite partial output
+  and explicit numerical failure. Active physical residuals are checked before
+  impulses are admitted. Matrix/RHS coefficients, including the original
+  unsigned impact bias, are unchanged.
+- Numerical failures now reach the existing local response owner's separate
+  three-report budget. They are distinct from geometry callback rejection and
+  the ordinary successful-response limit. A finite accepted partial result is
+  still processed, matching the inspected native caller's behavior.
+
+Solver deviations are explicit: double precision; full factor rebuilds;
+independent negative-row selection with visited-set preference; a bounded
+50-transition path instead of reproducing native conditional continuation;
+and failure for an unsolvable protected block. Exactly identical unilateral
+rows **and columns** with exactly equal demands are aggregated and their total
+load distributed uniformly. This preserves the browser's previous symmetric
+loading without compliance or tiny artificial impulses; signed rows and
+unequal demands stay distinct. It is a compatibility adaptation, not a claim
+about native impulse distribution between redundant rows.
+
+There is no new speed, angular-velocity, energy or damage cap, and no
+car/track-specific branch. The raw reproduced packet matches the original
+routine's small finite partial response. Valid near-dependent wedges can still
+produce large forces in the original mathematics; temporal admission remains
+an independent requirement rather than treating RQ as a universal energy cap.
 
 ## Procedural reproduction
 

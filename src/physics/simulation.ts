@@ -1,5 +1,9 @@
 import { HierarchyPredictionCache } from "./cached-hierarchy-motion";
 import { freeWorldEnvelope } from "./free-world-envelope";
+import {
+  admitSampledWorldContacts,
+  mergeWorldContacts,
+} from "./world-contact-admission";
 import { escapedBodyReason } from "./escaped-bodies";
 import {
   createEdgeFeatureIndex,
@@ -409,10 +413,18 @@ function nativePairAllowed(a: RigidBody, b: RigidBody): boolean {
   );
 }
 const Y = new Vector3(0, 1, 0);
+interface WorldGuardResult {
+  fraction: number;
+  crossingFraction: number;
+  contacts: readonly Contact[];
+  /** Full coherent encounter evidence, before response-row reduction. */
+  encounters?: readonly Contact[];
+}
 // Thousands of dormant no-op guards per tick must not allocate independent
 // objects/arrays. This private result is only read by collection/commitment.
 const EMPTY_WORLD_GUARD = Object.freeze({
   fraction: 1,
+  crossingFraction: 1,
   contacts: Object.freeze([] as Contact[]),
 });
 export function boxVertices(bounds: Box3): Vector3[] {
@@ -3955,7 +3967,17 @@ export class VehicleSimulation {
           profile.sweepMs += performance.now() - clock;
           clock = performance.now();
         }
-        allHits.push(...reduceWorldContacts(candidates));
+        allHits.push(
+          ...reduceWorldContacts(candidates).map((hit) => ({
+            ...hit,
+            worldFeature: {
+              hullIndex: i,
+              vertexIndex: hit.vertexIndices?.[0],
+              fraction: hit.fraction ?? 0,
+              trajectory: "chord" as const,
+            },
+          })),
+        );
         if (profile) profile.reduceMs += performance.now() - clock;
       }
       const contacts = finalizeWorldContacts(allHits).map((hit) => ({
@@ -3968,6 +3990,7 @@ export class VehicleSimulation {
         penetration: hit.penetration,
         faceFriction: hit.faceFriction ?? 1,
         sourceSurface: hit.sourceSurface,
+        worldFeature: hit.worldFeature,
       }));
       return { contacts, overlap };
     };
@@ -4038,7 +4061,10 @@ export class VehicleSimulation {
       contacts: copyContactRows(result.value.contacts),
     };
   }
-  private computeAdvanceWorldContacts(body: SimulationBody, refine = false) {
+  private computeAdvanceWorldContacts(
+    body: SimulationBody,
+    refine = false,
+  ): WorldGuardResult {
     if (
       body.properties.immovable ||
       ((isNativePedBody(body) || isNativePedBoneBody(body)) &&
@@ -4128,7 +4154,7 @@ export class VehicleSimulation {
     pose: (fraction: number) => { position: Vector3; orientation: Quaternion },
     basePosition = body.state.position,
     baseOrientation = body.state.orientation,
-  ) {
+  ): WorldGuardResult {
     if (isNativeSphereBody(body))
       return this.sweepSphereWorldTrajectory(
         body,
@@ -4284,16 +4310,35 @@ export class VehicleSimulation {
               contactTypes: [hit.contactTypes?.[index] ?? 1],
               faceFriction: hit.faceFriction,
               sourceSurface: hit.sourceSurface,
+              worldFeature: {
+                hullIndex: shape,
+                vertexIndex: hit.vertexIndices?.[index],
+                fraction: time,
+                trajectory: "angular",
+              },
             });
           }
         }
       }
       old = next;
     }
+    // A later opposite crossing on the same local arc is a new encounter, not
+    // a simultaneous constraint. Keep the earliest sampled encounter across
+    // directions; safe-prefix commitment above still observes every crossing.
+    const admitted = admitSampledWorldContacts(
+      hits.map((hit) => ({
+        a: body,
+        point: hit.points[0],
+        normal: hit.normal,
+        sourceSurface: hit.sourceSurface,
+        worldFeature: hit.worldFeature,
+        hit,
+      })),
+    );
     // Preserve four source rows per direction while allowing both independent
     // faces at a road/wall corner to constrain the newly solved movement.
     const groups: HullContact[][] = [];
-    for (const hit of hits) {
+    for (const { hit } of admitted) {
       let group = groups.find(
         (group) => group[0].normal.dot(hit.normal) > 0.95,
       );
@@ -4310,6 +4355,7 @@ export class VehicleSimulation {
           sourceType: hit.contactTypes?.[0],
           faceFriction: hit.faceFriction,
           sourceSurface: hit.sourceSurface,
+          worldFeature: hit.worldFeature,
         }),
       );
     // A source feature sweep interpolates its endpoints linearly. Committing
@@ -4317,6 +4363,10 @@ export class VehicleSimulation {
     // can land just beyond the face; retain the preceding tested pose instead.
     return {
       contacts,
+      // Keep encounter evidence separate from the limited response packet.
+      // Reduction can replace a row by a nearby equal-normal row on another
+      // plane/hull; that must not resurrect a conflicting full-chord contact.
+      encounters: admitted.map(({ hit: _hit, ...row }) => row),
       fraction: hits.length ? Math.max(0, earliest - 1 / samples) : 1,
       crossingFraction: earliest,
     };
@@ -6008,20 +6058,14 @@ export class VehicleSimulation {
             const native = this.worldContacts(body, body.hulls);
             const position = body.state.predictedPosition!.clone();
             const orientation = body.state.predictedOrientation!.clone();
-            const angular = this.advanceWorldContacts(body).contacts;
+            const angular = this.advanceWorldContacts(body);
             body.state.predictedPosition!.copy(position);
             body.state.predictedOrientation!.copy(orientation);
-            return [
-              ...native,
-              ...angular.filter(
-                (row) =>
-                  !native.some(
-                    (other) =>
-                      other.b === row.b &&
-                      other.normal.dot(row.normal) > 1 - 1e-8,
-                  ),
-              ),
-            ];
+            return mergeWorldContacts(
+              native,
+              angular.contacts,
+              angular.encounters ?? angular.contacts,
+            );
           } finally {
             this.pullWakeSourceVelocity = undefined;
           }
@@ -6038,7 +6082,8 @@ export class VehicleSimulation {
         prepare: (rows) => this.preparePedContacts(rows),
         solve: (rows, joints) => {
           let rejected = false,
-            positiveJointImpulse = false;
+            positiveJointImpulse = false,
+            reportedFailure = false;
           const impacts = resolveContactGroups(
             rows,
             PHYSICS_STEP,
@@ -6057,6 +6102,12 @@ export class VehicleSimulation {
               return accepted;
             },
             friction,
+            (solution) => {
+              // HW0x4bb860 reports numerical failure separately from a geometry
+              // callback rejection. A finite partial response is still applied;
+              // the native three-report budget prevents futile local retries.
+              reportedFailure ||= solution.status === "numerical-failure";
+            },
           );
           // Geometry/COM/attachment changes are visible at the next local
           // collection barrier. Never keep rows against a pre-split shape.
@@ -6073,7 +6124,7 @@ export class VehicleSimulation {
           );
           rejected ||= restartGroups.length > 0;
           restartGroups.length = 0;
-          return { impacts, rejected, positiveJointImpulse };
+          return { impacts, rejected, positiveJointImpulse, reportedFailure };
         },
         diagnostics: this.correctionDiagnostics,
         trace: this.onLocalResponseTrace,

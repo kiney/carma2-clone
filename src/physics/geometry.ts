@@ -1,5 +1,5 @@
 import { Box3, Quaternion, Triangle, Vector3 } from "three";
-import type { RigidBody } from "./contact";
+import type { RigidBody, WorldContactFeature } from "./contact";
 import { recoverHull } from "./hull-recovery";
 import {
   createEdgeFeatureIndex,
@@ -45,6 +45,8 @@ export interface HullContact {
   contactTypes?: number[];
   faceFriction?: number;
   sourceSurface?: import("../world").Surface;
+  /** Retained through native reduction for the browser temporal admission pass. */
+  worldFeature?: WorldContactFeature;
 }
 export interface WorldSurfaceOptions {
   /** Phase-owned transformed endpoints; acquired only for enabled edge tests. */

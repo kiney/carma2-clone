@@ -1,3 +1,7 @@
+import {
+  solveNormalConstraints,
+  type NormalConstraintSolution,
+} from "./normal-solver";
 import { Quaternion, Vector3 } from "three";
 import {
   buildJointConstraints,
@@ -48,6 +52,15 @@ export interface Contact {
   /** Original world feature flags0=edge,1=body vertex,2=world vertex;5=pair. */
   sourceType?: number;
   sourceSurface?: import("../world").Surface;
+  /** Collection provenance only: chord and sampled-arc times are not comparable. */
+  worldFeature?: WorldContactFeature;
+}
+
+export interface WorldContactFeature {
+  hullIndex: number;
+  vertexIndex?: number;
+  fraction: number;
+  trajectory: "chord" | "angular";
 }
 
 export interface ContactImpact extends Contact {
@@ -179,106 +192,6 @@ function coupling(a: ContactRow[], b: ContactRow[]): number {
     }
   }
   return value;
-}
-
-/** Dense Gaussian elimination with only numerical regularization for redundancy. */
-function linearSolve(
-  matrix: number[][],
-  rhs: number[],
-  active: number[],
-): number[] {
-  const count = active.length;
-  const scale = Math.max(...active.map((i) => matrix[i][i]), 1e-30);
-  const work = active.map((i, r) => [
-    ...active.map((j, c) => matrix[i][j] + (r === c ? scale * 1e-12 : 0)),
-    rhs[i],
-  ]);
-  for (let column = 0; column < count; column++) {
-    let pivot = column;
-    for (let r = column + 1; r < count; r++) {
-      if (Math.abs(work[r][column]) > Math.abs(work[pivot][column])) pivot = r;
-    }
-    [work[column], work[pivot]] = [work[pivot], work[column]];
-    const divisor = work[column][column];
-    for (let c = column; c <= count; c++) work[column][c] /= divisor;
-    for (let r = column + 1; r < count; r++) {
-      const factor = work[r][column];
-      for (let c = column; c <= count; c++)
-        work[r][c] -= factor * work[column][c];
-    }
-  }
-  const solution = new Array<number>(count).fill(0);
-  for (let r = count - 1; r >= 0; r--) {
-    let value = work[r][count];
-    for (let c = r + 1; c < count; c++) value -= work[r][c] * solution[c];
-    solution[r] = value;
-  }
-  return solution;
-}
-
-/** Independent active-set solve: lambda >= 0, K lambda - b >= 0. */
-function solveNormals(
-  matrix: number[][],
-  rhs: number[],
-  unilateral = rhs.map(() => true),
-): number[] {
-  const count = rhs.length;
-  const impulses = new Array<number>(count).fill(0);
-  const active = Array.from({ length: count }, (_, i) => i);
-  const tolerance = 1e-9 * Math.max(1, ...rhs);
-  for (let iteration = 0; iteration < 4 * count * count + 1; iteration++) {
-    impulses.fill(0);
-    if (active.length) {
-      const solution = linearSolve(matrix, rhs, active);
-      let negative = -1;
-      for (let i = 0; i < active.length; i++) {
-        impulses[active[i]] = solution[i];
-        if (
-          unilateral[active[i]] &&
-          solution[i] < -tolerance &&
-          (negative < 0 || solution[i] < solution[negative])
-        ) {
-          negative = i;
-        }
-      }
-      if (negative >= 0) {
-        active.splice(negative, 1);
-        continue;
-      }
-    }
-    let worst = -1,
-      minimum = -tolerance;
-    for (let i = 0; i < count; i++) {
-      if (active.includes(i)) continue;
-      let slack = -rhs[i];
-      for (let j = 0; j < count; j++) slack += matrix[i][j] * impulses[j];
-      if (slack < minimum) {
-        minimum = slack;
-        worst = i;
-      }
-    }
-    if (worst < 0)
-      return impulses.map((value, i) =>
-        unilateral[i] ? Math.max(0, value) : value,
-      );
-    active.push(worst);
-  }
-  // Degenerate active sets can cycle. Projected coordinate descent solves the
-  // same nonnegative quadratic without introducing a physical compliance.
-  impulses.fill(0);
-  for (let pass = 0; pass < 2000; pass++) {
-    let change = 0;
-    for (let i = 0; i < count; i++) {
-      let residual = rhs[i];
-      for (let j = 0; j < count; j++) residual -= matrix[i][j] * impulses[j];
-      const value = impulses[i] + residual / matrix[i][i];
-      const next = unilateral[i] ? Math.max(0, value) : value;
-      change = Math.max(change, Math.abs(next - impulses[i]));
-      impulses[i] = next;
-    }
-    if (change < tolerance) break;
-  }
-  return impulses;
 }
 
 function restingRhs(contact: Contact): number {
@@ -645,6 +558,7 @@ export function resolveContacts(
   joints: RigidJoint[] = [],
   beforeApply?: BeforeContactApply,
   deferredFriction?: DeferredContactFriction,
+  onNormalSolve?: (solution: NormalConstraintSolution) => void,
 ): ContactImpact[] {
   if (!contacts.length && !joints.length) return [];
   // C2's hidden quick-hinge rows are already satisfied before it measures
@@ -744,10 +658,12 @@ export function resolveContacts(
       })),
     );
   const matrix = rows.map((a) => rows.map((b) => coupling(a, b)));
-  const normalImpulses = solveNormals(matrix, rhs, [
+  const solution = solveNormalConstraints(matrix, rhs, [
     ...contacts.map(() => true),
     ...jointConstraints.map((row) => row.unilateral),
   ]);
+  onNormalSolve?.(solution);
+  const normalImpulses = solution.impulses;
   for (let i = 0; i < impacts.length; i++)
     impacts[i].normalImpulse = normalImpulses[i];
   const jointImpacts = jointConstraintImpacts(
@@ -808,6 +724,7 @@ export function resolveContactGroups(
   joints: RigidJoint[] = [],
   beforeApply?: BeforeContactApply,
   deferredFriction?: DeferredContactFriction,
+  onNormalSolve?: (solution: NormalConstraintSolution) => void,
 ): ContactImpact[] {
   const parents = new Map<RigidState, RigidState>();
   const find = (state: RigidState): RigidState => {
@@ -850,6 +767,7 @@ export function resolveContactGroups(
       value.joints,
       beforeApply,
       deferredFriction,
+      onNormalSolve,
     );
     for (let i = 0; i < impacts.length; i++)
       results.set(value.contacts[i], impacts[i]);
