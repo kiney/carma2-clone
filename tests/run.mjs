@@ -456,3 +456,5 @@ import "./population-availability.test.mjs";
 import "./diagnostics.test.mjs";
 
 import "./runaway-contact-regression.test.mjs";
+
+import "./world-joint-phase-admission.test.mjs";

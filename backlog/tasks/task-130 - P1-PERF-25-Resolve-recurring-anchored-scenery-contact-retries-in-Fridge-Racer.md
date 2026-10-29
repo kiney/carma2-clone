@@ -3,9 +3,10 @@ id: TASK-130
 title: >-
   [P1] PERF-25: Resolve recurring anchored-scenery contact retries in Fridge
   Racer
-status: next
+status: wip
 assignee: []
 created_date: '2026-10-29 15:15'
+updated_date: '2026-10-29 15:20'
 labels:
   - priority-1
   - PERF-25
@@ -32,3 +33,9 @@ Live original Advanced Fridge Racer on bb61b30 remains CPU limited without runaw
 - [ ] #3 Eliminate repeated futile response work for settled attached scenery while retaining real impacts, tipping, snapping, world collision and wake behavior across multiple props.
 - [ ] #4 Verify unchanged crash/repair/part regressions and one short real-GPU capture; separate physics CPU from independent browser RAF delivery and profiling overhead.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+User selected deeper physics investigation; browser focus cadence is treated separately as a possible workstation/window-manager effect. Preserve live Fridge Racer tab9 on5457. Reduce captured cone state, compare contact/joint/rest/candidate/commit/native quiet semantics, and freeze meaningful failing regressions before any engine correction. No retry-cap reductions or forced-sleep workaround.
+<!-- SECTION:NOTES:END -->

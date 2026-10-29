@@ -3,10 +3,10 @@ id: TASK-129
 title: >-
   [P1] PERF-24: Eliminate world-query and CCD amplification from finite runaway
   wreck motion
-status: wip
+status: next
 assignee: []
 created_date: '2026-10-29 13:27'
-updated_date: '2026-10-29 14:56'
+updated_date: '2026-10-29 15:20'
 labels:
   - priority-1
   - PERF-24
@@ -54,4 +54,6 @@ User explicitly selected test-driven correction: write reviewed meaningful faili
 TDD correction implemented against immutable red checkpoint f76c807: 14 reviewed procedural regressions, initial 10 pass/4 expected failures, now 14/14 pass with identical test/fixture/runner hashes. Chronological local sampled admission replaces conflicting full-chord events and retains full encounter witnesses before row reduction. Independent Givens RQ normal solve uses verified native dependence/failure semantics, no compliance or speed/energy caps; numerical failures reach the native separate three-report owner budget. Exact duplicate unilateral equations share aggregate load to preserve existing symmetric browser behavior. Full suite 3440 tests: 3434 pass, 5 skip, 1 intermittent unrelated HMR shutdown timeout; focused HMR rerun passes on baseline and isolated checkout. Production build passes. Unchanged headless crash matrix passes three Stock cases (Eagle3, Buggy, Bigdump, including damage/deformation/repair) then stops at its stale Advanced carrier_mission practice case because no rival exists. Separate real-GPU MCP Advanced Fridge Racer/69mach1 versus Coupe crash and repair passes with deformation/component damage, no console/WebGL errors; Stock Plow/Zee crash loses two parts and remains finite. Actual FAIR first impulse is still unrecorded. Capture/lifecycle hardening acceptance #1/#3 remains open; this checkpoint fixes the independently reproducible energy source, not every possible extreme-motion stall.
 
 AC2 remains deliberately unchecked: the procedural causal mechanism is fixed, but the historical FAIR first event is not replayed and arbitrary pre-existing extreme velocity is not yet guaranteed cheap. Do not equate green numerical regressions with closing the broader workload/lifecycle ticket.
+
+PERF-24 causal correction checkpoint is landed; remaining capture/lifecycle hardening is inactive while user selects the distinct PERF-25 anchored-scenery retry diagnosis. Return to next to keep WIP representative of actual active work.
 <!-- SECTION:NOTES:END -->
