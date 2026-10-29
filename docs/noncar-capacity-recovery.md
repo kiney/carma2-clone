@@ -1,5 +1,13 @@
 # PHY-21: retryable scenery activation capacity
 
+Follow-up PHY-22 restores native retained query ownership for ignore-world
+objects such as lifts. Without that cache, one awake lift vetoed the entire
+reclaim pass and kept all scenery slots occupied. The retryable admission fix
+below remains necessary; [binary evidence and regression checks](c2-ignore-world-reclaim-re.md)
+cover the independent reclaim starvation defect. The later reported fatal sign
+impact remains separately tracked as PHY-23 until its actual damaging rows are
+captured.
+
 ## Live evidence
 
 In the paused Newcity1 playtest at game time 251791 ms, the stop sign originally

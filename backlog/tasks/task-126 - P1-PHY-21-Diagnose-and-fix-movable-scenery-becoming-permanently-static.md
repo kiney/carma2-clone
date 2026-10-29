@@ -4,7 +4,7 @@ title: '[P1] PHY-21: Diagnose and fix movable scenery becoming permanently stati
 status: done
 assignee: []
 created_date: '2026-10-29 08:33'
-updated_date: '2026-10-29 08:59'
+updated_date: '2026-10-29 13:07'
 labels:
   - priority-1
   - PHY-21
@@ -48,6 +48,8 @@ Implemented deliberate browser capacity backpressure instead of installed perman
 The exact original stop-sign browser regression fails on unchanged 59769de at the first controlled capacity failure: 42 quiet original props, 40 extras full, sign renamed &x0s0078. Candidate Stock/Advanced cases retain the name, preserve 28 actor-specific static faces, release capacity via production reclaim effects, and ordinary W-key driving then activates/displaces/tips the sign (observed rotations 1.5567/0.5830 radians). No post-release manual target admission. Four existing original Newcity/Carrier admission/quiet/reclaim/repull browser cases also pass; no console/request/GL failures, SwiftShader 1280x800 correctness only.
 
 13 participation tests include actual once-per-second reclaim with no manual cache invalidation and no retry on cache hits. Full suite: 3372 tests, 3361 passes, 5 optional captured-fixture skips, 6 sandbox socket EPERM failures; all 8 server-startup tests pass when rerun with socket access, resolving those 6 environment failures. Build passes. Historical query that first produced the users 549 markers remains unknown; this fixes the reproduced permanent-failure class, not a claim that oversized speculative queries are eliminated.
+
+2026-10-29 follow-up PHY-22/TASK-127 restores native query-cache ownership for IGNORE_WORLD_COLLISIONS lifts. One cacheless awake lift globally vetoed normal reclamation and kept every scenery slot occupied even after most props slept; this distinct omission is fixed with the existing source flag0x80 path. The earlier retryable-capacity fix remains valid. Reported historical fatal sign impact is still unconfirmed and separately tracked as PHY-23/TASK-128; see docs/c2-ignore-world-reclaim-re.md.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

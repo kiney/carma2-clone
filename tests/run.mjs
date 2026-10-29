@@ -21,6 +21,7 @@ import "./powerup-respawn-effects.test.mjs";
 import "./powerup-respawn-integration.test.mjs";
 import "./vehicle-status.test.mjs";
 import "./live-performance-recorder.test.mjs";
+import "./impact-history-recorder.test.mjs";
 import "./performance-probe.test.mjs";
 import "./render-matrices.test.mjs";
 import "./noncar-render-ownership.test.mjs";

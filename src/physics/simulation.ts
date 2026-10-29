@@ -2000,6 +2000,15 @@ export class VehicleSimulation {
         bounds,
         matrix: matrix(candidate),
         committedMatrix: matrix(false),
+        // Installed4bd7f8 still collects retained bounds for flag80 objects.
+        // GetFacesNearObject disables MODEL emission and empties their face
+        // range; the cache remains necessary for native scenery reclamation.
+        flags:
+          "kind" in body &&
+          body.kind === "noncar" &&
+          (body as NonCarBody).mechanics.ignoreWorldCollisions
+            ? 0x80
+            : 0,
       },
       (query, maximum, gatherModels) => {
         refreshed = true;
@@ -3787,12 +3796,21 @@ export class VehicleSimulation {
     if (
       body.properties.immovable ||
       ((isNativePedBody(body) || isNativePedBoneBody(body)) &&
-        body.suppressWorldFaces) ||
-      ("kind" in body &&
-        body.kind === "noncar" &&
-        (body as NonCarBody).mechanics.ignoreWorldCollisions)
+        body.suppressWorldFaces)
     )
       return [];
+    if (
+      "kind" in body &&
+      body.kind === "noncar" &&
+      (body as NonCarBody).mechanics.ignoreWorldCollisions
+    ) {
+      // IGNORE_WORLD_COLLISIONS suppresses physical rows, not the native
+      // predictive query owner. Missing lift caches otherwise veto every
+      // sleeping prop's once-per-second reclaim and exhaust physical slots.
+      this.facesNearBody(body, hulls, true);
+      this.contactSurfaces.set(body, []);
+      return [];
+    }
     let clock = profile ? performance.now() : 0;
     const carBody = body as SimulationBody;
     const working = this.correctionWorkingSet;

@@ -4,6 +4,14 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-29)
 
+P1 PHY-22 / TASK-127 fixes the newly reproduced ignore-world lift cache omission
+that globally blocked scenery reclaim. Its original Stock/Advanced and hardware
+Chromium checks preserve near-owner protection and zero lift world contacts.
+P1 PHY-23 / TASK-128 is inserted first in `next` for the reported fatal sign
+impact: the actual historical damaging rows remain unknown, and a clean Plow
+approach does not reproduce the failure. Bounded impact/component telemetry is
+installed in the preserved user tab; see [evidence and boundaries](../docs/c2-ignore-world-reclaim-re.md).
+
 The user selected the following implementation order. ANI-01/PED-04 complete the
 first animation/resource stage. The four P2 pedestrian tickets follow in `next`.
 Existing numeric priorities remain unchanged: selection order is explicit and
@@ -11,6 +19,7 @@ must not be inferred from priority alone. WIP is empty, below the limit3.
 
 | Stage | Ticket                                | Status | Priority | Purpose                                                                                                     |
 | ----- | ------------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------- |
+| 0     | PHY-23 / TASK-128                     | next   | P1       | Attribute the reported fatal sign impact using retained committed-contact and component-change evidence. |
 | 1     | ANI-01 / TASK-62 and PED-04 / TASK-57 | done   | P3       | Original FORM/MODEL selection, living/death BON/SKL, source morph/head/model effects and prepared vertices. |
 | 2     | PED-06 / TASK-96                      | next   | P2       | Bind ordinary population identities to native physical lifecycle and movement owners.                       |
 | 3     | PED-07 / TASK-97                      | next   | P2       | Grounding, living falls and recovery ownership.                                                             |

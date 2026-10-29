@@ -496,6 +496,75 @@ test("the source reclaim clock survives race disposal and a new simulation", () 
   assert.equal(second.world.collectFaces(second.query, 300, true).length, 12);
 });
 
+test("ignored-world noncar still collects and retains predictive ACT bounds for reclaim", () => {
+  const f = fixture(3),
+    [far, near, source] = f.bodies;
+  // Keep one sleeping prop at the origin, one beside the source's predictive
+  // query, and the ignored-world source 40 units away from its authored pose.
+  far.state.position.set(0, 0, 0);
+  near.state.position.set(40, 0, 0);
+  source.state.position.set(40, 0, 0);
+  for (const body of f.bodies) body.actor.position.copy(body.state.position);
+  source.mechanics = { ...source.mechanics, ignoreWorldCollisions: true };
+
+  // Quiet props are eligible for ordinary outer-frame reclaim.
+  assert.equal(f.simulation.admitNonCar(far), true);
+  assert.equal(f.simulation.admitNonCar(near), true);
+  assert.equal(f.simulation.admitNonCar(source, { wake: true }), true);
+  source.motor.sleeping = true; // ec remains awake, like the native path.
+  assert.equal(source.properties.immovable, false);
+
+  const gathers = [],
+    collectFaces = f.world.collectFaces.bind(f.world);
+  f.world.collectFaces = (query, maximum, gatherModels, options) => {
+    gathers.push(gatherModels);
+    return collectFaces(query, maximum, gatherModels, options);
+  };
+
+  // Exercise the production contact entry point. The ignored-world flag must
+  // suppress contacts while still running GetFacesNearObject's cache query.
+  assert.deepEqual(f.simulation.worldContacts(source, source.hulls), []);
+  const cache = f.simulation.worldFaceStates.get(source);
+  assert.ok(cache, "world contact query creates predictive face state");
+  assert.equal(f.simulation.worldFaceCache.valid(cache), true);
+  assert.ok(gathers.length > 0, "ordinary world face collector ran");
+  assert.ok(gathers.every((gatherModels) => gatherModels === false));
+  assert.ok(cache.bounds.min.x < -1 && cache.bounds.max.x > 1);
+  assert.ok(Math.abs(cache.inverse.elements[12] + 40) < 1e-5);
+  assert.equal(
+    cache.start,
+    cache.end,
+    "ignore-world query retains no physical faces",
+  );
+
+  // The ordinary collection callback was invoked without gathering models;
+  // the synthetic fixture has no native owner faces, so retained bounds are
+  // the important output of this zero-face GetFacesNearObject pass.
+  const quietState = f.simulation.nativeNonCarQuietState(near);
+  assert.equal(quietState.doNothing, true);
+  assert.equal(f.simulation.nativeNonCarQuietState(far).doNothing, true);
+  f.simulation.finishNonCarReclaim(1000);
+  assert.equal(
+    f.simulation.isNonCarPhysicsActive(near),
+    true,
+    "a quiet prop intersecting another body's valid retained bounds stays admitted",
+  );
+  assert.equal(
+    f.simulation.isNonCarPhysicsActive(far),
+    false,
+    "a quiet prop outside every retained query can be reclaimed",
+  );
+  assert.equal(f.simulation.isNonCarPhysicsActive(source), true);
+});
+
+test("immovable bodies still suppress world-face cache collection", () => {
+  const f = fixture(),
+    body = f.bodies[0];
+  body.properties.immovable = true;
+  assert.deepEqual(f.simulation.worldContacts(body, body.hulls), []);
+  assert.equal(f.simulation.worldFaceStates.has(body), false);
+});
+
 test("production reclaim does not read MODEL providers on inactive or sub-threshold frames", () => {
   const f = fixture(),
     body = f.bodies[0];
