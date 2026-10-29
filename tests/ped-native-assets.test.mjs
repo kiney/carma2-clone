@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import * as THREE from "three";
 import { createAssetStore } from "../server/assets.mjs";
 import { Assets } from "../src/content.ts";
-import { loadNativePedAssets } from "../src/ped-native-assets.ts";
+import {
+  NativePedAssetError,
+  loadNativePedAssets,
+} from "../src/ped-native-assets.ts";
 
-async function fixture(root, dataRoot, stem) {
+async function originalAssets(root) {
   const store = await createAssetStore(root);
   const assets = new Assets();
   assets.manifest = store.manifest;
@@ -17,7 +20,15 @@ async function fixture(root, dataRoot, stem) {
     if (!bytes) throw new Error(`Asset missing: ${path}`);
     return new Uint8Array(bytes);
   };
-  return loadNativePedAssets(assets, `PEDS/PEEPS/${stem}`, stem, dataRoot);
+  return assets;
+}
+async function fixture(root, dataRoot, stem) {
+  return loadNativePedAssets(
+    await originalAssets(root),
+    `PEDS/PEEPS/${stem}`,
+    stem,
+    dataRoot,
+  );
 }
 
 test("native pedestrian assets assemble flat original Blokebl and Bandsman actors", async (t) => {
@@ -186,7 +197,7 @@ test("native asset paths reject traversal before accessing the asset bundle", as
   );
 });
 
-test("DAT slot zero uses the root ACT inherited material, not a named DAT slot", async () => {
+test("flat FORM actors inherit BRender default; authored ACT material is unrelated", async () => {
   const assets = new Assets();
   assets.text = async (path) => {
     if (path.endsWith("/PERSON.TXT"))
@@ -209,7 +220,7 @@ test("DAT slot zero uses the root ACT inherited material, not a named DAT slot",
   sourceMesh.name = "ROOT.DAT";
   root.add(sourceMesh);
   const dat = {
-    name: "ROOT",
+    name: "ROOT.ACT",
     flags: 0,
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
     uvs: new Float32Array(8),
@@ -219,15 +230,18 @@ test("DAT slot zero uses the root ACT inherited material, not a named DAT slot",
     ],
     materials: ["DAT_MAT"],
   };
-  assets.scene = async () => ({
-    group: new THREE.Group().add(root),
-    models: new Map([["root", dat]]),
-    materials: new Map([
-      ["act_mat", actorMaterial],
-      ["dat_mat", namedMaterial],
-    ]),
-    defaultMaterial,
-  });
+  assets.scene = async (_directory, _stem, options) => {
+    assert.equal(options.resourceOnly, true);
+    return {
+      group: new THREE.Group().add(root),
+      models: new Map([["root", dat]]),
+      materials: new Map([
+        ["act_mat", actorMaterial],
+        ["dat_mat", namedMaterial],
+      ]),
+      defaultMaterial,
+    };
+  };
   const ped = await loadNativePedAssets(
     assets,
     "PEDS/PEEPS/PERSON",
@@ -235,7 +249,7 @@ test("DAT slot zero uses the root ACT inherited material, not a named DAT slot",
     "data",
   );
   const mesh = ped.bones[0].actor.children[0];
-  assert.equal(mesh.material[0], actorMaterial);
+  assert.equal(mesh.material[0], defaultMaterial);
   assert.equal(mesh.material[1], namedMaterial);
 
   root.userData.c2ActorMaterialName = null;
@@ -250,8 +264,170 @@ test("DAT slot zero uses the root ACT inherited material, not a named DAT slot",
     defaultMaterial,
   );
   root.userData.c2ActorMaterialName = "MISSING_MAT";
+  const unchangedPed = await loadNativePedAssets(
+    assets,
+    "PEDS/PEEPS/PERSON",
+    "PERSON",
+    "data",
+  );
+  assert.equal(
+    unchangedPed.bones[0].actor.children[0].material[0],
+    defaultMaterial,
+  );
+  dat.name = "ROOT.DAT";
   await assert.rejects(
     loadNativePedAssets(assets, "PEDS/PEEPS/PERSON", "PERSON", "data"),
-    /MISSING_MAT\.MAT \(ACT inherited material\)/,
+    (error) =>
+      error instanceof NativePedAssetError &&
+      error.diagnostics[0].identifier === "ROOT.ACT" &&
+      error.diagnostics[0].code === "missing-model",
   );
+});
+
+test("resource-only directories do not require an arbitrary ACT bootstrap", async () => {
+  const assets = new Assets();
+  assets.bytes = async () => {
+    throw new Error("No authored files should be read");
+  };
+  const scene = await assets.scene("data/PEDS/PEEPS/EMPTY", "EMPTY", {
+    resourceOnly: true,
+  });
+  assert.equal(scene.sourceActors.length, 0);
+  assert.equal(scene.group.children.length, 0);
+  assert.equal(scene.defaultMaterial.name, "C2 default material");
+  scene.dispose();
+  scene.dispose();
+});
+
+test("Stock and Advanced declared MODELs preserve CitySwat poses, animal attachments and head variants", async (t) => {
+  let assets;
+  try {
+    assets = await originalAssets(
+      new URL("../carma2_orig/", import.meta.url).pathname,
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return t.skip("Original installation unavailable");
+    throw error;
+  }
+  const identity = new THREE.Matrix4();
+  for (const dataRoot of ["data", "adv_data"]) {
+    for (const stem of ["CitySwat", "Bandsman", "deer", "penguin"]) {
+      const ped = await loadNativePedAssets(
+        assets,
+        `PEDS/PEEPS/${stem}`,
+        stem,
+        dataRoot,
+      );
+      assert.equal(ped.scene.sourceActors.length, 0);
+      for (const bone of ped.bones) {
+        assert.equal(
+          bone.attachments,
+          ped.profile.attachmentsByBone.get(bone.name) ?? null,
+        );
+        for (const variant of bone.variants) {
+          if (!variant.actor) continue;
+          assert.ok(
+            variant.actor.matrix.equals(identity),
+            `${stem}/${bone.name} has no ACT tilt`,
+          );
+          assert.equal(
+            variant.sourceModels[0].toLowerCase(),
+            variant.identifier.toLowerCase(),
+          );
+          assert.equal(variant.actor.parent, ped.group);
+        }
+      }
+      if (stem === "CitySwat" || stem === "Bandsman") {
+        assert.equal(ped.bones[1].variants.length, 3);
+        assert.equal(
+          new Set(ped.bones[1].variants.map((v) => v.sourceModels[0])).size,
+          3,
+        );
+      }
+      let releases = 0;
+      const geometry = ped.bones[0].actor.children[0].geometry;
+      geometry.addEventListener("dispose", () => releases++);
+      ped.dispose();
+      ped.dispose();
+      assert.equal(releases, 1);
+      assert.equal(ped.group.children.length, 0);
+    }
+    // These original backup TXT files have spaces; their declared resources
+    // are valid and must be checked rather than rejected by path validation.
+    for (const stem of ["deer", "penguin"]) {
+      const copy = await loadNativePedAssets(
+        assets,
+        `PEDS/PEEPS/${stem}`,
+        `Copy of ${stem}`,
+        dataRoot,
+      );
+      assert.ok(copy.bones.length > 0);
+      copy.dispose();
+    }
+    await assert.rejects(
+      loadNativePedAssets(assets, "PEDS/PEEPS/chef1", "CHEF1", dataRoot),
+      (error) =>
+        error instanceof NativePedAssetError &&
+        error.diagnostics.some((d) => d.identifier === "HECHB.DAT") &&
+        error.diagnostics.some((d) => d.identifier === "HECHC.DAT") &&
+        !error.diagnostics.some((d) => d.identifier === "FATBCH.ACT"),
+    );
+  }
+});
+
+test("source BON/SKL parsing is shared per Assets/root/path and template geometry is owned", async (t) => {
+  let assets;
+  try {
+    assets = await originalAssets(
+      new URL("../carma2_orig/", import.meta.url).pathname,
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return t.skip("Original installation unavailable");
+    throw error;
+  }
+  const bytes = assets.bytes.bind(assets),
+    reads = new Map();
+  assets.bytes = async (path) => {
+    if (/\.(bon|skl)$/i.test(path)) reads.set(path, (reads.get(path) ?? 0) + 1);
+    return bytes(path);
+  };
+  const first = await loadNativePedAssets(
+    assets,
+    "PEDS/PEEPS/CitySwat",
+    "CitySwat",
+    "data",
+  );
+  const second = await loadNativePedAssets(
+    assets,
+    "PEDS/PEEPS/Blokebl",
+    "Blokebl",
+    "data",
+  );
+  assert.ok(reads.size > 0);
+  assert.ok([...reads.values()].every((count) => count === 1));
+  for (const [id, move] of first.moves)
+    assert.equal(move.motion, second.moves.get(id).motion);
+  assert.notEqual(
+    first.bones[0].actor.children[0].geometry,
+    second.bones[0].actor.children[0].geometry,
+  );
+  let materialReleases = 0;
+  first.inheritedActorMaterial.addEventListener(
+    "dispose",
+    () => materialReleases++,
+  );
+  first.dispose();
+  assert.equal(
+    materialReleases,
+    0,
+    "shared native storage retains borrowed render resources",
+  );
+  assert.ok(
+    second.bones[0].actor.children[0].geometry.getAttribute("position").count >
+      0,
+  );
+  second.dispose();
+  assert.equal(materialReleases, 1);
 });

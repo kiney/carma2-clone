@@ -574,6 +574,8 @@ export class Assets {
       storage?: string;
       shading?: number;
       defaultMaterial?: MatMaterial;
+      /** Load the directory MODEL/MAT/PIX library without requiring an ACT. */
+      resourceOnly?: boolean;
     } = {},
   ) {
     const storage = options.storage
@@ -761,8 +763,11 @@ export class Assets {
           (p) =>
             p.split("/").pop()?.toLowerCase() === stem.toLowerCase() + ".act",
         );
-      if (!act) throw new Error(`Actor scene missing: ${dir}/${stem}.act`);
-      const roots = parseAct(await this.bytes(act));
+      if (!act && !options.resourceOnly)
+        throw new Error(`Actor scene missing: ${dir}/${stem}.act`);
+      const roots = options.resourceOnly
+        ? []
+        : parseAct(await this.bytes(act!));
       const group = new THREE.Group();
       group.name = stem;
       let missingModels = 0;
@@ -967,6 +972,15 @@ export class Assets {
           DatModel,
           THREE.BufferGeometry
         >,
+        /** Rendering follows captured native MAT pointers, including failed
+         * named lookups that became NULL at MODEL registration time. */
+        modelMaterials: (model: DatModel, inherited: THREE.Material) => {
+          const data = nativeGeometries.get(model);
+          if (!data) throw new Error(`Native MODEL unavailable: ${model.name}`);
+          return data.materials.map((material, slot) =>
+            data.nullMaterialSlots[slot] ? inherited : material,
+          );
+        },
         /** Native replacement keeps the already loaded MODEL/MAT identities;
          * named registry lookups must not rebind raw face slots at smash time. */
         createModelInstance: (model: DatModel, inherited: THREE.Material) => {

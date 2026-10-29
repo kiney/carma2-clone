@@ -24,7 +24,7 @@ export interface NativePedModelVariant {
   actor: THREE.Group | null;
   /** Bounds of remapped source DAT vertices, before ACT node transforms. */
   modelBounds: ReadonlyMap<string, THREE.Box3>;
-  /** DAT names in source ACT traversal order. */
+  /** Exact resolved source MODEL identity; a flat actor has one MODEL. */
   sourceModels: readonly string[];
 }
 export interface NativePedBoneAsset {
@@ -57,11 +57,57 @@ export interface NativePedAssets {
   profile: PedSimpleBodyProfile;
   bones: readonly NativePedBoneAsset[];
   moves: ReadonlyMap<number, NativePedMoveAsset>;
-  /** Source root ACT material inherited by flat FORM bone ACTs, including
-   * raw NULL face materials and native dead-MAT capacity overflow. */
+  /** BRender inherited/default material for newly allocated flat FORM actors,
+   * including raw NULL face materials and dead-MAT capacity overflow. */
   inheritedActorMaterial: THREE.Material;
   /** The loaded scene library; textures/materials/geometries are shared read-only. */
   scene: Awaited<ReturnType<Assets["scene"]>>;
+  /** Loader evidence; missing required resources throw NativePedAssetError. */
+  diagnostics: readonly NativePedAssetDiagnostic[];
+  /** Release template geometry and its owned resource library once unused. */
+  dispose(): void;
+}
+
+export interface NativePedAssetDiagnostic {
+  code: "missing-resource" | "missing-model" | "invalid-source";
+  path: string;
+  identifier?: string;
+  bone?: string;
+  poseIndex?: number;
+  message: string;
+}
+export class NativePedAssetError extends Error {
+  constructor(readonly diagnostics: readonly NativePedAssetDiagnostic[]) {
+    super(diagnostics.map((entry) => entry.message).join("; "));
+    this.name = "NativePedAssetError";
+  }
+}
+
+// Source BON/SKL records are borrowed read-only by every personality using the
+// same Assets instance/root/path. Failures remain retryable after a reload.
+const motionLibraries = new WeakMap<Assets, Map<string, Promise<PedMotion>>>();
+function sourceMotion(assets: Assets, path: string): Promise<PedMotion> {
+  let library = motionLibraries.get(assets);
+  if (!library) motionLibraries.set(assets, (library = new Map()));
+  const key = (assets.resolve(path) ?? path).toLowerCase();
+  let promise = library.get(key);
+  if (!promise) {
+    promise = assets.bytes(path).then((bytes) => {
+      const motion = parsePedMotion(bytes);
+      for (const bone of motion.bones) {
+        Object.freeze(bone.children);
+        Object.freeze(bone);
+      }
+      Object.freeze(motion.bones);
+      return Object.freeze(motion);
+    });
+    library.set(key, promise);
+    const request = promise;
+    void request.catch(() => {
+      if (library!.get(key) === request) library!.delete(key);
+    });
+  }
+  return promise;
 }
 
 const assetKey = (name: string) =>
@@ -114,13 +160,39 @@ export async function loadNativePedAssets(
     personDirectory
       .split(/[\\/]/)
       .some((part) => !part || part === "." || part === "..") ||
-    !/^[\w-]{1,64}$/.test(stem) ||
+    !/^[\w -]{1,64}$/.test(stem) ||
     !["data", "adv_data"].includes(dataRoot)
   )
     throw new Error("Invalid native pedestrian asset path");
 
   const prefix = `${dataRoot}/${personDirectory}`;
-  const personalityText = await assets.text(`${prefix}/${stem}.TXT`);
+  const readText = async (path: string) => {
+    try {
+      return await assets.text(path);
+    } catch (error) {
+      throw new NativePedAssetError([
+        {
+          code: "missing-resource",
+          path,
+          message: `Native pedestrian source resource unavailable: ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ]);
+    }
+  };
+  const parseSource = <T>(path: string, parse: () => T): T => {
+    try {
+      return parse();
+    } catch (error) {
+      throw new NativePedAssetError([
+        {
+          code: "invalid-source",
+          path,
+          message: `Native pedestrian source invalid: ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ]);
+    }
+  };
+  const personalityText = await readText(`${prefix}/${stem}.TXT`);
   const personalityRows = personalityText
     .split(/\r?\n/)
     .map((row) => row.split("//")[0].trim())
@@ -134,179 +206,187 @@ export async function loadNativePedAssets(
     `${prefix}/${stem}.TXT default moves`,
   );
   const formPath = `${dataRoot}/PEDS/FORMS/${formStem}.TXT`;
-  const form = parsePedForm(await assets.text(formPath));
+  const formText = await readText(formPath);
+  const form = parseSource(formPath, () => parsePedForm(formText));
   const remap = form.remapFilename
     ? parsePedRemap(
-        await assets.text(`${dataRoot}/PEDS/REMAPS/${form.remapFilename}`),
+        await readText(`${dataRoot}/PEDS/REMAPS/${form.remapFilename}`),
       )
     : undefined;
-  const defaultMovesText = await assets.text(
+  const defaultMovesText = await readText(
     `${dataRoot}/PEDS/MOVES/${defaultsStem}.TXT`,
   );
-  const profile = parsePedPersonalitySimpleBody(
-    personalityText,
-    form,
-    remap,
-    defaultMovesText,
+  const profile = parseSource(`${prefix}/${stem}.TXT`, () =>
+    parsePedPersonalitySimpleBody(
+      personalityText,
+      form,
+      remap,
+      defaultMovesText,
+    ),
   );
-  const actorFiles = assets
-    .files(prefix, /^[^/]+\.act$/i)
-    .sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }));
-  const actorPath = required(actorFiles[0], `${prefix} actor scene`);
-  const sceneStem = actorPath
-    .split("/")
-    .pop()!
-    .replace(/\.act$/i, "");
-  const scene = await assets.scene(prefix, sceneStem);
+  // ReadPersonality finds MODEL identifiers exactly; .ACT is a legal MODEL
+  // suffix, not a request to load an actor graph. FORM allocates fresh actors.
+  const scene = await assets.scene(prefix, stem, {
+    resourceOnly: true,
+    storage: `native-peds:${dataRoot}`,
+  });
   const group = new THREE.Group();
   group.name = `native-ped:${stem}`;
   group.matrix.identity();
   group.matrixAutoUpdate = false;
   const geometryCache = new Map<string, THREE.BufferGeometry>();
-  const rootBone = form.bones[0];
-  const rootIdentifier = required(
-    profile.modelsByBone.get(rootBone.name)?.[0],
-    `${stem} root model`,
-  );
-  const rootDatName = rootIdentifier.replace(/\.ACT$/i, ".DAT");
-  required(scene.models.get(assetKey(rootDatName)), `${prefix}/${rootDatName}`);
-  const sceneNative = scene as typeof scene & {
-    defaultMaterial?: THREE.Material;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    group.clear();
+    for (const geometry of geometryCache.values()) geometry.dispose();
+    geometryCache.clear();
+    scene.dispose?.();
   };
-  let rootActor: THREE.Object3D | undefined;
-  scene.group.traverse((object) => {
-    if (rootActor || !(object as THREE.Mesh).isMesh) return;
-    const mesh = object as THREE.Mesh;
-    if (assetKey(mesh.name) === assetKey(rootDatName))
-      rootActor = mesh.parent ?? undefined;
-  });
-  const selectedRootActor = required(
-    rootActor,
-    `${prefix} ACT node for root model ${rootDatName}`,
-  );
-  if (
-    !Object.prototype.hasOwnProperty.call(
-      selectedRootActor.userData,
-      "c2ActorMaterialName",
-    )
-  )
-    throw new Error(
-      `Native pedestrian asset missing: ACT material metadata for ${rootDatName}`,
+  try {
+    const inheritedActorMaterial = required(
+      scene.defaultMaterial,
+      `${prefix} BRender default material`,
     );
-  const inheritedName = selectedRootActor.userData.c2ActorMaterialName;
-  const inheritedActorMaterial =
-    inheritedName === null
-      ? required(
-          sceneNative.defaultMaterial,
-          `${prefix} BRender default material`,
-        )
-      : required(
-          scene.materials.get(assetKey(String(inheritedName))),
-          `${prefix}/${String(inheritedName)}.MAT (ACT inherited material)`,
-        );
+    // The exact registry preserves suffixes and native newest-first lookup. The
+    // compatibility map fallback also compares full source identities exactly.
+    const findModel = (name: string) =>
+      scene.findSourceModel
+        ? scene.findSourceModel(name)
+        : [...scene.models.values()].find(
+            (model) => model.name.toLowerCase() === name.toLowerCase(),
+          );
+    const diagnostics: NativePedAssetDiagnostic[] = [];
+    for (const [bone, variants] of profile.modelsByBone)
+      variants.forEach((identifier, poseIndex) => {
+        if (identifier !== null && !findModel(identifier))
+          diagnostics.push({
+            code: "missing-model",
+            path: prefix,
+            identifier,
+            bone,
+            poseIndex,
+            message: `Native pedestrian MODEL missing: ${prefix}/${identifier} (${bone}, pose ${poseIndex})`,
+          });
+      });
+    if (diagnostics.length) throw new NativePedAssetError(diagnostics);
 
-  const buildModel = (name: string, boneName: string, updateable: boolean) => {
-    const model = required(
-      scene.models.get(assetKey(name)),
-      `${prefix}/${name}`,
-    );
-    const remapped = remappedModel(model, remap?.get(boneName));
-    // ReadPersonality marks contiguous nonnull set0 poses updateable as part
-    // of set1 preparation. The cached original library MODEL stays untouched.
-    if (updateable) remapped.flags |= 0x80;
-    const bounds = modelBounds(remapped);
-    const cacheKey = `${assetKey(name)}:${remapped.flags}:${(remap?.get(boneName)?.general ?? []).join(",")}`;
-    let geometry = geometryCache.get(cacheKey);
-    if (!geometry) {
-      geometry = createModelGeometry(remapped);
-      geometryCache.set(cacheKey, geometry);
-    }
-    const materials = [
-      ...new Set(model.faces.map((face) => face.material)),
-    ].map((slot) => {
-      if (slot === 0) return inheritedActorMaterial;
-      const materialName = required(
-        model.materials[slot - 1],
-        `${name} material slot ${slot}`,
-      );
-      return required(
-        scene.materials.get(assetKey(materialName)),
-        `${prefix}/${materialName}.MAT`,
-      );
-    });
-    return { model, bounds, geometry, materials };
-  };
-
-  const bones: NativePedBoneAsset[] = [];
-  for (let index = 0; index < form.bones.length; index++) {
-    const bone = form.bones[index];
-    const names = required(
-      profile.modelsByBone.get(bone.name),
-      `${stem} model list for ${bone.name}`,
-    );
-    const variants: NativePedModelVariant[] = [];
-    let contiguous = true;
-    for (const identifier of names) {
-      if (identifier === null) {
-        contiguous = false;
-        variants.push({
-          identifier: "NULL",
-          actor: null,
-          modelBounds: new Map(),
-          sourceModels: [],
-        });
-        continue;
+    const buildModel = (
+      name: string,
+      boneName: string,
+      updateable: boolean,
+    ) => {
+      const model = required(findModel(name), `${prefix}/${name}`);
+      const remapped = remappedModel(model, remap?.get(boneName));
+      // ReadPersonality marks contiguous nonnull set0 poses updateable as part
+      // of set1 preparation. The cached original library MODEL stays untouched.
+      if (updateable) remapped.flags |= 0x80;
+      const bounds = modelBounds(remapped);
+      const cacheKey = `${name.toLowerCase()}:${remapped.flags}:${(remap?.get(boneName)?.general ?? []).join(",")}`;
+      let geometry = geometryCache.get(cacheKey);
+      if (!geometry) {
+        geometry = createModelGeometry(remapped);
+        geometryCache.set(cacheKey, geometry);
       }
-      // Personality entries may use .ACT for historical model names. The
-      // library's flattened geometry is still the corresponding DAT model.
-      const datName = identifier.replace(/\.ACT$/i, ".DAT");
-      const { model, bounds, geometry, materials } = buildModel(
-        datName,
-        bone.name,
-        contiguous,
-      );
-      const actor = new THREE.Group();
-      actor.name = identifier;
-      actor.matrix.identity();
-      actor.matrixAutoUpdate = false;
-      actor.add(new THREE.Mesh(geometry, materials));
-      const built = {
-        actor,
-        modelBounds: new Map([[model.name, bounds]]),
-        sourceModels: [model.name],
-      };
-      variants.push({ identifier, ...built });
-      group.add(built.actor);
-      if (variants.length === 1) built.actor.visible = true;
-      else built.actor.visible = false;
-    }
-    const selected = variants[0] ?? null;
-    bones.push({
-      index,
-      name: bone.name,
-      parent: bone.parent,
-      massKg: bone.massKg,
-      mass: bone.mass,
-      collisionType: bone.collisionType,
-      jointType: bone.jointType,
-      actor: selected?.actor ?? null,
-      variants,
-      attachments: profile.attachmentsByBone.get(bone.name) ?? null,
-    });
-  }
+      const materials = scene.modelMaterials
+        ? scene.modelMaterials(model, inheritedActorMaterial)
+        : [...new Set(model.faces.map((face) => face.material))].map((slot) => {
+            if (slot === 0) return inheritedActorMaterial;
+            const name = required(
+              model.materials[slot - 1],
+              `${model.name} material slot ${slot}`,
+            );
+            // Synthetic/custom asset providers may not expose captured pointers.
+            return (
+              scene.materials.get(assetKey(name)) ?? inheritedActorMaterial
+            );
+          });
+      return { model, bounds, geometry, materials };
+    };
 
-  const moves = new Map<number, NativePedMoveAsset>();
-  for (const move of form.moves) {
-    const motion = parsePedMotion(
-      await assets.bytes(`${dataRoot}/PEDS/MOVES/${move.filename}`),
-    );
-    moves.set(move.id, {
-      id: move.id,
-      form: move,
-      personality: profile.movement.get(move.id) ?? null,
-      motion,
-    });
+    const bones: NativePedBoneAsset[] = [];
+    for (let index = 0; index < form.bones.length; index++) {
+      const bone = form.bones[index];
+      const names = required(
+        profile.modelsByBone.get(bone.name),
+        `${stem} model list for ${bone.name}`,
+      );
+      const variants: NativePedModelVariant[] = [];
+      let contiguous = true;
+      for (const identifier of names) {
+        if (identifier === null) {
+          contiguous = false;
+          variants.push({
+            identifier: "NULL",
+            actor: null,
+            modelBounds: new Map(),
+            sourceModels: [],
+          });
+          continue;
+        }
+        const { model, bounds, geometry, materials } = buildModel(
+          identifier,
+          bone.name,
+          contiguous,
+        );
+        const actor = new THREE.Group();
+        actor.name = identifier;
+        actor.matrix.identity();
+        actor.matrixAutoUpdate = false;
+        actor.add(new THREE.Mesh(geometry, materials));
+        const built = {
+          actor,
+          modelBounds: new Map([[model.name, bounds]]),
+          sourceModels: [model.name],
+        };
+        variants.push({ identifier, ...built });
+        group.add(built.actor);
+        if (variants.length === 1) built.actor.visible = true;
+        else built.actor.visible = false;
+      }
+      const selected = variants[0] ?? null;
+      bones.push({
+        index,
+        name: bone.name,
+        parent: bone.parent,
+        massKg: bone.massKg,
+        mass: bone.mass,
+        collisionType: bone.collisionType,
+        jointType: bone.jointType,
+        actor: selected?.actor ?? null,
+        variants,
+        attachments: profile.attachmentsByBone.get(bone.name) ?? null,
+      });
+    }
+
+    const moves = new Map<number, NativePedMoveAsset>();
+    for (const move of form.moves) {
+      const motion = await sourceMotion(
+        assets,
+        `${dataRoot}/PEDS/MOVES/${move.filename}`,
+      );
+      moves.set(move.id, {
+        id: move.id,
+        form: move,
+        personality: profile.movement.get(move.id) ?? null,
+        motion,
+      });
+    }
+    group.updateMatrixWorld(true);
+    return {
+      group,
+      form,
+      profile,
+      bones,
+      moves,
+      scene,
+      inheritedActorMaterial,
+      diagnostics,
+      dispose,
+    };
+  } catch (error) {
+    dispose();
+    throw error;
   }
-  group.updateMatrixWorld(true);
-  return { group, form, profile, bones, moves, scene, inheritedActorMaterial };
 }

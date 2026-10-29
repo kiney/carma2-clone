@@ -269,14 +269,12 @@ try {
                   missingClonePointers: dead.models.filter((model) =>
                     model.faceMaterials.some((material) => material === null),
                   ).length,
-                  identifiers: dead.models
-                    .slice(0, 12)
-                    .map((model) => ({
-                      boneIndex: model.boneIndex,
-                      poseIndex: model.poseIndex,
-                      source: model.sourceIdentifier,
-                      identifier: model.identifier,
-                    })),
+                  identifiers: dead.models.slice(0, 12).map((model) => ({
+                    boneIndex: model.boneIndex,
+                    poseIndex: model.poseIndex,
+                    source: model.sourceIdentifier,
+                    identifier: model.identifier,
+                  })),
                 };
                 stage = "createNativePedInstance";
                 const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
@@ -311,20 +309,21 @@ try {
                       }
                     : null,
                 };
-                row.warnings = [...template.scene.group.children].length
-                  ? []
-                  : ["source scene root is empty"];
+                row.warnings = template.diagnostics.map(
+                  (entry) => entry.message,
+                );
               } catch (error) {
                 row.failure = {
                   stage,
                   error: error instanceof Error ? error.message : String(error),
                   stack: error instanceof Error ? error.stack : null,
+                  diagnostics: error?.diagnostics ?? [],
                 };
                 row.stages[stage] = false;
               } finally {
                 dead?.dispose();
                 instance?.group.clear();
-                template?.group.clear();
+                template?.dispose();
                 template = undefined;
                 dead = undefined;
                 instance = undefined;
