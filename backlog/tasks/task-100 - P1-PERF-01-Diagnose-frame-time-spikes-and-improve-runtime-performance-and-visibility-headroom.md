@@ -4,7 +4,7 @@ title: '[P5] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: backlog
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-29 13:28'
+updated_date: '2026-10-29 15:16'
 labels:
   - PERF-01
   - performance
@@ -100,6 +100,8 @@ PERF-19 implementation checkpoint: scoped native preparation, scalar collector k
 2026-10-29 new live user report inspected without reload. SHEIK, RATTLE & ROLL, cached82a5cc8 plus PED-10/PHY-21 adapters (new ANI-01 not loaded), hardware AMD ANGLE2067x1430. Initial running43.36FPS; later reproduced0.67FPS with966/1101ms RAF gaps but only111ms simulation CPU and12ms render CPU over3s. Paused independent heartbeat: RAF1016.6ms apart while all16 100ms timer callbacks remain timely. MCP bringToFront restores59.32FPS paused; subsequent running46.41FPS with mean12.43ms physics tick and approximately1ms GPU. Strong evidence for frame-delivery scheduling in this captured episode, exact Chromium mechanism unknown; not proof that historical engine stalls are fixed. Existing bounded physics recorder and separate cadence/heartbeat/long-task rings installed in preserved paused tab for recurrence. No production code or physics policy changed. See docs/live-browser-cadence.md; keep user-deferred P5 backlog priority/ordinal.
 
 2026-10-29 subsequent user Screwie report establishes a distinct actual CPU stall (not RAF-only scheduling). Worst measured40ms tick1448ms, update5837ms/5ticks; slow contact calls identify extreme-motion FAIR wreck and FRBUMPR.DA. Earliest FAIR v1371.94 actor units/s /34079kmh and spin14789.63rad/s still inside level. The late escaped car has normal hull radius.481 and unit quaternion; initial energy source remains unrecorded. New P1 next PERF-24/TASK-129 owns this concrete workload and first-event diagnostics. Umbrella remains deferred P5. Evidence: docs/screwie-runaway-car-stall.md; original-derived snapshots ignored.
+
+2026-10-29 Fridge Racer recurrence on bb61b30: paused59.96FPS, running21.39FPS with mean30.8ms physics ticks; later paused RAF1017.5ms despite14 timely100ms heartbeats over1.4s. Activating existing tab restores59.97FPS paused; subsequent running34.27FPS remains CPU limited at25.8ms/tick and approximately0.8ms GPU. Distinct non-explosive physics cause isolated: two anchored cones each consume30 contact/joint responses every tick,300/341 solves in five ticks. New P1 next PERF-25/TASK-130 owns reduced reproduction and root correction; preserve umbrella P5 backlog priority/ordinal. No engine/resolution/population changes; original scene retained paused, profiling wrappers removed. See docs/fridge-racer-frame-time.md.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
