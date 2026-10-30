@@ -1,3 +1,5 @@
+import { planNativeOpponentInitialization } from "../src/ai/startup-plan.ts";
+import { NativeRandom } from "../src/native-random.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Vector3, Quaternion, Group } from "three";
@@ -43,7 +45,7 @@ function car(human, x) {
     knackered: false,
   };
 }
-function fixture(overrides = {}) {
+function fixture(overrides = {}, initialization) {
   const player = car(true, 10),
     rival = car(false, 10),
     inactive = new Set(),
@@ -83,7 +85,7 @@ function fixture(overrides = {}) {
       ...overrides,
     },
   );
-  fleet.add(rival, 0, 0);
+  fleet.add(rival, 0, 0, initialization);
   return { fleet, player, rival, inactive, events };
 }
 
@@ -244,4 +246,46 @@ test("safe-relocation closed component reports bounded exhaustion and preserves 
     diagnostics.some((message) => message.includes("4096 endpoint visits")),
   );
   assert.equal(fleet.snapshot.rivals[0].physical, false);
+});
+
+test("reserved opponent initialization binds publication clock without repeating random draws", () => {
+  const rng = new NativeRandom(1),
+    plan = planNativeOpponentInitialization(5, 1, [120, 240], rng.random),
+    before = rng.state;
+  const { fleet } = fixture(
+    {
+      initialTimeMs: 100000,
+      random: () => {
+        throw new Error("reserved initialization must not draw again");
+      },
+    },
+    plan.instances[0],
+  );
+  const state = fleet.snapshot.rivals[0];
+  assert.equal(
+    state.repair.repairIntervalMs,
+    plan.instances[0].repairIntervalMs,
+  );
+  assert.equal(state.repair.lastRepairMs, 100000);
+  assert.equal(
+    state.visibilityInitialDeadlineMs,
+    102000 + plan.instances[0].visibilityDelayMs,
+  );
+  assert.equal(rng.state, before);
+});
+
+test("reserved initialization validates before partial fleet registration", () => {
+  for (const initialization of [
+    { repairIntervalMs: -1, visibilityDelayMs: 0 },
+    { repairIntervalMs: 0, visibilityDelayMs: 901 },
+    { repairIntervalMs: NaN, visibilityDelayMs: 0 },
+  ]) {
+    assert.throws(() => fixture({}, initialization), /initialization/);
+  }
+  const { fleet } = fixture({}, { repairIntervalMs: 0, visibilityDelayMs: 0 });
+  assert.equal(
+    fleet.snapshot.rivals[0].repair.repairIntervalMs,
+    0,
+    "zero is valid reserved data, not a signal to draw again",
+  );
 });

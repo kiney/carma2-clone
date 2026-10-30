@@ -1,3 +1,4 @@
+import type { NativeOpponentInitializationInstance } from "./startup-plan";
 import { Vector3 } from "three";
 import type { OpponentConfig, TrackPathSection } from "../config";
 import type { SimulatedCar } from "../physics/simulation";
@@ -172,6 +173,7 @@ export class NativeOpponentFleet {
     body: SimulatedCar,
     catalogIndex: number,
     forcedPersonality: NativeForcedPersonality,
+    initialization?: NativeOpponentInitializationInstance,
   ): void {
     if (
       body.human ||
@@ -180,6 +182,16 @@ export class NativeOpponentFleet {
       ![0, 1, 2, 3].includes(forcedPersonality)
     )
       throw new Error("Invalid native opponent registration");
+    if (
+      initialization &&
+      (!Number.isInteger(initialization.repairIntervalMs) ||
+        initialization.repairIntervalMs < 0 ||
+        initialization.repairIntervalMs > 0xffffffff ||
+        !Number.isInteger(initialization.visibilityDelayMs) ||
+        initialization.visibilityDelayMs < 0 ||
+        initialization.visibilityDelayMs > 900)
+    )
+      throw new Error("Invalid reserved opponent initialization");
     if (!this.initialized) {
       this.nextGrudgeReductionMs = (this.nowMs + 10000) >>> 0;
       this.initialized = true;
@@ -255,7 +267,7 @@ export class NativeOpponentFleet {
       movedEver: false,
       initialized: false,
     });
-    this.initializeRival(this.rivals.get(body.group.uuid)!);
+    this.initializeRival(this.rivals.get(body.group.uuid)!, initialization);
   }
 
   get snapshot() {
@@ -275,6 +287,7 @@ export class NativeOpponentFleet {
         physical: this.hooks.isPhysicsActive(r.body),
         playerDistance: r.playerDistance,
         lastInViewMs: r.lastInViewMs,
+        visibilityInitialDeadlineMs: r.visibilityInitialDeadlineMs,
         movedEver: r.movedEver,
         objective: r.objective.snapshot(),
         selector: r.selector.snapshot(),
@@ -493,16 +506,22 @@ export class NativeOpponentFleet {
     return result;
   }
 
-  private initializeRival(r: Rival): void {
+  private initializeRival(
+    r: Rival,
+    initialization?: NativeOpponentInitializationInstance,
+  ): void {
     if (r.initialized) return;
     r.repair = new NativeOpponentRepairState(
       this.nowMs,
       this.hooks.repairLimits[0],
       this.hooks.repairLimits[1],
       this.random,
+      initialization?.repairIntervalMs,
     );
     this.facts.get(r.body.group.uuid)!.contactTimeMs = this.nowMs;
-    const delay = Math.floor((Math.floor(this.random() * 32768) * 901) / 32768);
+    const delay =
+      initialization?.visibilityDelayMs ??
+      Math.floor((Math.floor(this.random() * 32768) * 901) / 32768);
     r.visibilityInitialDeadlineMs = (this.nowMs + 2000 + delay) >>> 0;
     r.selector.synchronize({
       ...r.selector.snapshot(),

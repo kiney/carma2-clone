@@ -25,10 +25,17 @@ let browser;
 let page;
 const report = {
   fixture:
-    "DUNE BUGGERED / DESERT2.TXT, Bigdump player, complete original ten-opponent roster selected with stack-filtered xorshift32 seed 1; second opponent scene held to inspect staged population",
+    "DUNE BUGGERED / DESERT2.TXT, Bigdump player, complete original ten-opponent roster and initialization reserved from shared native CRT seed4; second opponent scene held to inspect staged population",
   backend: "SwiftShader correctness fixture, not a hardware measurement",
-  selectionSeed: 1,
-  selectedOpponentIds: [2, 7, 22, 3, 17, 10, 6, 14, 29, 35],
+  selectionSeed: 4,
+  selectedOpponentIds: [2, 33, 17, 22, 12, 10, 37, 14, 29, 19],
+  selectedRankings: [54, 1, 83, 62, 18, 86, 2, 60, 5, 31],
+  expectedPersonalities: [2, 2, 2, 2, 2, 1, 1, 0, 2, 0],
+  expectedRepairIntervals: [
+    7440000, 10740000, 9660000, 10680000, 10920000, 10380000, 12420000,
+    12120000, 14220000, 13980000,
+  ],
+  expectedVisibilityDelays: [777, 582, 351, 71, 426, 538, 636, 438, 49, 115],
   errors: [],
   failedRequests: [],
 };
@@ -83,36 +90,37 @@ try {
     { timeout: 45000 },
   );
 
-  // Stack filtering seeds only the two global-random consumers that choose
-  // the race roster and its authored personality slots. Other systems retain
-  // their ordinary Math.random behavior.
+  // Reset only at the first actual native roster draw, then observe the real
+  // shared stream. No independent Math.random roster/personality substitutes.
   const configured = await page.evaluate(async () => {
     const c = window.carma;
     const module = await import("/src/native-random.ts");
-    module.sharedNativeRandom.seed(1);
-    const originalRandom = Math.random.bind(Math);
-    const streams = { selection: 1, personality: 1 };
-    const next = (key) => {
-      let value = streams[key] >>> 0;
-      value ^= value << 13;
-      value ^= value >>> 17;
-      value ^= value << 5;
-      streams[key] = value >>> 0;
-      return streams[key] / 0x100000000;
-    };
-    const draws = { selection: 0, personality: 0 };
-    Math.random = function () {
+    const stream = module.sharedNativeRandom;
+    const originalRandom = stream.random;
+    let started = false;
+    const draws = { selection: 0, initialization: 0, personality: 0 };
+    const trace = [];
+    stream.random = function () {
       const stack = String(new Error().stack || "");
-      if (/opponent-selection(?:\.ts|\.js)?/.test(stack)) {
-        draws.selection++;
-        return next("selection");
+      const phase = /opponent-selection/.test(stack)
+        ? "selection"
+        : /personality/.test(stack)
+          ? "personality"
+          : /startup-plan/.test(stack)
+            ? "initialization"
+            : null;
+      if (phase === "selection" && !started) {
+        stream.seed(4);
+        started = true;
       }
-      if (/personality(?:\.ts|\.js)?/.test(stack)) {
-        draws.personality++;
-        return next("personality");
+      const value = originalRandom();
+      if (phase) {
+        draws[phase]++;
+        trace.push({ phase, raw: Math.round(value * 32768) });
       }
-      return originalRandom();
+      return value;
     };
+    window.__ai01StartupTrace = trace;
     const track = c.assets.resolve("data/RACES/desert2/desert2.txt");
     const car = c.assets.resolve("data/CARS/bigdump/bigdump.txt");
     if (!track || !car) throw new Error("Original DUNE/Bigdump data is absent");
@@ -227,6 +235,17 @@ try {
     "Player input advances during population load",
   );
 
+  const reservation = await page.evaluate(async () => {
+    const module = await import("/src/native-random.ts");
+    const before = window.__ai01StartupTrace.length;
+    for (let n = 0; n < 17; n++) module.sharedNativeRandom.random();
+    return { before, after: window.__ai01StartupTrace.length };
+  });
+  assert.deepEqual(
+    reservation,
+    { before: 48, after: 48 },
+    "unrelated shared draws during asset staging cannot change the reservation",
+  );
   await page.evaluate(() => window.__releaseOpponentScene());
   await page.waitForFunction(
     () => window.carma.populationLoadState.opponents.state === "ready",
@@ -240,10 +259,9 @@ try {
   );
   const completed = await page.evaluate(async () => {
     const c = window.carma;
-    const module = await import("/src/native-random.ts");
-    module.sharedNativeRandom.seed(1);
     const rivals = c.rivals.map((rival) => ({
       id: rival.id,
+      selectionRanking: rival.selectionRanking,
       name: rival.body.group.name,
       wasted: rival.body.knackered,
       damage: [...rival.body.damage.componentLevels],
@@ -263,6 +281,13 @@ try {
       opponents: c.populationLoadState.opponents,
       sceneCalls: window.__ai05SceneCalls(),
       randomDraws: { ...window.__ai05RandomDraws },
+      startupTrace: window.__ai01StartupTrace.slice(),
+      initialAI: c.opponentFleet.snapshot.rivals.map((r) => ({
+        personality: r.personality,
+        repairIntervalMs: r.repair.repairIntervalMs,
+        visibilityDelayMs:
+          r.visibilityInitialDeadlineMs - c.opponentFleet.snapshot.nowMs - 2000,
+      })),
       player: player.group.name,
       rivals,
       cars,
@@ -283,7 +308,7 @@ try {
   assert.deepEqual(
     completed.rivals.map((rival) => rival.id),
     report.selectedOpponentIds,
-    "Stack-filtered seed must reproduce the expected full Bigdump roster",
+    "Native CRT seed4 must reproduce the complete original Bigdump roster",
   );
   assert.ok(
     completed.rivals.some((rival) => rival.name.toLowerCase() === "newhawk"),
@@ -306,7 +331,36 @@ try {
     ),
     "Every published car must begin at a finite, supported, undamaged pose",
   );
-  assert.equal(completed.randomDraws.selection, 10);
+  assert.deepEqual(
+    completed.rivals.map((r) => r.selectionRanking),
+    report.selectedRankings,
+  );
+  assert.deepEqual(
+    completed.initialAI.map((r) => r.personality),
+    report.expectedPersonalities,
+  );
+  assert.deepEqual(
+    completed.initialAI.map((r) => r.repairIntervalMs),
+    report.expectedRepairIntervals,
+  );
+  assert.deepEqual(
+    completed.initialAI.map((r) => r.visibilityDelayMs),
+    report.expectedVisibilityDelays,
+  );
+  assert.deepEqual(completed.randomDraws, {
+    selection: 20,
+    initialization: 20,
+    personality: 8,
+  });
+  assert.deepEqual(
+    completed.startupTrace.map((row) => row.phase),
+    [
+      ...Array(20).fill("selection"),
+      ...Array(20).fill("initialization"),
+      ...Array(8).fill("personality"),
+    ],
+    "normal startup reserves complete AI chronology synchronously before held asset work",
+  );
 
   // Observe a short ordinary-AI window. Heavy-car contact damage or a later
   // waste is recorded as behavior; it is not treated as an unconditional test

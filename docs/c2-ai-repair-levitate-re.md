@@ -32,10 +32,20 @@ Verified installed grudge reduction `0x4aa138–0x4aa186` reads each active inst
 
 ## Live engine binding and deliberate extensions
 
-`main.ts` uses this fleet once the complete original opponent population has loaded. It runs once per native game frame before physics; animations read its controls without a second steering/speed controller. Physics inactivity excludes the car and attached pieces from collisions while preserving independently detached debris. Attribution reaches the live fleet before the physics accumulator is cleared. A loading-only parking brake prevents asynchronous partial grids from driving before their final initialization.
+`main.ts` uses this fleet once the complete original opponent population has loaded. It runs once per native game frame before physics; animations read its controls without a second steering/speed controller. Physics inactivity excludes the car and attached pieces from collisions while preserving independently detached debris. Attribution reaches the live fleet before the physics accumulator is cleared. Atomic private staging prevents asynchronous partial grids from entering the scene or physics before final initialization.
 
 `NativeOpponentPlacement` binds the verified projection, metric/model ground conversion, yaw/pitch/roll attempts and sensible-place polarity to current deformed hulls and world faces. Success performs only `ResetCarSpecialVolume`; exhausted attempts call shared-route native safe relocation. `WorldCollision.nativeYBelow` uses original material facing flags and pling filtering, with the minimum relevant height-100 instead of an unlimited ray. `fallen-world.ts` retains the66-query maximum, caret-material behavior and iterative Float32 origins.
 
 Two explicit robustness extensions remain: the installed undefined empty-race return slot is interpreted as continue, and the otherwise unbounded endpoint relocation walk is limited to4096 visits with an observable diagnostic. Neither extension invents a successful physical placement. Replay/flying-cheat flags remain false while those features are absent.
 
 Installed trail recording is player-only: the sole `StartRecordingTrail4aa230` caller is `MungeOpponents4a9f35`, passing the current player pointer. Initializers clear regular/cop recording counts. Pursuit START/DIE does not create trail ownership. Rival trails consequently remain empty; native pursuit of such a target uses its GetNear fallback.
+
+
+## AI-01 startup and contact completion (2026-10-30)
+
+Production reserves the original local repair/visibility-before-personality
+chronology before asynchronous staging and binds publication-relative deadlines
+without duplicate draws. `selectionRanking` retains native per-slot ranking draws.
+Real solver contacts now have tests through attribution into the following
+frame's pursuit/escape decision and strict stun resumption. Whole-launch/grid
+chronology remains AI-06. See [implementation and evidence](ai01-production-integration.md).

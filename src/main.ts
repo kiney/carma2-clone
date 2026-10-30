@@ -33,10 +33,8 @@ import { applyOpponentHotrod } from "./physics/opponent-hotrod";
 import { NativeOpponentFleet } from "./ai/runtime";
 import { NativeOpponentPlacement } from "./physics/opponent-placement";
 import { readNativeOpponentRepairLimits } from "./ai/repair";
-import {
-  assignNativePersonalities,
-  resolveNativeRaceNastiness,
-} from "./ai/personality";
+import { resolveNativeRaceNastiness } from "./ai/personality";
+import { planNativeOpponentInitialization } from "./ai/startup-plan";
 import { nativeOpponentViewDistance } from "./ai/proximity";
 import { nativeHasCarFallenOffWorld } from "./ai/fallen-world";
 import { NONCAR_FLAGS } from "./physics/noncar-motion";
@@ -169,7 +167,7 @@ import { RacePayout } from "./race-payout";
 import { RaceFeedback, terminalRaceMessage } from "./race-feedback";
 import {
   resolveOpponentRequests,
-  selectOpponentIds,
+  selectNativeOpponentRoster,
 } from "./opponent-selection";
 import {
   parseRaceAwards,
@@ -1061,6 +1059,7 @@ interface Rival {
   animation: CarAnimation;
   textures: TextureAnimation;
   id: number;
+  selectionRanking: number;
 }
 function groupMaterials(group: THREE.Object3D) {
   const map = new Map<string, THREE.Material>();
@@ -2943,20 +2942,37 @@ async function loadRivals(
       opponent.carFilename.replace(/\.txt$/i, "").toLowerCase() ===
       stemOf(currentCar).toLowerCase(),
   );
-  const ids = selectOpponentIds(requests, opponents, playerId);
+  const selected = selectNativeOpponentRoster(
+    requests,
+    opponents,
+    playerId,
+    sharedNativeRandom.random,
+  );
+  const ids = selected.map((row) => row.id);
   if (!ids.length) return;
   if (!nodes.length)
     throw new Error(
       "Opponent navigation data is missing; race population is incomplete",
     );
-  const candidates = ids.map((id) => {
+  const candidates = selected.map(({ id, ranking }) => {
     const path = findConfig("CARS", opponents[id].carFilename);
     if (!path)
       throw new Error(
         `Opponent ${id} car asset is missing: ${opponents[id].carFilename}`,
       );
-    return { id, path };
+    return { id, path, ranking };
   });
+  // Reserve the complete AI-local chronology before any asset await. Other
+  // shared-stream consumers may keep running while this fleet stages. Failed
+  // or superseded loads consume reservations without rewinding global RNG.
+  const nastiness = resolveNativeRaceNastiness(catalog, raceIndex);
+  const repairLimits = readNativeOpponentRepairLimits(generalText);
+  const initialization = planNativeOpponentInitialization(
+    ids.length,
+    nastiness,
+    repairLimits,
+    sharedNativeRandom.random,
+  );
   const activePlayer = player;
   const activeScene = scene;
   const stagedModels: Awaited<ReturnType<Assets["scene"]>>[] = [];
@@ -3044,6 +3060,7 @@ async function loadRivals(
           wasted: false,
           damage: rivalDamage,
           id: candidates[i].id,
+          selectionRanking: candidates[i].ranking,
           animation,
           textures,
         },
@@ -3083,10 +3100,8 @@ async function loadRivals(
         body.state.powerMultiplier =
           activePlayer.state.powerMultiplier ?? upgradeSettings.factors[1][0];
     }
-    const count = staged.length;
     const pathNodes = nodes.map((p) => new THREE.Vector3(...p));
-    const nastiness = resolveNativeRaceNastiness(catalog, raceIndex);
-    const personalities = assignNativePersonalities(count, nastiness);
+    const personalities = initialization.personalities;
     const placement = new NativeOpponentPlacement(
       activeSimulation,
       activeCollision,
@@ -3107,7 +3122,7 @@ async function loadRivals(
         raceIndex,
         raceCount: catalog.races.length,
         viewDistance: nativeOpponentViewDistance(nativeCameraYon),
-        repairLimits: readNativeOpponentRepairLimits(generalText),
+        repairLimits,
         rayFraction: (origin, direction) => {
           const length = direction.length();
           const hit = activeCollision.raycast(origin, direction, length);
@@ -3151,7 +3166,12 @@ async function loadRivals(
     // Prepare all potentially throwing car consumers before admitting any body.
     for (let i = 0; i < staged.length; i++) {
       const { rival, text } = staged[i];
-      fleet.add(rival.body, rival.id, personalities[i]);
+      fleet.add(
+        rival.body,
+        rival.id,
+        personalities[i],
+        initialization.instances[i],
+      );
       bindWamEffects(
         rival.body,
         stagedModels[i].materials,

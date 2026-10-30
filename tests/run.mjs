@@ -1,3 +1,6 @@
+import "./ai-startup-plan.test.mjs";
+import "./ai01-roster-random.test.mjs";
+import "./ai01-contact-reactions.test.mjs";
 import "./ai02-original-placement.test.mjs";
 import "./ai02-placement-candidates.test.mjs";
 import "./ai02-placement-adapter.test.mjs";

@@ -49,6 +49,7 @@ export class NativeOpponentRepairState {
     private readonly minimumMinutes: number,
     private readonly maximumMinutes: number,
     private readonly random = Math.random,
+    initialIntervalMs?: number,
   ) {
     if (
       !uint(nowMs) ||
@@ -56,12 +57,13 @@ export class NativeOpponentRepairState {
       !Number.isInteger(maximumMinutes) ||
       minimumMinutes < 0 ||
       maximumMinutes < minimumMinutes ||
-      maximumMinutes > 0x7fffffff
+      maximumMinutes > 0x7fffffff ||
+      (initialIntervalMs !== undefined && !uint(initialIntervalMs))
     )
       throw new Error("Invalid native opponent repair initialization");
     this.state = {
       nextCheckMs: 0,
-      repairIntervalMs: this.interval(),
+      repairIntervalMs: initialIntervalMs ?? this.interval(),
       lastRepairMs: nowMs,
     };
   }
@@ -104,8 +106,9 @@ export class NativeOpponentRepairState {
     const sample = this.random();
     if (!Number.isFinite(sample) || sample < 0 || sample >= 1)
       throw new Error("Native opponent repair sample must be in [0,1)");
-    return (
-      low + Math.floor((Math.floor(sample * 32768) * (high - low + 1)) / 32768)
-    );
+    // IRandomBetween512f00 multiplies in signed32 before truncation. Keep
+    // later repair rerolls identical to reserved startup at wide custom bounds.
+    const product = Math.imul(Math.floor(sample * 32768), (high - low + 1) | 0);
+    return (low + Math.trunc(product / 32768)) | 0;
   }
 }

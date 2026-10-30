@@ -80,12 +80,12 @@ export function resolveOpponentRequests(
  * Authored duplicate IDs and the player's ID are valid explicit selections.
  * Random fillers exclude all explicitly selected IDs and the player's ID.
  */
-export function selectOpponentIds(
+export function selectNativeOpponentRoster(
   requests: readonly number[],
   opponents: readonly OpponentConfig[],
   playerId: number,
   random: () => number = Math.random,
-): number[] {
+): NativeOpponentSelection[] {
   if (!Number.isSafeInteger(playerId))
     throw new RangeError("Player opponent catalog ID must be an integer");
   const picked = new Set<number>();
@@ -101,8 +101,16 @@ export function selectOpponentIds(
       picked.add(request);
     }
   }
-  return requests.map((request) => {
-    if (request >= 0) return request;
+  const between = (high: number): number => {
+    const sample = random();
+    if (!Number.isFinite(sample) || sample < 0 || sample >= 1)
+      throw new RangeError(
+        "Opponent random callback must return a value in [0, 1)",
+      );
+    return Math.floor((Math.floor(sample * 32768) * (high + 1)) / 32768);
+  };
+  return requests.map((request, slot) => {
+    if (request >= 0) return { id: request, ranking: -(slot + 1) };
     const eligible = opponents.flatMap((opponent, id) =>
       opponent.strengthRating >= 1 &&
       opponent.strengthRating <= 5 &&
@@ -126,13 +134,29 @@ export function selectOpponentIds(
           ? eligible
           : eligible.filter((id) => opponents[id].strengthRating === strength);
     }
-    const draw = random();
-    if (!Number.isFinite(draw) || draw < 0 || draw >= 1)
-      throw new RangeError(
-        "Opponent random callback must return a value in [0, 1)",
-      );
-    const id = candidates[Math.floor(draw * candidates.length)];
+    const id = candidates[between(candidates.length - 1)];
+    // SelectOpponents5037a0 consumes ranking AFTER ChooseOpponent, even when
+    // the caller needs only IDs. Explicit requests retain negative slot ranks.
+    const ranking = between(99);
     picked.add(id);
-    return id;
+    return { id, ranking };
   });
+}
+
+export interface NativeOpponentSelection {
+  id: number;
+  /** Original tOpp_spec+8, retained even before grid sorting is implemented. */
+  ranking: number;
+}
+
+/** ID-only callers still consume the complete native per-selection chronology. */
+export function selectOpponentIds(
+  requests: readonly number[],
+  opponents: readonly OpponentConfig[],
+  playerId: number,
+  random: () => number = Math.random,
+): number[] {
+  return selectNativeOpponentRoster(requests, opponents, playerId, random).map(
+    (row) => row.id,
+  );
 }

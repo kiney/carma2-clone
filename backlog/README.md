@@ -7,11 +7,14 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 The selected opponent-AI workstream is in `next`, with numeric priorities retained:
 
 1. AI-02 / TASK-33 (P2), `done`: shared navigation collision preparation and placement/fallback validation.
-2. AI-01 / TASK-32 (P2), after TASK-33: crash-to-retaliation/escape coverage and roster/personality RNG ownership.
+2. AI-01 / TASK-32 (P2), `done` after TASK-33: real-contact reactions and native roster/initialization/personality RNG ownership.
 3. AI-04 / TASK-56 (P3), after TASK-33 and TASK-32: integrated stuck/struggle recovery and objective/rematerialization transitions.
 
 Board ordinals encode this order; plain task lists can instead sort equal-priority
-items by ID. AI-02 is complete; AI-01 and AI-04 remain in `next`.
+items by ID. AI-02 and AI-01 are complete; AI-04 remains in `next`.
+AI-06 / TASK-136 separately records original grid ranking and whole-launch
+selection chronology in `backlog` at P3.
+See [AI-01 evidence and validation](../docs/ai01-production-integration.md).
 See [AI-02 implementation and validation](../docs/ai02-production-integration.md).
 
 P2 PED-06 / TASK-96 is `done`:authored ordinary Stock/Advanced identities now own

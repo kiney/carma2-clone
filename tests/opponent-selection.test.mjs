@@ -26,7 +26,11 @@ test("random opponent choice is deterministic among eligible IDs", () => {
     return 0.5;
   });
   assert.deepEqual(selected, [2, 4]);
-  assert.equal(draws.length, 2);
+  assert.equal(
+    draws.length,
+    4,
+    "candidate and ranking draws for both random slots",
+  );
 });
 
 test("requested strengths escalate through five and then fall back to any eligible tier", () => {

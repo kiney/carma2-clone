@@ -59,8 +59,11 @@ The safe-grid search and atomic browser publication are explicit integration
 extensions. Native motion, contact impulses, crush and wastage thresholds are
 not retuned. The wheel-distance/bumpiness history discrepancy is separately
 tracked in PHY-20; its cause and correction require original-initialization
-verification. Global `Math.random` still feeds roster/personality selection;
-this is recorded under AI-01 rather than silently changing random-stream order.
+verification. AI-01 now routes selection through the shared native CRT and reserves
+per-instance repair/visibility before quota personalities, ahead of asset awaits.
+Publication binds timestamps without more draws. The updated held-model fixture
+uses native seed4, including Newhawk; older xorshift seed1 evidence below is
+historical. See [AI-01 completion and limits](ai01-production-integration.md).
 
 ## Validation
 
