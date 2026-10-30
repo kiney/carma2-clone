@@ -1,3 +1,4 @@
+import "./ped-panic-completion.test.mjs";
 import "./ped-release-reentry.test.mjs";
 import "./ai04-recovery.test.mjs";
 import "./ai04-force-ownership.test.mjs";

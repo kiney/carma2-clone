@@ -323,6 +323,8 @@ historical Windows material-address capture still have documented gaps. Live pos
 
 `npm run test:world-effects` checks original Stock/Advanced city and Carrier replacement fire, actual MODEL/ACT ownership, same-model rejection, unrelated car repair, fancy award dispatch and the full Carrier objective/followup chain. Controlled prop contacts and synthetic nonzero fancy awards are labelled separately from driven crashes. See [producer coverage](docs/c2-effect-producer-audit.md), [replacement fire](docs/c2-replacement-fire-re.md), [source edges and collector](docs/c2-world-smash-source-edges-re.md) and [pickup ACT hits](docs/c2-pickup-act-re.md).
 
+`npm run test:ped-panic` checks original Stock/Advanced fear animation completion, fleeing direction and run transport. [PED-13 evidence](docs/ped13-panic-completion.md).
+
 ## Asset and license notes
 
 Use an installation you are entitled to use. Assets are read from that directory at runtime and are not copied into this repository or included in its license. Independently written project code is MIT licensed; see [LICENSE](LICENSE). The runtime depends on Three.js (MIT), UTIF (MIT), and UTIF's dependency pako (MIT and Zlib). UTIF also embeds a PDF.js/jpgjs JPEG decoder (Apache-2.0). Their copyright notices and license texts are included in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

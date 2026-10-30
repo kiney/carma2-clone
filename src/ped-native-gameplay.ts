@@ -84,6 +84,7 @@ export type NativePedCauseKillResult =
   | { status: "ineligible"; requiredProviders: [] }
   | { status: "provider-required"; requiredProviders: string[] };
 export interface NativePedGameplayGlobals {
+  suicidal?: boolean;
   immortal: boolean;
   exploding: boolean;
   brittle: boolean;
@@ -1428,6 +1429,9 @@ export class NativePedGameplay<Owner extends object = object> {
     const result = completeNativePedMove(
       state,
       {
+        direction: ctx.character.direction,
+        removedBoneMask: ctx.character.removedBoneMask,
+        suicidal: g.suicidal ?? false,
         frameCount: state.frame,
         positiveAdvance: 1,
         replay: g.replay,

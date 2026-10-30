@@ -539,6 +539,10 @@ export interface NativePedCompletionState extends NativePedHaltState {
   completionEnabled: boolean;
 }
 export interface NativePedCompletionInput {
+  /** Current character direction, not the actor's animation-root basis. */
+  direction?: PedVector;
+  removedBoneMask?: number;
+  suicidal?: boolean;
   frameCount: number;
   positiveAdvance: number;
   replay: boolean;
@@ -547,7 +551,7 @@ export interface NativePedCompletionInput {
   valiumTimeMs: number;
   head: NativePedHaltInput["head"];
 }
-/**409e2c dispatch gate, then ordinary4cbf52 completion. Frame count is an
+/**409e2c dispatch gate, then CBMoveCompleted4cbcc0 fear/recovery. Frame count is an
  * actual animation provider; the kernel does not synthesize60/50-frame timers. */
 export function completeNativePedMove(
   state: NativePedCompletionState,
@@ -575,7 +579,41 @@ export function completeNativePedMove(
     return { dispatched: false, effects, requiredProviders: required };
   state.frame = input.frameCount - 1;
   state.completionEnabled = false;
-  if (state.moveId >= 80 && state.moveId <= 85) {
+  if ([2, 3, 4, 5, 6, 10, 11, 13].includes(state.moveId)) {
+    const completedMove = state.moveId;
+    if (completedMove !== 13 && !input.suicidal) {
+      if (!input.direction)
+        throw new Error("Native fear completion requires character direction");
+      emit(effects, providers, {
+        kind: "direction",
+        vector: [
+          -scalar(input.direction[0]),
+          -scalar(input.direction[1]),
+          -scalar(input.direction[2]),
+        ],
+        turn: 0,
+        timeMs: input.nowMs,
+      });
+    }
+    // HW4cbd83/4cbe1a: missing-leg paths retain the cached period and let
+    // SetPedMove select its authored limb substitution. Fear completion has
+    // no blind/Valium gate or running-time timestamp store (unlike get-up).
+    const runCache = (input.removedBoneMask ?? 0) & 0x28 ? null : state.cache;
+    if (runCache) {
+      runCache.runSpeed = 100;
+      runCache.runFactor = f(0.09);
+    }
+    move(
+      state,
+      effects,
+      providers,
+      input.nowMs,
+      completedMove === 13 ? 40 : 41,
+      1,
+      false,
+      runCache ? 100 : -1,
+    );
+  } else if (state.moveId >= 80 && state.moveId <= 85) {
     if (!input.blind && input.valiumTimeMs === 0) {
       state.action = 0;
       if (state.cache) {
@@ -624,8 +662,6 @@ export function completeNativePedMove(
     }
   } else if (state.moveId === 113)
     required.push("source-move113-forced-reaction-provider");
-  else if (state.moveId < 90)
-    required.push("nonordinary-completion-dispatch-provider");
   emit(effects, providers, { kind: "release-selected-face-cache" });
   required.push("source-selected-face-cache-release-provider");
   if (effects.some((effect) => effect.kind === "move"))

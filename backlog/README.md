@@ -4,6 +4,11 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-30)
 
+P1 PED-13 / TASK-139 completes native fear-animation callbacks into fleeing,
+including grounded direction reversal, run40/41 selection and normal limb
+substitutions. Original Stock/Advanced and the preserved user scene are checked.
+[Implementation and evidence](../docs/ped13-panic-completion.md).
+
 P1 PED-12 / TASK-137 fixes the live TIMBER frame-abort loop during repeated
 severed-part scope release. The adapter now honors PHIL absent-identity code3
 before demanding a prepared solver body; live/deferred validation is preserved.
