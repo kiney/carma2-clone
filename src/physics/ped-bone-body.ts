@@ -69,7 +69,15 @@ export interface NativePedBoneBody<Model = unknown> extends RigidBody {
   detached: boolean;
   /** Retained Object+18c. Ordinary bare allocations start NULL; preparation
    * never erases a later articulated owner's joint-info provider. */
-  nativeJoint2: { quietOrientationY: number } | null;
+  nativeJoint2: {
+    /** Actual tPhysics_joint+4. Absent fields remain an unresolved external owner. */
+    friction?: number;
+    /** Actual source type+0 and limit count+50. Unknown geometry is not free. */
+    type?: number;
+    limitCount?: number;
+    /** Legacy diagnostic input, never the source quiet orientation field. */
+    quietOrientationY?: number;
+  } | null;
   overlapRecovery: boolean;
   overlapDetected: boolean;
   worldRecovery: boolean;

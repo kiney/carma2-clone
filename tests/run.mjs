@@ -1,4 +1,6 @@
 import "./ped-ordinary-volume.test.mjs";
+import "./ped-retained-joint.test.mjs";
+import "./powerup-explosive-peds.test.mjs";
 import "./ped-stored-poses.test.mjs";
 import "./ped-gore-options.test.mjs";
 import "./native-object-records.test.mjs";

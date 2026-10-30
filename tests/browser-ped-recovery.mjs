@@ -101,14 +101,12 @@ try {
       trackSelect.value = track;
       carSelect.value = car;
       await window.carma.loadRace();
-      window.carma.paused = false;
+      window.carma.paused = true;
       document.querySelector("#panel").hidden = true;
       return { track, car };
     }, dataRoot);
     await page.waitForFunction(
-      () =>
-        window.carma?.populationLoadState?.pedestrians?.state === "ready" &&
-        window.carma?.pedestrians?.nativeLifecycle?.physical > 0,
+      () => window.carma?.populationLoadState?.pedestrians?.state === "ready",
       null,
       { timeout: 90000 },
     );
@@ -120,6 +118,30 @@ try {
           runtime = system.nativeRuntime,
           bridge = system.nativeBridge;
         if (!bridge) throw new Error("Ordinary native bridge is unavailable");
+        // Keep asynchronous loading separate from simulation: renderer speed
+        // must not choose the walking pose, candidate, or first impact velocity.
+        // Admit the authored population through three fixed ordinary visits.
+        c.shards.options.seed(24);
+        system.noteCameraPosition(c.camera.position);
+        for (let visit = 1; visit <= 3; visit++)
+          system.update(
+            0.04,
+            {
+              position: c.player.state.position,
+              yaw: c.player.state.heading,
+              speed: 0,
+              velocity: c.player.state.velocity,
+            },
+            {
+              gameTimeMs: visit * 40,
+              physicsTickMs: Math.round(c.simulation.elapsed * 1000) >>> 0,
+              framePeriodMs: 40,
+              cameraPosition: c.camera.position,
+              threats: [],
+              combatOwner: c.player,
+              combatPosition: c.player.state.position,
+            },
+          );
         const available = runtime.characters.filter(
           (row) =>
             row.body &&
@@ -171,7 +193,7 @@ try {
           instance = character.instance,
           ped = system.peds.find((row) => row.object === owner),
           gameplay = bridge.gameplay.state(owner),
-          start = Math.max(0, Math.trunc(c.stats.gameTimeMs)),
+          start = Math.max(120, Math.trunc(c.stats.gameTimeMs)),
           camera = body.state.position.clone(),
           allocated = new Set(runtime.simpleResources),
           population = runtime.characters.slice();

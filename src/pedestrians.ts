@@ -7,6 +7,7 @@ import type { ShardRuntime } from "./smash-shards";
 import type { SkidMarkSystem } from "./skidmarks";
 import type { NativePedRuntimeCallback } from "./ped-native-runtime";
 import type { NativePedBloodPacket } from "./ped-native-blood-phases";
+import { readNativePedBloodRootLooks } from "./ped-native-blood-phases";
 import {
   parsePedContactSettings,
   type PedContactSettings,
@@ -345,6 +346,7 @@ export interface PedFrameOptions {
   readCombatRayOrigin?: () => THREE.Vector3;
   cameraOrientation?: THREE.Quaternion;
   immortalPedestrians?: boolean;
+  explosivePedestrians?: boolean;
   gravityMultiplier?: number;
   pedestrianAnimation?: {
     bodyScale: readonly [number, number, number];
@@ -674,6 +676,7 @@ export class PedestrianSystem {
   private readonly nativeDeadModels = new Map<string, NativePedDeadModels>();
   private readonly nativeDeadMaterials = new NativePedDeadMaterialRegistry();
   private moveFSM?: NativePedMoveFSM;
+  private nativeBloodRootLooks?: ReturnType<typeof readNativePedBloodRootLooks>;
   private nativeSlickMaterials?: NativePedSlickMaterialRegistry;
   private nativeBridge?: OrdinaryPedRuntime;
   private nativeSimulation?: VehicleSimulation;
@@ -986,9 +989,17 @@ export class PedestrianSystem {
     if (assets instanceof Assets) {
       const executable =
         assets.resolve("carma2_HW.exe") ?? assets.resolve("carma2_SW.exe");
-      if (executable)
-        system.moveFSM = readNativePedMoveFSM(await assets.bytes(executable));
-      else
+      if (executable) {
+        const bytes = await assets.bytes(executable);
+        system.moveFSM = readNativePedMoveFSM(bytes);
+        try {
+          system.nativeBloodRootLooks = readNativePedBloodRootLooks(bytes);
+        } catch (error) {
+          system.warnings.push(
+            `Native pedestrian blood root-look data: ${error}`,
+          );
+        }
+      } else
         system.warnings.push(
           "Original pedestrian move fallback table unavailable: missing C2 executable",
         );
@@ -2064,6 +2075,8 @@ export class PedestrianSystem {
               lumpsPerEmission: this.blood.settings.spurt.lumpsPerEmission,
             }
           : null,
+      readBloodRootLook: (index) =>
+        this.nativeBloodRootLooks?.vectors[index - 1] ?? null,
       emitBlood: (ctx, packet) => {
         if (!this.blood || !this.options.shards)
           return ["source-shared-native-ped-blood-owner"];

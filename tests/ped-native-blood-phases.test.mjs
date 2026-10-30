@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import {
   activeNativePedBloodPacket,
   createNativePedImpactBloodPacket,
@@ -8,6 +9,7 @@ import {
   createNativePedSpurtBloodPacket,
   processNativePedBleeding,
   nativePedBloodCacheOffsets,
+  readNativePedBloodRootLooks,
 } from "../src/ped-native-blood-phases.ts";
 
 const f = Math.fround;
@@ -371,6 +373,102 @@ test("MakeEmBleed emits detached then parent with source root look transformed t
     0,
     "same timestamp fails the strict next-period gate",
   );
+});
+
+test("MakeEmBleed reads actual adjacent root-look words for high-index root children", () => {
+  const bones = Array.from({ length: 16 }, (_, i) => ({
+    parent: i ? 0 : -1,
+    childAttachment: [0, 0, 0],
+    parentAttachment: [0, 0, 0],
+  }));
+  const h = bleeding({ bones, removedBoneMask: 1 << 13 });
+  h.snapshots.set(13, { matrix: identity(), velocity: [1, 0, 0] });
+  h.view.setUint8(0x23 + 13, 10);
+  const reads = [];
+  h.host.readRootLook = (index) => {
+    reads.push(index);
+    return index === 13 ? [0, 1, 0] : null;
+  };
+  const r = processNativePedBleeding(h.input, h.host);
+  assert.deepEqual(r.requiredProviders, []);
+  assert.equal(r.emitted, 2);
+  assert.deepEqual(reads, [13]);
+  assert.deepEqual(h.packets[1].direction, [0, -1, 0]);
+});
+
+test("missing high-index source root look has a precise provider and preserves cache before emission", () => {
+  const h = bleeding({
+    bones: Array.from({ length: 32 }, (_, i) => ({
+      parent: i ? 0 : -1,
+      childAttachment: [0, 0, 0],
+      parentAttachment: [0, 0, 0],
+    })),
+    removedBoneMask: 0x80000000,
+  });
+  h.snapshots.set(31, { matrix: identity(), velocity: [1, 0, 0] });
+  const before = h.bytes.slice();
+  const r = processNativePedBleeding(h.input, h.host);
+  assert.deepEqual(r.requiredProviders, ["native-blood-root-look-31"]);
+  assert.deepEqual(h.bytes, before);
+  assert.equal(h.packets.length, 0);
+});
+
+test("original HW/SW root-look reads preserve adjacent pointer bits, source addresses and DOG1 lookup", async (t) => {
+  const bits = (v) => Array.from(new Uint32Array(Float32Array.from(v).buffer));
+  for (const [name, address, pointer] of [
+    ["HW", 0x65d064, 0x65d170],
+    ["SW", 0x6579ac, 0x657ab8],
+  ]) {
+    let bytes;
+    try {
+      bytes = await readFile(
+        new URL(`../carma2_orig/carma2_${name}.exe`, import.meta.url),
+      );
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        t.skip("Original local installation absent");
+        return;
+      }
+      throw error;
+    }
+    const table = readNativePedBloodRootLooks(bytes);
+    assert.equal(table.sourceAddress, address);
+    assert.equal(table.vectors.length, 15);
+    assert.deepEqual(bits(table.vectors[9]), [pointer, 0, 0x3f800000]);
+    assert.deepEqual(table.vectors[10], [0, 0, 0]);
+    assert.deepEqual(table.vectors[12], [0, 1, 0]);
+    const h = bleeding({
+      bones: Array.from({ length: 16 }, (_, i) => ({
+        parent: i ? 0 : -1,
+        childAttachment: [0, 0, 0],
+        parentAttachment: [0, 0, 0],
+      })),
+      removedBoneMask: 1 << 10,
+    });
+    h.snapshots.set(10, { matrix: identity(), velocity: [1, 0, 0] });
+    h.host.readRootLook = (index) => table.vectors[index - 1] ?? null;
+    assert.deepEqual(
+      processNativePedBleeding(h.input, h.host).requiredProviders,
+      [],
+    );
+    assert.deepEqual(bits(h.packets[1].direction), [
+      (pointer | 0x80000000) >>> 0,
+      0,
+      0x3f800000,
+    ]);
+  }
+});
+
+test("root-look PE parser rejects truncated and non-PE inputs", () => {
+  for (const bytes of [
+    new Uint8Array(0),
+    new Uint8Array(64),
+    new Uint8Array(33 * 1024 * 1024),
+  ])
+    assert.throws(
+      () => readNativePedBloodRootLooks(bytes),
+      /C2 pedestrian blood/,
+    );
 });
 
 test("dead stump period uses double1.2 and counter subtraction wraps BYTE", () => {

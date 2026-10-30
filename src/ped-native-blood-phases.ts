@@ -338,6 +338,126 @@ const ROOT_LOOK: readonly PedVector[] = [
   [-1, 0, 0],
   [-1, 0, 0],
 ];
+
+export interface NativePedBloodRootLooks {
+  /** Native unchecked index1..15 reads: nine authored vectors followed by
+   * adjacent initialized-data words, including pointer bits reinterpreted F32.
+   * This is a bounded installed-image snapshot, not an enlarged authored array. */
+  readonly vectors: readonly PedVector[];
+  readonly sourceAddress: number;
+  readonly sourceOffset: number;
+}
+
+/** Locate HW/SW source lookup plus the bounded adjacent words needed by all
+ * installed FORM bones. Never embed executable payload or assume equal RVAs. */
+export function readNativePedBloodRootLooks(
+  bytes: Uint8Array,
+): NativePedBloodRootLooks {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const fail = (message: string): never => {
+    throw new Error(`C2 pedestrian blood: ${message}`);
+  };
+  const span = (offset: number, length: number): void => {
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      length < 0 ||
+      offset > bytes.length - length
+    )
+      fail("PE span exceeds file bounds");
+  };
+  span(0, 64);
+  if (bytes.length > 32 * 1024 * 1024 || view.getUint16(0, true) !== 0x5a4d)
+    fail("bounded DOS/PE image required");
+  const pe = view.getUint32(0x3c, true);
+  span(pe, 24);
+  const count = view.getUint16(pe + 6, true),
+    optionalSize = view.getUint16(pe + 20, true);
+  if (
+    view.getUint32(pe, true) !== 0x4550 ||
+    view.getUint16(pe + 4, true) !== 0x14c ||
+    count < 1 ||
+    count > 96 ||
+    optionalSize < 96
+  )
+    fail("x86 PE32 headers required");
+  span(pe + 24, optionalSize + count * 40);
+  if (view.getUint16(pe + 24, true) !== 0x10b)
+    fail("PE32 optional header required");
+  const imageBase = view.getUint32(pe + 24 + 28, true);
+  const sections: Array<{
+    address: number;
+    offset: number;
+    size: number;
+    flags: number;
+  }> = [];
+  for (let i = 0; i < count; i++) {
+    const at = pe + 24 + optionalSize + i * 40;
+    const offset = view.getUint32(at + 20, true),
+      size = view.getUint32(at + 16, true);
+    span(offset, size);
+    sections.push({
+      address: imageBase + view.getUint32(at + 12, true),
+      offset,
+      size,
+      flags: view.getUint32(at + 36, true),
+    });
+  }
+  const signature = ROOT_LOOK.flat(),
+    name = "NONHUMANOID\0",
+    matches: NativePedBloodRootLooks[] = [];
+  for (const section of sections) {
+    if (!(section.flags & 0x40) || section.flags & 0x20000000) continue;
+    for (
+      let at = section.offset;
+      at <= section.offset + section.size - 15 * 12;
+      at += 4
+    ) {
+      if (
+        !signature.every(
+          (value, i) => view.getFloat32(at + i * 4, true) === value,
+        )
+      )
+        continue;
+      // The first adjacent cell is gForm_non_humanoid_names[0]. Validate its
+      // actual pointer target before accepting an incidental vector signature.
+      const pointer = view.getUint32(at + 9 * 12, true);
+      const target = sections.find(
+        (s) =>
+          pointer >= s.address && pointer - s.address <= s.size - name.length,
+      );
+      if (!target) continue;
+      const stringOffset = target.offset + pointer - target.address;
+      if (
+        ![...name].every(
+          (c, i) => view.getUint8(stringOffset + i) === c.charCodeAt(0),
+        )
+      )
+        continue;
+      const vectors = Array.from(
+        { length: 15 },
+        (_, index) =>
+          Object.freeze([
+            view.getFloat32(at + index * 12, true),
+            view.getFloat32(at + index * 12 + 4, true),
+            view.getFloat32(at + index * 12 + 8, true),
+          ]) as PedVector,
+      );
+      if (!vectors.every((v) => v.every(Number.isFinite)))
+        fail("nonfinite adjacent root-look words");
+      matches.push(
+        Object.freeze({
+          vectors: Object.freeze(vectors),
+          sourceOffset: at,
+          sourceAddress: section.address + at - section.offset,
+        }),
+      );
+    }
+  }
+  if (matches.length !== 1)
+    fail(`expected one original root lookup, found ${matches.length}`);
+  return matches[0];
+}
 function apply(m: Float32Array, v: PedVector, point: boolean): PedVector {
   return [0, 1, 2].map((axis) =>
     f(
@@ -395,6 +515,9 @@ export interface NativePedBleedingHost {
   readBone?: (
     index: number,
   ) => { matrix: Float32Array | null; velocity: PedVector | null } | null;
+  /** Raw source lookup at base+12*(index-1). Required beyond the nine authored
+   * humanoid entries: actual installed adjacent words, never a fallback axis. */
+  readRootLook?: (index: number) => PedVector | null;
   nextCrtInteger?: () => number;
   emit?: (packet: NativePedBloodPacket) => void | readonly string[];
   /** Optional resource preflight before phase RNG, counters or timestamps. */
@@ -548,11 +671,17 @@ export function processNativePedBleeding(
           if (dot(v, v) !== 0 || nextPeriod !== 0) {
             const m = read(parent)?.matrix;
             let look: PedVector | null = m ? [m[0], m[1], m[2]] : null;
-            if (parent === 0)
-              look =
-                m && ROOT_LOOK[index - 1]
-                  ? apply(matrix(m), ROOT_LOOK[index - 1], false)
-                  : null;
+            if (parent === 0) {
+              const sourceLook =
+                ROOT_LOOK[index - 1] ?? host.readRootLook?.(index);
+              if (!sourceLook) {
+                result.requiredProviders.push(
+                  `native-blood-root-look-${index}`,
+                );
+                continue;
+              }
+              look = m ? apply(matrix(m), vector(sourceLook), false) : null;
+            }
             emitFor(parent, bone.parentAttachment, look, v, packets);
           }
         }

@@ -1,3 +1,10 @@
+> Current production scope: PED-06 through PED-09 integrate ordinary population,
+> recovery, severing and effects. [PED-11](ped11-production-integration.md)
+> completes reachable nonhumanoid/explosive contacts and retained joint2 friction.
+> Its [topology audit](ped11-topology-re.md) shows ordinary callers select levels0/5;
+> full level2/6 remains dormant/incomplete in the installed executables. Historical
+> provider requirements below are contracts, not evidence of active ragdolls.
+
 # Detached pedestrian bone runtime
 
 The browser now admits actual prepared type5 BOX/SPHERE bodies through the shared

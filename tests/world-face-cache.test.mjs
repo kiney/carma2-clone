@@ -189,6 +189,100 @@ test("no-model flag exposes gather false then clears this object's face range", 
   assert.equal(state.start, state.end);
 });
 
+test("raw slots expose known zero-filled storage across the full native capacity", () => {
+  const cache = new NativeWorldFaceCache();
+  for (let index = 0; index < cache.capacity; index++)
+    assert.equal(cache.rawSlot(index), null, `unwritten native slot${index}`);
+  for (const index of [-1, 300, 0.5, NaN, Infinity])
+    assert.throws(() => cache.rawSlot(index), RangeError);
+  assert.equal(cache.count, 0, "raw reads do not collect faces");
+  assert.equal(cache.epoch, 1, "raw reads do not advance the ring");
+});
+
+test("an empty owner range reads another owner's subsequently written raw slot", () => {
+  const cache = new NativeWorldFaceCache(),
+    empty = cache.createState(),
+    writer = cache.createState(),
+    face = { normal: [0, 0.6, 0.8], material: "ROAD" };
+  let calls = 0;
+  cache.get(empty, input(), () => {
+    calls++;
+    return [];
+  });
+  assert.deepEqual([empty.start, empty.end], [0, 0]);
+  assert.equal(cache.rawSlot(empty.start), null);
+  cache.get(writer, input(), () => {
+    calls++;
+    return [face];
+  });
+  assert.deepEqual(cache.read(empty), [], "own range remains empty");
+  assert.equal(
+    cache.rawSlot(empty.start),
+    face,
+    "settling dereferences shared storage at callback time",
+  );
+  assert.equal(calls, 2, "raw reads issue no collector callbacks");
+});
+
+test("raw slots retain the unwritten tail through ring wrap and invalidation", () => {
+  const cache = new NativeWorldFaceCache(),
+    first = cache.createState(),
+    rollover = cache.createState(),
+    faces = Array.from({ length: 290 }, (_, index) => ({ index })),
+    overwritten = { index: "new0" };
+  cache.get(first, input(), () => faces);
+  let calls = 0;
+  cache.get(rollover, input(), (_, maximum) => {
+    calls++;
+    return maximum === 10 ? Array(10).fill(overwritten) : [overwritten];
+  });
+  assert.equal(cache.epoch, 2);
+  assert.equal(cache.count, 1);
+  assert.equal(cache.valid(first), false);
+  assert.deepEqual(cache.read(first), []);
+  assert.equal(
+    cache.rawSlot(0),
+    overwritten,
+    "read current overwritten storage, not an old owner's snapshot",
+  );
+  assert.equal(
+    cache.rawSlot(200),
+    faces[200],
+    "old epoch does not erase stored records",
+  );
+  cache.invalidate(first);
+  assert.equal(
+    cache.rawSlot(200),
+    faces[200],
+    "owner invalidation does not zero shared storage",
+  );
+  assert.equal(
+    calls,
+    2,
+    "exactly full first collection performs source wrap collection",
+  );
+});
+
+test("raw slot reads preserve special materials outside an owner's exposed range", () => {
+  const cache = new NativeWorldFaceCache(),
+    state = cache.createState(),
+    water = { normal: [0, 1, 0], material: "!WATER" },
+    special = { normal: [1, 0, 0], material: ">SPECIAL" };
+  cache.get(state, { ...input(), flags: 0x80 }, () => [water, special]);
+  assert.deepEqual(
+    cache.read(state),
+    [],
+    "no-model source flag empties only the exposed range",
+  );
+  assert.equal(cache.rawSlot(0), water);
+  assert.equal(cache.rawSlot(1), special);
+  assert.equal(
+    cache.rawSlot(2),
+    null,
+    "unwritten records retain known initial zero bytes",
+  );
+});
+
 test("suspension extension selects front/rear native heights and leaves other five planes untouched", () => {
   const shape = box();
   const wheels = [

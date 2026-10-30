@@ -1,10 +1,13 @@
 # Native pedestrian process-cache owner
 
-`src/ped-process-cache.ts` independently implements the installed bounded
-process-record selection and selective initialization in MungePedestrians. It
-supplies stable records compatible with `NativePedGameplayCache`. It does not
-wire the normal population, create unlimited per-pedestrian caches, or implement
-the missing normal movement/proximity/scare owner.
+`src/ped-process-cache.ts` implements the installed bounded process-record
+selection and selective initialization in MungePedestrians. The production
+ordinary-pedestrian runtime uses this pool as the owner of its current process
+record and binds it to `NativePedGameplayCache`. Movement, proximity, contacts,
+recovery and awards are supplied by their integrated production consumers; this
+module remains the bounded record/cache layer. See [ordinary production
+integration](ped06-production-integration.md) and the [PED-11 exceptional
+boundary](ped11-production-integration.md).
 
 ## Installed evidence
 
@@ -62,7 +65,7 @@ process record or its character/FORM/PHIL resources.
 | `+9c`, `+88`, `+8c`, `+94`, `+90`, `+98` | zero DWORDs; +98 is signed napalm state/deadline               |
 | `+84`                                    | actual global gPed_spurting_period (`0x692aec`)                |
 | `+c4`                                    | clear bit1; each processed visit subsequently also clears bit2 |
-| `+23..+2c`                               | zero exactly10 stump-counter bytes                             |
+| `+23..+2c`                               | zero exactly10 bytes in the stump-counter initialization span  |
 
 All other bytes remain untouched, including both vectors at +00/+0c, head
 index+1a/time+78, run factor+b8 and opaque retained fields. An initially allocated
@@ -71,6 +74,16 @@ the current support face normal. Actual native proximity work owns later vector
 writes. The stock/Advanced SETTINGS `SPURTING STUMP GIBLETS` second integer is100
 milliseconds. The module requires the actual loaded global explicitly; callers
 store the signed authored value with `>>> 0`, matching the native DWORD store.
+
+The source also performs indexed stump-counter accesses beyond the ten-byte
+initialization span (`0x4d3990..0x4d399a`, `0x4cd80d`). The host uses a
+storage-backed 32-byte counter access view so those reachable indices are safe,
+while retaining the source's unchecked aliases into adjacent process storage:
+the named cause/flag bytes at `+2e/+2f` and vector storage beginning at `+30`.
+This is a bounded compatibility view over the process record, not evidence for a
+source-declared 32-byte counter array. `InitProcessData` continues to clear only
+its exact ten-byte span plus its separately documented named-field stores; it
+does not zero the whole view.
 
 ## Ground-face and retained-vector owners
 
@@ -136,16 +149,16 @@ const visit = process.visit(owner, {
 });
 ```
 
-This illustrative host requires a gameplay/cache adapter with the narrower
-actual record type; no runtime or gameplay file is changed in this handoff.
-Initialize the gameplay owner with cacheNULL, then invoke `visit` only after
-successful processed FORM/simple-body admission, before grounding/AI/BON. A
-NULL process pointer is valid before that phase and after eviction. The host
-stores the real pointer on the real owner; the pool substitutes no unlimited
-internal owner Map.
+This example shows the cache adapter contract. Production initializes the
+gameplay owner with cacheNULL, then invokes `visit` for a successfully admitted
+ordinary FORM/simple body before grounding and BON processing. A NULL process
+pointer is valid before that phase and after eviction. The runtime stores the
+current record on the actual owner; the pool substitutes no unlimited internal
+owner Map.
 
 Stable records expose named scalar accessors, vectors, head-sequence accessors,
-the10-byte stump view and a300-byte numeric/opaque storage buffer. Setters use
+the ten-byte initialization span, its32-byte storage-backed counter access view,
+and a300-byte numeric/opaque storage buffer. Setters use
 the original integer width/Float32 representation. Vectors are copied on read;
 write them through their property setter. Actual JS owner/killer/borrowed-face
 identities are separate reference fields. This storage does not invent Windows
@@ -179,8 +192,12 @@ remain under `/tmp`; no asset payload is committed.
 The focused tests check these boundary and lifetime semantics, preflight ordering,
 all selective stores versus preserved bytes, shared CRT progression, invalid
 identities, and read-only Stock/Advanced movement settings. Original tests honor
-`CARMA2_ROOT` and skip cleanly without an installation. Production normal-ped
-grounding/scare/powerup/award integration is a separate root-owned task.
+`CARMA2_ROOT` and skip cleanly without an installation. The normal production
+grounding, scan, contact, recovery, powerup and award consumers are tracked in
+PED-06 through PED-09. PED-11 records separate exceptional topology and
+nonhumanoid/explosive behavior; ordinary native callers still select simple
+mode0 and levels0/5. The full boned level2/6 branch is dormant and incomplete,
+not an ordinary population feature.
 
 ## Current-root grounding binding
 
@@ -199,5 +216,9 @@ Replay singleton bypass observes aliases without relinking another Ped's slot.
 
 Numerical tests cover reuse of the real100-record process pool alongside the85
 borrowed ground slots, selected-face write chronology, replay aliases, completion
-and reset. Normal scene population still uses the legacy owner; full ordinary
-proximity/move/scare and ordered native collector providers remain open (PED-03).
+and reset. Current ordinary production reads and writes the bounded process
+record through the live `Ped+0c` owner; ground-face links are evicted in native
+order. The DOG16 out-of-range counter case is represented with the storage-backed
+32-byte view above without widening the exact ten-byte initialization clear.
+Ordinary integration status and the remaining level2/6 topology boundary are
+summarized in [PED-11 production integration](ped11-production-integration.md).

@@ -728,8 +728,8 @@ test(
     );
     assert.equal(
       system.warnings.length,
-      11,
-      "New City no longer warns for supported body/head/mutant animation effects",
+      10,
+      "New City no longer warns for supported body/head/mutant and explosive pedestrian effects",
     );
     assert.equal(system.group.children.length, system.pickups.length);
     system.dispose();

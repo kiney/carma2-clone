@@ -12,6 +12,7 @@ import { NativePedRuntime } from "../src/ped-native-runtime.ts";
 import { createNativeActivePedMoveCallback } from "../src/physics/ped-active-move.ts";
 import { VehicleSimulation } from "../src/physics/simulation.ts";
 import { nativePedRootPose } from "../src/physics/ped-body.ts";
+import { settleNativePedBody } from "../src/physics/ped-settling.ts";
 import { resolvePedContactDamage } from "../src/physics/ped-contact.ts";
 import { advanceNativePedPose } from "../src/ped-native-instance.ts";
 import { createNativePedPoolSettings } from "../src/ped-body-pool.ts";
@@ -827,6 +828,126 @@ test("retained joint2 is rejected before native bone admission or mask mutation"
   assert.equal(resource.owner, null);
   assert.deepEqual(runtime.preflightSeverBones(c.owner, [2]), []);
   runtime.dispose();
+});
+
+test("known retained joint2 survives ordinary sever and release without an invented FORM constraint", () => {
+  const { runtime, simulation } = host(),
+    c = enroll(runtime, {});
+  runtime.prepareFrame(frame());
+  const resource = runtime.bonePool.previewBodies(c)[1],
+    joint = { friction: Math.fround(0.2), type: 0, limitCount: 0 };
+  resource.nativeJoint2 = joint;
+  assert.deepEqual(runtime.preflightSeverBones(c.owner, [1]), []);
+  const slot = runtime.reserveBonedSlot(c.owner),
+    request = {
+      index: 1,
+      slot,
+      bone: c.instance.template.form.bones[1],
+      snapshot: runtime.readBone(c.owner, 1),
+      rigidType: 5,
+      filterA: 0x40000,
+      filterB: 0x50000,
+      localOmega: [1, 2, 3],
+      activation: null,
+      clearParentJoint: true,
+      clearChildren: true,
+      clearLink188: true,
+    };
+  const registered = runtime.registerBone(c.owner, request);
+  assert.ok(registered);
+  runtime.commitBone(c.owner, request, registered);
+  assert.equal(registered.body.nativeJoint2, joint);
+  assert.equal(c.removedBoneMask, 2);
+  assert.equal(runtime.releaseCurrent(c.owner).status, "complete");
+  assert.equal(simulation.phil.count, 0);
+  assert.equal(registered.body.nativeJoint2, joint);
+  runtime.dispose();
+  simulation.dispose();
+});
+
+test("car-contact settling reads the live shared raw face slot even for an empty owned range", () => {
+  for (const normal of [null, new Vector3(0, 1, 0)]) {
+    const { runtime, simulation } = host(),
+      c = enroll(runtime, {});
+    runtime.prepareFrame(frame());
+    runtime.activate(c.owner);
+    const body = c.body,
+      state = simulation.worldFaceCache.createState();
+    if (normal) {
+      simulation.worldFaceCache.get(
+        state,
+        {
+          bounds: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)),
+          matrix: body.nativeMatrix ?? new Group().matrix,
+          committedMatrix: body.nativeMatrix ?? new Group().matrix,
+        },
+        () => [{ normal, material: "!retained-raw-face", enabled: false }],
+      );
+    }
+    state.start = 0;
+    state.end = 0;
+    simulation.worldFaceStates.set(body, state);
+    body.state.velocity.set(0.3, 0, 0.1);
+    body.state.angularVelocity.set(0, 0, 0);
+    body.collisionFlags = 2;
+    body.firstWorldFaceNormal = null;
+    const expected = settleNativePedBody({
+      worldVector: body.state.velocity.toArray(),
+      firstWorldFaceNormal: normal?.toArray() ?? [0, 0, 0],
+      actorMatrix: nativePedRootPose(body),
+      mass: body.properties.mass,
+      inertia: body.properties.inertia.toArray(),
+      bounds: body.profile.bounds,
+      localOmega: [0, 0, 0],
+      collisionFlag: true,
+      doNothing: false,
+    });
+    assert.equal(expected.applied, true);
+    simulation.finishPedFrame(40);
+    assert.deepEqual(body.state.angularVelocity.toArray(), expected.localOmega);
+    assert.equal(
+      body.diagnostics.has("native-settling-face-unavailable"),
+      false,
+    );
+    runtime.dispose();
+    simulation.dispose();
+  }
+});
+
+test("halt receives current unfiltered raw-range normals after epoch invalidation", () => {
+  let received;
+  const { runtime, simulation } = host({
+      hooks: {
+        onHalt: (ctx) => {
+          received = ctx.body.worldFaceNormals.map((n) => n.toArray());
+          return { returnValue: 1 };
+        },
+      },
+    }),
+    c = enroll(runtime, {});
+  runtime.prepareFrame(frame());
+  runtime.activate(c.owner);
+  const body = c.body,
+    state = simulation.worldFaceCache.createState();
+  simulation.worldFaceCache.get(
+    state,
+    {
+      bounds: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)),
+      matrix: new Group().matrix,
+      committedMatrix: new Group().matrix,
+    },
+    () => [
+      { normal: new Vector3(0, 1, 0), material: "!source-raw", enabled: false },
+    ],
+  );
+  simulation.worldFaceCache.invalidate(state);
+  simulation.worldFaceStates.set(body, state);
+  body.worldFaceNormals = [];
+  body.doNothing = true;
+  simulation.finishPedFrame(40);
+  assert.deepEqual(received, [[0, 1, 0]]);
+  runtime.dispose();
+  simulation.dispose();
 });
 
 for (const tree of ["data", "adv_data"])

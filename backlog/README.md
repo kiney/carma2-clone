@@ -2,7 +2,7 @@
 
 Backlog.md is the task source of truth. The former `TODO.md` entries have been migrated with their complete descriptions, evidence, source references, original issue IDs and numeric priorities. Use the installed `backlog` CLI from the repository root; it stores tasks in `backlog/tasks/` without committing automatically or checking remote branches.
 
-## Current implementation queue (updated 2026-10-29)
+## Current implementation queue (updated 2026-10-30)
 
 P2 PED-06 / TASK-96 is `done`:authored ordinary Stock/Advanced identities now own
 bounded FORM/PHIL bodies, native BON transport and source steering/scanning.
@@ -17,10 +17,22 @@ ordinary falls/get-up, independent severed parts and native effect/award outlets
 now use actual population/FORM/PHIL owners. Stock and Advanced contacts,
 release/reset, original gore selection, blood/shared marks, score chronology
 and actual falling height are validated. Full suite:3670 passed,6 optional
-cases skipped. Full articulated/nonhumanoid/exploding providers remain
-PED-11 / TASK-134. See [recovery](../docs/ped07-production-integration.md),
+cases skipped. PED-11 / TASK-134 now completes reachable nonhumanoid and
+explosive contacts and corrects the original active-ragdoll assumption against
+installed HW/SW evidence. See [exceptional physics](../docs/ped11-production-integration.md), [recovery](../docs/ped07-production-integration.md),
 [severed parts](../docs/ped08-production-integration.md) and
 [awards/effects](../docs/ped09-production-integration.md).
+
+P2 PED-11 / TASK-134 is `done`: reachable nonhumanoid and explosive contacts
+now use original sever selection, launch, damage and independent FORM parts.
+Actual high-bone process-cache aliases, local-PE blood lookup, shared-face
+settling and retained joint2 friction/quiet ownership are covered. Installed
+ordinary callers use levels0/5; full level2/6 topology is dormant/incomplete,
+not an active ragdoll to reproduce. Missing DOCTOR4/Nuke assets and optional
+custom shapes remain explicit limitations. Full suite:3703 passed,6 skipped;
+asset-free CI:3209 passed,431 skipped. Serial Stock/Advanced Chromium covers
+exceptional hits, living recovery, ordinary severing and combat powerups.
+[Implementation and validation](../docs/ped11-production-integration.md).
 
 P2 QUA-13 / TASK-132 is `done`: every playtest now keeps an automatic rolling
 three-minute bug history with a512MiB recorder budget, including download
@@ -54,8 +66,8 @@ does not reproduce the failure. The bounded impact/component recorder remains
 available for another capture; see [evidence and boundaries](../docs/c2-ignore-world-reclaim-re.md).
 
 The user selected the following implementation order. ANI-01/PED-04 complete the
-first animation/resource stage. PED-06 through PED-09 are complete; the exceptional articulated-body follow-up
-remains separately tracked in PED-11 / TASK-134.
+first animation/resource stage. PED-06 through PED-09 are complete; PED-11 /
+TASK-134 completes reachable exceptional contacts and records dormant topology.
 Existing numeric priorities remain unchanged: selection order is explicit and
 must not be inferred from priority alone. No pedestrian ticket currently occupies a WIP slot.
 
@@ -442,10 +454,10 @@ labels remain intact. Filter with, for example,
 `backlog task list --labels topic-physics --plain`.
 
 The open queue was tagged and reconciled against implementation notes. PUP-11 /
-TASK-30 is now `done`: its gameplay/timed effects are implemented, and the
-remaining articulated topology, prepared pedestrian vertices and positional
-audio have explicit owners in PED-11 / TASK-134, ANI-01 / TASK-62 and AUD-03 /
-TASK-71. DMG-02 / TASK-22 remains open for prepared face/column ordering at
+TASK-30 is now `done`: its gameplay/timed effects are implemented. The
+historical articulated-topology assumption is resolved by the PED-11 / TASK-134
+audit; prepared vertices are completed under ANI-01 / TASK-62, while positional
+audio remains AUD-03 / TASK-71. DMG-02 / TASK-22 remains open for prepared face/column ordering at
 saturation and any remaining source connotation outlets; completed WLD-05 /
 DMG-03 providers were removed from its active scope, while the unused undefined
 parallel-direction branch remains documented as uncertainty. Original evidence

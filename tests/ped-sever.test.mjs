@@ -481,20 +481,105 @@ test("missing required provider preflights before draws/mutation and does not ma
   assert.equal(mutateNativePedSever(s, input(), h).status, "provider-required");
   assert.equal(h.log.length, 0);
 });
-test("exploding and articulated/nonhumanoid selection require explicit alternate providers, without generic fallbacks", () => {
-  for (const overrides of [
-    { exploding: true },
-    { articulated: true },
-    { form: { ...input().form, nonHumanoid: true } },
-  ]) {
-    const s = state(),
-      h = host(s, []);
-    const r = mutateNativePedSever(s, input(overrides), h);
-    assert.equal(r.status, "provider-required");
-    assert.equal(r.randomDraws, 0);
-    assert.equal(r.tailInvoked, false);
-    assert.equal(s.hitPoints, 100);
+test("exploding chance0 uses six wrapper draws, supplied launch velocity and spin without ordinary spin draws", () => {
+  const s = state(),
+    h = host(s, [select(9), 0, 16384, 32767, 0, 16384, 32767]);
+  const r = mutateNativePedSever(
+    s,
+    input({ exploding: true, severChance: 0 }),
+    h,
+  );
+  assert.equal(r.status, "complete");
+  assert.equal(r.randomDraws, 7);
+  assert.equal(r.newlyDetached, 1);
+  assert.equal(r.removedBoneMask, 512);
+  assert.equal(r.remainingBudget, -40);
+  const request = h.log.find((e) => e[0] === "register")[1];
+  assert.deepEqual(request.activation.velocity, [-0.75, -2, 7.74981689453125]);
+  assert.deepEqual(request.localOmega, [-20, 0, 19.998779296875]);
+});
+test("exploding consumes wrapper draws on repeats and pool failure for every descendant-first visitor", () => {
+  for (const removedBoneMask of [0, 4]) {
+    const s = state({ removedBoneMask });
+    const h = host(s, [select(2), ...Array(12).fill(16384)], {
+      reserveBonedSlot: () => null,
+    });
+    const r = mutateNativePedSever(s, input({ exploding: true }), h);
+    assert.equal(r.status, "complete");
+    assert.equal(r.randomDraws, 13);
+    assert.equal(r.newlyDetached, 0);
+    assert.equal(r.removedBoneMask, removedBoneMask);
+    assert.equal(r.remainingBudget, -40);
+    assert.deepEqual(
+      r.effects
+        .filter((e) => e.kind === "exploding-launch")
+        .map((e) => e.index),
+      [3, 2],
+    );
+    assert.equal(s.cache.stumpCounters[3], 100);
+    assert.equal(s.cache.stumpCounters[2], 100);
   }
+});
+test("exploding samples source character velocity after translation draws and retains it through registration", () => {
+  const s = state(),
+    h = host(s, [select(9), 0, 0, 0, 0, 0, 0]);
+  const draw = h.nextCrtInteger,
+    register = h.registerBone;
+  let calls = 0;
+  h.nextCrtInteger = () => {
+    const n = draw();
+    if (++calls === 4) s.characterVelocity = [10, 20, 30];
+    return n;
+  };
+  h.registerBone = (q) => {
+    s.characterVelocity = [100, 200, 300];
+    return register(q);
+  };
+  mutateNativePedSever(s, input({ exploding: true }), h);
+  assert.deepEqual(
+    h.log.find((e) => e[0] === "register")[1].activation.velocity,
+    [7, 20, 27],
+  );
+});
+test("nonhumanoid uses the same source selection and descendant recursion", () => {
+  const s = state(),
+    h = host(s, [0, select(2), ...Array(6).fill(16384)]);
+  const r = mutateNativePedSever(
+    s,
+    input({ form: { ...input().form, nonHumanoid: true } }),
+    h,
+  );
+  assert.equal(r.status, "complete");
+  assert.equal(r.randomDraws, 8);
+  assert.equal(r.removedBoneMask, 12);
+  assert.deepEqual(
+    r.effects.filter((e) => e.kind === "detach").map((e) => e.index),
+    [3, 2],
+  );
+});
+test("articulated state requires an actual resource preflight, then uses ordinary sever chronology", () => {
+  const absent = state(),
+    missing = mutateNativePedSever(
+      absent,
+      input({ articulated: true }),
+      host(absent, []),
+    );
+  assert.deepEqual(missing.requiredProviders, [
+    "source-articulated-joint-sever-provider",
+  ]);
+  assert.equal(missing.randomDraws, 0);
+  const s = state(),
+    h = host(s, [0, select(9), 0, 16384, 32767], {
+      preflightBones: (indices) => {
+        assert.deepEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        return [];
+      },
+    });
+  const r = mutateNativePedSever(s, input({ articulated: true }), h);
+  assert.equal(r.status, "complete");
+  assert.equal(r.randomDraws, 5);
+  assert.equal(r.removedBoneMask, 512);
+  assert.equal(h.log.find((e) => e[0] === "register")[1].clearLink188, true);
 });
 test("stump low byte and32-bit highest mask bit are preserved", () => {
   const p = input();
@@ -654,5 +739,44 @@ test("activation reads live character flag and velocity after successful PHIL re
     if (activeAfterRegistration)
       assert.deepEqual(committed.velocity, [-7, 8, -9]);
     else assert.equal(committed, null);
+  }
+});
+
+test("original DOG1 and BIPEDF use actual source parents, head bits and sever draw counts in both installations", async (t) => {
+  for (const root of ["data", "adv_data"]) {
+    for (const [name, selected, order, mask] of [
+      ["DOG1", 4, [6, 5, 4], 112],
+      ["BIPEDF", 2, [3, 2], 12],
+    ]) {
+      const bytes = await original(`${root}/PEDS/FORMS/${name}.TXT`, t);
+      if (!bytes) return;
+      const form = parsePedForm(decodeText(bytes));
+      const s = state();
+      const h = host(
+        s,
+        [
+          0,
+          select(selected, form.bones.length),
+          ...Array(order.length * 3).fill(16384),
+        ],
+        {
+          preflightBones: () => [],
+        },
+      );
+      const r = mutateNativePedSever(
+        s,
+        input({ form, articulated: name === "BIPEDF" }),
+        h,
+      );
+      assert.equal(r.status, "complete", `${root}/${name}`);
+      assert.equal(r.randomDraws, 2 + order.length * 3);
+      assert.equal(r.removedBoneMask, mask);
+      assert.equal(r.remainingBudget, -40);
+      assert.deepEqual(
+        r.effects.filter((e) => e.kind === "detach").map((e) => e.index),
+        order,
+      );
+      assert.equal(form.headBone, name === "DOG1" ? 2 : 1);
+    }
   }
 });

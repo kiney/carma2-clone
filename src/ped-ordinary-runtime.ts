@@ -115,6 +115,7 @@ export interface OrdinaryPedRuntimeOptions {
   onVanish?: (context: NativePedRuntimeCallback<Object3D>) => void;
   clearBurning?: (ped: Ped, signedIndex: number) => void | readonly string[];
   burningRequirements?: (ped: Ped, signedValue: number) => readonly string[];
+  readBloodRootLook?: (index: number) => PedVector | null;
   readBloodSettings?: () => {
     scrapeStart: number;
     lumpsPerEmission: number;
@@ -190,7 +191,7 @@ export class OrdinaryPedRuntime {
       moveFSM: options.moveFSM,
       readGlobals: () => ({
         immortal: !!options.frame().immortalPedestrians,
-        exploding: false,
+        exploding: !!options.frame().explosivePedestrians,
         brittle: false,
         goreLevel: options.frame().goreLevel ?? 1,
         dismemberSpurtCount: options.dismemberSpurtCount ?? 0,
@@ -669,6 +670,7 @@ export class OrdinaryPedRuntime {
         }),
         preflightPacket: (packet) =>
           this.options.preflightBlood?.(ctx, packet) ?? [],
+        readRootLook: this.options.readBloodRootLook,
         emit: (packet) => this.emitBlood(ctx, packet),
       },
     );

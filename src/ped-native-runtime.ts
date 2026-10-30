@@ -59,6 +59,7 @@ import type {
   NativePedSeverKillModelEffect,
 } from "./physics/ped-sever";
 import type { RigidBody } from "./physics/contact";
+import { nativePedFrictionOnlyJoint } from "./physics/ped-retained-joint";
 import type { VehicleSimulation } from "./physics/simulation";
 import {
   setNativePedPosition,
@@ -1165,7 +1166,12 @@ export class NativePedRuntime<Owner extends object = object> {
   ): readonly string[] {
     const missingProviders: string[] = [];
     const resources = this.bonePool.allocation(c)?.bodies ?? [];
-    if (resources.some((body) => body?.nativeJoint2) && !this.hooks.unlinkBone)
+    if (
+      resources.some(
+        (body) =>
+          body?.nativeJoint2 && !nativePedFrictionOnlyJoint(body.nativeJoint2),
+      )
+    )
       missingProviders.push("native-retained-joint2-owner");
     if (
       reason === "scope" &&
@@ -1240,7 +1246,10 @@ export class NativePedRuntime<Owner extends object = object> {
   ): readonly string[] {
     const bodies = this.bonePool.previewBodies(this.character(owner));
     // Existing source zero-capacity behavior remains normal reservation failure.
-    return indices.some((index) => bodies?.[index]?.nativeJoint2)
+    return indices.some((index) => {
+      const joint = bodies?.[index]?.nativeJoint2;
+      return joint && !nativePedFrictionOnlyJoint(joint);
+    })
       ? ["native-retained-joint2-constraint"]
       : [];
   }
@@ -1303,7 +1312,7 @@ export class NativePedRuntime<Owner extends object = object> {
     const c = this.character(owner),
       body = registration.body;
     body.poseTarget = c.instance!.bones[request.index].pose;
-    if (body.nativeJoint2 && !this.hooks.unlinkBone)
+    if (body.nativeJoint2 && !nativePedFrictionOnlyJoint(body.nativeJoint2))
       throw new Error("Native retained joint2 owner required");
     c.removedBoneMask = (c.removedBoneMask | (1 << request.index)) >>> 0;
     this.copyMasks(c);

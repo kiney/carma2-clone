@@ -4019,6 +4019,7 @@ function animate(now: number) {
           {
             cameraPosition: camera.position,
             pedestrianAnimation: powerups?.pedestrianAnimationState,
+            explosivePedestrians: powerups?.explosivePedestrians,
             gameTimeMs: stats.gameTimeMs,
             physicsTickMs: Math.round((simulation?.elapsed ?? 0) * 1000) >>> 0,
             framePeriodMs: gameFrame.periodMs,

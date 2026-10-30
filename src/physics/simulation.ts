@@ -17,6 +17,10 @@ import {
 } from "./edge-feature-index";
 import { NativeHierarchyQuiet } from "./hierarchy-quiet";
 import { NativePhysicsObjectRecords } from "./native-object-records";
+import {
+  evaluateNativePedRetainedJoint,
+  nativePedFrictionOnlyJoint,
+} from "./ped-retained-joint";
 import type { WorldContactProfile } from "./world-contact-profile";
 import {
   runLocalResponses,
@@ -1277,6 +1281,8 @@ export class VehicleSimulation {
     this.pedContactRings.delete(body);
   }
   addPedBoneBody(body: NativePedBoneBody): { accepted: boolean; code: number } {
+    if (body.nativeJoint2 && !nativePedFrictionOnlyJoint(body.nativeJoint2))
+      throw new Error("Native retained joint2 geometry provider required");
     if (
       body.rigidType !== 5 ||
       !body.actor ||
@@ -3204,8 +3210,10 @@ export class VehicleSimulation {
         },
       );
     for (const provider of forces.requiredProviders) diagnostics.add(provider);
-    if (forces.jointConstraintProviderRequired)
-      diagnostics.add("native-retained-joint2-constraint");
+    if (forces.jointConstraintProviderRequired && isNativePedBoneBody(body)) {
+      if (!body.nativeJoint2 || !nativePedFrictionOnlyJoint(body.nativeJoint2))
+        diagnostics.add("native-retained-joint2-constraint");
+    }
     if (forces.applied)
       body.state.angularVelocity
         .copy(omega)
@@ -3569,7 +3577,9 @@ export class VehicleSimulation {
           inertia: body.properties.inertia.toArray(),
           bounds: body.shape.bounds,
           centreOfMass: body.properties.centerOfMass.toArray(),
-          jointInfoOrientationY: body.nativeJoint2?.quietOrientationY ?? null,
+          jointInfoOrientationY: body.nativeJoint2
+            ? nativeRigidPose(body.state.position, body.state.orientation)[4]
+            : null,
         });
       state.quietState = result.quietState;
       if (result.zeroVelocities) {
@@ -3577,6 +3587,38 @@ export class VehicleSimulation {
         body.state.angularVelocity.set(0, 0, 0);
         body.localOmega.set(0, 0, 0);
         body.auxiliaryLocalOmega.set(0, 0, 0);
+      }
+    }
+  }
+  /** Installed4ba784 follows quiet/sleep and only changes next-tick omega. */
+  private finishPedJointFriction(): void {
+    for (const body of this.pedBoneBodies) {
+      if (
+        !body.nativeJoint2 ||
+        body.doNothing ||
+        this.phil.getState(body) !== 2
+      )
+        continue;
+      const diagnostics = this.pedBoneQuiet.get(body)!.requiredProviders;
+      if (!nativePedFrictionOnlyJoint(body.nativeJoint2)) {
+        diagnostics.add("native-retained-joint2-constraint");
+        continue;
+      }
+      const result = evaluateNativePedRetainedJoint({
+        joint: { friction: body.nativeJoint2.friction! },
+        inertia: body.properties.inertia.toArray() as [number, number, number],
+        localOmega: body.state.angularVelocity
+          .clone()
+          .applyQuaternion(body.state.orientation.clone().invert())
+          .toArray() as [number, number, number],
+      });
+      for (const provider of result.requiredProviders)
+        diagnostics.add(provider);
+      if (result.applied) {
+        body.localOmega.fromArray(result.localOmega);
+        body.state.angularVelocity
+          .copy(body.localOmega)
+          .applyQuaternion(body.state.orientation);
       }
     }
   }
@@ -3597,6 +3639,23 @@ export class VehicleSimulation {
       body.actor.position.copy(body.state.position);
       body.actor.quaternion.copy(body.state.orientation);
       body.actor.updateMatrix();
+      const faceState = this.worldFaceStates.get(body);
+      if (faceState) {
+        const { start, end } = faceState;
+        if (
+          !Number.isInteger(start) ||
+          !Number.isInteger(end) ||
+          start < 0 ||
+          end < start ||
+          end > this.worldFaceCache.capacity
+        )
+          throw new Error("Invalid native pedestrian world-face range");
+        body.worldFaceNormals = [];
+        for (let index = start; index < end; index++)
+          body.worldFaceNormals.push(
+            this.worldFaceCache.rawSlot(index)?.normal.clone() ?? new Vector3(),
+          );
+      }
       if (body.doNothing) {
         if (!body.haltCallbackEnabled) continue;
         if (!body.onHalt) {
@@ -3611,6 +3670,12 @@ export class VehicleSimulation {
           body.properties.immovable = false;
         }
       } else {
+        // Installed41803a reads the shared slot at start, even for an empty or
+        // overwritten body range. Read now, after all collections this frame.
+        if (faceState) {
+          const rawFace = this.worldFaceCache.rawSlot(faceState.start);
+          body.firstWorldFaceNormal = rawFace?.normal.clone() ?? new Vector3();
+        }
         const result = settleNativePedBody({
           worldVector: body.state.velocity.toArray(),
           firstWorldFaceNormal: body.firstWorldFaceNormal?.toArray() ?? null,
@@ -6384,6 +6449,7 @@ export class VehicleSimulation {
       this.finishPedBoneQuiet();
       this.finishPedQuiet();
       this.finishHierarchyQuiet();
+      this.finishPedJointFriction();
       for (const car of this.cars) {
         if (!this.isCarPhysicsActive(car)) continue;
         const forward = new Vector3(0, 0, -1).applyQuaternion(

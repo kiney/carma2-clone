@@ -1,12 +1,12 @@
 ---
 id: TASK-48
 title: >-
-  [P3] PUP-09: Implement explosive, immortal, stupid, suicidal, and Valium
+  [P3] PUP-09: Implement remaining immortal, stupid, suicidal and Valium
   pedestrians
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-30 15:12'
+updated_date: '2026-10-30 17:14'
 labels:
   - priority-3
   - PUP-09
@@ -27,14 +27,12 @@ ordinal: 3029
 <!-- SECTION:DESCRIPTION:BEGIN -->
 Original issue ID: **PUP-09**
 Numeric priority: **3** (1 is highest)
-Original status: **Missing**
-Category: **Powerups**
 
-## Scope and evidence
-
-Implement explosive, immortal, stupid, and suicidal pedestrians, as well as Valium behavior. Actions `3`, `23`–`25`, `50`.
-
-## Source references
-
-[powerups.ts](../../src/powerups.ts), [pedestrians.ts](../../src/pedestrians.ts)
+Remaining scope: implement immortal, stupid, suicidal and Valium pedestrian effects (actions23-25 and50). Original action3 explosive pedestrians is implemented and validated under PED-11/TASK-134 through normal timed powerup and physical contact paths. Preserve that completed behavior. See src/powerups.ts, src/pedestrians.ts and docs/ped11-production-integration.md.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PED-11 completion implements original explosive pedestrians (action3, catalog powerup4) through normal grant/renew/conflict/expiry/reset and real nonhumanoid severing. This ticket remains open for actions23-25 and50 (immortal, stupid, suicidal and Valium); explosive action3 is no longer missing. See docs/ped11-explosive-powerup-re.md and docs/ped11-production-integration.md.
+<!-- SECTION:NOTES:END -->

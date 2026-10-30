@@ -95,6 +95,16 @@ export class NativeWorldFaceCache<Face> {
   read(state: NativeWorldFaceState): Face[] {
     return this.valid(state) ? this.faces.slice(state.start, state.end) : [];
   }
+  /** Installed settling41803a..418051 dereferences the shared slot at start
+   * without checking the owner's end or epoch. NULL means a valid slot's known
+   * initial zero-filled record, never a missing provider. Written slots retain
+   * their current record across owner invalidation, empty ranges and ring wraps.
+   * Read at callback time: another collection can overwrite the slot meanwhile. */
+  rawSlot(index: number): Face | null {
+    if (!Number.isInteger(index) || index < 0 || index >= this.capacity)
+      throw new RangeError("Native world face raw slot outside capacity");
+    return this.faces[index] ?? null;
+  }
   get(
     state: NativeWorldFaceState,
     input: NativeWorldFaceInput,

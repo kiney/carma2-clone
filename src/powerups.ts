@@ -85,7 +85,7 @@ export interface PowerupEvent {
 }
 
 const implementedActions = new Set([
-  0, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26,
+  0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26,
   27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 45, 46, 47, 48, 49, 51,
 ]);
 
@@ -244,6 +244,7 @@ interface ActiveEffect {
     | 29
     | 31
     | 2
+    | 3
     | 32
     | 33
     | 48;
@@ -287,6 +288,7 @@ export class PowerupSystem {
   private underwaterAbility = false;
   private instantHandbrake = false;
   private mapPedestrians = false;
+  private explodingPedestrians = false;
   private pedBodyScale: [number, number, number] = [1, 1, 1];
   private pedHeadScale = 1;
   private pedMutantSpeed = 0;
@@ -306,6 +308,10 @@ export class PowerupSystem {
   }
   get pedestriansOnMap(): boolean {
     return this.mapPedestrians;
+  }
+  /** Installed global SetPedExplode state, owned by timed action 3 effects. */
+  get explosivePedestrians(): boolean {
+    return this.explodingPedestrians;
   }
   private opponentSpeedFactor = 1;
   private copSpeedFactor = 1;
@@ -827,6 +833,9 @@ export class PowerupSystem {
         this.proxyRayDistanceSquared = 0;
         if (recipient) recipient.proxyRayDistanceSquared = 0;
         break;
+      case 3:
+        this.explodingPedestrians = false;
+        break;
       case 2:
         this.pedBodyScale = [1, 1, 1];
         this.pedAnimationRevision++;
@@ -992,6 +1001,7 @@ export class PowerupSystem {
         );
         break;
       }
+      case 3:
       case 5:
       case 6:
       case 8:
@@ -1010,6 +1020,7 @@ export class PowerupSystem {
       case 29:
       case 48:
       case 31: {
+        if (def.action === 3) this.explodingPedestrians = true;
         if (def.action === 48) {
           this.drinkDriving.set(
             def.floatParams,

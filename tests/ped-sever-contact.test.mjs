@@ -184,6 +184,45 @@ test("surviving limb uses post-sever mask but retains ordinary alive reaction an
   );
 });
 
+test("nonhumanoid limb sever runs the source fatal HP tail with effective damage0", () => {
+  const s = state();
+  const h = host(s, {
+    values: [0, choose(2), 0, 0, 0],
+    input: { form: { ...severInput().form, nonHumanoid: true } },
+    onKill: (_health, context, events) =>
+      events.push(["kill", context.removedBoneMask]),
+  });
+  const result = h.adapter.damageTail(
+    request({ damage: 40, form: { ...form, nonHumanoid: true } }),
+  );
+  assert.equal(result.receipt.status, "complete");
+  assert.equal(result.health.hitPoints, 0);
+  assert.equal(result.health.damage, 40);
+  assert.equal(result.health.effectiveDamage, 0);
+  assert.equal(result.health.killed, true);
+  assert.equal(s.removedBoneMask, 4);
+  assert.equal(h.draws(), 5);
+  assert.deepEqual(
+    h.events.filter((e) => e[0] === "kill"),
+    [["kill", 4]],
+  );
+});
+
+test("actual contact exploding flag overrides stale input and bypasses zero sever chance", () => {
+  const s = state();
+  const h = host(s, {
+    values: [choose(2), ...Array(6).fill(16384)],
+    input: { severChance: 0 },
+  });
+  const result = h.adapter.damageTail(
+    request({ damage: 40, state: { ...request().state, exploding: true } }),
+  );
+  assert.equal(result.receipt.status, "complete");
+  assert.equal(result.health.hitPoints, 60);
+  assert.equal(s.removedBoneMask, 4);
+  assert.equal(h.draws(), 7);
+});
+
 test("no selected bone and failed registration still run the HP tail once", () => {
   const belowThresholdState = state();
   const belowThreshold = host(belowThresholdState, { values: [] });

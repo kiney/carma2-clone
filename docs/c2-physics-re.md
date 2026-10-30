@@ -707,8 +707,9 @@ and [volume addresses/formulas](c2-ped-ordinary-volume-re.md).
 
 Ordinary authored populations now use original gore options, bounded FORM
 removed-pose stores and actual independent BOX/SPHERE PHIL parts. Scope,
-repair/reset and resource disposal retain distinct canonical owners. Full
-articulated/nonhumanoid/exploding providers remain explicitly tracked in PED-11.
+repair/reset and resource disposal retain distinct canonical owners. The subsequent PED-11 integration completes reachable nonhumanoid and explosive
+contacts; its binary audit distinguishes dormant full boned topology from ordinary
+level0/5 gameplay. See [exceptional integration](ped11-production-integration.md).
 See [severing integration](ped08-production-integration.md).
 
 Native physical causes now reach existing award and blood consumers with actual

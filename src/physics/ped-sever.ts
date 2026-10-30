@@ -79,6 +79,12 @@ export type NativePedSeverEffect =
   | { kind: "reserve-slot"; slot: number | null }
   | { kind: "already-removed"; index: number }
   | { kind: "spin"; index: number; omega: PedVector }
+  | {
+      kind: "exploding-launch";
+      index: number;
+      velocity: PedVector;
+      omega: PedVector;
+    }
   | { kind: "registration"; index: number; accepted: boolean }
   | { kind: "mask"; index: number; removedBoneMask: number }
   | { kind: "detach"; index: number; oldSlot: number; newSlot: number }
@@ -100,6 +106,8 @@ export interface NativePedSeverTailContext {
 }
 export interface NativePedSeverProviders<Actor, Model, Body, Tail> {
   /** Host-only readiness of retained source resources, before reservation/RNG.
+   * Mandatory for an already articulated character: validate actual link/unlink,
+   * registration and retained joint2 ownership, not authored joint template names.
    * Unsupported retained constraints cannot be discovered after PHIL/mask commit. */
   preflightBones?: (indices: readonly number[]) => readonly string[];
   nextCrtInteger?: () => number;
@@ -246,7 +254,8 @@ export function nativePedSeverKillModelEffects(
 /** Installed4cd480/4cd790/40b860 ordinary severing. Sever/continuation capabilities
  * preflight before draws; native false results ALWAYS resume the supplied tail.
  * The optional Kill-model hook reports a missing owner at its actual tail phase.
- * No implicit generic articulation, exploding velocity, cache or CRT provider. */
+ * Exploding launch uses source character V and the same shared CRT. Articulated
+ * resource readiness remains explicit; no generic joint owner is fabricated. */
 export function mutateNativePedSever<Actor, Model, Body, Tail>(
   state: NativePedSeverState,
   input: NativePedSeverInput,
@@ -285,16 +294,13 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
   const gate = input.otherPresent && !input.immortal && input.goreLevel >= 2;
   const attemptsPossible = gate && remaining - threshold >= 0;
   const selectionPossible =
-    attemptsPossible && (input.brittle || input.severChance > 0);
+    attemptsPossible &&
+    (input.exploding || input.brittle || input.severChance > 0);
   if (!providers.commonTail) required.push("source-common-HP-kill-tail");
   if (!providers.callerContinuation)
     required.push("source-contact-caller-continuation");
-  if (attemptsPossible && input.exploding)
-    required.push("source-exploding-sever-velocity-provider");
-  if (selectionPossible && input.articulated)
+  if (selectionPossible && input.articulated && !providers.preflightBones)
     required.push("source-articulated-joint-sever-provider");
-  if (selectionPossible && input.form.nonHumanoid)
-    required.push("source-nonhumanoid-sever-provider");
   if (attemptsPossible) {
     const limit = integer(
       input.maximumAttempts ?? 65536,
@@ -334,7 +340,7 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
           }
     }
   }
-  if (selectionPossible && !input.articulated && providers.preflightBones)
+  if (selectionPossible && providers.preflightBones)
     required.push(...providers.preflightBones([...snapshots.keys()]));
   if (required.length) return finish();
   const draw = () => {
@@ -342,7 +348,11 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
     randomDraws++;
     return n;
   };
-  const one = (index: number): number => {
+  const one = (
+    index: number,
+    suppliedVelocity: PedVector | null,
+    suppliedOmega: PedVector | null,
+  ): number => {
     const oldSlot = state.bonedSlot;
     if (state.removedBoneMask & bit(index)) {
       emit({ kind: "already-removed", index });
@@ -356,7 +366,7 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
       if (slot === null) return 0;
       state.bonedSlot = slot;
     }
-    const omega: PedVector = [
+    const omega: PedVector = suppliedOmega ?? [
       f(-1 + (2 * draw()) / 32768),
       f(-1 + (2 * draw()) / 32768),
       f(-1 + (2 * draw()) / 32768),
@@ -395,7 +405,7 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
     // another object; never capture activation before that provider returns.
     request.activation = state.physicsActive
       ? {
-          velocity: vector(state.characterVelocity),
+          velocity: vector(suppliedVelocity ?? state.characterVelocity),
           gravity: 1,
           clearProperties: [3, 4, 5],
           clearDoNothing: true,
@@ -417,7 +427,30 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
     const value = input.dismemberSpurtCount & 255;
     state.cache!.stumpCounters[index] = value;
     emit({ kind: "stump-counter", index, value });
-    return count + one(index);
+    // 4cd81e: wrapper draws precede40b860's missing-mask/slot checks, even on a
+    // repeated selection or native allocation failure. Translation is spilled,
+    // added to the live character V, then the three supplied BODY spins are drawn.
+    if (input.exploding) {
+      const translation: PedVector = [
+        f(-3 + (6 * draw()) / 32768),
+        f((3 * draw()) / 32768),
+        f(-3 + (6 * draw()) / 32768),
+      ];
+      const characterVelocity = vector(state.characterVelocity);
+      const velocity: PedVector = [
+        scalar(translation[0] + characterVelocity[0]),
+        scalar(translation[1] + characterVelocity[1]),
+        scalar(translation[2] + characterVelocity[2]),
+      ];
+      const omega: PedVector = [
+        f(-20 + (40 * draw()) / 32768),
+        f(-20 + (40 * draw()) / 32768),
+        f(-20 + (40 * draw()) / 32768),
+      ];
+      emit({ kind: "exploding-launch", index, velocity, omega });
+      return count + one(index, velocity, omega);
+    }
+    return count + one(index, null, null);
   };
   if (gate)
     while (true) {
@@ -426,6 +459,7 @@ export function mutateNativePedSever<Actor, Model, Body, Tail>(
       emit({ kind: "budget", remaining, successfulCount: newlyDetached });
       if (difference < 0 || newlyDetached >= 5) break;
       const accepted =
+        input.exploding ||
         input.brittle ||
         (input.severChance !== 0 &&
           Math.floor((draw() * 100) / 32768) < input.severChance);

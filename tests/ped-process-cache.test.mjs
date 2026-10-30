@@ -66,7 +66,7 @@ test("native pool preallocates exactly100 stable300-byte process records plus on
   for (const [i, cache] of h.pool.slots.entries()) {
     assert.equal(cache.index, i);
     assert.equal(cache.storage.length, 300);
-    assert.equal(cache.stumpCounters.length, 10);
+    assert.equal(cache.stumpCounters.length, 32);
     assert.equal(cache.owner, null);
     assert.equal(cache.faceCache, null);
     assert.equal(cache.killer, null);
@@ -77,6 +77,26 @@ test("native pool preallocates exactly100 stable300-byte process records plus on
     assert.equal(cache.runFactor, 0);
   }
   assert.ok(Object.isFrozen(h.pool.slots));
+});
+
+test("animal stump indices alias native flags/vectors while Init clears only ten counter bytes", () => {
+  const h = hostFixture(),
+    slot = h.pool.slots[0];
+  slot.storage.fill(0xa5);
+  const { cache } = h.pool.visit({}, input());
+  assert.equal(cache, slot);
+  assert.equal(cache.stumpCounters.length, 32);
+  assert.deepEqual([...cache.stumpCounters.subarray(0, 10)], Array(10).fill(0));
+  assert.equal(cache.stumpCounters[10], 0xa5, "source retains opaque+2d");
+  assert.equal(cache.stumpCounters[15], 0xa5, "source retains vector+30 bytes");
+  assert.equal(cache.stumpCounters[31], 0xa5, "no full-view initialization");
+  cache.stumpCounters[15] = 42;
+  assert.equal(cache.storage[0x32], 42);
+  cache.stumpCounters[11] = 0x80;
+  assert.equal(cache.flags, 0x80, "actual source byte aliases flags WORD+2e");
+  cache.flags = 0x1234;
+  assert.equal(cache.stumpCounters[11], 0x34);
+  assert.equal(cache.stumpCounters[12], 0x12);
 });
 
 test("first free array slot wins even when an earlier occupied record has an older timestamp", () => {

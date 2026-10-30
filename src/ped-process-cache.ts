@@ -6,6 +6,9 @@ import type { PedVector } from "./ped-form";
 export const NATIVE_PED_PROCESS_CACHE_CAPACITY = 100;
 export const NATIVE_PED_PROCESS_CACHE_BYTES = 0x12c;
 export const NATIVE_PED_PROCESS_STUMP_COUNT = 10;
+/** Source mask addressing admits32 FORM bones. Beyond the ten declared bytes,
+ * original animal indices alias flags+2e and vectors+30; keep the real storage. */
+export const NATIVE_PED_PROCESS_STUMP_CAPACITY = 32;
 export interface NativePedProcessCache<
   Owner extends object,
   Face extends object,
@@ -168,7 +171,10 @@ function makeCache<Owner extends object, Face extends object>(
       index,
       replaySingleton,
       storage,
-      stumpCounters: storage.subarray(0x23, 0x2d),
+      stumpCounters: storage.subarray(
+        0x23,
+        0x23 + NATIVE_PED_PROCESS_STUMP_CAPACITY,
+      ),
     },
     {
       owner: {
@@ -375,7 +381,7 @@ export class NativePedProcessCachePool<
       cache.processFlags = (cache.processFlags & ~1) >>> 0;
       for (const offset of [0x94, 0x90]) view.setUint32(offset, 0, true);
       cache.napalmDeadlineMs = 0;
-      cache.stumpCounters.fill(0);
+      cache.stumpCounters.fill(0, 0, NATIVE_PED_PROCESS_STUMP_COUNT);
     }
     cache.owner = owner;
     cache.lastUsedTimeMs = input.timeMs;
