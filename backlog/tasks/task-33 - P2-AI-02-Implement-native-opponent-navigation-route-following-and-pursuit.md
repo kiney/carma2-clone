@@ -1,10 +1,10 @@
 ---
 id: TASK-33
 title: '[P2] AI-02: Implement native opponent navigation, route following, and pursuit'
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-30 15:11'
+updated_date: '2026-10-30 17:29'
 labels:
   - priority-2
   - AI-02
@@ -17,7 +17,7 @@ references:
   - src/physics/opponent-placement.ts
   - docs/c2-ai-pursuit-re.md
 priority: high
-ordinal: 2041
+ordinal: 2040
 ---
 
 ## Description
@@ -36,3 +36,9 @@ The live native dispatcher replaces RoadNavigator targets with original section 
 
 [runtime.ts](../../src/ai/runtime.ts), [placement](../../src/physics/opponent-placement.ts), [pursuit evidence](../../docs/c2-ai-pursuit-re.md)
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Selected AI workstream order (2026-10-30): first AI-02/TASK-33, then AI-01/TASK-32, then AI-04/TASK-56. Finish shared collision-candidate preparation and verify placement/fallback transitions before reviewing behavioral reactions and integrated stuck recovery. Preserve implemented navigation and ordinary driving; audit the remaining scope against current code before changing it.
+<!-- SECTION:NOTES:END -->

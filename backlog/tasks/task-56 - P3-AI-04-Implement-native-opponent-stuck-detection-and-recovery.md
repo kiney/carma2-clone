@@ -1,17 +1,19 @@
 ---
 id: TASK-56
 title: '[P3] AI-04: Implement native opponent stuck detection and recovery'
-status: backlog
+status: next
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-30 15:16'
+updated_date: '2026-10-30 17:29'
 labels:
   - priority-3
   - AI-04
   - opponents
   - legacy-partial
   - topic-ai
-dependencies: []
+dependencies:
+  - TASK-33
+  - TASK-32
 references:
   - src/ai.ts
   - src/main.ts
@@ -43,3 +45,9 @@ Navigation/path reconstruction remains tracked by AI-02 / TASK-33. Keep this tic
 
 [src/ai/path-follow.ts](../../src/ai/path-follow.ts), [src/ai/path-struggle.ts](../../src/ai/path-struggle.ts), [src/ai/runtime.ts](../../src/ai/runtime.ts), [src/ai/rematerialization.ts](../../src/ai/rematerialization.ts), [src/ai/fallen-world.ts](../../src/ai/fallen-world.ts), [native path evidence](../../docs/c2-ai-paths-re.md), [repair and levitation evidence](../../docs/c2-ai-repair-levitate-re.md), [cheating/rematerialization evidence](../../docs/c2-ai-cheating-re.md), [pursuit evidence](../../docs/c2-ai-pursuit-re.md).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Selected third after navigation/placement (AI-02/TASK-33) and objective/crash-reaction integration (AI-01/TASK-32). Validate existing native struggle/give-up through objective restart, physical/remote transitions and rematerialization, including count-zero behavior. Dependencies describe completion of those integrated validation prerequisites.
+<!-- SECTION:NOTES:END -->
