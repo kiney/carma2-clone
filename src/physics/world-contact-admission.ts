@@ -1,6 +1,51 @@
 import type { Contact } from "./contact";
 
-/** Same finite-plane neighborhood, including coplanar source-triangle seams.
+/** Browser trajectory admission: a shallow shared-edge seam is one local
+ * encounter, not two simultaneous opposed supports. Five degrees is a bounded
+ * smooth-patch policy, not an original C2 constant. Geometry and actor identity
+ * distinguish a seam from separate walls, overlapping faces and sharp corners. */
+function shallowSharedEdge(
+  x: NonNullable<Contact["sourceSurface"]>,
+  y: NonNullable<Contact["sourceSurface"]>,
+): boolean {
+  const actorX = x.source?.actor ?? x.actor;
+  const actorY = y.source?.actor ?? y.actor;
+  if (
+    !actorX ||
+    actorX !== actorY ||
+    Math.abs(x.normal.dot(y.normal)) < Math.cos((5 * Math.PI) / 180)
+  )
+    return false;
+  const first = [x.a, x.b, x.c],
+    second = [y.a, y.b, y.c];
+  const shared: { first: number; second: number }[] = [];
+  for (let i = 0; i < 3; i++) {
+    const j = second.findIndex(
+      (v, index) =>
+        !shared.some((pair) => pair.second === index) &&
+        first[i].distanceToSquared(v) <= 1e-12,
+    );
+    if (j >= 0) shared.push({ first: i, second: j });
+  }
+  if (shared.length !== 2) return false;
+  const origin = first[shared[0].first];
+  const edge = first[shared[1].first].clone().sub(origin);
+  if (edge.lengthSq() <= 1e-12) return false;
+  const thirdX = first.find(
+    (_, i) => !shared.some((pair) => pair.first === i),
+  )!;
+  const thirdY = second.find(
+    (_, i) => !shared.some((pair) => pair.second === i),
+  )!;
+  // Compare the third vertices in the plane perpendicular to the shared edge.
+  // Same-side overlapping triangles must not erase an independent contact.
+  const sideX = edge.clone().cross(thirdX.clone().sub(origin));
+  const sideY = edge.clone().cross(thirdY.clone().sub(origin));
+  return sideX.dot(sideY) < 0;
+}
+
+/** Same local finite surface neighborhood. Coplanar behavior stays unchanged;
+ * only proven shallow shared-edge adjacency broadens the previous predicate.
  * Different walls in a narrow gap remain independent constraints. */
 function sameSurfacePatch(a: Contact, b: Contact): boolean {
   const x = a.sourceSurface,
@@ -8,8 +53,9 @@ function sameSurfacePatch(a: Contact, b: Contact): boolean {
   if (!x || !y || x.owner || y.owner) return false;
   if (x === y) return true;
   return (
-    Math.abs(x.normal.dot(y.normal)) > 1 - 1e-8 &&
-    Math.abs(x.normal.dot(y.a.clone().sub(x.a))) <= 1e-6
+    (Math.abs(x.normal.dot(y.normal)) > 1 - 1e-8 &&
+      Math.abs(x.normal.dot(y.a.clone().sub(x.a))) <= 1e-6) ||
+    shallowSharedEdge(x, y)
   );
 }
 

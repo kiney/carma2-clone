@@ -325,6 +325,8 @@ historical Windows material-address capture still have documented gaps. Live pos
 
 `npm run test:ped-panic` checks original Stock/Advanced fear animation completion, fleeing direction and run transport. [PED-13 evidence](docs/ped13-panic-completion.md).
 
+`npm run test:seams` checks shallow terrain contact admission, bounded impact energy and preservation of independent walls/slots. [PED-14 evidence](docs/ped14-shallow-seam-stutter.md).
+
 ## Asset and license notes
 
 Use an installation you are entitled to use. Assets are read from that directory at runtime and are not copied into this repository or included in its license. Independently written project code is MIT licensed; see [LICENSE](LICENSE). The runtime depends on Three.js (MIT), UTIF (MIT), and UTIF's dependency pako (MIT and Zlib). UTIF also embeds a PDF.js/jpgjs JPEG decoder (Apache-2.0). Their copyright notices and license texts are included in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

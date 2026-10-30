@@ -4,6 +4,12 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-30)
 
+P1 PED-14 / TASK-140 fixes the captured TIMBER shallow-seam energy injection
+through shared-edge encounter admission. Exact contact replay and original-world
+collectors verify the first destructive event; the preserved scene runs again.
+Remaining ordinary crowded-scene throughput is P1 PERF-26 / TASK-141 in `next`,
+starting with a full-production-build profile. [Evidence and limits](../docs/ped14-shallow-seam-stutter.md).
+
 P1 PED-13 / TASK-139 completes native fear-animation callbacks into fleeing,
 including grounded direction reversal, run40/41 selection and normal limb
 substitutions. Original Stock/Advanced and the preserved user scene are checked.

@@ -1,5 +1,10 @@
 # Runaway collision energy: reproduced cause and native solver comparison
 
+Current extension: [PED-14 shallow shared-edge admission](ped14-shallow-seam-stutter.md)
+reproduces a separate TIMBER pedestrian energy injection with a first-event
+capture and original-world collector comparison. It broadens only the browser
+surface-neighborhood predicate; the native normal solver/RHS remains unchanged.
+
 ## Conclusions (2026-10-29)
 
 There is now a small, redistributable reproduction of a causal mechanism for

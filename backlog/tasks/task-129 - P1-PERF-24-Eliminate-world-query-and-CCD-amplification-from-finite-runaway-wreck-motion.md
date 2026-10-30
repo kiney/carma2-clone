@@ -6,7 +6,7 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-29 13:27'
-updated_date: '2026-10-30 15:11'
+updated_date: '2026-10-30 22:00'
 labels:
   - PERF-24
   - performance
@@ -59,4 +59,6 @@ AC2 remains deliberately unchecked: the procedural causal mechanism is fixed, bu
 PERF-24 causal correction checkpoint is landed; remaining capture/lifecycle hardening is inactive while user selects the distinct PERF-25 anchored-scenery retry diagnosis. Return to next to keep WIP representative of actual active work.
 
 User deferred remaining work until the extreme-motion stall occurs again. Medium priority (P3), backlog. The reproduced energy-source correction stays implemented; do not resume speculative first-event capture or lifecycle hardening without a new concrete occurrence or explicit selection.
+
+New concrete occurrence (PED-14/TASK-140): Stock TIMBER pedestrian root, actual bounded contact input -> adjacent1.33-degree seam contradiction ->1647x energy, then oversized world-query amplification. Both recorded normal packets and original-world reconstructed emitters reproduce it. PED-14 fixes smooth shared-edge encounter admission with frozen procedural regressions. This does not replay the older FAIR first event or guarantee cheap handling of arbitrary pre-existing runaway velocity; remaining ordinary crowded-scene throughput is separately PERF-26.
 <!-- SECTION:NOTES:END -->

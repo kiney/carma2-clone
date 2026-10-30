@@ -1,3 +1,5 @@
+import "./shallow-seam-slot.test.mjs";
+import "./shallow-seam-contact.test.mjs";
 import "./ped-panic-completion.test.mjs";
 import "./ped-release-reentry.test.mjs";
 import "./ai04-recovery.test.mjs";

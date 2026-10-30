@@ -4,6 +4,7 @@ title: '[P3] QUA-15: Diagnose intermittent Vite HMR shutdown test timeout'
 status: backlog
 assignee: []
 created_date: '2026-10-30 20:28'
+updated_date: '2026-10-30 22:06'
 labels:
   - priority-3
   - QUA-15
@@ -25,3 +26,9 @@ Known unrelated intermittent test: tests/server-startup.test.mjs development ser
 - [ ] #1 Reproduce or explain the shutdown ordering race and separate dependency scan from lingering socket ownership.
 - [ ] #2 Fix root lifecycle ownership while retaining bounded exit and port-release assertions; asset-free CI and focused server tests pass.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Also recurred in PED-14 asset-free CI: only Vite-HMR shutdown case exceeded15s while dependency scan reported Request is outdated during close. All collision/recovery tests passed; no server source changed. Original-data full suite was green. Keep separate from gameplay stutter.
+<!-- SECTION:NOTES:END -->

@@ -82,7 +82,8 @@
     "test:ped-exceptional": "npm run build && node tests/browser-ped-exceptional.mjs",
     "test:ai-reactions": "npm run build && node tests/browser-ai-crash-reactions.mjs",
     "test:ai-recovery": "npm run build && node tests/browser-ai-recovery.mjs",
-    "test:ped-panic": "npm run build && node tests/browser-ped-panic.mjs"
+    "test:ped-panic": "npm run build && node tests/browser-ped-panic.mjs",
+    "test:seams": "node --import tsx tests/shallow-seam-contact.test.mjs && node --import tsx tests/shallow-seam-slot.test.mjs"
   },
   "dependencies": {
     "three": "0.180.0",
