@@ -4,11 +4,13 @@ title: '[P3] QUA-05: Measure rendering and performance on hardware GPUs'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - QUA-05
   - quality
   - legacy-needs-validation
+  - topic-quality
 dependencies: []
 references:
   - tests/browser.mjs

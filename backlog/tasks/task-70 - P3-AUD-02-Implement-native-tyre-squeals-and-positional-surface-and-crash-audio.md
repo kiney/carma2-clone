@@ -6,12 +6,13 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - AUD-02
   - audio
   - legacy-partial
+  - topic-audio
 dependencies: []
 references:
   - src/physics/surfaces.ts

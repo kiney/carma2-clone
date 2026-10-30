@@ -4,11 +4,13 @@ title: '[P4] AUD-04: Integrate original music, ambient audio, and event sounds'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-4
   - AUD-04
   - audio
   - legacy-missing
+  - topic-audio
 dependencies: []
 references:
   - src/audio.ts

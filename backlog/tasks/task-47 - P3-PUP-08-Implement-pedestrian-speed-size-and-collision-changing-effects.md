@@ -4,12 +4,14 @@ title: '[P3] PUP-08: Implement pedestrian speed, size, and collision-changing ef
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-29 10:30'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-3
   - PUP-08
   - powerups
   - legacy-partial
+  - topic-pedestrians
+  - topic-powerups
 dependencies: []
 references:
   - src/powerups.ts

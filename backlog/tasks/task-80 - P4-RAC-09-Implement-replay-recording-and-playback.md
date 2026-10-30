@@ -4,12 +4,13 @@ title: '[P4] RAC-09: Implement replay recording and playback'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:33'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-4
   - RAC-09
   - races
   - legacy-missing
+  - topic-campaign
 dependencies: []
 references:
   - docs/compatibility.md

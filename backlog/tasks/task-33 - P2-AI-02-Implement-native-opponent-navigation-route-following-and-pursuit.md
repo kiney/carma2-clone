@@ -4,12 +4,13 @@ title: '[P2] AI-02: Implement native opponent navigation, route following, and p
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-2
   - AI-02
   - opponents
   - legacy-partial
+  - topic-ai
 dependencies: []
 references:
   - src/ai/runtime.ts

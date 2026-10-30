@@ -4,12 +4,13 @@ title: '[P5] UI-03: Add configurable controls, audio levels, and graphics option
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-5
   - UI-03
   - ui
   - legacy-partial
+  - topic-audio
 dependencies: []
 references:
   - src/main.ts

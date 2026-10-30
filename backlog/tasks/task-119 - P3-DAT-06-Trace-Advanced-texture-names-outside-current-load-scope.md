@@ -4,12 +4,13 @@ title: '[P3] DAT-06: Trace Advanced texture names outside current load scope'
 status: backlog
 assignee: []
 created_date: '2026-10-24 17:09'
-updated_date: '2026-10-24 19:40'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - DAT-06
   - assets
   - materials
+  - topic-quality
 dependencies: []
 references:
   - docs/advanced-assets-audit.md

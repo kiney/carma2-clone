@@ -4,12 +4,13 @@ title: '[P3] PUP-16: Honor powerup icon, group, flag, Pratcam, and fizzle metada
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-24 19:49'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - PUP-16
   - powerups
   - legacy-partial
+  - topic-ui
 dependencies: []
 references:
   - src/powerups.ts

@@ -4,12 +4,13 @@ title: '[P5] PERF-01: Diagnose frame-time spikes and coordinate performance find
 status: backlog
 assignee: []
 created_date: '2026-10-11 19:16'
-updated_date: '2026-10-29 15:16'
+updated_date: '2026-10-30 15:12'
 labels:
   - PERF-01
   - performance
   - profiling
   - priority-5
+  - topic-quality
 dependencies: []
 references:
   - docs/performance-investigation.md

@@ -4,11 +4,13 @@ title: '[P3] PUP-14: Implement the original cloaking effect'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - PUP-14
   - powerups
   - legacy-missing
+  - topic-powerups
 dependencies: []
 references:
   - src/powerups.ts

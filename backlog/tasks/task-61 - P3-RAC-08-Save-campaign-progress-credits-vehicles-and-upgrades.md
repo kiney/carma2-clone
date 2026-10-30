@@ -4,11 +4,13 @@ title: '[P3] RAC-08: Save campaign progress, credits, vehicles, and upgrades'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - RAC-08
   - races
   - legacy-missing
+  - topic-campaign
 dependencies: []
 references:
   - src/main.ts

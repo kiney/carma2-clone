@@ -6,12 +6,13 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-26 20:46'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-2
   - AI-01
   - opponents
   - legacy-partial
+  - topic-ai
 dependencies: []
 references:
   - src/ai/runtime.ts

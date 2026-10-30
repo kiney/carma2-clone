@@ -4,11 +4,13 @@ title: '[P4] RAC-10: Implement multiplayer and networked game state'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-4
   - RAC-10
   - races
   - legacy-missing
+  - topic-campaign
 dependencies: []
 references:
   - src/config.ts

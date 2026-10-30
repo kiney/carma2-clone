@@ -6,13 +6,14 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-13 13:18'
-updated_date: '2026-10-13 13:23'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-2
   - PHY-14
   - physics
   - collision
   - joints
+  - topic-physics
 dependencies: []
 references:
   - src/physics/simulation.ts

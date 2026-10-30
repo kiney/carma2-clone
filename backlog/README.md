@@ -430,3 +430,23 @@ a final async DevTools probe failed separately from the passing application chec
 PERF-18 is the next P1 checkpoint after user playtesting; PERF-01 alone stays
 `wip`, with the WIP limit3 and broader paused Goal unchanged.
 Current board:121 tasks,66 `backlog`,2 `next`,1 `wip`,52 `done`.
+
+## Topic labels and scope reconciliation (2026-10-30)
+
+Open tickets use `topic-*` labels for filtering by subsystem: `topic-pedestrians`,
+`topic-powerups`, `topic-ai`, `topic-physics`, `topic-destruction`,
+`topic-campaign`, `topic-rendering`, `topic-audio`, `topic-quality`,
+`topic-performance` and `topic-ui`. A ticket can carry more than one when its
+remaining work crosses subsystem boundaries. Existing issue, priority and legacy
+labels remain intact. Filter with, for example,
+`backlog task list --labels topic-physics --plain`.
+
+The open queue was tagged and reconciled against implementation notes. PUP-11 /
+TASK-30 is now `done`: its gameplay/timed effects are implemented, and the
+remaining articulated topology, prepared pedestrian vertices and positional
+audio have explicit owners in PED-11 / TASK-134, ANI-01 / TASK-62 and AUD-03 /
+TASK-71. DMG-02 / TASK-22 remains open for prepared face/column ordering at
+saturation and any remaining source connotation outlets; completed WLD-05 /
+DMG-03 providers were removed from its active scope, while the unused undefined
+parallel-direction branch remains documented as uncertainty. Original evidence
+and ticket history are retained.

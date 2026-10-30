@@ -4,12 +4,13 @@ title: '[P3] PUP-17: Match pickup contact volumes, source rules, and respawning'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-24 20:14'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - PUP-17
   - powerups
   - legacy-needs-validation
+  - topic-powerups
 dependencies: []
 references:
   - src/powerups.ts

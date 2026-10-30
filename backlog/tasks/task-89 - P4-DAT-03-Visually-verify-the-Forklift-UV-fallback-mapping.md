@@ -4,11 +4,13 @@ title: '[P4] DAT-03: Visually verify the Forklift UV fallback mapping'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-4
   - DAT-03
   - assets
   - legacy-needs-validation
+  - topic-rendering
 dependencies: []
 references:
   - src/formats.ts

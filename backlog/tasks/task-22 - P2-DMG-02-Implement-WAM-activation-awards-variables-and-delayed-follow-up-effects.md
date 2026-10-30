@@ -6,12 +6,14 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-28 22:34'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-2
   - DMG-02
   - damage
   - legacy-partial
+  - topic-physics
+  - topic-destruction
 dependencies: []
 references:
   - docs/c2-wam-effects-re.md
@@ -44,5 +46,10 @@ WAM activation boxes, follow-up side effects, room/script fields, awards and var
 created: 2026-10-28 22:34
 ---
 WLD-05/DMG-03 (2026-10-28) now supply this task's previously duplicated finite native prefix, generated ACT/source identities, immediate source-edge flags, direct pickup followups and original-font fancy outlet. Retain the installed parallel-direction uncertainty explicitly: that branch divides uninitialized scratch, and all111 catalogued Stock/Advanced entries are away. Do not invent normalized force semantics or duplicate completed providers. See docs/c2-world-smash-source-edges-re.md and docs/c2-effect-producer-audit.md.
+---
+
+created: 2026-10-30 15:12
+---
+2026-10-30 scope reconciliation: WLD-05/DMG-03 now provide the finite native prefix, generated ACT/source identities, immediate source-edge flags, direct pickup followups and original-font fancy outlet (docs/c2-world-smash-source-edges-re.md; docs/c2-effect-producer-audit.md). Those portions are no longer open DMG-02 scope. Keep this ticket open only for exact prepared track-column/face ordering at saturation and any remaining source connotation outlet behavior; the parallel-direction branch remains an explicitly unexercised undefined-scratch uncertainty, not a behavior to invent (all 111 authored directions are away).
 ---
 <!-- COMMENTS:END -->

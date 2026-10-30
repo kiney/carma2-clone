@@ -4,11 +4,12 @@ title: '[P3] QUA-12: Make the loaded-noncar crash-effect contact fixture reprodu
 status: backlog
 assignee: []
 created_date: '2026-10-28 22:32'
-updated_date: '2026-10-29 08:33'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - QUA-12
   - quality
+  - topic-destruction
 dependencies: []
 references:
   - tests/browser-crash-effects.mjs

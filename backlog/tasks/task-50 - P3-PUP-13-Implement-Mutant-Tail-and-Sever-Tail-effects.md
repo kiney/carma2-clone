@@ -4,11 +4,14 @@ title: '[P3] PUP-13: Implement Mutant Tail and Sever Tail effects'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-3
   - PUP-13
   - powerups
   - legacy-missing
+  - topic-pedestrians
+  - topic-powerups
 dependencies: []
 references:
   - src/powerups.ts

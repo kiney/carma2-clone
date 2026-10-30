@@ -4,13 +4,14 @@ title: '[P3] PHY-23: Attribute reported fatal light-scenery impacts in damaged s
 status: backlog
 assignee: []
 created_date: '2026-10-29 13:01'
-updated_date: '2026-10-29 17:30'
+updated_date: '2026-10-30 15:11'
 labels:
   - PHY-23
   - physics
   - reported
   - diagnostics
   - priority-3
+  - topic-quality
 dependencies:
   - TASK-127
 references:

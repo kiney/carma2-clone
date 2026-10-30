@@ -6,12 +6,13 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 21:48'
-updated_date: '2026-10-24 15:41'
+updated_date: '2026-10-30 15:12'
 labels:
   - PERF-03
   - performance
   - rendering
   - priority-5
+  - topic-rendering
 dependencies: []
 references:
   - docs/performance-investigation.md

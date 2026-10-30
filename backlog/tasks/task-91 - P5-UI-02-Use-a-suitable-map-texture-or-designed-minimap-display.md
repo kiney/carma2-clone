@@ -4,12 +4,13 @@ title: '[P5] UI-02: Use a suitable map texture or designed minimap display'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-5
   - UI-02
   - ui
   - legacy-partial
+  - topic-rendering
 dependencies: []
 references:
   - src/config.ts

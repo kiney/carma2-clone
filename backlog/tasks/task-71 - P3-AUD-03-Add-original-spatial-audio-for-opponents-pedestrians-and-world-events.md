@@ -6,12 +6,13 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-28 22:34'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - AUD-03
   - audio
   - legacy-partial
+  - topic-audio
 dependencies: []
 references:
   - src/audio.ts

@@ -4,10 +4,12 @@ title: '[P3] PHY-20: Verify initial suspension history on bumpy surfaces'
 status: backlog
 assignee: []
 created_date: '2026-10-26 20:39'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - PHY-20
   - physics
+  - topic-physics
 dependencies: []
 references:
   - src/physics/spawn.ts

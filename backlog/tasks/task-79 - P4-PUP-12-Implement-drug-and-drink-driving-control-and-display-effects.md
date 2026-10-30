@@ -4,11 +4,13 @@ title: '[P4] PUP-12: Implement drug and drink-driving control and display effect
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-4
   - PUP-12
   - powerups
   - legacy-missing
+  - topic-ui
 dependencies: []
 references:
   - src/powerups.ts

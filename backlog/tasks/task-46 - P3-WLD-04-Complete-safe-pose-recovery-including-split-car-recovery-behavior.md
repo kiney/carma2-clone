@@ -6,12 +6,13 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-11 16:03'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - WLD-04
   - world
   - legacy-partial
+  - topic-physics
 dependencies: []
 references:
   - src/physics/recovery.ts

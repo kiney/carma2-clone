@@ -4,11 +4,13 @@ title: '[P3] REN-03: Implement original Lollipop and Billboard rendering behavio
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - REN-03
   - rendering
   - legacy-missing
+  - topic-rendering
 dependencies: []
 references:
   - src/animation.ts

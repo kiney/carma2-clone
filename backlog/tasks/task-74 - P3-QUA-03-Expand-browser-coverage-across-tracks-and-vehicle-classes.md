@@ -4,12 +4,13 @@ title: '[P3] QUA-03: Expand browser coverage across tracks and vehicle classes'
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
-updated_date: '2026-10-29 14:56'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-3
   - QUA-03
   - quality
   - legacy-partial
+  - topic-quality
 dependencies: []
 references:
   - tests/browser.mjs

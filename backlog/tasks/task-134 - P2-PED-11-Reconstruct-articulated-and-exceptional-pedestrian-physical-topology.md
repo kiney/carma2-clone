@@ -3,14 +3,17 @@ id: TASK-134
 title: >-
   [P2] PED-11: Reconstruct articulated and exceptional pedestrian physical
   topology
-status: backlog
+status: wip
 assignee: []
 created_date: '2026-10-29 21:33'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-2
   - PED-11
   - pedestrians
   - source-PED-08
+  - topic-destruction
+  - topic-pedestrians
 dependencies:
   - TASK-98
 priority: high
@@ -28,3 +31,9 @@ PED-08 completes ordinary simple-character severing and bounded part ownership. 
 - [ ] #1 Original BIPEDF articulated conversion and authored constraints drive actual body topology with coherent release/reset.
 - [ ] #2 Retained joint2 and exceptional/nonhumanoid sever branches are source-backed and numerically/browser validated without weakening ordinary sever regressions.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+User selected completion of pedestrian physical topology after PED-07/08/09. Audit actual articulated conversion, FORM joint ownership and exceptional sever branches before implementation; preserve ordinary conformance and Stock/Advanced production checks.
+<!-- SECTION:NOTES:END -->

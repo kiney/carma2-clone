@@ -6,13 +6,14 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-29 13:27'
-updated_date: '2026-10-29 17:26'
+updated_date: '2026-10-30 15:11'
 labels:
   - PERF-24
   - performance
   - physics
   - runaway
   - priority-3
+  - topic-physics
 dependencies: []
 references:
   - docs/screwie-runaway-car-stall.md

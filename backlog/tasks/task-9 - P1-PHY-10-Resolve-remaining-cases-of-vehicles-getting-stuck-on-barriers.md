@@ -4,12 +4,13 @@ title: '[P1] PHY-10: Resolve remaining cases of vehicles getting stuck on barrie
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:13'
-updated_date: '2026-10-15 21:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-1
   - PHY-10
   - physics
   - legacy-partial
+  - topic-physics
 dependencies: []
 references:
   - docs/c2-physics-re.md

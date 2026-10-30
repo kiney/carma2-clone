@@ -4,11 +4,13 @@ title: '[P4] ANI-04: Add FLIC playback and suitable intro and interstitial seque
 status: backlog
 assignee: []
 created_date: '2026-10-11 15:14'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-4
   - ANI-04
   - animation
   - legacy-missing
+  - topic-audio
 dependencies: []
 references:
   - docs/compatibility.md

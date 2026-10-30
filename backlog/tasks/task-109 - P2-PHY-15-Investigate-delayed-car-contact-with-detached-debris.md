@@ -4,11 +4,13 @@ title: '[P2] PHY-15: Investigate delayed car contact with detached debris'
 status: backlog
 assignee: []
 created_date: '2026-10-13 23:11'
+updated_date: '2026-10-30 15:11'
 labels:
   - priority-2
   - PHY-15
   - physics
   - reported
+  - topic-destruction
 dependencies: []
 priority: high
 ordinal: 2090

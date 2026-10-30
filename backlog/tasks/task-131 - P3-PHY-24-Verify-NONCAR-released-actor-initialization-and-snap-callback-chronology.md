@@ -6,11 +6,13 @@ title: >-
 status: backlog
 assignee: []
 created_date: '2026-10-29 16:32'
+updated_date: '2026-10-30 15:12'
 labels:
   - priority-3
   - PHY-24
   - physics
   - noncars
+  - topic-physics
 dependencies: []
 references:
   - docs/perf25-world-joint-phase.md
