@@ -42,7 +42,8 @@ The established practice is proactive delegation when tasks can be separated use
 
 ## Evidence and implementation
 
-- C2 is the specification. Use original car configuration, WAM data, geometry and gameplay tables rather than hard-coded Eagle/track behavior or generic physics coefficients.
+- C2 is the behavioral specification especially for vehicle motion, collisions, crush, damage and repair. Use original car configuration, WAM data, geometry and gameplay tables rather than hard-coded Eagle/track behavior or generic physics coefficients.
+- Pedestrian policy (user clarification, 2026-10-30): exact original behavioral parity is not required. Modern pedestrian algorithms, collision handling and articulated ragdoll physics are permitted when they improve convincing reactions, robustness or performance. Preserve original asset compatibility, population/gameplay ownership, damage/severing, effects and working systems. Describe deliberate modern behavior honestly; binary evidence remains useful context rather than an acceptance requirement for every pedestrian algorithm. Evaluate changes against gameplay quality, stability and bounded CPU/memory cost, while preserving the vehicle-fidelity goal.
 - Consult `madebr/rec2` first as a map into C2 functions and addresses. Dethrace provides ancestral clues, not proof that C2 behavior is identical. Use community tooling/documentation where relevant and inspect licenses.
 - Hash executables and record PE metadata before serious binary analysis. Exploit shared HW/SW game logic to distinguish gameplay from renderer code. Use static analysis and suitable installed tools before manually decoding assembly.
 - Maintain concise implementation evidence in `docs/c2-physics-re.md` and the related subsystem notes. Record symbols/addresses where known, structures, equations/constants, car fields, confidence, implemented behavior and deviations. Avoid large proprietary binary dumps.

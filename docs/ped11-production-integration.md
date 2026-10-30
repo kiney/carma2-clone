@@ -1,5 +1,15 @@
 # PED-11: exceptional pedestrian physics
 
+## Subsequent project policy (2026-10-30)
+
+The user permits modern algorithms and physics for pedestrians, including
+articulated ragdolls. Exact original behavioral parity remains primarily a
+vehicle-physics objective. Future pedestrian work should prioritize convincing
+reactions, stability, performance and original asset/gameplay compatibility.
+The audit below documents the original and the completed implementation; its
+decision against inventing native ragdoll behavior does not prohibit a deliberate
+modern extension. Such an extension has not been implemented by this policy change.
+
 ## Native topology and corrected scope
 
 The installed HW/SW call graphs select ordinary simple mode0 and physical
