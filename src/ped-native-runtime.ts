@@ -328,11 +328,17 @@ export class NativePedRuntime<Owner extends object = object> {
           queued: false,
         }),
         remove: (resource) => {
-          const body = this.preparedBone(resource),
-            code = simulation.phil.getState(body) === 0 ? 3 : 0;
+          // Re-entry reserves stable FORM resources but does not prepare
+          // vanished parts. Their next release still visits every removed
+          // bit; PHIL code3 completes an already-absent identity without
+          // demanding a live solver body. Deferred/live parts retain the
+          // preparation and actual removal requirements below.
+          if (simulation.phil.getState(resource) === 0)
+            return { code: 3, phase: "complete" };
+          const body = this.preparedBone(resource);
           simulation.removePedBoneBody(body);
           return {
-            code,
+            code: 0,
             phase:
               simulation.phil.getState(resource) === 0
                 ? "complete"

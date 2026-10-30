@@ -4,6 +4,11 @@ Backlog.md is the task source of truth. The former `TODO.md` entries have been m
 
 ## Current implementation queue (updated 2026-10-30)
 
+P1 PED-12 / TASK-137 fixes the live TIMBER frame-abort loop during repeated
+severed-part scope release. The adapter now honors PHIL absent-identity code3
+before demanding a prepared solver body; live/deferred validation is preserved.
+[Root cause and live-scene recovery](../docs/ped12-release-reentry.md).
+
 The selected opponent-AI workstream is complete, with numeric priorities retained:
 
 1. AI-02 / TASK-33 (P2), `done`: shared navigation collision preparation and placement/fallback validation.

@@ -1,3 +1,4 @@
+import "./ped-release-reentry.test.mjs";
 import "./ai04-recovery.test.mjs";
 import "./ai04-force-ownership.test.mjs";
 import "./ai04-run-away-modes.test.mjs";
