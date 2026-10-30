@@ -80,7 +80,8 @@
     "test:ped-sever-population": "npm run build && node tests/browser-ped-sever-population.mjs",
     "test:ped-awards-effects": "npm run build && node tests/browser-ped-awards-effects.mjs",
     "test:ped-exceptional": "npm run build && node tests/browser-ped-exceptional.mjs",
-    "test:ai-reactions": "npm run build && node tests/browser-ai-crash-reactions.mjs"
+    "test:ai-reactions": "npm run build && node tests/browser-ai-crash-reactions.mjs",
+    "test:ai-recovery": "npm run build && node tests/browser-ai-recovery.mjs"
   },
   "dependencies": {
     "three": "0.180.0",

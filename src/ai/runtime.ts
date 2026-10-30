@@ -642,6 +642,11 @@ export class NativeOpponentFleet {
   }
 
   private run(r: Rival, objective: NativeDecisionObjective): void {
+    // ProcessFollowPath reads car-owned forces, including writes made by
+    // placement, wheel processing or this frame's countdown brake command.
+    // Its borrowed-time give-up leaves them untouched; the adapter cache must
+    // not restore the previous AI frame's commands during objective restart.
+    r.follow.syncCarForces(r.body.state.accForce ?? 0, r.body.state.brakeForce);
     const q = this.query(r);
     let follower;
     if (objective === "complete-race") {

@@ -2639,6 +2639,7 @@ export class VehicleSimulation {
     car.state.angularVelocity.set(0, 0, 0);
     car.state.curvature = car.state.turnSpeed = car.state.rpm = 0;
     car.state.gear = 0;
+    car.state.tractionControl = true;
     car.state.speed = velocity.length();
     car.state.wheelLengths.fill(car.motion.suspensionBase.rideHeight);
     car.state.predictedPosition = undefined;

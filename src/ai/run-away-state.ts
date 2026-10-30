@@ -88,7 +88,7 @@ export class NativeRunAwayState {
     this.stopDeadlineMs = (query.nowMs + seconds * 1000) >>> 0;
     this.route.clear();
     this.seed(query);
-    this.route.topUpRandom(-1, false, this.random);
+    this.route.topUpRandom(-1, query.cheating, this.random);
     this.follower.start(this.physicalQuery(query), 0);
     this.followSlot = 0;
     this.started = true;
@@ -116,7 +116,11 @@ export class NativeRunAwayState {
     if (!this.entries.length)
       throw new Error("Native run-away route became empty before RUN");
     if (this.entries.length < 12)
-      this.route.topUpRandom(12 - this.entries.length, false, this.random);
+      this.route.topUpRandom(
+        12 - this.entries.length,
+        query.cheating,
+        this.random,
+      );
     const result = this.follower.run(
       this.nodes,
       this.sections,
@@ -133,7 +137,7 @@ export class NativeRunAwayState {
     if (result.rawStatus === 2) {
       this.route.clear();
       this.seed(query);
-      this.route.topUpRandom(-1, false, this.random);
+      this.route.topUpRandom(-1, query.cheating, this.random);
       this.follower.start(this.physicalQuery(query), 0);
       this.followSlot = 0;
       return {

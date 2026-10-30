@@ -213,6 +213,8 @@ pause/resume in Chromium.
 
 Opponent startup now reserves native repair/visibility values before personality quotas using the shared CRT, including original random-slot ranking draws. `npm run test:ai-reactions` checks real contacts through damage attribution into next-frame pursuit. [AI-01 evidence and remaining launch/grid limits](docs/ai01-production-integration.md).
 
+`npm run test:ai-recovery` checks native struggle interruption, give-up force ownership and real Stock/Advanced rematerialization. [AI-04 recovery evidence and limits](docs/ai04-production-integration.md).
+
 Production world queries now use the native finite collector, prepared MODEL-group order, interleaved ACT callbacks and a separate PHIL-ordered drivable wheel phase. Live smashed/grooved geometry retains original DAT provenance. Original MAT coefficients drive Gouraud/specular shading, per-material fog and texture sampling, with shared resource registries released between races. Native `OneLessPed` counts bind to existing population identities and update group/mission counters once before scoring. The current ordinary population path also binds the bounded process cache, movement, scan, contact, recovery and award owners; PED-11 also completes reachable nonhumanoid/explosive contacts and documents dormant boned topology. See [world collector evidence](docs/c2-wld-production-collector-re.md), [material rendering](docs/c2-native-material-render-re.md), [pedestrian count integration](docs/c2-ped-native-gameplay-re.md) and [PED-11 integration](docs/ped11-production-integration.md).
 
 Ordinary pedestrians use original FORM/MODEL definitions and BON/SKL root/bone

@@ -138,7 +138,19 @@ export class NativeOpponentPlacement {
         car.state.accForce = car.state.brakeForce = car.state.curvature = 0;
       },
       fallback: () => {
-        applyPose(actor.pose, new Vector3());
+        // Exhaustion restores ACT, not the per-attempt caches. Teleport uses
+        // the last aligned cached direction (HW4a8fd3–4a8fd9); replaying the
+        // reset here would substitute the saved, possibly rolled orientation.
+        car.state.position.copy(actor.pose.position);
+        car.state.orientation.setFromRotationMatrix(
+          new Matrix4().makeBasis(
+            actor.pose.row0,
+            actor.pose.row1,
+            actor.pose.row2,
+          ),
+        );
+        car.poseEpoch = (car.poseEpoch ?? 0) + 1;
+        this.simulation.sync(car);
         this.onFallback(car);
       },
     });

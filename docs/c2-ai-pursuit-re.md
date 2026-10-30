@@ -1,5 +1,10 @@
 # C2 pursuit and target trail evidence
 
+Current integration: [AI-04 recovery completion](ai04-production-integration.md)
+records the live fleet checks and corrected force/placement-cache ownership.
+Earlier pending-dispatch statements below describe historical reconstruction
+stages; AI-01/AI-02/AI-04 now supply those live integrations.
+
 This note records independent static verification of the installed C2 HW executable. `madebr/rec2` supplies names and structures; several annotated addresses and trail branches disagree with this executable. See [path evidence](c2-ai-paths-re.md) for projected routes, GetNear acquisition and the physical follower. No proprietary code is copied here.
 
 ## GetNear cache and fresh seed
@@ -186,7 +191,6 @@ are not generally rolled back by this exhausted branch.
 These lifecycle stores are verified evidence for the remaining live mode
 adapter; the existing scalar/ground helpers do not yet perform this whole
 sequence or resolve the engine's redundant native cached-coordinate fields.
-
 
 ### AI-02 production completion (2026-10-30)
 

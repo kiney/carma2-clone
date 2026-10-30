@@ -1,3 +1,7 @@
+import "./ai04-recovery.test.mjs";
+import "./ai04-force-ownership.test.mjs";
+import "./ai04-run-away-modes.test.mjs";
+import "./ai04-rematerialization.test.mjs";
 import "./ai-startup-plan.test.mjs";
 import "./ai01-roster-random.test.mjs";
 import "./ai01-contact-reactions.test.mjs";

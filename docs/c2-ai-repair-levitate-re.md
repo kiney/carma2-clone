@@ -1,5 +1,10 @@
 # Native opponent repair and stolen-car levitation
 
+Current integration: [AI-04 recovery completion](ai04-production-integration.md)
+records the live fleet checks and corrected force/placement-cache ownership.
+Earlier pending-dispatch statements below describe historical reconstruction
+stages; AI-01/AI-02/AI-04 now supply those live integrations.
+
 Evidence: verified against the installed `carma2_HW.exe`; rec2 provides symbol and structure mapping but both objective addresses differ in this installation. Original files remain read-only.
 
 ## Repair
@@ -39,7 +44,6 @@ Verified installed grudge reduction `0x4aa138–0x4aa186` reads each active inst
 Two explicit robustness extensions remain: the installed undefined empty-race return slot is interpreted as continue, and the otherwise unbounded endpoint relocation walk is limited to4096 visits with an observable diagnostic. Neither extension invents a successful physical placement. Replay/flying-cheat flags remain false while those features are absent.
 
 Installed trail recording is player-only: the sole `StartRecordingTrail4aa230` caller is `MungeOpponents4a9f35`, passing the current player pointer. Initializers clear regular/cop recording counts. Pursuit START/DIE does not create trail ownership. Rival trails consequently remain empty; native pursuit of such a target uses its GetNear fallback.
-
 
 ## AI-01 startup and contact completion (2026-10-30)
 

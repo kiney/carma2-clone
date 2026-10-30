@@ -55,6 +55,7 @@ function fixture({
       car.state.velocity.copy(v);
       events.push(["reset", p.clone(), q.clone(), v.clone()]);
     },
+    sync: () => {},
     testCarPlacement: () => {
       const result = place();
       events.push(["placement", result]);
@@ -109,8 +110,8 @@ test("24 rejected attempts restore admitted pose and fall back once without volu
   assert.equal(fallbacks, 1);
   assert.equal(
     f.events.filter(([kind]) => kind === "reset").length,
-    25,
-    "24 attempt resets plus fallback restore",
+    24,
+    "fallback restores ACT without repeating per-attempt cache reset",
   );
   assert.equal(f.events.filter(([kind]) => kind === "volume").length, 0);
   const firstReset = f.events.findIndex(([kind]) => kind === "reset");

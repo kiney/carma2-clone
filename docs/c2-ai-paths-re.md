@@ -1,5 +1,10 @@
 # C2 opponent path evidence
 
+Current integration: [AI-04 recovery completion](ai04-production-integration.md)
+records the live fleet checks and corrected force/placement-cache ownership.
+Earlier pending-dispatch statements below describe historical reconstruction
+stages; AI-01/AI-02/AI-04 now supply those live integrations.
+
 Scope: native section metadata, projected routes, nearest-section selection and physical path following. The installed local `carma2_HW.exe` is the specification; `madebr/rec2` supplies symbols and structure names. The executable's provenance and hashes are recorded in the existing reverse-engineering notes. No executable or original asset was modified.
 
 ## Status and addresses
