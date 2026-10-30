@@ -43,6 +43,7 @@ import { NativeNonCarSlots, type NativeNonCarBodySlot } from "./noncar-slots";
 import {
   NativeNonCarReclaimRuntime,
   nativeNonCarId,
+  nativeNonCarReclaimBounds,
   type NativeNonCarReclaimEffect,
 } from "./noncar-reclaim";
 import { CameraContactFrame } from "../camera/contact-frame";
@@ -2215,7 +2216,7 @@ export class VehicleSimulation {
     }
   }
   private pullWorldActor(actor: Object3D): object | null {
-    if (!this.physicsQueryDepth) return null;
+    if (!this.physicsQueryDepth && !this.sensiblePlaceQueryDepth) return null;
     const body = this.noncarsByActor.get(actor);
     if (!body) {
       // Installed420007 permanently disables actors with missing mechanics.
@@ -2233,6 +2234,8 @@ export class VehicleSimulation {
     return body;
   }
   private physicsQueryDepth = 0;
+  /** Source677c3c permits ACT pulls without entering PHIL doingPhysics. */
+  private sensiblePlaceQueryDepth = 0;
   /** ActorBoxPick calls once per model that emitted at least one face. */
   private stopGroovesForCollectedFaces(surfaces: readonly Surface[]): void {
     if (!this.worldGrooveFrameActive || !this.grooves) return;
@@ -2650,11 +2653,122 @@ export class VehicleSimulation {
     this.oilWheelPrevious.delete(car);
     this.sync(car);
   }
-  /** Native sensible-place public polarity: an obstruction is0, clear is-1.
-   * Reuse the current authored/deformed hull and finite world feature queries.
-   */
+  /** Installed41fe70/428fc0: source finite face preparation precedes the
+   * current PHIL root/child list. Clear is-1, every obstruction is0. This query
+   * does not change ordinary recovery/shape-swap separation or contact forces. */
   testCarPlacement(car: SimulatedCar): 0 | -1 {
-    return this.placementDirection(car, car.hulls) ? 0 : -1;
+    this.sensiblePlaceQueryDepth++;
+    try {
+      const hulls = this.sensiblePlaceHulls(car),
+        transformed = transformHulls(car, hulls),
+        center = car.properties.centerOfMass
+          .clone()
+          .applyQuaternion(car.state.orientation)
+          .add(car.state.position),
+        faces = this.facesNearBody(car, car.hulls);
+      if (
+        worldPlacementContacts(
+          transformed,
+          this.recoverySurfaces(faces),
+          center,
+        ).length
+      )
+        return 0;
+
+      // Collection can pull new scenery into PHIL. Read roots AFTER it, keeping
+      // passive/sleeping headers. Physical AddObject prepends each child.
+      const children = new Map<RigidBody, SimulationBody[]>();
+      for (const child of [...this.debris, ...this.noncars]) {
+        if (!child.joint) continue;
+        const parent = child.joint.parent,
+          siblings = children.get(parent) ?? [];
+        siblings.unshift(child);
+        children.set(parent, siblings);
+      }
+      const parentOf = (body: RigidBody): RigidBody | undefined =>
+        "joint" in body
+          ? (body as DetachedBody | NonCarBody).joint?.parent
+          : undefined;
+      const flagsOf = (body: RigidBody): number =>
+        "rigidFlags" in body
+          ? Number(body.rigidFlags) >>> 0
+          : (this.philFields.get(body)?.flags ?? 0);
+      const visited = new Set<RigidBody>(),
+        bounds = this.sensiblePlaceBounds(car, hulls);
+      const blocked = (body: RigidBody): boolean => {
+        if (visited.has(body)) return false;
+        visited.add(body);
+        // Rejecting this pair does not prune an independently eligible child.
+        if (
+          body !== car &&
+          parentOf(body) !== car &&
+          parentOf(car) !== body &&
+          nativePairAllowed(car, body) &&
+          !((flagsOf(car) | flagsOf(body)) & 4)
+        ) {
+          const local = this.sensiblePlaceHulls(body as SimulationBody),
+            other = transformHulls(body, local),
+            otherBounds = this.sensiblePlaceBounds(body, local);
+          // Stationary native prepared+f4 expands physical bb1 by double.0025
+          // with Float32 stores. This is distinct from LOCAL plane tolerance
+          // .005 and from wheel bb2. Moving historical+f4 lifetime is documented.
+          for (let axis = 0; axis < 3; axis++) {
+            otherBounds.min.setComponent(
+              axis,
+              Math.fround(otherBounds.min.getComponent(axis) - 0.0025),
+            );
+            otherBounds.max.setComponent(
+              axis,
+              Math.fround(otherBounds.max.getComponent(axis) + 0.0025),
+            );
+          }
+          if (
+            bounds.intersectsBox(otherBounds) &&
+            transformed.some((a) =>
+              other.some((b) => placementHullsOverlap(a, b)),
+            )
+          )
+            return true;
+        }
+        return (children.get(body) ?? []).some(blocked);
+      };
+      return this.phil.registeredBodies.some(blocked) ? 0 : -1;
+    } finally {
+      this.sensiblePlaceQueryDepth--;
+    }
+  }
+  private sensiblePlaceBounds(body: RigidBody, hulls: CollisionHull[]): Box3 {
+    // The existing helper is verified GetNewBoundingBox45fab0, despite its
+    // original reclaim name. Preserve aggregate local bb1 and F32 contributions.
+    return nativeNonCarReclaimBounds(
+      hullsBounds(hulls),
+      new Matrix4().compose(
+        body.state.position,
+        body.state.orientation,
+        new Vector3(1, 1, 1),
+      ),
+      new Matrix4(),
+    );
+  }
+  /** Only sensible-place428d10 dispatches BOX/WIRE/SPHERE through common
+   * bounds. Actual moving sphere/wire contact equations remain unchanged. */
+  private sensiblePlaceHulls(body: SimulationBody): CollisionHull[] {
+    if (isNativeSphereBody(body)) {
+      const bounds = nativeBodyLocalBounds(body);
+      return [buildBoxHull(bounds.min, bounds.max)];
+    }
+    return body.hulls.map((hull, index) => {
+      const sourceKind =
+        "mechanics" in body ? body.mechanics.shapes[index]?.kind : undefined;
+      const commonBounds =
+        ("kind" in body && body.kind === "mine") ||
+        sourceKind === "sphere" ||
+        sourceKind === "wire" ||
+        hull.nativeType === "WIRE";
+      if (!commonBounds) return hull;
+      const bounds = hullsBounds([hull]);
+      return buildBoxHull(bounds.min, bounds.max);
+    });
   }
   /** Installed ResetCarSpecialVolume4ff2c0 changes only automatic volume/depth.
    * Recompute immediately; do not erase authored volume or water-plane caches.

@@ -186,3 +186,62 @@ test("fleet retains assigned personalities and applies their objectives after th
     ["complete-race", "get-near-player", "pursue"],
   );
 });
+
+test("fleet empty-route default selects explicit browser continuation without completing GetNear", () => {
+  const { fleet, rival } = fixture();
+  fleet.update(100, 40, 1, false);
+  // An exhausted finished route is the original undefined-return branch.
+  // Keep actual roads available to the next GetNear objective.
+  const current = fleet.rivals.get(rival.group.uuid);
+  current.race.route.clear();
+  current.race.state.finished = true;
+  fleet.update(140, 40, 1, false);
+  const state = fleet.snapshot;
+  assert.equal(state.rivals[0].objective.objective, "get-near-player");
+  assert.equal(state.rivals[0].objective.newRequired, false);
+  // Native old-objective count is recounted next frame; this transition
+  // increments GetNear but must not immediately complete/decrement it.
+  assert.equal(state.counts.getNear, 1);
+  assert.ok(rival.state.position.toArray().every(Number.isFinite));
+});
+
+test("safe-relocation closed component reports bounded exhaustion and preserves damage/orientation", () => {
+  const diagnostics = [];
+  const { fleet, rival, player, inactive } = fixture({
+    diagnostic: (message) => diagnostics.push(message),
+  });
+  rival.state.velocity.set(1, 2, 3);
+  rival.state.angularVelocity.set(4, 5, 6);
+  rival.state.accForce = 10;
+  rival.state.brakeForce = 12;
+  rival.state.curvature = 0.1;
+  rival.state.gear = 3;
+  rival.state.rpm = 4000;
+  rival.damage.componentLevels[0] = 42;
+  const orientation = rival.state.orientation.clone();
+  player.state.position.set(0, 0, 0);
+  const result = fleet.teleportToSafeLocation(rival);
+  assert.equal(result.kind, "bound-exhausted");
+  assert.equal(result.endpointVisits, 4096);
+  assert.equal(inactive.has(rival), true);
+  assert.equal(rival.group.visible, false);
+  assert.deepEqual(rival.state.velocity.toArray(), [0, 0, 0]);
+  assert.deepEqual(rival.state.angularVelocity.toArray(), [0, 0, 0]);
+  assert.deepEqual(
+    [
+      rival.state.accForce,
+      rival.state.brakeForce,
+      rival.state.curvature,
+      rival.state.gear,
+      rival.state.rpm,
+    ],
+    [0, 0, 0, 0, 0],
+  );
+  assert.deepEqual(rival.state.orientation.toArray(), orientation.toArray());
+  assert.equal(rival.damage.componentLevels[0], 42);
+  assert.deepEqual(rival.state.position.toArray(), result.position.toArray());
+  assert.ok(
+    diagnostics.some((message) => message.includes("4096 endpoint visits")),
+  );
+  assert.equal(fleet.snapshot.rivals[0].physical, false);
+});

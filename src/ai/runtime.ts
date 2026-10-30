@@ -72,7 +72,9 @@ export interface NativeOpponentFleetHooks {
   stopOpponentsMoving?(): boolean;
   mapView?(): number;
   showOpponents?(): boolean;
-  /** Original empty-race branch reads an uninitialized raw return slot. */
+  /** Original empty-race branch reads an uninitialized raw return slot.
+   * If omitted, this browser fleet explicitly selects0 (continue); the pure
+   * original coordinator still requires an explicitly supplied value. */
   emptyRaceRouteStatus?(body: SimulatedCar): number | undefined;
   diagnostic?(message: string): void;
 }
@@ -630,7 +632,9 @@ export class NativeOpponentFleet {
           newGetNearPlayer: () => this.transition(r, "get-near-player"),
           objectiveComplete: () => r.objective.objectiveComplete(),
         },
-        this.hooks.emptyRaceRouteStatus?.(r.body),
+        this.hooks.emptyRaceRouteStatus
+          ? this.hooks.emptyRaceRouteStatus(r.body)
+          : 0,
       );
       follower = result.follower;
     } else if (objective === "get-near-player") {

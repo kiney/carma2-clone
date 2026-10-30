@@ -186,3 +186,13 @@ are not generally rolled back by this exhausted branch.
 These lifecycle stores are verified evidence for the remaining live mode
 adapter; the existing scalar/ground helpers do not yet perform this whole
 sequence or resolve the engine's redundant native cached-coordinate fields.
+
+
+### AI-02 production completion (2026-10-30)
+
+The live placement adapter now uses shared finite face preparation and the current
+PHIL hierarchy, including collection-time scenery pulls and passive participants.
+Source masks, object flag4, symmetric parent exclusions and sensible-only
+WIRE/SPHERE common-bound dispatch are integrated. Existing24 attempts, return1
+on exhausted fallback, volume reset and route robustness choices have integration
+checks. See [implementation, evidence and explicit bounds limitation](ai02-production-integration.md).

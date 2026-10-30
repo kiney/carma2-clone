@@ -78,7 +78,7 @@ try {
       advanced: options.find(
         (option) =>
           /^adv_data\//i.test(option.value) &&
-          /carrier_mission\.txt$/i.test(option.value),
+          /carrier2\/carrier2\.txt$/i.test(option.value),
       )?.value,
       snow: find(/snow/i),
       dune12: find(/dune.*12|12.*dune/i),
@@ -89,11 +89,11 @@ try {
     };
   });
   assert.ok(catalogs.stock, "stock NICE BEAVER mission absent");
-  assert.ok(catalogs.advanced, "Advanced carrier mission absent");
+  assert.ok(catalogs.advanced, "Advanced USS LEWINSKY race absent");
   assert.ok(catalogs.eagle3, "original Eagle 3 absent");
   const cases = [
     ["stock", catalogs.stock, 5],
-    ["advanced", catalogs.advanced, 10],
+    ["advanced", catalogs.advanced, 12],
   ];
   if (catalogs.snow) cases.push(["snow", catalogs.snow, null]);
   if (catalogs.dune12 && catalogs.dune12 !== catalogs.snow)

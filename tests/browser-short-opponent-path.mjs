@@ -109,7 +109,9 @@ try {
     timeout: 90000,
   });
   await page.waitForFunction(
-    () => window.carma.rivals.length > 0 && !!window.carma.pedestrians,
+    () =>
+      window.carma.populationLoadState.opponents.state !== "loading" &&
+      window.carma.populationLoadState.pedestrians.state !== "loading",
     null,
     { timeout: 90000 },
   );
@@ -122,6 +124,16 @@ try {
     const c = window.carma;
     c.paused = true;
     const fleet = c.opponentFleet;
+    if (!fleet)
+      return {
+        practice: true,
+        practiceReason: c.populationLoadState.practiceReason,
+        catalogRacePresent: !!c.raceDefinition,
+        opponentObjective: c.populationLoadState.objectives.opponents,
+        rivalCount: c.rivals.length,
+        sectionCount: c.track.pathSections.length,
+        trackPath: document.querySelector("#track-select").value,
+      };
     const status = fleet.snapshot.rivals.find((r) => r.physical && !r.cheating);
     const rival = status && fleet.rivals.get(status.identity);
     if (!rival) throw new Error("no registered physical noncheating rival");
@@ -143,16 +155,34 @@ try {
     };
   });
   assert.equal(fixture.sectionCount, 1, "quarrynet must have one path section");
-  assert.equal(fixture.routeLength, 12, "GetNearPlayer should seed 12 entries");
-  assert.ok(fixture.sectionZeroValid, "route must begin at a valid section");
-  assert.ok(
-    fixture.route.every(
-      (entry) =>
-        entry.section === 0 && (entry.direction === 0 || entry.direction === 1),
-    ),
-    "route should reference the only authored section in a valid direction",
-  );
-
+  if (fixture.practice) {
+    assert.equal(
+      fixture.catalogRacePresent,
+      false,
+      "uncatalogued net track is not an authored opponent race",
+    );
+    assert.equal(fixture.opponentObjective, false);
+    assert.equal(
+      fixture.rivalCount,
+      0,
+      "do not manufacture opponents for an uncatalogued track",
+    );
+  } else {
+    assert.equal(
+      fixture.routeLength,
+      12,
+      "GetNearPlayer should seed 12 entries",
+    );
+    assert.ok(fixture.sectionZeroValid, "route must begin at a valid section");
+    assert.ok(
+      fixture.route.every(
+        (entry) =>
+          entry.section === 0 &&
+          (entry.direction === 0 || entry.direction === 1),
+      ),
+      "route should reference the only authored section in a valid direction",
+    );
+  }
   const start = await page.evaluate(() => {
     const c = window.carma;
     c.paused = false;
@@ -185,9 +215,11 @@ try {
           y: initial[1],
           z: initial[2],
         }) > 0.01,
-      route: [...c.opponentFleet.rivals.values()]
-        .find((r) => r.body.group.uuid === window.__shortPathRival)
-        ?.getNear.entries.map((entry) => entry.section),
+      route: c.opponentFleet
+        ? [...c.opponentFleet.rivals.values()]
+            .find((r) => r.body.group.uuid === window.__shortPathRival)
+            ?.getNear.entries.map((entry) => entry.section)
+        : null,
     };
   }, start.position);
   assert.ok(
@@ -197,10 +229,11 @@ try {
   assert.ok(live.renderedFrames > start.renderedFrames, "rendering stopped");
   assert.ok(live.elapsed >= start.elapsed + 0.16, "physics stopped advancing");
   assert.ok(live.moved, "player did not move during live driving");
-  assert.ok(
-    live.route?.length === 12 && live.route.every(Number.isFinite),
-    `projected route became invalid: ${JSON.stringify(live.route)}`,
-  );
+  if (!fixture.practice)
+    assert.ok(
+      live.route?.length === 12 && live.route.every(Number.isFinite),
+      `projected route became invalid: ${JSON.stringify(live.route)}`,
+    );
 
   const webglErrors = await page.evaluate(() => {
     const gl = document.querySelector("#view").getContext("webgl2");
@@ -225,8 +258,9 @@ try {
   );
   assert.deepEqual(report.failedResponses, [], "failed asset responses");
   assert.deepEqual(webglErrors, [], `WebGL errors: ${webglErrors.join(",")}`);
-  report.provenance =
-    "Forced the native GetNearPlayer transition, then drove through ordinary production frames; this does not claim a natural 21-second reproduction.";
+  report.provenance = fixture.practice
+    ? "Original quarrynet is excluded from the current race catalog: verified one-section free-drive rendering, physics and real-key driving without invented opponents. Original one-section GetNear routing is covered numerically by short-opponent-path.test.mjs."
+    : "Forced the native GetNearPlayer transition, then drove through ordinary production frames; this does not claim a natural 21-second reproduction.";
   report.choices = choices;
   report.fixture = fixture;
   report.start = start;

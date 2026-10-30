@@ -1,3 +1,6 @@
+import "./ai02-original-placement.test.mjs";
+import "./ai02-placement-candidates.test.mjs";
+import "./ai02-placement-adapter.test.mjs";
 import "./ped-ordinary-volume.test.mjs";
 import "./ped-retained-joint.test.mjs";
 import "./powerup-explosive-peds.test.mjs";
